@@ -24,6 +24,7 @@ export function passesManifestOwnerBasePolicy(params: {
   plugin: Pick<PluginManifestRecord, "id">;
   normalizedConfig: NormalizedPluginsConfig;
   allowExplicitlyDisabled?: boolean;
+  allowRestrictiveAllowlistBypass?: boolean;
 }): boolean {
   if (!params.normalizedConfig.enabled) {
     return false;
@@ -38,6 +39,7 @@ export function passesManifestOwnerBasePolicy(params: {
     return false;
   }
   if (
+    params.allowRestrictiveAllowlistBypass !== true &&
     params.normalizedConfig.allow.length > 0 &&
     !params.normalizedConfig.allow.includes(params.plugin.id)
   ) {

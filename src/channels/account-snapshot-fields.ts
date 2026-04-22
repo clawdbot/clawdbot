@@ -186,6 +186,9 @@ export function projectSafeChannelAccountSnapshotFields(
     ...(readNumber(record, "lastInboundAt") !== undefined
       ? { lastInboundAt: readNumber(record, "lastInboundAt") }
       : {}),
+    ...(readNumber(record, "lastTransportActivityAt") !== undefined
+      ? { lastTransportActivityAt: readNumber(record, "lastTransportActivityAt") }
+      : {}),
     ...(healthState ? { healthState } : {}),
     ...(mode ? { mode } : {}),
     ...(dmPolicy ? { dmPolicy } : {}),

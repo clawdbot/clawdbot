@@ -3,7 +3,11 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  presentationToInteractiveReply,
+  renderMessagePresentationFallbackText,
+  resolveInteractiveTextFallback,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import {
   resolveOutboundSendDep,
   sanitizeForPlainText,
@@ -18,6 +22,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
+import { pinMessageTelegram } from "./send.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 
@@ -119,6 +124,29 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
   sanitizeText: ({ text }) => sanitizeForPlainText(text),
   shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: false,
+  },
+  deliveryCapabilities: {
+    pin: true,
+  },
+  renderPresentation: ({ payload, presentation }) => ({
+    ...payload,
+    text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
+    interactive: presentationToInteractiveReply(presentation),
+  }),
+  pinDeliveredMessage: async ({ cfg, target, messageId, pin }) => {
+    await pinMessageTelegram(target.to, messageId, {
+      cfg,
+      accountId: target.accountId ?? undefined,
+      notify: pin.notify,
+      verbose: false,
+    });
+  },
   resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
     typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
   ...createAttachedChannelResultAdapter({

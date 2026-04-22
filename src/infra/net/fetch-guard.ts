@@ -177,7 +177,7 @@ async function assertExplicitProxyAllowed(
             // The proxy hostname is operator-configured, not user input.
             // Clear the target-scoped hostnameAllowlist so configured proxies
             // like localhost or internal hosts aren't rejected by an allowlist
-            // that was built for the target URL (e.g. api.telegram.org).
+            // that was built for the target URL (for example api.example.test).
             // Private-network IP checks still apply via allowPrivateNetwork.
             ...policy,
             allowPrivateNetwork: true,

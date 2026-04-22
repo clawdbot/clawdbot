@@ -67,18 +67,29 @@ describe("handleControlUiHttpRequest", () => {
     return { res, end, handled };
   }
 
-  function runAvatarRequest(params: {
+  async function runAvatarRequest(params: {
     url: string;
     method: "GET" | "HEAD";
     resolveAvatar: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
     basePath?: string;
+    auth?: ResolvedGatewayAuth;
+    headers?: IncomingMessage["headers"];
+    trustedProxies?: string[];
+    remoteAddress?: string;
   }) {
     const { res, end } = makeMockHttpResponse();
-    const handled = handleControlUiAvatarRequest(
-      { url: params.url, method: params.method } as IncomingMessage,
+    const handled = await handleControlUiAvatarRequest(
+      {
+        url: params.url,
+        method: params.method,
+        headers: params.headers ?? {},
+        socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
+      } as IncomingMessage,
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
+        ...(params.auth ? { auth: params.auth } : {}),
+        ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
         resolveAvatar: params.resolveAvatar,
       },
     );
@@ -145,6 +156,24 @@ describe("handleControlUiHttpRequest", () => {
       trustedProxies: ["10.0.0.1"],
       remoteAddress: "10.0.0.1",
       headers: createTrustedProxyHeaders(params.headers),
+    });
+  }
+
+  async function runTrustedProxyAvatarRequest(params: {
+    agentId?: string;
+    meta?: boolean;
+    headers?: IncomingMessage["headers"];
+    resolveAvatar?: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
+  }) {
+    return await runAvatarRequest({
+      url: `/avatar/${params.agentId ?? "main"}${params.meta ? "?meta=1" : ""}`,
+      method: "GET",
+      auth: createTrustedProxyAuth(),
+      trustedProxies: ["10.0.0.1"],
+      remoteAddress: "10.0.0.1",
+      headers: createTrustedProxyHeaders(params.headers),
+      resolveAvatar:
+        params.resolveAvatar ?? (() => ({ kind: "remote", url: "https://example.com/avatar.png" })),
     });
   }
 
@@ -471,7 +500,7 @@ describe("handleControlUiHttpRequest", () => {
       const avatarPath = path.join(tmp, "main.png");
       await fs.writeFile(avatarPath, "avatar-bytes\n");
 
-      const { res, end, handled } = runAvatarRequest({
+      const { res, end, handled } = await runAvatarRequest({
         url: "/avatar/main",
         method: "GET",
         resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
@@ -494,7 +523,7 @@ describe("handleControlUiHttpRequest", () => {
       const linkPath = path.join(tmp, "avatar-link.png");
       await fs.symlink(outsideFile, linkPath);
 
-      const { res, end, handled } = runAvatarRequest({
+      const { res, end, handled } = await runAvatarRequest({
         url: "/avatar/main",
         method: "GET",
         resolveAvatar: () => ({ kind: "local", filePath: linkPath }),
@@ -505,6 +534,71 @@ describe("handleControlUiHttpRequest", () => {
       await fs.rm(tmp, { recursive: true, force: true });
       await fs.rm(outside, { recursive: true, force: true });
     }
+  });
+
+  it("serves local avatar bytes when auth is enabled and the token is valid", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-auth-"));
+    try {
+      const avatarPath = path.join(tmp, "main.png");
+      await fs.writeFile(avatarPath, "avatar-bytes\n");
+
+      const { res, handled } = await runAvatarRequest({
+        url: "/avatar/main",
+        method: "GET",
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+        headers: {
+          authorization: "Bearer test-token",
+        },
+        resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
+      });
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns avatar metadata when auth is enabled and the token is valid", async () => {
+    const { res, end, handled } = await runAvatarRequest({
+      url: "/avatar/main?meta=1",
+      method: "GET",
+      auth: { mode: "token", token: "test-token", allowTailscale: false },
+      headers: {
+        authorization: "Bearer test-token",
+      },
+      resolveAvatar: () => ({ kind: "remote", url: "https://example.com/avatar.png" }),
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+      avatarUrl: "https://example.com/avatar.png",
+    });
+  });
+
+  it("rejects avatar requests without a valid auth token when auth is enabled", async () => {
+    const { res, handled, end } = await runAvatarRequest({
+      url: "/avatar/main",
+      method: "GET",
+      auth: { mode: "token", token: "test-token", allowTailscale: false },
+      resolveAvatar: () => ({ kind: "remote", url: "https://example.com/avatar.png" }),
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(401);
+    expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+  });
+
+  it("rejects trusted-proxy avatar metadata requests without operator.read scope", async () => {
+    const { res, handled, end } = await runTrustedProxyAvatarRequest({
+      meta: true,
+      headers: {
+        "x-openclaw-scopes": "",
+      },
+    });
+
+    expectMissingOperatorReadResponse({ handled, res, end });
   });
 
   it("rejects symlinked assets that resolve outside control-ui root", async () => {

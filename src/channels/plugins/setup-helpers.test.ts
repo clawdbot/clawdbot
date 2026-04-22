@@ -54,6 +54,7 @@ function resolveMatrixSingleAccountPromotionTarget(params: {
 }
 
 beforeEach(() => {
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(
     createTestRegistry([
       {

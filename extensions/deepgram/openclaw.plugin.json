@@ -7,6 +7,17 @@
   "contracts": {
     "mediaUnderstandingProviders": ["deepgram"]
   },
+  "mediaUnderstandingProviderMetadata": {
+    "deepgram": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "nova-3"
+      },
+      "autoPriority": {
+        "audio": 30
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

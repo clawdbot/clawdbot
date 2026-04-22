@@ -72,6 +72,24 @@ describe("matchesMessagingToolDeliveryTarget", () => {
       ),
     ).toBe(false);
   });
+
+  it("matches when delivery has accountId and target omits it (tool fills accountId at exec)", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "message", to: "123456" },
+        { channel: "telegram", to: "123456", accountId: "bot-a" },
+      ),
+    ).toBe(true);
+  });
+
+  it("matches when delivery and target carry the same accountId", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "telegram", to: "123456", accountId: "bot-a" },
+        { channel: "telegram", to: "123456", accountId: "bot-a" },
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("resolveCronDeliveryBestEffort", () => {

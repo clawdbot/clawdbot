@@ -290,18 +290,10 @@ function resolveReadOnlyWorkspaceDir(
   return options.workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
 }
 
-function listExternalChannelManifestRecords(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  cache?: boolean;
-}): PluginManifestRecord[] {
-  return loadPluginManifestRegistry({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    cache: params.cache,
-  }).plugins.filter((plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0);
+function listExternalChannelManifestRecords(
+  records: readonly PluginManifestRecord[],
+): PluginManifestRecord[] {
+  return records.filter((plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0);
 }
 
 function resolveExternalReadOnlyChannelPluginIds(params: {
@@ -353,12 +345,13 @@ export function resolveReadOnlyChannelPluginsForConfig(
 ): ReadOnlyChannelPluginResolution {
   const env = options.env ?? process.env;
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
-  const externalManifestRecords = listExternalChannelManifestRecords({
-    cfg,
+  const manifestRecords = loadPluginManifestRegistry({
+    config: cfg,
     workspaceDir,
     env,
     cache: options.cache,
-  });
+  }).plugins;
+  const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
   const configuredChannelIds = [
     ...new Set(
       listConfiguredChannelIdsForReadOnlyScope({
@@ -368,7 +361,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
         env,
         cache: options.cache,
         includePersistedAuthState: options.includePersistedAuthState,
-        manifestRecords: externalManifestRecords,
+        manifestRecords,
       }),
     ),
   ];

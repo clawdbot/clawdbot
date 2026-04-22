@@ -49,24 +49,6 @@ const EMOJI_ICON_MAP: Record<string, IconName> = {
   "💬": "messageSquare",
 };
 
-const SLACK_SPEC: ToolDisplaySpec = {
-  icon: "messageSquare",
-  title: "Slack",
-  actions: {
-    react: { label: "react", detailKeys: ["channelId", "messageId", "emoji"] },
-    reactions: { label: "reactions", detailKeys: ["channelId", "messageId"] },
-    sendMessage: { label: "send", detailKeys: ["to", "content"] },
-    editMessage: { label: "edit", detailKeys: ["channelId", "messageId"] },
-    deleteMessage: { label: "delete", detailKeys: ["channelId", "messageId"] },
-    readMessages: { label: "read messages", detailKeys: ["channelId", "limit"] },
-    pinMessage: { label: "pin", detailKeys: ["channelId", "messageId"] },
-    unpinMessage: { label: "unpin", detailKeys: ["channelId", "messageId"] },
-    listPins: { label: "list pins", detailKeys: ["channelId"] },
-    memberInfo: { label: "member", detailKeys: ["userId"] },
-    emojiList: { label: "emoji list" },
-  },
-};
-
 function iconForEmoji(emoji?: string): IconName {
   if (!emoji) {
     return "puzzle";
@@ -92,7 +74,6 @@ const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
     convertSpec(spec),
   ]),
 );
-TOOL_MAP.slack = SLACK_SPEC;
 
 function shortenHomeInString(input: string): string {
   if (!input) {

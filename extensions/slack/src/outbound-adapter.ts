@@ -6,6 +6,7 @@ import {
 import {
   resolveInteractiveTextFallback,
   type InteractiveReply,
+  type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   resolveOutboundSendDep,
@@ -20,7 +21,11 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
-import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
+import {
+  buildSlackInteractiveBlocks,
+  buildSlackPresentationBlocks,
+  type SlackBlock,
+} from "./blocks-render.js";
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackSendIdentity } from "./send.js";
@@ -154,16 +159,20 @@ async function sendSlackOutboundMessage(params: {
 function resolveSlackBlocks(payload: {
   channelData?: Record<string, unknown>;
   interactive?: InteractiveReply;
+  presentation?: MessagePresentation;
 }) {
-  const slackData = payload.channelData?.slack;
-  const renderedInteractive = resolveRenderedInteractiveBlocks(payload.interactive);
-  if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
-    return renderedInteractive;
-  }
-  const existingBlocks = parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks) as
-    | SlackBlock[]
+  const slackData = payload.channelData?.slack as
+    | { blocks?: unknown; presentationBlocks?: SlackBlock[] }
     | undefined;
-  const mergedBlocks = [...(existingBlocks ?? []), ...(renderedInteractive ?? [])];
+  const nativeBlocks = parseSlackBlocksInput(slackData?.blocks) as SlackBlock[] | undefined;
+  const renderedPresentation =
+    slackData?.presentationBlocks ?? buildSlackPresentationBlocks(payload.presentation);
+  const renderedInteractive = resolveRenderedInteractiveBlocks(payload.interactive);
+  const mergedBlocks = [
+    ...(nativeBlocks ?? []),
+    ...renderedPresentation,
+    ...(renderedInteractive ?? []),
+  ];
   if (mergedBlocks.length === 0) {
     return undefined;
   }
@@ -180,6 +189,23 @@ export const slackOutbound: ChannelOutboundAdapter = {
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
   normalizePayload: ({ payload }) => compileSlackInteractiveReplies(payload),
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: true,
+  },
+  renderPresentation: ({ payload, presentation }) => ({
+    ...payload,
+    channelData: {
+      ...payload.channelData,
+      slack: {
+        ...(payload.channelData?.slack as Record<string, unknown> | undefined),
+        presentationBlocks: buildSlackPresentationBlocks(presentation),
+      },
+    },
+  }),
   sendPayload: async (ctx) => {
     const payload = {
       ...ctx.payload,

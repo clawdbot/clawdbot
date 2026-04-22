@@ -14,6 +14,8 @@ export type MattermostDraftStream = {
   flush: () => Promise<void>;
   postId: () => string | undefined;
   clear: () => Promise<void>;
+  discardPending: () => Promise<void>;
+  seal: () => Promise<void>;
   stop: () => Promise<void>;
   forceNewMessage: () => void;
 };
@@ -95,7 +97,7 @@ export function createMattermostDraftStream(params: {
     }
   };
 
-  const { loop, update, stop, clear } = createFinalizableDraftLifecycle({
+  const { loop, update, stop, clear, discardPending, seal } = createFinalizableDraftLifecycle({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
@@ -125,6 +127,8 @@ export function createMattermostDraftStream(params: {
     flush: loop.flush,
     postId: () => streamPostId,
     clear,
+    discardPending,
+    seal,
     stop,
     forceNewMessage,
   };

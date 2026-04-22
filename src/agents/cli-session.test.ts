@@ -22,6 +22,7 @@ describe("cli-session helpers", () => {
       authEpoch: "auth-epoch",
       extraSystemPromptHash: "prompt-hash",
       mcpConfigHash: "mcp-hash",
+      mcpResumeHash: "mcp-resume-hash",
     });
 
     expect(entry.cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
@@ -32,6 +33,7 @@ describe("cli-session helpers", () => {
       authEpoch: "auth-epoch",
       extraSystemPromptHash: "prompt-hash",
       mcpConfigHash: "mcp-hash",
+      mcpResumeHash: "mcp-resume-hash",
     });
   });
 
@@ -142,6 +144,38 @@ describe("cli-session helpers", () => {
         mcpConfigHash: "mcp-a",
       }),
     ).toEqual({ sessionId: "cli-session-1" });
+  });
+
+  it("prefers the stable MCP resume hash over the raw MCP config hash", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-config-a",
+      mcpResumeHash: "mcp-resume-a",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-config-b",
+        mcpResumeHash: "mcp-resume-a",
+      }),
+    ).toEqual({ sessionId: "cli-session-1" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-config-a",
+        mcpResumeHash: "mcp-resume-b",
+      }),
+    ).toEqual({ invalidatedReason: "mcp" });
   });
 
   it("clears provider-scoped and global CLI session state", () => {

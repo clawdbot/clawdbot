@@ -36,6 +36,7 @@ describe("web monitor inbox", () => {
 
   async function openMonitor(onMessage = vi.fn()) {
     return await monitorWebInbox({
+      cfg: mockLoadConfig() as never,
       verbose: false,
       accountId: DEFAULT_ACCOUNT_ID,
       authDir: getAuthDir(),

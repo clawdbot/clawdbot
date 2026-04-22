@@ -1,3 +1,4 @@
+import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
@@ -43,6 +44,7 @@ type EventHandlerContext = {
   clearLocalBtwRunIds?: () => void;
   /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
   streamingWatchdogMs?: number;
+  localMode?: boolean;
 };
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
@@ -63,6 +65,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    localMode,
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
@@ -161,6 +164,16 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     pendingHistoryRefresh = false;
     void loadHistory?.();
+  };
+
+  const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
+    if (!localMode || !isAuthErrorMessage(errorMessage)) {
+      return undefined;
+    }
+    const provider = state.sessionInfo.modelProvider?.trim();
+    return provider
+      ? `auth or provider access failed for ${provider}. Run /auth ${provider} to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.`
+      : "auth or provider access failed for the current provider. Run /auth to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.";
   };
 
   const noteSessionRun = (runId: string) => {
@@ -376,7 +389,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
+      const errorMessage = evt.errorMessage ?? "unknown";
+      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${errorMessage}`);
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
     }

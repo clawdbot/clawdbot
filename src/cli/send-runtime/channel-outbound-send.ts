@@ -14,6 +14,7 @@ type RuntimeSendOpts = {
   accountId?: string;
   threadId?: string | number | null;
   messageThreadId?: string | number;
+  threadTs?: string | number;
   replyToId?: string | number | null;
   replyToMessageId?: string | number;
   silent?: boolean;
@@ -23,7 +24,7 @@ type RuntimeSendOpts = {
 };
 
 function resolveRuntimeThreadId(opts: RuntimeSendOpts): string | number | undefined {
-  return opts.messageThreadId ?? opts.threadId ?? undefined;
+  return opts.messageThreadId ?? opts.threadId ?? opts.threadTs ?? undefined;
 }
 
 function resolveRuntimeReplyToId(opts: RuntimeSendOpts): string | undefined {

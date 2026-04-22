@@ -4,6 +4,7 @@ import {
   buildAgentContext,
   resolveConfiguredCronModelSuggestions,
   resolveAgentAvatarUrl,
+  resolveChatAvatarRenderUrl,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./agents-utils.ts";
@@ -146,6 +147,32 @@ describe("resolveAgentAvatarUrl", () => {
   it("returns null for initials or emoji avatar values without a URL", () => {
     expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
     expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
+  });
+});
+
+describe("resolveChatAvatarRenderUrl", () => {
+  it("accepts a blob: URL produced by an authenticated avatar fetch", () => {
+    expect(
+      resolveChatAvatarRenderUrl("blob:http://localhost/uuid-123", {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("blob:http://localhost/uuid-123");
+  });
+
+  it("falls back to the config-sanitized avatar when no blob candidate is present", () => {
+    expect(
+      resolveChatAvatarRenderUrl(null, {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("/avatar/main");
+  });
+
+  it("rejects remote URLs passed as the render candidate", () => {
+    expect(
+      resolveChatAvatarRenderUrl("https://example.com/avatar.png", {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("/avatar/main");
   });
 });
 

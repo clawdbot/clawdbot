@@ -671,7 +671,7 @@ export function resolvePluginLoaderJitiTryNative(
   },
 ): boolean {
   if (isBundledPluginDistModulePath(modulePath)) {
-    return false;
+    return shouldPreferNativeJiti(modulePath);
   }
   return (
     shouldPreferNativeJiti(modulePath) ||

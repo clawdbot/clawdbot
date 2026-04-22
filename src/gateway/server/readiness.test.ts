@@ -32,7 +32,10 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   };
 }
 
-function createHealthyDiscordManager(startedAt: number, lastEventAt: number): ChannelManager {
+function createHealthyDiscordManager(
+  startedAt: number,
+  lastTransportActivityAt: number,
+): ChannelManager {
   return createManager(
     snapshotWith({
       discord: {
@@ -41,7 +44,7 @@ function createHealthyDiscordManager(startedAt: number, lastEventAt: number): Ch
         enabled: true,
         configured: true,
         lastStartAt: startedAt,
-        lastEventAt,
+        lastTransportActivityAt,
       },
     }),
   );
@@ -216,7 +219,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: startedAt,
-            lastEventAt: Date.now() - 31 * 60_000,
+            lastTransportActivityAt: Date.now() - 31 * 60_000,
           },
         },
       });
@@ -236,7 +239,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: startedAt,
-            lastEventAt: null,
+            lastTransportActivityAt: null,
           },
         },
       });
@@ -255,7 +258,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: Date.now() - 5 * 60_000,
-            lastEventAt: Date.now() - 1_000,
+            lastTransportActivityAt: Date.now() - 1_000,
           },
         },
         cacheTtlMs: 1_000,

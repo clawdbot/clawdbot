@@ -71,6 +71,13 @@ describe("pw-session refLocator", () => {
 
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
   });
+
+  it("rejects axN refs from format=aria snapshots instead of timing out", () => {
+    const { page, mocks } = fakePage();
+
+    expect(() => refLocator(page, "ax12")).toThrow(/format=aria snapshot/);
+    expect(mocks.locator).not.toHaveBeenCalled();
+  });
 });
 
 describe("pw-session role refs cache", () => {

@@ -86,7 +86,14 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
-    const rawErrorConsoleSuffix = safeRawErrorPreview ? ` rawError=${safeRawErrorPreview}` : "";
+    const shouldSuppressRawErrorConsoleSuffix =
+      observedError.providerRuntimeFailureKind === "auth_html_403" ||
+      observedError.providerRuntimeFailureKind === "auth_scope" ||
+      observedError.providerRuntimeFailureKind === "auth_refresh";
+    const rawErrorConsoleSuffix =
+      safeRawErrorPreview && !shouldSuppressRawErrorConsoleSuffix
+        ? ` rawError=${safeRawErrorPreview}`
+        : "";
     ctx.log.warn("embedded run agent end", {
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],

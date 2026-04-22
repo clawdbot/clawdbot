@@ -379,3 +379,31 @@ gateway.
 openclaw config validate
 openclaw config validate --json
 ```
+
+After `openclaw config validate` is passing, you can use the local TUI to have
+an embedded agent compare the active config against the docs while you validate
+each change from the same terminal:
+
+If validation is already failing, start with `openclaw configure` or
+`openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config
+guard.
+
+```bash
+openclaw chat
+```
+
+Then inside the TUI:
+
+```text
+!openclaw config file
+!openclaw docs gateway auth token secretref
+!openclaw config validate
+!openclaw doctor
+```
+
+Typical repair loop:
+
+- Ask the agent to compare your current config with the relevant docs page and suggest the smallest fix.
+- Apply targeted edits with `openclaw config set` or `openclaw configure`.
+- Rerun `openclaw config validate` after each change.
+- If validation passes but the runtime is still unhealthy, run `openclaw doctor` or `openclaw doctor --fix` for migration and repair help.

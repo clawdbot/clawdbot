@@ -38,6 +38,99 @@ function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] 
 }
 
 describe("deliverMattermostReplyPayload", () => {
+  it("suppresses payloads flagged as reasoning", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "Reasoning:\n_hidden_", isReasoning: true },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("suppresses reasoning-prefixed payloads even without an explicit flag", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "  \n Reasoning:\n_hidden_" },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("suppresses reasoning payloads formatted as a Mattermost blockquote", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "> Reasoning:\n> _hidden_" },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress messages that mention Reasoning: mid-text", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "Intro line\nReasoning: appears in content but is not a prefix" },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "channel:town-square",
+      "Intro line\nReasoning: appears in content but is not a prefix",
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        replyToId: "root-post",
+      }),
+    );
+  });
+
   it("passes agent-scoped mediaLocalRoots when sending media paths", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mm-state-"));

@@ -54,7 +54,7 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("Authorization: Bearer abcdef…ghij");
   });
 
-  it("masks Telegram-style tokens", () => {
+  it("masks bot-style tokens", () => {
     const input = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef";
     const output = redactSensitiveText(input, {
       mode: "tools",
@@ -63,14 +63,14 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("123456…cdef");
   });
 
-  it("masks Telegram Bot API URL tokens", () => {
+  it("masks bot API URL tokens", () => {
     const input =
-      "GET https://api.telegram.org/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
+      "GET https://api.example.test/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
     const output = redactSensitiveText(input, {
       mode: "tools",
       patterns: defaults,
     });
-    expect(output).toBe("GET https://api.telegram.org/bot123456…cdef/getMe HTTP/1.1");
+    expect(output).toBe("GET https://api.example.test/bot123456…cdef/getMe HTTP/1.1");
   });
 
   it("redacts short tokens fully", () => {

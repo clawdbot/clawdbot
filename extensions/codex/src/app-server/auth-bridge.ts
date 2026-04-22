@@ -13,6 +13,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
     agentDir: params.agentDir,
     bridgeDir: "harness-auth",
     profileId,
+    sourceCodexHome: params.startOptions.env?.CODEX_HOME,
   });
   if (!bridge) {
     return params.startOptions;

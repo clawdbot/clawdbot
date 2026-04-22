@@ -7,7 +7,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before touching a subt
 - Repo: `https://github.com/openclaw/openclaw`
 - Replies: repo-root file refs only, e.g. `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
 - CODEOWNERS: maintenance/refactors/tests are ok. For larger behavior, product, security, or ownership-sensitive changes, get a listed owner request/review first.
-- First pass: run docs list (`bin/docs-list` or `pnpm docs:list`; ignore if unavailable), then read only relevant docs/guides.
+- First pass: run docs list (`pnpm docs:list`; ignore if unavailable), then read only relevant docs/guides.
 - Missing deps: run `pnpm install`, rerun once, then report first actionable error.
 - Use "plugin/plugins" in docs/UI/changelog. `extensions/` remains internal workspace layout.
 - Add channel/plugin/app/doc surface: update `.github/labeler.yml` and matching GitHub labels.
@@ -65,6 +65,7 @@ Scoped guides:
 - Normal full prod sweep: `pnpm check` (prod typecheck/lint/guards, no tests)
 - Full tests: `pnpm test`
 - Changed tests only: `pnpm test:changed`
+- Local serial loop: `pnpm test:serial`
 - Extension tests: `pnpm test:extensions` or `pnpm test extensions` = all extension shards; `pnpm test extensions/<id>` = one extension lane. Heavy channels/OpenAI have dedicated shards.
 - Shard timing artifact: `.artifacts/vitest-shard-timings.json`; auto-used for balanced shard ordering. Disable with `OPENCLAW_TEST_PROJECTS_TIMINGS=0`.
 - Targeted tests: `pnpm test <path-or-filter> [vitest args...]`; do not call raw `vitest`.
@@ -84,6 +85,7 @@ Scoped guides:
   - `pnpm lint:apps`: Swift/app surface, separate from TS lint
   - `pnpm lint:all`: legacy comparison lane
 - Local heavy-check behavior: `OPENCLAW_LOCAL_CHECK=1` default; `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; `OPENCLAW_LOCAL_CHECK=0` for CI/shared runs.
+- Local validation is local-first. Do not default to Blacksmith/Testbox for routine OpenClaw iteration; it burns warm caches and startup time. Use repo `pnpm` lanes first, then reach for remote CI/Testbox only for parity-only failures, secrets/services, or when explicitly requested.
 
 ## Gates
 

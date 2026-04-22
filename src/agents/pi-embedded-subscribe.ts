@@ -123,6 +123,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingMediaUrls: new Map(),
     pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
+    pendingToolTrustedLocalMedia: false,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
   };

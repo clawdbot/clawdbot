@@ -1,4 +1,5 @@
 import type { messagingApi } from "@line/bot-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { FlexContainer } from "./flex-templates.js";
@@ -17,7 +18,7 @@ export type LineAutoReplyDeps = {
   pushMessagesLine: (
     to: string,
     messages: messagingApi.Message[],
-    opts?: { accountId?: string },
+    opts: { cfg: OpenClawConfig; accountId?: string },
   ) => Promise<unknown>;
   createFlexMessage: (altText: string, contents: FlexContainer) => messagingApi.FlexMessage;
   createImageMessage: (
@@ -46,6 +47,7 @@ export async function deliverLineAutoReply(params: {
   replyToken?: string | null;
   replyTokenUsed: boolean;
   accountId?: string;
+  cfg: OpenClawConfig;
   textLimit: number;
   deps: LineAutoReplyDeps;
 }): Promise<{ replyTokenUsed: boolean }> {
@@ -58,6 +60,7 @@ export async function deliverLineAutoReply(params: {
     }
     for (let i = 0; i < messages.length; i += 5) {
       await deps.pushMessagesLine(to, messages.slice(i, i + 5), {
+        cfg: params.cfg,
         accountId,
       });
     }
@@ -76,6 +79,7 @@ export async function deliverLineAutoReply(params: {
       const replyBatch = remaining.slice(0, 5);
       try {
         await deps.replyMessageLine(replyToken, replyBatch, {
+          cfg: params.cfg,
           accountId,
         });
       } catch (err) {
@@ -145,6 +149,7 @@ export async function deliverLineAutoReply(params: {
       quickReplies: lineData.quickReplies,
       replyToken,
       replyTokenUsed,
+      cfg: params.cfg,
       accountId,
       replyMessageLine: deps.replyMessageLine,
       pushMessageLine: deps.pushMessageLine,

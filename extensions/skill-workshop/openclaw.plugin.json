@@ -1,0 +1,80 @@
+{
+  "id": "skill-workshop",
+  "name": "Skill Workshop",
+  "description": "Captures repeatable workflows as workspace skills, with pending review, safe writes, and skill prompt refresh.",
+  "contracts": {
+    "tools": ["skill_workshop"]
+  },
+  "uiHints": {
+    "autoCapture": {
+      "label": "Auto Capture",
+      "help": "Detect user corrections and reusable workflow instructions after agent turns."
+    },
+    "approvalPolicy": {
+      "label": "Approval Policy",
+      "help": "Store learned skill changes as pending suggestions, or write them automatically."
+    },
+    "reviewMode": {
+      "label": "Review Mode",
+      "help": "Choose heuristic capture, threshold LLM review, both, or no automatic capture."
+    },
+    "maxPending": {
+      "label": "Max Pending",
+      "help": "Maximum pending skill suggestions to keep per workspace."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": true
+      },
+      "approvalPolicy": {
+        "type": "string",
+        "enum": ["pending", "auto"],
+        "default": "pending"
+      },
+      "reviewMode": {
+        "type": "string",
+        "enum": ["off", "heuristic", "llm", "hybrid"],
+        "default": "hybrid"
+      },
+      "reviewInterval": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 15
+      },
+      "reviewMinToolCalls": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 500,
+        "default": 8
+      },
+      "reviewTimeoutMs": {
+        "type": "integer",
+        "minimum": 5000,
+        "maximum": 180000,
+        "default": 45000
+      },
+      "maxPending": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 50
+      },
+      "maxSkillBytes": {
+        "type": "integer",
+        "minimum": 1024,
+        "maximum": 200000,
+        "default": 40000
+      }
+    }
+  }
+}

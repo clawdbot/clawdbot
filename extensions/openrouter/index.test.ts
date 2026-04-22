@@ -2,8 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import { expectPassthroughReplayPolicy } from "../../test/helpers/provider-replay-policy.ts";
 import openrouterPlugin from "./index.js";
+import { buildOpenrouterProvider } from "./provider-catalog.js";
 
 describe("openrouter provider hooks", () => {
+  it("includes Kimi K2.6 in the bundled catalog", () => {
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain(
+      "moonshotai/kimi-k2.6",
+    );
+  });
+
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
     await expectPassthroughReplayPolicy({
       plugin: openrouterPlugin,

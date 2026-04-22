@@ -110,6 +110,12 @@ export default definePluginEntry({
           };
         },
       },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({
+          provider: buildOpenrouterProvider(),
+        }),
+      },
       resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
       prepareDynamicModel: async (ctx) => {
         await loadOpenRouterModelCapabilities(ctx.modelId);

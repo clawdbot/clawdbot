@@ -239,6 +239,23 @@ describe("runtime api guardrails", () => {
     }
   });
 
+  it("keeps Slack's narrow runtime-setter entrypoint pinned to a single export", () => {
+    // Regression for #69317. The bundled channel entry's runtime.specifier
+    // now points at runtime-setter-api.ts. The whole point of that file is
+    // to expose ONLY setSlackRuntime so that register() does not pay the
+    // cost of importing the full runtime-api barrel. If a future change
+    // re-broadens this file, this test fails so the perf regression is
+    // surfaced explicitly rather than silently re-introduced.
+    const setterFile = bundledPluginFile({
+      rootDir: ROOT_DIR,
+      pluginId: "slack",
+      relativePath: "runtime-setter-api.ts",
+    });
+    expect(readExportStatements(setterFile)).toEqual([
+      'export { setSlackRuntime } from "./src/runtime.js";',
+    ]);
+  });
+
   it("keeps Matrix's narrow runtime-setter entrypoint pinned to a single export", () => {
     const setterFile = bundledPluginFile({
       rootDir: ROOT_DIR,

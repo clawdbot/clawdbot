@@ -33,6 +33,7 @@ export function mkdirSafe(dir: string) {
 const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const prevPluginStageDir = process.env.OPENCLAW_PLUGIN_STAGE_DIR;
 
 export const EMPTY_PLUGIN_SCHEMA = {
   type: "object",
@@ -142,6 +143,11 @@ export function resetPluginLoaderTestStateForTest() {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
+  }
+  if (prevPluginStageDir === undefined) {
+    delete process.env.OPENCLAW_PLUGIN_STAGE_DIR;
+  } else {
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = prevPluginStageDir;
   }
 }
 

@@ -15,12 +15,11 @@ let package = Package(
         .executable(name: "openclaw-mac", targets: ["OpenClawMacCLI"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.2.2"),
+        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.0"),
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.10.1"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
         .package(url: "https://github.com/steipete/Peekaboo.git", branch: "main"),
-        .package(url: "https://github.com/Blaizzy/mlx-audio-swift", exact: "0.1.2"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../../Swabble"),
     ],
@@ -55,7 +54,6 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "PeekabooBridge", package: "Peekaboo"),
                 .product(name: "PeekabooAutomationKit", package: "Peekaboo"),
-                .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
             ],
             exclude: [
                 "Resources/Info.plist",

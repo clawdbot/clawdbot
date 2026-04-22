@@ -3,7 +3,7 @@
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
-export type { ReplyPayload } from "../auto-reply/reply-payload.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export type {
   ChannelGatewayContext,

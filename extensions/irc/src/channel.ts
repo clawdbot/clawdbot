@@ -322,13 +322,15 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       idLabel: "ircUser",
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),
-      notify: async ({ id, message }) => {
+      notify: async ({ cfg, id, message }) => {
         const target = normalizePairingTarget(id);
         if (!target) {
           throw new Error(`invalid IRC pairing id: ${id}`);
         }
         const { sendMessageIrc } = await loadIrcChannelRuntime();
-        await sendMessageIrc(target, message);
+        await sendMessageIrc(target, message, {
+          cfg: cfg as CoreConfig,
+        });
       },
     },
   },

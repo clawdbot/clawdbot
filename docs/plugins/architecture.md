@@ -1251,16 +1251,21 @@ Compatibility note:
 ## Message tool schemas
 
 Plugins should own channel-specific `describeMessageTool(...)` schema
-contributions. Keep provider-specific fields in the plugin, not in shared core.
+contributions for non-message primitives such as reactions, reads, and polls.
+Shared send presentation should use the generic `MessagePresentation` contract
+instead of provider-native button, component, block, or card fields.
+See [Message Presentation](/plugins/message-presentation) for the contract,
+fallback rules, provider mapping, and plugin author checklist.
 
-For shared portable schema fragments, reuse the generic helpers exported through
-`openclaw/plugin-sdk/channel-actions`:
+Send-capable plugins declare what they can render through message capabilities:
 
-- `createMessageToolButtonsSchema()` for button-grid style payloads
-- `createMessageToolCardSchema()` for structured card payloads
+- `presentation` for semantic presentation blocks (`text`, `context`, `divider`, `buttons`, `select`)
+- `delivery-pin` for pinned-delivery requests
 
-If a schema shape only makes sense for one provider, define it in that plugin's
-own source instead of promoting it into the shared SDK.
+Core decides whether to render the presentation natively or degrade it to text.
+Do not expose provider-native UI escape hatches from the generic message tool.
+Deprecated SDK helpers for legacy native schemas remain exported for existing
+third-party plugins, but new plugins should not use them.
 
 ## Channel target resolution
 

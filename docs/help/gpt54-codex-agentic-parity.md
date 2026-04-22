@@ -1,3 +1,12 @@
+---
+title: "GPT-5.4 / Codex Agentic Parity"
+summary: "How OpenClaw closes agentic execution gaps for GPT-5.4 and Codex-style models"
+read_when:
+  - Debugging GPT-5.4 or Codex agent behavior
+  - Comparing OpenClaw agentic behavior across frontier models
+  - Reviewing the strict-agentic, tool-schema, elevation, and replay fixes
+---
+
 # GPT-5.4 / Codex Agentic Parity in OpenClaw
 
 OpenClaw already worked well with tool-using frontier models, but GPT-5.4 and Codex-style models were still underperforming in a few practical ways:

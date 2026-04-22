@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,10 +34,31 @@ vi.mock("openclaw/plugin-sdk/json-store", async () => {
 
 import {
   __testing,
-  createTelegramThreadBindingManager,
+  createTelegramThreadBindingManager as createTelegramThreadBindingManagerImpl,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
+
+const TELEGRAM_THREAD_BINDINGS_TEST_CFG = {
+  channels: {
+    telegram: {
+      token: "test-token",
+    },
+  },
+} as OpenClawConfig;
+
+type TelegramThreadBindingManagerParams = Parameters<
+  typeof createTelegramThreadBindingManagerImpl
+>[0];
+
+function createTelegramThreadBindingManager(
+  params: Omit<TelegramThreadBindingManagerParams, "cfg">,
+) {
+  return createTelegramThreadBindingManagerImpl({
+    cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
+    ...params,
+  });
+}
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -156,11 +178,13 @@ describe("telegram thread bindings", () => {
 
     try {
       const managerA = bindingsA.createTelegramThreadBindingManager({
+        cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
         accountId: "shared-runtime",
         persist: false,
         enableSweeper: false,
       });
       const managerB = bindingsB.createTelegramThreadBindingManager({
+        cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
         accountId: "shared-runtime",
         persist: false,
         enableSweeper: false,

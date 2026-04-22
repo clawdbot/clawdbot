@@ -8,7 +8,7 @@ export {
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
-export type { ReplyPayload } from "../auto-reply/reply-payload.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export { logTypingFailure } from "../channels/logging.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";

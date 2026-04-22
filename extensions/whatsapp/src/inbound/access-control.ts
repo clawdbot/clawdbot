@@ -1,5 +1,5 @@
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/config-runtime";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
@@ -26,6 +26,7 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
 }
 
 export async function checkInboundAccessControl(params: {
+  cfg: OpenClawConfig;
   accountId: string;
   from: string;
   selfE164: string | null;
@@ -42,9 +43,8 @@ export async function checkInboundAccessControl(params: {
   };
   remoteJid: string;
 }): Promise<InboundAccessControlResult> {
-  const cfg = loadConfig();
   const policy = resolveWhatsAppInboundPolicy({
-    cfg,
+    cfg: params.cfg,
     accountId: params.accountId,
     selfE164: params.selfE164,
   });

@@ -296,6 +296,9 @@ export type AriaSnapshotNode = {
   depth: number;
 };
 
+export const AX_REF_PREFIX = "ax";
+export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
+
 export type RawAXNode = {
   nodeId?: string;
   role?: { value?: string };
@@ -362,7 +365,7 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
     const name = axValue(n.name);
     const value = axValue(n.value);
     const description = axValue(n.description);
-    const ref = `ax${out.length + 1}`;
+    const ref = `${AX_REF_PREFIX}${out.length + 1}`;
     out.push({
       ref,
       role: role || "unknown",

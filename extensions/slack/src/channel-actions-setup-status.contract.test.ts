@@ -40,10 +40,10 @@ describe("slack actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: slackDefaultActions,
-        expectedCapabilities: ["blocks"],
+        expectedCapabilities: ["presentation"],
       },
       {
-        name: "interactive replies add the shared interactive capability",
+        name: "interactive replies keep the shared presentation capability",
         cfg: {
           channels: {
             slack: {
@@ -56,7 +56,7 @@ describe("slack actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: slackDefaultActions,
-        expectedCapabilities: ["blocks", "interactive"],
+        expectedCapabilities: ["presentation"],
       },
       {
         name: "missing tokens disables the actions surface",

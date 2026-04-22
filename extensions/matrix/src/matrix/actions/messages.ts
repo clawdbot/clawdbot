@@ -22,6 +22,9 @@ export async function sendMatrixMessage(
     audioAsVoice?: boolean;
   } = {},
 ) {
+  if (!opts.cfg) {
+    throw new Error("Matrix message actions require a resolved runtime config.");
+  }
   return await sendMessageMatrix(to, content, {
     cfg: opts.cfg,
     mediaUrl: opts.mediaUrl,
@@ -41,6 +44,9 @@ export async function editMatrixMessage(
   content: string,
   opts: MatrixActionClientOpts = {},
 ) {
+  if (!opts.cfg) {
+    throw new Error("Matrix message actions require a resolved runtime config.");
+  }
   const trimmed = content.trim();
   if (!trimmed) {
     throw new Error("Matrix edit requires content");

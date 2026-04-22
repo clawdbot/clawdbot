@@ -3,10 +3,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
 import { isLoopbackAddress } from "./net.js";
@@ -32,7 +29,7 @@ export type McpRequestContext = {
   sessionKey: string;
   messageProvider: string | undefined;
   accountId: string | undefined;
-  senderIsOwner: boolean | undefined;
+  senderIsOwner: boolean;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -66,8 +63,9 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
 export function validateMcpLoopbackRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
-  token: string;
-}): boolean {
+  ownerToken: string;
+  nonOwnerToken: string;
+}): { senderIsOwner: boolean } | null {
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
@@ -75,13 +73,13 @@ export function validateMcpLoopbackRequest(params: {
     logMcpLoopbackHttp("reject", { reason: "bad_request_url", method: params.req.method ?? "" });
     params.res.writeHead(400, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "bad_request" }));
-    return false;
+    return null;
   }
 
   if (params.req.method === "GET" && url.pathname.startsWith("/.well-known/")) {
     params.res.writeHead(404);
     params.res.end();
-    return false;
+    return null;
   }
 
   if (url.pathname !== "/mcp") {
@@ -92,7 +90,7 @@ export function validateMcpLoopbackRequest(params: {
     });
     params.res.writeHead(404, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "not_found" }));
-    return false;
+    return null;
   }
 
   if (params.req.method !== "POST") {
@@ -103,7 +101,7 @@ export function validateMcpLoopbackRequest(params: {
     });
     params.res.writeHead(405, { Allow: "POST" });
     params.res.end();
-    return false;
+    return null;
   }
 
   if (rejectsBrowserLoopbackRequest(params.req)) {
@@ -114,11 +112,14 @@ export function validateMcpLoopbackRequest(params: {
     });
     params.res.writeHead(403, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "forbidden" }));
-    return false;
+    return null;
   }
 
   const authHeader = getHeader(params.req, "authorization") ?? "";
-  if (!safeEqualSecret(authHeader, `Bearer ${params.token}`)) {
+  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+  const senderIsOwner = ownerTokenMatched ? true : nonOwnerTokenMatched ? false : null;
+  if (senderIsOwner === null) {
     logMcpLoopbackHttp("reject", {
       reason: "unauthorized",
       method: params.req.method ?? "",
@@ -126,7 +127,7 @@ export function validateMcpLoopbackRequest(params: {
     });
     params.res.writeHead(401, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unauthorized" }));
-    return false;
+    return null;
   }
 
   const contentType = getHeader(params.req, "content-type") ?? "";
@@ -138,10 +139,10 @@ export function validateMcpLoopbackRequest(params: {
     });
     params.res.writeHead(415, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unsupported_media_type" }));
-    return false;
+    return null;
   }
 
-  return true;
+  return { senderIsOwner };
 }
 
 export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
@@ -165,16 +166,13 @@ export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
+  auth: { senderIsOwner: boolean },
 ): McpRequestContext {
-  const senderIsOwnerRaw = normalizeOptionalLowercaseString(
-    getHeader(req, "x-openclaw-sender-is-owner"),
-  );
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
-    senderIsOwner:
-      senderIsOwnerRaw === "true" ? true : senderIsOwnerRaw === "false" ? false : undefined,
+    senderIsOwner: auth.senderIsOwner,
   };
 }

@@ -1,18 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   countOutboundMedia,
+  createNormalizedOutboundDeliverer,
   deliverFormattedTextWithAttachments,
   deliverTextOrMediaReply,
   hasOutboundMedia,
   hasOutboundReplyContent,
   hasOutboundText,
+  isReasoningReplyPayload,
   isNumericTargetId,
+  normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
+
+describe("isReasoningReplyPayload", () => {
+  it.each([
+    { name: "flagged", payload: { text: "Visible", isReasoning: true }, expected: true },
+    { name: "prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
+    { name: "blockquote", payload: { text: "> Reasoning:\n> _hidden_" }, expected: true },
+    {
+      name: "mid-message mention",
+      payload: { text: "Intro\nReasoning: visible discussion" },
+      expected: false,
+    },
+    { name: "missing text", payload: {}, expected: false },
+  ])("$name", ({ payload, expected }) => {
+    expect(isReasoningReplyPayload(payload)).toBe(expected);
+  });
+});
 
 describe("sendPayloadWithChunkedTextAndMedia", () => {
   it("returns empty result when payload has no text and no media", async () => {
@@ -67,6 +86,45 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
     expect(isNumericTargetId("  987  ")).toBe(true);
     expect(isNumericTargetId("ab12")).toBe(false);
     expect(isNumericTargetId("")).toBe(false);
+  });
+});
+
+describe("normalizeOutboundReplyPayload", () => {
+  it("strips internal-only local media trust flags from loose payload objects", () => {
+    expect(
+      normalizeOutboundReplyPayload({
+        text: "hello",
+        mediaUrl: "/tmp/reply.opus",
+        trustedLocalMedia: true,
+        sensitiveMedia: true,
+        replyToId: "abc123",
+      }),
+    ).toEqual({
+      text: "hello",
+      mediaUrl: "/tmp/reply.opus",
+      sensitiveMedia: true,
+      replyToId: "abc123",
+    });
+  });
+
+  it("keeps the normalized deliverer from forwarding trustedLocalMedia", async () => {
+    const handler = vi.fn(async () => {});
+    const deliver = createNormalizedOutboundDeliverer(handler);
+
+    await deliver({
+      text: "hello",
+      mediaUrl: "/tmp/reply.opus",
+      trustedLocalMedia: true,
+      sensitiveMedia: true,
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      text: "hello",
+      mediaUrl: "/tmp/reply.opus",
+      sensitiveMedia: true,
+      replyToId: undefined,
+      mediaUrls: undefined,
+    });
   });
 });
 

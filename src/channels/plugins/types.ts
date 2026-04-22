@@ -79,6 +79,7 @@ export type {
   ChannelStatusIssue,
   ChannelStreamingAdapter,
   ChannelStructuredComponents,
+  ChannelCrossContextPresentationFactory,
   ChannelThreadingAdapter,
   ChannelThreadingContext,
   ChannelThreadingToolContext,

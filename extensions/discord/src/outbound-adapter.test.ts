@@ -199,19 +199,29 @@ describe("discordOutbound", () => {
       channelId: "ch-1",
     });
 
+    const payload = await discordOutbound.renderPresentation?.({
+      payload: {
+        text: "hello",
+        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+      },
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+      },
+      ctx: {
+        cfg: {},
+        to: "channel:123456",
+      },
+    } as never);
+
+    if (!payload) {
+      throw new Error("expected Discord presentation payload");
+    }
+
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
       to: "channel:123456",
       text: "",
-      payload: {
-        text: "hello",
-        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
-        channelData: {
-          discord: {
-            components: { text: "hello", components: [] },
-          },
-        },
-      },
+      payload,
       accountId: "default",
       mediaLocalRoots: ["/tmp/media"],
     });
@@ -239,6 +249,35 @@ describe("discordOutbound", () => {
       messageId: "msg-2",
       channelId: "ch-1",
     });
+  });
+
+  it("renders channelData Discord components on payload sends", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "native component text",
+        channelData: {
+          discord: {
+            components: {
+              blocks: [{ type: "text", text: "Native component body" }],
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(hoisted.sendDiscordComponentMessageMock).toHaveBeenCalledWith(
+      "channel:123456",
+      expect.objectContaining({
+        text: "native component text",
+        blocks: [{ type: "text", text: "Native component body" }],
+      }),
+      expect.objectContaining({ accountId: "default" }),
+    );
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
   });
 
   it("neutralizes approval mentions only for approval payloads", async () => {

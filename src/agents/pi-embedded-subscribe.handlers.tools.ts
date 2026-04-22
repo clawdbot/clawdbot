@@ -293,7 +293,7 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
 
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
-  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean },
+  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
 ) {
   const seen = new Set(ctx.state.pendingToolMediaUrls);
   for (const mediaUrl of mediaReply.mediaUrls) {
@@ -305,6 +305,9 @@ function queuePendingToolMedia(
   }
   if (mediaReply.audioAsVoice) {
     ctx.state.pendingToolAudioAsVoice = true;
+  }
+  if (mediaReply.trustedLocalMedia) {
+    ctx.state.pendingToolTrustedLocalMedia = true;
   }
 }
 

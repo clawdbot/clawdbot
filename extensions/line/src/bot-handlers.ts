@@ -209,6 +209,7 @@ async function sendLinePairingReply(params: {
       if (replyToken) {
         try {
           await replyMessageLine(replyToken, [{ type: "text", text }], {
+            cfg: context.cfg,
             accountId: context.account.accountId,
             channelAccessToken: context.account.channelAccessToken,
           });
@@ -219,6 +220,7 @@ async function sendLinePairingReply(params: {
       }
       try {
         await pushMessageLine(`line:${senderId}`, text, {
+          cfg: context.cfg,
           accountId: context.account.accountId,
           channelAccessToken: context.account.channelAccessToken,
         });

@@ -225,7 +225,8 @@ describe("registerSlackInteractionEvents", () => {
 
   it("enqueues structured events and updates button rows", async () => {
     const { ctx, app, getHandler, resolveSessionKey } = createContext();
-    registerSlackInteractionEvents({ ctx: ctx as never });
+    const trackEvent = vi.fn();
+    registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
 
     const handler = getHandler();
     expect(handler).toBeTruthy();
@@ -296,6 +297,7 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "channel",
       senderId: "U123",
     });
+    expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
   });
 
@@ -1414,7 +1416,8 @@ describe("registerSlackInteractionEvents", () => {
   it("captures modal submissions and enqueues view submission event", async () => {
     enqueueSystemEventMock.mockClear();
     const { ctx, getViewHandler, resolveSessionKey } = createContext();
-    registerSlackInteractionEvents({ ctx: ctx as never });
+    const trackEvent = vi.fn();
+    registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
     const viewHandler = getViewHandler();
     expect(viewHandler).toBeTruthy();
 
@@ -1508,6 +1511,7 @@ describe("registerSlackInteractionEvents", () => {
         expect.objectContaining({ actionId: "notes_input", inputValue: "ship now" }),
       ]),
     );
+    expect(trackEvent).toHaveBeenCalledTimes(1);
   });
 
   it("blocks modal events when private metadata userId does not match submitter", async () => {
@@ -1857,7 +1861,8 @@ describe("registerSlackInteractionEvents", () => {
   it("captures modal close events and enqueues view closed event", async () => {
     enqueueSystemEventMock.mockClear();
     const { ctx, getViewClosedHandler, resolveSessionKey } = createContext();
-    registerSlackInteractionEvents({ ctx: ctx as never });
+    const trackEvent = vi.fn();
+    registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
     const viewClosedHandler = getViewClosedHandler();
     expect(viewClosedHandler).toBeTruthy();
 
@@ -1937,6 +1942,7 @@ describe("registerSlackInteractionEvents", () => {
         expect.objectContaining({ actionId: "env_select", selectedValues: ["canary"] }),
       ]),
     );
+    expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(options.sessionKey).toBe("agent:main:slack:channel:C99");
   });
 

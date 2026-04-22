@@ -10,6 +10,11 @@ import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
+// Keep the historical one-line-per-message export shape for normal turns, but
+// wrap pathological long messages so downstream indexers never ingest a single
+// toxic line. Wrapped continuation lines still map back to the same JSONL line.
+// This limit applies to content only; the role label adds up to 11 chars.
+const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 
 export type SessionFileEntry = {
   path: string;
@@ -203,6 +208,65 @@ function collectRawSessionText(content: unknown): string | null {
   return parts.length > 0 ? parts.join("\n") : null;
 }
 
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+function splitLongSessionLine(
+  text: string,
+  maxChars: number = SESSION_EXPORT_CONTENT_WRAP_CHARS,
+): string[] {
+  const normalized = text.trim();
+  if (!normalized) {
+    return [];
+  }
+  if (normalized.length <= maxChars) {
+    return [normalized];
+  }
+
+  const segments: string[] = [];
+  let cursor = 0;
+  while (cursor < normalized.length) {
+    const remaining = normalized.length - cursor;
+    if (remaining <= maxChars) {
+      segments.push(normalized.slice(cursor).trim());
+      break;
+    }
+
+    const limit = cursor + maxChars;
+    let splitAt = limit;
+    for (let index = limit; index > cursor; index -= 1) {
+      if (normalized[index] === " ") {
+        splitAt = index;
+        break;
+      }
+    }
+    if (
+      splitAt < normalized.length &&
+      splitAt > cursor &&
+      isHighSurrogate(normalized.charCodeAt(splitAt - 1)) &&
+      isLowSurrogate(normalized.charCodeAt(splitAt))
+    ) {
+      splitAt -= 1;
+    }
+    segments.push(normalized.slice(cursor, splitAt).trim());
+    cursor = splitAt;
+    while (cursor < normalized.length && normalized[cursor] === " ") {
+      cursor += 1;
+    }
+  }
+
+  return segments.filter(Boolean);
+}
+
+function renderSessionExportLines(label: string, text: string): string[] {
+  return splitLongSessionLine(text).map((segment) => `${label}: ${segment}`);
+}
+
 /**
  * Strip OpenClaw-injected inbound metadata envelopes from a raw text block.
  *
@@ -310,14 +374,14 @@ export async function buildSessionEntry(
       }
       const safe = redactSensitiveText(text, { mode: "tools" });
       const label = message.role === "user" ? "User" : "Assistant";
-      collected.push(`${label}: ${safe}`);
-      lineMap.push(jsonlIdx + 1);
-      messageTimestampsMs.push(
-        parseSessionTimestampMs(
-          record as { timestamp?: unknown },
-          message as { timestamp?: unknown },
-        ),
+      const renderedLines = renderSessionExportLines(label, safe);
+      const timestampMs = parseSessionTimestampMs(
+        record as { timestamp?: unknown },
+        message as { timestamp?: unknown },
       );
+      collected.push(...renderedLines);
+      lineMap.push(...renderedLines.map(() => jsonlIdx + 1));
+      messageTimestampsMs.push(...renderedLines.map(() => timestampMs));
     }
     const content = collected.join("\n");
     return {

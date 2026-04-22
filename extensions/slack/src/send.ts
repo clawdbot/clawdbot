@@ -1,5 +1,5 @@
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
@@ -49,7 +49,7 @@ export type SlackSendIdentity = {
 };
 
 type SlackSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   mediaUrl?: string;
@@ -310,7 +310,7 @@ async function uploadSlackFile(params: {
 export async function sendMessageSlack(
   to: string,
   message: string,
-  opts: SlackSendOpts = {},
+  opts: SlackSendOpts,
 ): Promise<SlackSendResult> {
   const trimmedMessage = normalizeOptionalString(message) ?? "";
   if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
@@ -321,21 +321,10 @@ export async function sendMessageSlack(
   if (!trimmedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }
-  const cfg = opts.cfg ?? loadConfig();
-  // Tolerate unresolved channel SecretRefs in the cfg snapshot here: the
-  // send path either receives an explicit `opts.token` (resolved at Slack
-  // monitor boot time and threaded through `ctx.botToken`) or surfaces the
-  // existing "Slack bot token missing" error via `resolveToken` below. The
-  // runtime snapshot can legitimately retain unresolved `channels.slack.*`
-  // SecretRefs (see the inspect/strict separation introduced in #66818) when
-  // the active account's secrets were not part of the agent-runtime base
-  // target set; failing the strict resolver here would block outbound
-  // replies even though `reactions.add` and inbound dispatch (which use the
-  // boot-resolved client/token directly) keep working. See #68237.
+  const cfg = requireRuntimeConfig(opts.cfg, "Slack send");
   const account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,
-    tolerateUnresolvedSecrets: true,
   });
   const token = resolveToken({
     explicit: opts.token,

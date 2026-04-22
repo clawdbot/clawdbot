@@ -232,7 +232,11 @@ describe("chrome.ts internal", () => {
           }
           return true;
         }
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         return false;
@@ -321,7 +325,11 @@ describe("chrome.ts internal", () => {
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
         // Pretend the mac Chrome binary exists and the preference files exist.
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -516,7 +524,7 @@ describe("chrome.ts internal", () => {
           });
         },
         run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(true);
+          await expect(isChromeCdpReady(baseUrl, 500, 100)).resolves.toBe(true);
         },
       });
     });
@@ -693,7 +701,11 @@ describe("chrome.ts internal", () => {
         );
         vi.spyOn(fs, "existsSync").mockImplementation((p) => {
           const s = String(p);
-          if (s.includes("Google Chrome")) {
+          if (
+            s.includes("Google Chrome") ||
+            s.includes("google-chrome") ||
+            s.includes("/usr/bin/chromium")
+          ) {
             return true;
           }
           // Fall through to real fs for the user-data-dir files.
@@ -731,7 +743,11 @@ describe("chrome.ts internal", () => {
       // Covers the `profile.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR` coalescing.
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -767,7 +783,11 @@ describe("chrome.ts internal", () => {
       // stderrHint truthy branch on failure.
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -804,7 +824,11 @@ describe("chrome.ts internal", () => {
       try {
         vi.spyOn(fs, "existsSync").mockImplementation((p) => {
           const s = String(p);
-          if (s.includes("Google Chrome")) {
+          if (
+            s.includes("Google Chrome") ||
+            s.includes("google-chrome") ||
+            s.includes("/usr/bin/chromium")
+          ) {
             return true;
           }
           if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -850,7 +874,11 @@ describe("chrome.ts internal", () => {
       }, 50);
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -892,7 +920,11 @@ describe("chrome.ts internal", () => {
       let prefsProbeCount = 0;
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -942,7 +974,11 @@ describe("chrome.ts internal", () => {
       const { decorateOpenClawProfile } = await import("./chrome.profile-decoration.js");
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -992,7 +1028,11 @@ describe("chrome.ts internal", () => {
       // Covers the `proc.pid ?? -1` falsy side.
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {

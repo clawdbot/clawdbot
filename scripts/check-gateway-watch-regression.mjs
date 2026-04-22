@@ -583,10 +583,10 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
   if (!options.skipBuild) {
-    runCheckedCommand("pnpm", ["build"]);
-    // The watch harness must start from a completed-build baseline. Refresh
-    // the build stamp after the full build pipeline finishes so run-node does
-    // not spuriously rebuild inside the bounded watch window.
+    runCheckedCommand("pnpm", ["build:ci-artifacts"]);
+    // The watch harness must start from a completed dist/runtime baseline.
+    // Refresh the build stamp after the CI artifact build finishes so run-node
+    // does not spuriously rebuild inside the bounded watch window.
     writeBuildStamp({ cwd: process.cwd() });
   }
 

@@ -8,41 +8,29 @@ let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCros
 let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
 let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
 
-class TestTextDisplay {
-  constructor(readonly content: string) {}
-}
-
-class TestSeparator {
-  constructor(readonly options: { divider: boolean; spacing: string }) {}
-}
-
-class TestRichUiContainer {
-  constructor(readonly components: Array<TestTextDisplay | TestSeparator>) {}
-}
-
 const mocks = vi.hoisted(() => ({
-  getChannelMessageAdapter: vi.fn((channel: string) =>
+  getChannelPlugin: vi.fn((channel: string) =>
     channel === "richchat"
       ? {
-          supportsComponentsV2: true,
-          buildCrossContextComponents: ({
-            originLabel,
-            message,
-          }: {
-            originLabel: string;
-            message: string;
-          }) => {
-            const trimmed = message.trim();
-            const components: Array<TestTextDisplay | TestSeparator> = [];
-            if (trimmed) {
-              components.push(new TestTextDisplay(message));
-              components.push(new TestSeparator({ divider: true, spacing: "small" }));
-            }
-            components.push(new TestTextDisplay(`*From ${originLabel}*`));
-            return [new TestRichUiContainer(components)];
+          messaging: {
+            buildCrossContextPresentation: ({
+              originLabel,
+              message,
+            }: {
+              originLabel: string;
+              message: string;
+            }) => {
+              const trimmed = message.trim();
+              return {
+                blocks: [
+                  ...(trimmed ? [{ type: "text" as const, text: message }] : []),
+                  { type: "context" as const, text: `From ${originLabel}` },
+                ],
+              };
+            },
           },
         }
-      : { supportsComponentsV2: false },
+      : undefined,
   ),
   normalizeTargetForProvider: vi.fn((channel: string, raw: string) => {
     const trimmed = raw.trim();
@@ -62,8 +50,8 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./channel-adapters.js", () => ({
-  getChannelMessageAdapter: mocks.getChannelMessageAdapter,
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: mocks.getChannelPlugin,
 }));
 
 vi.mock("./target-normalization.js", () => ({
@@ -187,7 +175,7 @@ describe("outbound policy helpers", () => {
     expectCrossContextPolicyResult(params);
   });
 
-  it("uses components when available and preferred", async () => {
+  it("uses presentation when available and preferred", async () => {
     const decoration = await buildCrossContextDecoration({
       cfg: richChatConfig,
       channel: "richchat",
@@ -199,12 +187,11 @@ describe("outbound policy helpers", () => {
     const applied = applyCrossContextDecoration({
       message: "hello",
       decoration: decoration!,
-      preferComponents: true,
+      preferPresentation: true,
     });
 
-    expect(applied.usedComponents).toBe(true);
-    expect(applied.componentsBuilder).toBeDefined();
-    expect(applied.componentsBuilder?.("hello").length).toBeGreaterThan(0);
+    expect(applied.usedPresentation).toBe(true);
+    expect(applied.presentation?.blocks.length).toBeGreaterThan(0);
     expect(applied.message).toBe("hello");
   });
 
@@ -225,11 +212,11 @@ describe("outbound policy helpers", () => {
     const applied = applyCrossContextDecoration({
       message: "hello",
       decoration: { prefix: "[from ops] ", suffix: " [cc]" },
-      preferComponents: true,
+      preferPresentation: true,
     });
     expect(applied).toEqual({
       message: "[from ops] hello [cc]",
-      usedComponents: false,
+      usedPresentation: false,
     });
   });
 

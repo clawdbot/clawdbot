@@ -98,7 +98,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.channelHealthCheckMinutes":
     "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
   "gateway.channelStaleEventThresholdMinutes":
-    "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
+    "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
   "gateway.channelMaxRestartsPerHour":
     "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
   "gateway.tailscale":
@@ -1145,9 +1145,9 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.embeddedHarness.runtime":
     "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
   "agents.defaults.embeddedHarness.fallback":
-    "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
+    "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
   "agents.list.*.embeddedHarness":
-    "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
+    "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
   "agents.list.*.embeddedHarness.runtime":
     "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
   "agents.list.*.embeddedHarness.fallback":

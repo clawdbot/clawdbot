@@ -172,7 +172,6 @@ export type ChannelGroupAdapter = {
 
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;
-  skipStaleSocketHealthCheck?: boolean;
   buildChannelSummary?: BivariantCallback<
     (params: {
       account: ResolvedAccount;
@@ -296,7 +295,7 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    * ## Backward Compatibility
    *
    * - This field is **optional** - channels that don't need it can ignore it
-   * - Built-in channels (slack, discord, etc.) typically don't use this field
+   * - Bundled channels typically don't use this field
    *   because they can directly import internal modules
    * - External plugins should check for undefined before using
    * - When provided, this must be a full `createPluginRuntime().channel` surface;
@@ -367,6 +366,20 @@ export type ChannelHeartbeatAdapter = {
     accountId?: string | null;
     deps?: ChannelHeartbeatDeps;
   }) => Promise<{ ok: boolean; reason: string }>;
+  sendTyping?: (params: {
+    cfg: OpenClawConfig;
+    to: string;
+    accountId?: string | null;
+    threadId?: string | number | null;
+    deps?: ChannelHeartbeatDeps;
+  }) => Promise<void> | void;
+  clearTyping?: (params: {
+    cfg: OpenClawConfig;
+    to: string;
+    accountId?: string | null;
+    threadId?: string | number | null;
+    deps?: ChannelHeartbeatDeps;
+  }) => Promise<void> | void;
   resolveRecipients?: (params: {
     cfg: OpenClawConfig;
     opts?: { to?: string; all?: boolean; accountId?: string };
@@ -762,7 +775,7 @@ export type ChannelConversationBindingSupport = {
     conversationId: string;
     parentConversationId?: string;
   } | null;
-  buildBoundReplyChannelData?: (params: {
+  buildBoundReplyPayload?: (params: {
     operation: "acp-spawn";
     placement: "current" | "child";
     conversation: {
@@ -771,7 +784,10 @@ export type ChannelConversationBindingSupport = {
       conversationId: string;
       parentConversationId?: string;
     };
-  }) => ReplyPayload["channelData"] | null | Promise<ReplyPayload["channelData"] | null>;
+  }) =>
+    | Pick<ReplyPayload, "channelData" | "delivery" | "presentation">
+    | null
+    | Promise<Pick<ReplyPayload, "channelData" | "delivery" | "presentation"> | null>;
   buildModelOverrideParentCandidates?: (params: {
     parentConversationId?: string | null;
   }) => string[] | null | undefined;

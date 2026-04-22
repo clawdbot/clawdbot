@@ -2,6 +2,8 @@ import type { ReplyToMode } from "../../config/types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type ReplyReferencePlanner = {
+  /** Returns the effective reply/thread id for the next send without updating state. */
+  peek(): string | undefined;
   /** Returns the effective reply/thread id for the next send and updates state. */
   use(): string | undefined;
   /** Mark that a reply was sent (needed when no reference is used). */
@@ -30,7 +32,7 @@ export function createReplyReferencePlanner(options: {
   const existingId = normalizeOptionalString(options.existingId);
   const startId = normalizeOptionalString(options.startId);
 
-  const use = (): string | undefined => {
+  const resolve = (): string | undefined => {
     if (!allowReference) {
       return undefined;
     }
@@ -42,10 +44,17 @@ export function createReplyReferencePlanner(options: {
       return undefined;
     }
     if (options.replyToMode === "all") {
-      hasReplied = true;
       return id;
     }
     if (isSingleUseReplyToMode(options.replyToMode) && hasReplied) {
+      return undefined;
+    }
+    return id;
+  };
+
+  const use = (): string | undefined => {
+    const id = resolve();
+    if (!id) {
       return undefined;
     }
     hasReplied = true;
@@ -57,6 +66,7 @@ export function createReplyReferencePlanner(options: {
   };
 
   return {
+    peek: resolve,
     use,
     markSent,
     hasReplied: () => hasReplied,

@@ -79,6 +79,24 @@ describe("qa suite transport helpers", () => {
     await expect(pending).rejects.toThrow("checking thread context");
   });
 
+  it("fails success-only waitForOutboundMessage calls when a tool-backed scenario reports missing tools", async () => {
+    const state = createQaBusState();
+    const pending = waitForOutboundMessage(
+      state,
+      (candidate) => candidate.text.includes("Status: complete"),
+      5_000,
+    );
+
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "Read: AGENT.md\nEvidence snippet: Tool read not found\nStatus: blocked",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+
+    await expect(pending).rejects.toThrow("Tool read not found");
+  });
+
   it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
     const state = createQaBusState();
     const waitForCondition = createScenarioWaitForCondition(state);

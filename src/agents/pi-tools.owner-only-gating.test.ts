@@ -9,10 +9,11 @@ vi.mock("./channel-tools.js", () => {
     name,
     description: `${name} stub`,
     parameters: { type: "object", properties: {} },
+    ownerOnly: true,
     execute: vi.fn(),
   });
   return {
-    listChannelAgentTools: () => [stubTool("whatsapp_login")],
+    listChannelAgentTools: () => [stubTool("plugin_login")],
     copyChannelAgentToolMeta: passthrough,
     getChannelAgentToolMeta: () => undefined,
   };
@@ -22,7 +23,7 @@ describe("owner-only tool gating", () => {
   it("removes owner-only tools for unauthorized senders", () => {
     const tools = createOpenClawCodingTools({ senderIsOwner: false });
     const toolNames = tools.map((tool) => tool.name);
-    expect(toolNames).not.toContain("whatsapp_login");
+    expect(toolNames).not.toContain("plugin_login");
     expect(toolNames).not.toContain("cron");
     expect(toolNames).not.toContain("gateway");
     expect(toolNames).not.toContain("nodes");
@@ -31,7 +32,7 @@ describe("owner-only tool gating", () => {
   it("keeps owner-only tools for authorized senders", () => {
     const tools = createOpenClawCodingTools({ senderIsOwner: true });
     const toolNames = tools.map((tool) => tool.name);
-    expect(toolNames).toContain("whatsapp_login");
+    expect(toolNames).toContain("plugin_login");
     expect(toolNames).toContain("cron");
     expect(toolNames).toContain("gateway");
     expect(toolNames).toContain("nodes");
@@ -46,7 +47,7 @@ describe("owner-only tool gating", () => {
   it("defaults to removing owner-only tools when owner status is unknown", () => {
     const tools = createOpenClawCodingTools();
     const toolNames = tools.map((tool) => tool.name);
-    expect(toolNames).not.toContain("whatsapp_login");
+    expect(toolNames).not.toContain("plugin_login");
     expect(toolNames).not.toContain("cron");
     expect(toolNames).not.toContain("gateway");
     expect(toolNames).not.toContain("nodes");

@@ -109,15 +109,17 @@ export async function handleDiscordMessagingAction(
       }),
     );
   const accountId = readStringParam(params, "accountId");
-  const cfgOptions = cfg ? { cfg } : {};
-  const reactionRuntimeOptions = cfg
+  if (!cfg) {
+    throw new Error("Discord messaging actions require a resolved runtime config.");
+  }
+  const cfgOptions = { cfg };
+  const resolvedReactionAccountId = accountId ?? resolveDefaultDiscordAccountId(cfg);
+  const reactionRuntimeOptions = resolvedReactionAccountId
     ? createDiscordRuntimeAccountContext({
         cfg,
-        accountId: accountId ?? resolveDefaultDiscordAccountId(cfg),
+        accountId: resolvedReactionAccountId,
       })
-    : accountId
-      ? { accountId }
-      : undefined;
+    : cfgOptions;
   const withReactionRuntimeOptions = (extra?: Record<string, unknown>) => ({
     ...(reactionRuntimeOptions ?? cfgOptions),
     ...extra,

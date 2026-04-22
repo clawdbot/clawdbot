@@ -28,6 +28,7 @@ import {
 } from "./live-agent-probes.js";
 import { renderCatFacePngBase64 } from "./live-image-probe.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.js";
+import { resolveMcpLoopbackBearerToken } from "./mcp-http.loopback-runtime.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 // Aggregate docker live runs can contend on startup enough that the gateway
@@ -261,10 +262,9 @@ async function callLoopbackJsonRpc(params: {
     throw new Error("mcp loopback runtime is not active");
   }
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${runtime.token}`,
+    Authorization: `Bearer ${resolveMcpLoopbackBearerToken(runtime, params.senderIsOwner)}`,
     "Content-Type": "application/json",
     "x-session-key": params.sessionKey,
-    "x-openclaw-sender-is-owner": params.senderIsOwner ? "true" : "false",
   };
   if (params.messageProvider) {
     headers["x-openclaw-message-channel"] = params.messageProvider;

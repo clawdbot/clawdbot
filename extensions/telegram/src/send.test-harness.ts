@@ -135,6 +135,16 @@ vi.mock("undici", () => ({
   setGlobalDispatcher: undiciSetGlobalDispatcher,
 }));
 
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfig()),
+  };
+});
+
 vi.mock("./send.runtime.js", () => ({
   buildOutboundMediaLoadOptions,
   getImageMetadata: vi.fn(async () => ({ ...imageMetadata })),
@@ -143,6 +153,7 @@ vi.mock("./send.runtime.js", () => ({
   loadConfig,
   loadWebMedia,
   normalizePollInput,
+  requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfig()),
   resolveMarkdownTableMode,
   resolveStorePath,
 }));

@@ -77,7 +77,7 @@ const updatedText = "updated text";
 const reactionTypes = ["like", "heart", "laugh", "surprised", "sad", "angry"];
 const deleteMissingTargetError = "Delete requires a target (to) and messageId.";
 const reactionsMissingTargetError = "Reactions requires a target (to) and messageId.";
-const cardSendMissingTargetError = "Card send requires a target (to).";
+const presentationSendMissingTargetError = "Card send requires a target (to).";
 const reactMissingEmojiError =
   "React requires an emoji (reaction type). Valid types: like, heart, laugh, surprised, sad, angry.";
 const reactMissingEmojiDetail = "React requires an emoji (reaction type).";
@@ -495,12 +495,57 @@ describe("msteamsPlugin message actions", () => {
     await expectActionParamError("reactions", { to: targetChannelId }, reactionsMissingTargetError);
   });
 
-  it("keeps card-send target validation shared", async () => {
+  it("keeps presentation-card target validation shared", async () => {
     await expectActionParamError(
       "send",
-      { card: { type: "AdaptiveCard" } },
-      cardSendMissingTargetError,
+      { presentation: { blocks: [{ type: "text", text: "hello" }] } },
+      presentationSendMissingTargetError,
     );
+  });
+
+  it("preserves message text when sending presentation cards", async () => {
+    await expectSuccessfulAction({
+      mockFn: sendAdaptiveCardMSTeamsMock,
+      mockResult: {
+        messageId: "msg-card-1",
+        conversationId: "conv-card-1",
+      },
+      action: "send",
+      actionParams: {
+        to: targetChannelId,
+        message: "Deploy finished",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Open", value: "open" }],
+            },
+          ],
+        },
+      },
+      runtimeParams: {
+        to: targetChannelId,
+        card: {
+          type: "AdaptiveCard",
+          version: "1.4",
+          body: [{ type: "TextBlock", text: "Deploy finished", wrap: true }],
+          actions: [
+            { type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } },
+          ],
+        },
+      },
+      details: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-card-1",
+      },
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-card-1",
+        conversationId: "conv-card-1",
+      },
+    });
   });
 
   it("reports the allowed reaction types when emoji is missing", async () => {

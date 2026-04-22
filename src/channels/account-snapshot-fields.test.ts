@@ -34,4 +34,16 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       baseUrl: "https://chat.example.test/",
     });
   });
+
+  it("preserves non-secret transport liveness timestamps", () => {
+    const snapshot = projectSafeChannelAccountSnapshotFields({
+      lastInboundAt: 123,
+      lastTransportActivityAt: 456,
+    });
+
+    expect(snapshot).toEqual({
+      lastInboundAt: 123,
+      lastTransportActivityAt: 456,
+    });
+  });
 });

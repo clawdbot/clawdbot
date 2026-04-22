@@ -1,9 +1,14 @@
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  presentationToInteractiveReply,
+  reduceInteractiveReply,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import type {
   InteractiveButtonStyle,
   InteractiveReply,
+  MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
+  DiscordComponentButtonSpec,
   DiscordComponentButtonStyle,
   DiscordComponentMessageSpec,
 } from "./components.types.js";
@@ -43,11 +48,19 @@ export function buildDiscordInteractiveComponents(
             type: "actions",
             buttons: block.buttons
               .slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE)
-              .map((button) => ({
-                label: button.label,
-                style: resolveDiscordInteractiveButtonStyle(button.style),
-                callbackData: button.value,
-              })),
+              .map((button) => {
+                const spec: DiscordComponentButtonSpec = {
+                  label: button.label,
+                  style: button.url ? "link" : resolveDiscordInteractiveButtonStyle(button.style),
+                };
+                if (button.value) {
+                  spec.callbackData = button.value;
+                }
+                if (button.url) {
+                  spec.url = button.url;
+                }
+                return spec;
+              }),
           });
         }
         return state;
@@ -69,4 +82,43 @@ export function buildDiscordInteractiveComponents(
     },
   );
   return blocks.length > 0 ? { blocks } : undefined;
+}
+
+export function buildDiscordPresentationComponents(
+  presentation?: MessagePresentation,
+): DiscordComponentMessageSpec | undefined {
+  if (!presentation) {
+    return undefined;
+  }
+  const spec: DiscordComponentMessageSpec = { blocks: [] };
+  if (presentation.title) {
+    spec.blocks?.push({ type: "text", text: presentation.title });
+  }
+  for (const block of presentation.blocks) {
+    if (block.type === "text" || block.type === "context") {
+      const text = block.text.trim();
+      if (text) {
+        spec.blocks?.push({
+          type: "text",
+          text: block.type === "context" ? `-# ${text}` : text,
+        });
+      }
+      continue;
+    }
+    if (block.type === "divider") {
+      spec.blocks?.push({ type: "separator" });
+      continue;
+    }
+  }
+  const interactiveSpec = buildDiscordInteractiveComponents(
+    presentationToInteractiveReply({
+      blocks: presentation.blocks.filter(
+        (block) => block.type === "buttons" || block.type === "select",
+      ),
+    }),
+  );
+  if (interactiveSpec?.blocks?.length) {
+    spec.blocks?.push(...interactiveSpec.blocks);
+  }
+  return spec.blocks?.length ? spec : undefined;
 }

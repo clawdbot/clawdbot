@@ -745,12 +745,10 @@ function buildAssistantText(
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
   }
-  if (
-    /subagent fanout synthesis check/i.test(prompt) &&
-    toolOutput &&
-    scenarioState.subagentFanoutPhase >= 2
-  ) {
-    return "Protocol note: delegated fanout complete. Alpha=ALPHA-OK. Beta=BETA-OK.";
+  const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
+  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+    scenarioState.subagentFanoutPhase = 3;
+    return fanoutCompleteReply;
   }
   if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
     const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";

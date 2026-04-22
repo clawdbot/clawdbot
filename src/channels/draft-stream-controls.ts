@@ -61,10 +61,18 @@ export function createFinalizableDraftStreamControls(params: {
     await loop.waitForInFlight();
   };
 
+  const seal = async (): Promise<void> => {
+    params.markFinal();
+    loop.stop();
+    await loop.waitForInFlight();
+  };
+
   return {
     loop,
     update,
     stop,
+    seal,
+    discardPending: stopForClear,
     stopForClear,
   };
 }

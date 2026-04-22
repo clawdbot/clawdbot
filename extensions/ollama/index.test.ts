@@ -495,4 +495,42 @@ describe("ollama plugin", () => {
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(payloadSeen?.think).toBeUndefined();
   });
+
+  it("registers an image-capable media understanding provider so image tool can route ollama/*", () => {
+    const mediaProviders: Array<{
+      id: string;
+      capabilities?: string[];
+      defaultModels?: Record<string, string>;
+      autoPriority?: Record<string, number>;
+      describeImage?: unknown;
+      describeImages?: unknown;
+    }> = [];
+
+    plugin.register(
+      createTestPluginApi({
+        id: "ollama",
+        name: "Ollama",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerProvider() {},
+        registerMediaUnderstandingProvider(provider) {
+          mediaProviders.push(provider);
+        },
+      }),
+    );
+
+    expect(mediaProviders).toHaveLength(1);
+    const [ollamaMedia] = mediaProviders;
+    expect(ollamaMedia.id).toBe("ollama");
+    expect(ollamaMedia.capabilities).toEqual(["image"]);
+    expect(typeof ollamaMedia.describeImage).toBe("function");
+    expect(typeof ollamaMedia.describeImages).toBe("function");
+    // Intentional: no defaultModels or autoPriority. Ollama vision models are
+    // user-installed (llava, qwen2.5vl, …) with no universal default, and we
+    // don't want Ollama to auto-steal image duty from configured providers.
+    expect(ollamaMedia.defaultModels).toBeUndefined();
+    expect(ollamaMedia.autoPriority).toBeUndefined();
+  });
 });

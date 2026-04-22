@@ -20,10 +20,23 @@ const mockState = vi.hoisted(() => ({
   sessionId: "sess-1",
   mainSessionKey: "main",
   finalText: "[[reply_to_current]]",
-  finalPayload: null as { text?: string; mediaUrl?: string } | null,
+  finalPayload: null as {
+    text?: string;
+    mediaUrl?: string;
+    sensitiveMedia?: boolean;
+    replyToId?: string;
+    replyToCurrent?: boolean;
+  } | null,
   dispatchedReplies: [] as Array<{
     kind: "tool" | "block" | "final";
-    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
+    payload: {
+      text?: string;
+      mediaUrl?: string;
+      mediaUrls?: string[];
+      trustedLocalMedia?: boolean;
+      replyToId?: string;
+      replyToCurrent?: boolean;
+    };
   }>,
   dispatchError: null as Error | null,
   triggerAgentRunStart: false,
@@ -91,16 +104,28 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
     async (params: {
       ctx: MsgContext;
       dispatcher: {
-        sendFinalReply: (payload: { text?: string; mediaUrl?: string }) => boolean;
+        sendFinalReply: (payload: {
+          text?: string;
+          mediaUrl?: string;
+          sensitiveMedia?: boolean;
+          replyToId?: string;
+          replyToCurrent?: boolean;
+        }) => boolean;
         sendBlockReply: (payload: {
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          trustedLocalMedia?: boolean;
+          replyToId?: string;
+          replyToCurrent?: boolean;
         }) => boolean;
         sendToolResult: (payload: {
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          trustedLocalMedia?: boolean;
+          replyToId?: string;
+          replyToCurrent?: boolean;
         }) => boolean;
         markComplete: () => void;
         waitForIdle: () => Promise<void>;
@@ -130,9 +155,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
             params.dispatcher.sendBlockReply(reply.payload);
             continue;
           }
-          params.dispatcher.sendFinalReply({
-            text: reply.payload.text ?? "",
-          });
+          params.dispatcher.sendFinalReply(reply.payload);
         }
       } else {
         params.dispatcher.sendFinalReply(mockState.finalPayload ?? { text: mockState.finalText });
@@ -500,6 +523,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         payload: {
           mediaUrl: audioPath,
           mediaUrls: [audioPath],
+          trustedLocalMedia: true,
         },
       },
     ];
@@ -528,7 +552,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(assistantUpdate).toMatchObject({
         message: {
           role: "assistant",
-          idempotencyKey: "idem-agent-audio:assistant-audio",
+          idempotencyKey: "idem-agent-audio:assistant-media",
           content: [
             { type: "text", text: "Audio reply" },
             {
@@ -542,6 +566,31 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       });
     });
+  });
+
+  it("renders image reply payloads as assistant image content instead of MEDIA text", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-image-");
+    mockState.finalPayload = {
+      text: "Scan this QR code with the OpenClaw iOS app:",
+      mediaUrl: "data:image/png;base64,cG5n",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-image",
+    });
+
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
+        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
+      ],
+    });
+    expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:data:image/png;base64,cG5n");
   });
 
   it("chat.inject keeps message defined when directive tag is the only content", async () => {
@@ -693,7 +742,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-untrusted-context",
     });
-    expect(extractFirstTextBlock(payload)).toBe("hello");
+    expect(extractFirstTextBlock(payload)?.trim()).toBe("hello");
   });
 
   it("chat.send non-streaming final broadcasts and routes on the canonical session key", async () => {
@@ -1867,7 +1916,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("preserves media-only final replies in the final broadcast message", async () => {
     createTranscriptFixture("openclaw-chat-send-media-only-final-");
-    mockState.finalPayload = { mediaUrl: "https://example.com/final.png" };
+    mockState.finalPayload = { mediaUrl: "data:image/png;base64,cG5n" };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -1877,14 +1926,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-media-only-final",
     });
 
-    expect(extractFirstTextBlock(payload)).toBe("MEDIA:https://example.com/final.png");
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Image reply" },
+        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
+      ],
+    });
   });
 
   it("strips NO_REPLY from transcript text when final replies only carry media", async () => {
     createTranscriptFixture("openclaw-chat-send-media-only-silent-final-");
     mockState.finalPayload = {
       text: "NO_REPLY",
-      mediaUrl: "https://example.com/final.png",
+      mediaUrl: "data:image/png;base64,cG5n",
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -1895,7 +1950,122 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-media-only-silent-final",
     });
 
-    expect(extractFirstTextBlock(payload)).toBe("MEDIA:https://example.com/final.png");
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Image reply" },
+        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
+      ],
+    });
+  });
+
+  it("preserves reply tags in transcript updates for media replies while stripping them from the broadcast", async () => {
+    createTranscriptFixture("openclaw-chat-send-media-reply-tags-");
+    mockState.finalPayload = {
+      replyToCurrent: true,
+      mediaUrl: "data:image/png;base64,cG5n",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-media-reply-tags",
+    });
+
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Image reply" },
+        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
+      ],
+    });
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant" &&
+        Array.isArray((update.message as { content?: unknown }).content) &&
+        ((update.message as { content: Array<{ type?: string; text?: string }> }).content.some(
+          (block) => block?.type === "text" && block?.text?.includes("[[reply_to_current]]"),
+        ) ??
+          false),
+    );
+    expect(transcriptUpdate).toMatchObject({
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "[[reply_to_current]]Image reply" },
+          { type: "input_image", image_url: "data:image/png;base64,cG5n" },
+        ],
+      },
+    });
+  });
+
+  it("does not persist sensitive image media into transcript updates", async () => {
+    createTranscriptFixture("openclaw-chat-send-sensitive-media-final-");
+    mockState.finalPayload = {
+      text: "Scan this QR code with the OpenClaw iOS app:",
+      mediaUrl: "data:image/png;base64,cG5n",
+      sensitiveMedia: true,
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-sensitive-media-final",
+    });
+
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
+        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
+      ],
+    });
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(transcriptUpdate).toMatchObject({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Scan this QR code with the OpenClaw iOS app:" }],
+      },
+    });
+    expect(JSON.stringify(transcriptUpdate)).not.toContain("input_image");
+    expect(JSON.stringify(transcriptUpdate)).not.toContain("data:image/png;base64,cG5n");
+  });
+
+  it("sanitizes replyToId before emitting inline reply directives", async () => {
+    createTranscriptFixture("openclaw-chat-send-sanitized-reply-id-");
+    mockState.finalPayload = {
+      text: "hello",
+      replyToId: "abc]]\n[[audio_as_voice]]",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-sanitized-reply-id",
+    });
+
+    expect(extractFirstTextBlock(payload)?.trim()).toBe("hello");
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(JSON.stringify(transcriptUpdate)).toContain("[[reply_to:abcaudio_as_voice]]");
+    expect(JSON.stringify(transcriptUpdate)).not.toContain("[[audio_as_voice]]");
   });
 
   it("drops image attachments for text-only session models", async () => {

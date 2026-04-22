@@ -222,7 +222,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -258,7 +258,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -303,7 +303,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -460,7 +460,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -602,7 +602,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

@@ -227,6 +227,24 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
   return touched ? out : messages;
 }
 
+export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out = [...messages];
+  for (let i = 0; i < out.length; i += 1) {
+    const message = out[i];
+    const replayContent = (message as { content?: unknown } | undefined)?.content;
+    if (!message || message.role !== "assistant" || typeof replayContent !== "string") {
+      continue;
+    }
+    out[i] = {
+      ...message,
+      content: [{ type: "text", text: replayContent }],
+    };
+    touched = true;
+  }
+  return touched ? out : messages;
+}
+
 function normalizeAssistantUsageSnapshot(usage: unknown) {
   const normalized = normalizeUsage((usage ?? undefined) as UsageLike | undefined);
   if (!normalized) {
@@ -443,8 +461,9 @@ export async function sanitizeSessionHistory(params: {
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
     params.modelApi === "azure-openai-responses";
+  const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
+    normalizedAssistantReplay,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,

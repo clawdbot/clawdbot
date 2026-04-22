@@ -19,6 +19,8 @@ const {
   resolveMatrixAuthContextMock,
 } = matrixClientResolverMocks;
 
+const TEST_CFG = {};
+
 vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
 }));
@@ -65,14 +67,20 @@ describe("action client helpers", () => {
   it("stops one-off shared clients when no active monitor client is registered", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18799");
 
-    const result = await withResolvedActionClient({ accountId: "default" }, async () => "ok");
+    const result = await withResolvedActionClient(
+      { cfg: TEST_CFG, accountId: "default" },
+      async () => "ok",
+    );
 
     await expectOneOffSharedMatrixClient();
     expect(result).toBe("ok");
   });
 
   it("skips one-off room preparation when readiness is disabled", async () => {
-    await withResolvedActionClient({ accountId: "default", readiness: "none" }, async () => {});
+    await withResolvedActionClient(
+      { cfg: TEST_CFG, accountId: "default", readiness: "none" },
+      async () => {},
+    );
 
     const sharedClient = await acquireSharedMatrixClientMock.mock.results[0]?.value;
     expect(sharedClient.prepareForOneOff).not.toHaveBeenCalled();
@@ -81,7 +89,7 @@ describe("action client helpers", () => {
   });
 
   it("starts one-off clients when started readiness is required", async () => {
-    await withStartedActionClient({ accountId: "default" }, async () => {});
+    await withStartedActionClient({ cfg: TEST_CFG, accountId: "default" }, async () => {});
 
     const sharedClient = await acquireSharedMatrixClientMock.mock.results[0]?.value;
     expect(sharedClient.start).toHaveBeenCalledTimes(1);
@@ -93,10 +101,13 @@ describe("action client helpers", () => {
     const activeClient = createMockMatrixClient();
     getActiveMatrixClientMock.mockReturnValue(activeClient);
 
-    const result = await withResolvedActionClient({ accountId: "default" }, async (client) => {
-      expect(client).toBe(activeClient);
-      return "ok";
-    });
+    const result = await withResolvedActionClient(
+      { cfg: TEST_CFG, accountId: "default" },
+      async (client) => {
+        expect(client).toBe(activeClient);
+        return "ok";
+      },
+    );
 
     expect(result).toBe("ok");
     expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
@@ -107,7 +118,7 @@ describe("action client helpers", () => {
     const activeClient = createMockMatrixClient();
     getActiveMatrixClientMock.mockReturnValue(activeClient);
 
-    await withStartedActionClient({ accountId: "default" }, async (client) => {
+    await withStartedActionClient({ cfg: TEST_CFG, accountId: "default" }, async (client) => {
       expect(client).toBe(activeClient);
     });
 
@@ -143,7 +154,7 @@ describe("action client helpers", () => {
         encryption: true,
       },
     });
-    await withResolvedActionClient({}, async () => {});
+    await withResolvedActionClient({ cfg: loadConfigMock() as never }, async () => {});
 
     await expectOneOffSharedMatrixClient({
       cfg: loadConfigMock(),
@@ -172,10 +183,13 @@ describe("action client helpers", () => {
     const sharedClient = createMockMatrixClient();
     acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
 
-    const result = await withResolvedActionClient({ accountId: "default" }, async (client) => {
-      expect(client).toBe(sharedClient);
-      return "ok";
-    });
+    const result = await withResolvedActionClient(
+      { cfg: TEST_CFG, accountId: "default" },
+      async (client) => {
+        expect(client).toBe(sharedClient);
+        return "ok";
+      },
+    );
 
     expect(result).toBe("ok");
     expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
@@ -186,7 +200,7 @@ describe("action client helpers", () => {
     acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
 
     await expect(
-      withResolvedActionClient({ accountId: "default" }, async () => {
+      withResolvedActionClient({ cfg: TEST_CFG, accountId: "default" }, async () => {
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
@@ -201,7 +215,7 @@ describe("action client helpers", () => {
 
     const result = await withResolvedRoomAction(
       "room:#ops:example.org",
-      { accountId: "default" },
+      { cfg: TEST_CFG, accountId: "default" },
       async (client, resolvedRoom) => {
         expect(client).toBe(sharedClient);
         return resolvedRoom;

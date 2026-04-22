@@ -246,7 +246,7 @@ private fun ChatBase64Image(base64: String, mimeType: String?) {
       modifier = Modifier.fillMaxWidth(),
     ) {
       Image(
-        bitmap = image!!,
+        bitmap = image,
         contentDescription = mimeType ?: "attachment",
         contentScale = ContentScale.Fit,
         modifier = Modifier.fillMaxWidth(),

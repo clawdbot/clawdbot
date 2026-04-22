@@ -16,7 +16,7 @@ import {
   createSearchableSelectList,
   createSettingsList,
 } from "./components/selectors.js";
-import type { GatewayChatClient } from "./gateway-chat.js";
+import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
@@ -27,7 +27,7 @@ import type {
 } from "./tui-types.js";
 
 type CommandHandlerContext = {
-  client: GatewayChatClient;
+  client: TuiBackend;
   chatLog: ChatLog;
   tui: TUI;
   opts: TuiOptions;
@@ -43,10 +43,13 @@ type CommandHandlerContext = {
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
-  noteLocalRunId: (runId: string) => void;
+  noteLocalRunId?: (runId: string) => void;
   noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
+  runAuthFlow?: (params: {
+    provider?: string;
+  }) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
   requestExit: () => void;
 };
 
@@ -75,6 +78,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     noteLocalBtwRunId,
     forgetLocalRunId,
     forgetLocalBtwRunId,
+    runAuthFlow,
     requestExit,
   } = context;
 
@@ -250,11 +254,52 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "help":
         chatLog.addSystem(
           helpText({
+            local: opts.local,
             provider: state.sessionInfo.modelProvider,
             model: state.sessionInfo.model,
           }),
         );
         break;
+      case "auth": {
+        if (!runAuthFlow) {
+          chatLog.addSystem("auth login is only available in local embedded mode");
+          break;
+        }
+        if (state.activeChatRunId || state.pendingOptimisticUserMessage) {
+          chatLog.addSystem("abort the current run before /auth");
+          break;
+        }
+        const provider = args.trim() || state.sessionInfo.modelProvider || undefined;
+        chatLog.addSystem(
+          provider
+            ? `opening auth flow for ${provider}; TUI will resume when it exits`
+            : "opening auth flow; TUI will resume when it exits",
+        );
+        tui.requestRender();
+        setActivityStatus("auth");
+        try {
+          const result = await runAuthFlow({ provider });
+          await refreshSessionInfo();
+          if (result.exitCode === 0 && !result.signal) {
+            chatLog.addSystem(
+              provider ? `auth flow finished for ${provider}` : "auth flow finished",
+            );
+            setActivityStatus("idle");
+          } else {
+            const failureSuffix = result.signal
+              ? ` (signal ${result.signal})`
+              : typeof result.exitCode === "number"
+                ? ` (exit ${String(result.exitCode)})`
+                : "";
+            chatLog.addSystem(`auth flow failed${failureSuffix}`);
+            setActivityStatus("error");
+          }
+        } catch (err) {
+          chatLog.addSystem(`auth flow failed: ${sanitizeRenderableText(String(err))}`);
+          setActivityStatus("error");
+        }
+        break;
+      }
       case "gateway-status":
         try {
           const status = await client.getGatewayStatus();
@@ -526,7 +571,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const sendMessage = async (text: string) => {
     if (!state.isConnected) {
-      chatLog.addSystem("not connected to gateway — message not sent");
+      chatLog.addSystem(
+        opts.local
+          ? "local runtime not ready — message not sent"
+          : "not connected to gateway — message not sent",
+      );
       setActivityStatus("disconnected");
       tui.requestRender();
       return;

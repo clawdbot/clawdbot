@@ -13,6 +13,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
+  hasOpenAICodexCliOAuthCredential,
   readOpenAICodexCliOAuthProfile,
 } from "./openai-codex-cli-auth.js";
 
@@ -78,6 +79,20 @@ describe("readOpenAICodexCliOAuthProfile", () => {
       },
     });
     expect(parsed?.credential.expires).toBeGreaterThan(Date.now());
+  });
+
+  it("detects an existing Codex CLI chatgpt login for setup labeling", () => {
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+        },
+      }),
+    );
+
+    expect(hasOpenAICodexCliOAuthCredential()).toBe(true);
   });
 
   it("does not override a locally managed OpenAI Codex profile", () => {

@@ -86,91 +86,103 @@ export function installChannelThreadingContractSuite(params: {
   plugin: Pick<ChannelPlugin, "id" | "threading">;
 }) {
   it("exposes the base threading contract", () => {
-    expect(params.plugin.threading).toBeDefined();
+    expectChannelThreadingBaseContract(params.plugin);
   });
 
   it("keeps threading return values normalized", () => {
-    const threading = params.plugin.threading;
-    expect(threading).toBeDefined();
-
-    if (threading?.resolveReplyToMode) {
-      expect(
-        ["off", "first", "all"].includes(
-          threading.resolveReplyToMode({
-            cfg: {} as OpenClawConfig,
-            accountId: "default",
-            chatType: "group",
-          }),
-        ),
-      ).toBe(true);
-    }
-
-    const repliedRef = { value: false };
-    const toolContext = threading?.buildToolContext?.({
-      cfg: {} as OpenClawConfig,
-      accountId: "default",
-      context: {
-        Channel: "group:test",
-        From: "user:test",
-        To: "group:test",
-        ChatType: "group",
-        CurrentMessageId: "msg-1",
-        ReplyToId: "msg-0",
-        ReplyToIdFull: "thread-0",
-        MessageThreadId: "thread-0",
-        NativeChannelId: "native:test",
-      },
-      hasRepliedRef: repliedRef,
-    });
-
-    if (toolContext) {
-      expectThreadingToolContextShape(toolContext);
-      if (toolContext.hasRepliedRef) {
-        expect(toolContext.hasRepliedRef).toBe(repliedRef);
-      }
-    }
-
-    const autoThreadId = threading?.resolveAutoThreadId?.({
-      cfg: {} as OpenClawConfig,
-      accountId: "default",
-      to: "group:test",
-      toolContext,
-      replyToId: null,
-    });
-    if (autoThreadId !== undefined) {
-      expect(typeof autoThreadId).toBe("string");
-      expect(autoThreadId.trim()).not.toBe("");
-    }
-
-    const replyTransport = threading?.resolveReplyTransport?.({
-      cfg: {} as OpenClawConfig,
-      accountId: "default",
-      threadId: "thread-0",
-      replyToId: "msg-0",
-    });
-    if (replyTransport) {
-      expectReplyTransportShape(replyTransport);
-    }
-
-    const focusedBinding = threading?.resolveFocusedBinding?.({
-      cfg: {} as OpenClawConfig,
-      accountId: "default",
-      context: {
-        Channel: "group:test",
-        From: "user:test",
-        To: "group:test",
-        ChatType: "group",
-        CurrentMessageId: "msg-1",
-        ReplyToId: "msg-0",
-        ReplyToIdFull: "thread-0",
-        MessageThreadId: "thread-0",
-        NativeChannelId: "native:test",
-      },
-    });
-    if (focusedBinding) {
-      expectFocusedBindingShape(focusedBinding);
-    }
+    expectChannelThreadingReturnValuesNormalized(params.plugin);
   });
+}
+
+export function expectChannelThreadingBaseContract(
+  plugin: Pick<ChannelPlugin, "id" | "threading">,
+) {
+  expect(plugin.threading).toBeDefined();
+}
+
+export function expectChannelThreadingReturnValuesNormalized(
+  plugin: Pick<ChannelPlugin, "id" | "threading">,
+) {
+  const threading = plugin.threading;
+  expect(threading).toBeDefined();
+
+  if (threading?.resolveReplyToMode) {
+    expect(
+      ["off", "first", "all"].includes(
+        threading.resolveReplyToMode({
+          cfg: {} as OpenClawConfig,
+          accountId: "default",
+          chatType: "group",
+        }),
+      ),
+    ).toBe(true);
+  }
+
+  const repliedRef = { value: false };
+  const toolContext = threading?.buildToolContext?.({
+    cfg: {} as OpenClawConfig,
+    accountId: "default",
+    context: {
+      Channel: "group:test",
+      From: "user:test",
+      To: "group:test",
+      ChatType: "group",
+      CurrentMessageId: "msg-1",
+      ReplyToId: "msg-0",
+      ReplyToIdFull: "thread-0",
+      MessageThreadId: "thread-0",
+      NativeChannelId: "native:test",
+    },
+    hasRepliedRef: repliedRef,
+  });
+
+  if (toolContext) {
+    expectThreadingToolContextShape(toolContext);
+    if (toolContext.hasRepliedRef) {
+      expect(toolContext.hasRepliedRef).toBe(repliedRef);
+    }
+  }
+
+  const autoThreadId = threading?.resolveAutoThreadId?.({
+    cfg: {} as OpenClawConfig,
+    accountId: "default",
+    to: "group:test",
+    toolContext,
+    replyToId: null,
+  });
+  if (autoThreadId !== undefined) {
+    expect(typeof autoThreadId).toBe("string");
+    expect(autoThreadId.trim()).not.toBe("");
+  }
+
+  const replyTransport = threading?.resolveReplyTransport?.({
+    cfg: {} as OpenClawConfig,
+    accountId: "default",
+    threadId: "thread-0",
+    replyToId: "msg-0",
+  });
+  if (replyTransport) {
+    expectReplyTransportShape(replyTransport);
+  }
+
+  const focusedBinding = threading?.resolveFocusedBinding?.({
+    cfg: {} as OpenClawConfig,
+    accountId: "default",
+    context: {
+      Channel: "group:test",
+      From: "user:test",
+      To: "group:test",
+      ChatType: "group",
+      CurrentMessageId: "msg-1",
+      ReplyToId: "msg-0",
+      ReplyToIdFull: "thread-0",
+      MessageThreadId: "thread-0",
+      NativeChannelId: "native:test",
+    },
+  });
+  if (focusedBinding) {
+    expectFocusedBindingShape(focusedBinding);
+  }
 }
 
 export function installChannelDirectoryContractSuite(params: {
@@ -180,60 +192,69 @@ export function installChannelDirectoryContractSuite(params: {
   accountId?: string;
 }) {
   it("exposes the base directory contract", async () => {
-    const directory = params.plugin.directory;
-    expect(directory).toBeDefined();
+    await expectChannelDirectoryBaseContract(params);
+  });
+}
 
-    if (params.coverage === "presence") {
-      return;
-    }
-    const runtime = await getDirectoryContractRuntime();
-    const self = await directory?.self?.({
+export async function expectChannelDirectoryBaseContract(params: {
+  plugin: Pick<ChannelPlugin, "id" | "directory">;
+  coverage?: "lookups" | "presence";
+  cfg?: OpenClawConfig;
+  accountId?: string;
+}) {
+  const directory = params.plugin.directory;
+  expect(directory).toBeDefined();
+
+  if (params.coverage === "presence") {
+    return;
+  }
+  const runtime = await getDirectoryContractRuntime();
+  const self = await directory?.self?.({
+    cfg: params.cfg ?? ({} as OpenClawConfig),
+    accountId: params.accountId ?? "default",
+    runtime,
+  });
+  if (self) {
+    expectDirectoryEntryShape(self);
+  }
+
+  const peers =
+    (await directory?.listPeers?.({
       cfg: params.cfg ?? ({} as OpenClawConfig),
       accountId: params.accountId ?? "default",
+      query: "",
+      limit: 5,
+      runtime,
+    })) ?? [];
+  expect(Array.isArray(peers)).toBe(true);
+  for (const peer of peers) {
+    expectDirectoryEntryShape(peer);
+  }
+
+  const groups =
+    (await directory?.listGroups?.({
+      cfg: params.cfg ?? ({} as OpenClawConfig),
+      accountId: params.accountId ?? "default",
+      query: "",
+      limit: 5,
+      runtime,
+    })) ?? [];
+  expect(Array.isArray(groups)).toBe(true);
+  for (const group of groups) {
+    expectDirectoryEntryShape(group);
+  }
+
+  if (directory?.listGroupMembers && groups[0]?.id) {
+    const members = await directory.listGroupMembers({
+      cfg: params.cfg ?? ({} as OpenClawConfig),
+      accountId: params.accountId ?? "default",
+      groupId: groups[0].id,
+      limit: 5,
       runtime,
     });
-    if (self) {
-      expectDirectoryEntryShape(self);
+    expect(Array.isArray(members)).toBe(true);
+    for (const member of members) {
+      expectDirectoryEntryShape(member);
     }
-
-    const peers =
-      (await directory?.listPeers?.({
-        cfg: params.cfg ?? ({} as OpenClawConfig),
-        accountId: params.accountId ?? "default",
-        query: "",
-        limit: 5,
-        runtime,
-      })) ?? [];
-    expect(Array.isArray(peers)).toBe(true);
-    for (const peer of peers) {
-      expectDirectoryEntryShape(peer);
-    }
-
-    const groups =
-      (await directory?.listGroups?.({
-        cfg: params.cfg ?? ({} as OpenClawConfig),
-        accountId: params.accountId ?? "default",
-        query: "",
-        limit: 5,
-        runtime,
-      })) ?? [];
-    expect(Array.isArray(groups)).toBe(true);
-    for (const group of groups) {
-      expectDirectoryEntryShape(group);
-    }
-
-    if (directory?.listGroupMembers && groups[0]?.id) {
-      const members = await directory.listGroupMembers({
-        cfg: params.cfg ?? ({} as OpenClawConfig),
-        accountId: params.accountId ?? "default",
-        groupId: groups[0].id,
-        limit: 5,
-        runtime,
-      });
-      expect(Array.isArray(members)).toBe(true);
-      for (const member of members) {
-        expectDirectoryEntryShape(member);
-      }
-    }
-  });
+  }
 }

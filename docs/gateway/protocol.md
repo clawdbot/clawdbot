@@ -240,6 +240,17 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
   even when it connects as both **operator** and **node**.
 
+## Broadcast event scoping
+
+Server-pushed WebSocket broadcast events are scope-gated so that pairing-scoped or node-only sessions do not passively receive session content.
+
+- **Chat, agent, and tool-result frames** (including streamed `agent` events and tool call results) require at least `operator.read`. Sessions without `operator.read` skip these frames entirely.
+- **Plugin-defined `plugin.*` broadcasts** are gated to `operator.write` or `operator.admin`, depending on how the plugin registered them.
+- **Status and transport events** (`heartbeat`, `presence`, `tick`, connect/disconnect lifecycle, etc.) remain unrestricted so transport health stays observable to every authenticated session.
+- **Unknown broadcast event families** are scope-gated by default (fail-closed) unless a registered handler explicitly relaxes them.
+
+Each client connection keeps its own per-client sequence number so broadcasts preserve monotonic ordering on that socket even when different clients see different scope-filtered subsets of the event stream.
+
 ## Common RPC method families
 
 This page is not a generated full dump, but the public WS surface is broader

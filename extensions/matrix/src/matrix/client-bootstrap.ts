@@ -1,4 +1,4 @@
-import { getMatrixRuntime } from "../runtime.js";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { CoreConfig } from "../types.js";
 import { getActiveMatrixClient } from "./active-client.js";
 import { isBunRuntime } from "./client/runtime.js";
@@ -71,7 +71,12 @@ async function resolveRuntimeMatrixClient(opts: {
     return { client: opts.client, stopOnDone: false };
   }
 
-  const cfg = opts.cfg ?? (getMatrixRuntime().config.loadConfig() as CoreConfig);
+  if (!opts.cfg) {
+    throw new Error(
+      "Matrix runtime client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const cfg = requireRuntimeConfig(opts.cfg, "Matrix runtime client") as CoreConfig;
   const { acquireSharedMatrixClient, releaseSharedClientInstance, resolveMatrixAuthContext } =
     await loadMatrixSharedClientRuntimeDeps();
   const authContext = resolveMatrixAuthContext({

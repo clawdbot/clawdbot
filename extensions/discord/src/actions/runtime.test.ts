@@ -82,6 +82,20 @@ const {
 } = discordSendMocks;
 
 const enableAllActions = () => true;
+const DISCORD_TEST_CFG = {} as OpenClawConfig;
+
+function handleMessagingAction(
+  action: string,
+  params: Record<string, unknown>,
+  isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
+  options?: {
+    mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  },
+  cfg: OpenClawConfig = DISCORD_TEST_CFG,
+) {
+  return handleDiscordMessagingAction(action, params, isActionEnabled, options, cfg);
+}
 
 const disabledActions = (key: keyof DiscordActionConfig) => key !== "reactions";
 const channelInfoEnabled = (key: keyof DiscordActionConfig) => key === "channelInfo";
@@ -112,7 +126,7 @@ describe("handleDiscordMessagingAction", () => {
         messageId: "M1",
         emoji: "✅",
       },
-      expectedOptions: undefined,
+      expectedOptions: { cfg: DISCORD_TEST_CFG, accountId: "default" },
     },
     {
       name: "with accountId",
@@ -122,19 +136,21 @@ describe("handleDiscordMessagingAction", () => {
         emoji: "✅",
         accountId: "ops",
       },
-      expectedOptions: { accountId: "ops" },
+      expectedOptions: { cfg: DISCORD_TEST_CFG, accountId: "ops" },
     },
   ])("adds reactions $name", async ({ params, expectedOptions }) => {
-    await handleDiscordMessagingAction("react", params, enableAllActions);
+    await handleMessagingAction("react", params, enableAllActions);
     if (expectedOptions) {
       expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", expectedOptions);
       return;
     }
-    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {});
+    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {
+      cfg: DISCORD_TEST_CFG,
+    });
   });
 
   it("uses configured defaultAccount when cfg is provided and accountId is omitted", async () => {
-    await handleDiscordMessagingAction(
+    await handleMessagingAction(
       "react",
       {
         channelId: "C1",
@@ -164,7 +180,7 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("removes reactions on empty emoji", async () => {
-    await handleDiscordMessagingAction(
+    await handleMessagingAction(
       "react",
       {
         channelId: "C1",
@@ -173,11 +189,14 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
     );
-    expect(removeOwnReactionsDiscord).toHaveBeenCalledWith("C1", "M1", {});
+    expect(removeOwnReactionsDiscord).toHaveBeenCalledWith("C1", "M1", {
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
   });
 
   it("removes reactions when remove flag set", async () => {
-    await handleDiscordMessagingAction(
+    await handleMessagingAction(
       "react",
       {
         channelId: "C1",
@@ -187,12 +206,15 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
     );
-    expect(removeReactionDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {});
+    expect(removeReactionDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
   });
 
   it("rejects removes without emoji", async () => {
     await expect(
-      handleDiscordMessagingAction(
+      handleMessagingAction(
         "react",
         {
           channelId: "C1",
@@ -207,7 +229,7 @@ describe("handleDiscordMessagingAction", () => {
 
   it("respects reaction gating", async () => {
     await expect(
-      handleDiscordMessagingAction(
+      handleMessagingAction(
         "react",
         {
           channelId: "C1",
@@ -220,7 +242,7 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("parses string booleans for poll options", async () => {
-    await handleDiscordMessagingAction(
+    await handleMessagingAction(
       "poll",
       {
         to: "channel:123",
@@ -249,7 +271,7 @@ describe("handleDiscordMessagingAction", () => {
       { id: "1", timestamp: "2026-01-15T10:00:00.000Z" },
     ] as never);
 
-    const result = await handleDiscordMessagingAction(
+    const result = await handleMessagingAction(
       "readMessages",
       { channelId: "C1" },
       enableAllActions,
@@ -271,13 +293,7 @@ describe("handleDiscordMessagingAction", () => {
         },
       },
     } as OpenClawConfig;
-    await handleDiscordMessagingAction(
-      "readMessages",
-      { channelId: "C1" },
-      enableAllActions,
-      {},
-      cfg,
-    );
+    await handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions, {}, cfg);
     expect(readMessagesDiscord).toHaveBeenCalledWith("C1", expect.any(Object), { cfg });
   });
 
@@ -287,7 +303,7 @@ describe("handleDiscordMessagingAction", () => {
       timestamp: "2026-01-15T11:00:00.000Z",
     });
 
-    const result = await handleDiscordMessagingAction(
+    const result = await handleMessagingAction(
       "fetchMessage",
       { guildId: "G1", channelId: "C1", messageId: "M1" },
       enableAllActions,
@@ -307,7 +323,7 @@ describe("handleDiscordMessagingAction", () => {
         },
       },
     } as OpenClawConfig;
-    await handleDiscordMessagingAction(
+    await handleMessagingAction(
       "fetchMessage",
       { guildId: "G1", channelId: "C1", messageId: "M1" },
       enableAllActions,
@@ -320,11 +336,7 @@ describe("handleDiscordMessagingAction", () => {
   it("adds normalized timestamps to listPins payloads", async () => {
     listPinsDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T12:00:00.000Z" }]);
 
-    const result = await handleDiscordMessagingAction(
-      "listPins",
-      { channelId: "C1" },
-      enableAllActions,
-    );
+    const result = await handleMessagingAction("listPins", { channelId: "C1" }, enableAllActions);
     const payload = result.details as {
       pins: Array<{ timestampMs?: number; timestampUtc?: string }>;
     };
@@ -340,7 +352,7 @@ describe("handleDiscordMessagingAction", () => {
       messages: [[{ id: "1", timestamp: "2026-01-15T13:00:00.000Z" }]],
     });
 
-    const result = await handleDiscordMessagingAction(
+    const result = await handleMessagingAction(
       "searchMessages",
       { guildId: "G1", content: "hi" },
       enableAllActions,
@@ -360,7 +372,7 @@ describe("handleDiscordMessagingAction", () => {
     sendVoiceMessageDiscord.mockClear();
     sendMessageDiscord.mockClear();
 
-    await handleDiscordMessagingAction(
+    await handleMessagingAction(
       "sendMessage",
       {
         to: "channel:123",
@@ -372,6 +384,7 @@ describe("handleDiscordMessagingAction", () => {
     );
 
     expect(sendVoiceMessageDiscord).toHaveBeenCalledWith("channel:123", "/tmp/voice.mp3", {
+      cfg: DISCORD_TEST_CFG,
       replyTo: undefined,
       silent: true,
     });
@@ -380,7 +393,7 @@ describe("handleDiscordMessagingAction", () => {
 
   it("forwards trusted mediaLocalRoots into sendMessageDiscord", async () => {
     sendMessageDiscord.mockClear();
-    await handleDiscordMessagingAction(
+    await handleMessagingAction(
       "sendMessage",
       {
         to: "channel:123",
@@ -404,7 +417,7 @@ describe("handleDiscordMessagingAction", () => {
     sendMessageDiscord.mockClear();
     sendDiscordComponentMessage.mockClear();
 
-    await handleDiscordMessagingAction(
+    await handleMessagingAction(
       "sendMessage",
       {
         to: "channel:123",
@@ -429,7 +442,7 @@ describe("handleDiscordMessagingAction", () => {
 
   it("forwards the optional filename into sendMessageDiscord", async () => {
     sendMessageDiscord.mockClear();
-    await handleDiscordMessagingAction(
+    await handleMessagingAction(
       "sendMessage",
       {
         to: "channel:123",
@@ -451,7 +464,7 @@ describe("handleDiscordMessagingAction", () => {
 
   it("rejects voice messages that include content", async () => {
     await expect(
-      handleDiscordMessagingAction(
+      handleMessagingAction(
         "sendMessage",
         {
           to: "channel:123",
@@ -466,7 +479,7 @@ describe("handleDiscordMessagingAction", () => {
 
   it("forwards optional thread content", async () => {
     createThreadDiscord.mockClear();
-    await handleDiscordMessagingAction(
+    await handleMessagingAction(
       "threadCreate",
       {
         channelId: "C1",
@@ -484,7 +497,7 @@ describe("handleDiscordMessagingAction", () => {
         content: "Initial forum post body",
         appliedTags: undefined,
       },
-      {},
+      { cfg: DISCORD_TEST_CFG },
     );
   });
 });

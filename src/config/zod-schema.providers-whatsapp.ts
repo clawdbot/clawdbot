@@ -22,11 +22,21 @@ const WhatsAppGroupEntrySchema = z
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
+    systemPrompt: z.string().optional(),
   })
   .strict()
   .optional();
 
 const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).optional();
+
+const WhatsAppDirectEntrySchema = z
+  .object({
+    systemPrompt: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const WhatsAppDirectSchema = z.record(z.string(), WhatsAppDirectEntrySchema).optional();
 
 const WhatsAppAckReactionSchema = z
   .object({
@@ -65,6 +75,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: WhatsAppGroupsSchema,
+    direct: WhatsAppDirectSchema,
     ackReaction: WhatsAppAckReactionSchema,
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     debounceMs: params.useDefaults

@@ -167,6 +167,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       const payload: ReplyPayload = {
         mediaUrl: result.audioPath,
         audioAsVoice: result.voiceCompatible === true,
+        trustedLocalMedia: true,
       };
       return { shouldContinue: false, reply: payload };
     }

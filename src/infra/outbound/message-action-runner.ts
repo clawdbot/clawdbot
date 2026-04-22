@@ -14,7 +14,12 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
+import {
+  hasInteractiveReplyBlocks,
+  hasMessagePresentationBlocks,
+  hasReplyPayloadContent,
+  normalizeMessagePresentation,
+} from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -46,10 +51,8 @@ import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
-  parseButtonsParam,
-  parseCardParam,
-  parseComponentsParam,
   parseInteractiveParam,
+  parseJsonMessageParam,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
@@ -209,21 +212,27 @@ function applyCrossContextMessageDecoration({
   params,
   message,
   decoration,
-  preferComponents,
+  preferPresentation,
 }: {
   params: Record<string, unknown>;
   message: string;
   decoration: CrossContextDecoration;
-  preferComponents: boolean;
+  preferPresentation: boolean;
 }): string {
   const applied = applyCrossContextDecoration({
     message,
     decoration,
-    preferComponents,
+    preferPresentation,
   });
   params.message = applied.message;
-  if (applied.componentsBuilder) {
-    params.components = applied.componentsBuilder;
+  if (applied.presentation) {
+    const existing = normalizeMessagePresentation(params.presentation);
+    params.presentation = existing
+      ? {
+          ...existing,
+          blocks: [...applied.presentation.blocks, ...existing.blocks],
+        }
+      : applied.presentation;
   }
   return applied.message;
 }
@@ -237,7 +246,7 @@ async function maybeApplyCrossContextMarker(params: {
   accountId?: string | null;
   args: Record<string, unknown>;
   message: string;
-  preferComponents: boolean;
+  preferPresentation: boolean;
 }): Promise<string> {
   if (!shouldApplyCrossContextMarker(params.action) || !params.toolContext) {
     return params.message;
@@ -256,7 +265,7 @@ async function maybeApplyCrossContextMarker(params: {
     params: params.args,
     message: params.message,
     decoration,
-    preferComponents: params.preferComponents,
+    preferPresentation: params.preferPresentation,
   });
 }
 
@@ -465,6 +474,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "send";
   const to = readStringParam(params, "to", { required: true });
+  if (params.pin === true && params.delivery == null) {
+    params.delivery = { pin: { enabled: true } };
+  }
   // Support media, path, and filePath parameters for attachments
   const mediaHint =
     readStringParam(params, "media", { trim: false }) ??
@@ -472,18 +484,12 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     readStringParam(params, "path", { trim: false }) ??
     readStringParam(params, "filePath", { trim: false }) ??
     readStringParam(params, "fileUrl", { trim: false });
-  const hasButtons = Array.isArray(params.buttons) && params.buttons.length > 0;
-  const hasCard = params.card != null && typeof params.card === "object";
-  const hasComponents = params.components != null && typeof params.components === "object";
+  const hasPresentation = hasMessagePresentationBlocks(params.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(params.interactive);
-  const hasBlocks =
-    (Array.isArray(params.blocks) && params.blocks.length > 0) ||
-    (typeof params.blocks === "string" && params.blocks.trim().length > 0);
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(params, "message", {
-      required:
-        !mediaHint && !hasButtons && !hasCard && !hasComponents && !hasInteractive && !hasBlocks,
+      required: !mediaHint && !hasPresentation && !hasInteractive,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -539,22 +545,18 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     args: params,
     message,
-    preferComponents: true,
+    preferPresentation: true,
   });
 
   const mediaUrl = readStringParam(params, "media", { trim: false });
   if (
-    !hasReplyPayloadContent(
-      {
-        text: message,
-        mediaUrl,
-        mediaUrls: mergedMediaUrls,
-        interactive: params.interactive,
-      },
-      {
-        extraContent: hasButtons || hasCard || hasComponents || hasBlocks,
-      },
-    )
+    !hasReplyPayloadContent({
+      text: message,
+      mediaUrl,
+      mediaUrls: mergedMediaUrls,
+      presentation: params.presentation,
+      interactive: params.interactive,
+    })
   ) {
     throw new Error("send requires text or media");
   }
@@ -665,7 +667,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     args: params,
     message: base,
-    preferComponents: false,
+    preferPresentation: false,
   });
 
   const poll = await executePollAction({
@@ -825,9 +827,8 @@ export async function runMessageAction(
     (input.sessionKey
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
       : undefined);
-  parseButtonsParam(params);
-  parseCardParam(params);
-  parseComponentsParam(params);
+  parseJsonMessageParam(params, "presentation");
+  parseJsonMessageParam(params, "delivery");
   parseInteractiveParam(params);
 
   const action = input.action;

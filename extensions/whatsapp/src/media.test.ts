@@ -339,7 +339,7 @@ describe("Discord voice message input hardening", () => {
 
     for (const testCase of cases) {
       await expect(
-        sendVoiceMessageDiscord("channel:123", testCase.candidate),
+        sendVoiceMessageDiscord("channel:123", testCase.candidate, { cfg: {} as never }),
         testCase.name,
       ).rejects.toThrow(testCase.expectedMessage);
     }

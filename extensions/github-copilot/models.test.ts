@@ -63,8 +63,9 @@ function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
 
 describe("github-copilot model defaults", () => {
   describe("getDefaultCopilotModelIds", () => {
-    it("includes claude-opus-4.6", () => {
-      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.6");
+    it("includes claude-opus-4.7", () => {
+      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.7");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-opus-4.6");
     });
 
     it("includes claude-sonnet-4.6", () => {

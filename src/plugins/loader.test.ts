@@ -933,6 +933,78 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
   });
 
+  it("keeps bundled runtime dep install logs off non-activating loads", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "discord",
+      dir: path.join(bundledDir, "discord"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "discord", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discord",
+          version: "1.0.0",
+          dependencies: {
+            "discord-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "discord",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      logger,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot }) => {
+        fs.mkdirSync(path.join(installRoot, "node_modules", "discord-runtime"), {
+          recursive: true,
+        });
+        fs.writeFileSync(
+          path.join(installRoot, "node_modules", "discord-runtime", "package.json"),
+          JSON.stringify({ name: "discord-runtime", version: "1.0.0" }),
+          "utf-8",
+        );
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+    expect(logger.info).not.toHaveBeenCalledWith(
+      "[plugins] discord installed bundled runtime deps: discord-runtime@1.0.0",
+    );
+  });
+
   it("does not repair disabled bundled plugin runtime deps", () => {
     const bundledDir = makeTempDir();
     const plugin = writePlugin({
@@ -1113,6 +1185,163 @@ module.exports = {
         installSpecs: ["beta-runtime@1.0.0"],
       },
     ]);
+  });
+
+  it("loads bundled runtime deps from an external stage dir", () => {
+    const bundledDir = makeTempDir();
+    const stageDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "alpha",
+      dir: path.join(bundledDir, "alpha"),
+      filename: "index.cjs",
+      body: `
+        const runtimeDep = require("external-runtime");
+        module.exports = {
+          id: "alpha",
+          register(api) {
+            api.registerCommand({ name: "external-runtime", handler: () => runtimeDep.marker });
+          }
+        };
+      `,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/alpha",
+          version: "1.0.0",
+          dependencies: {
+            "external-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "alpha",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot }) => {
+        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({ name: "external-runtime", version: "1.0.0", main: "index.cjs" }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.cjs"),
+          "module.exports = { marker: 'external-ok' };\n",
+          "utf-8",
+        );
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
+  });
+
+  it("loads source-checkout bundled runtime deps without mirroring the repo tree", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    const bundledDir = path.join(packageRoot, "extensions");
+    const plugin = writePlugin({
+      id: "tokenjuice",
+      dir: path.join(bundledDir, "tokenjuice"),
+      filename: "index.cjs",
+      body: `
+        const runtimeDep = require("external-runtime");
+        module.exports = {
+          id: "tokenjuice",
+          register(api) {
+            api.registerCommand({ name: "external-runtime", handler: () => runtimeDep.marker });
+          }
+        };
+      `,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/tokenjuice",
+          version: "1.0.0",
+          dependencies: {
+            "external-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "tokenjuice",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const installRoots: string[] = [];
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot }) => {
+        installRoots.push(fs.realpathSync(installRoot));
+        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({ name: "external-runtime", version: "1.0.0", main: "index.cjs" }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.cjs"),
+          "module.exports = { marker: 'source-checkout-ok' };\n",
+          "utf-8",
+        );
+      },
+    });
+
+    expect(installRoots).toEqual([fs.realpathSync(plugin.dir)]);
+    expect(registry.plugins.find((entry) => entry.id === "tokenjuice")?.status).toBe("loaded");
+    expect(resolveLoadedPluginSource(registry, "tokenjuice")).toBe(
+      fs.realpathSync(path.join(plugin.dir, "index.cjs")),
+    );
   });
 
   it("registers standalone text transforms", () => {

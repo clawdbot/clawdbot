@@ -153,14 +153,10 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
 
 function createOllamaThinkingWrapper(baseFn: StreamFn | undefined, think: boolean): StreamFn {
   const streamFn = baseFn ?? streamSimple;
-  return (model, context, options) => {
-    if (model.api !== "ollama") {
-      return streamFn(model, context, options);
-    }
-    return streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
+  return (model, context, options) =>
+    streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
       payloadRecord.think = think;
     });
-  };
 }
 
 function resolveOllamaCompatNumCtx(model: ProviderRuntimeModel): number {
@@ -178,6 +174,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
   let streamFn = ctx.streamFn;
   const model = ctx.model;
   let injectNumCtx = false;
+  const isNativeOllamaTransport = model?.api === "ollama";
 
   if (model) {
     const providerId =
@@ -199,9 +196,9 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaCompatNumCtx(model));
   }
 
-  if (ctx.thinkingLevel === "off") {
+  if (isNativeOllamaTransport && ctx.thinkingLevel === "off") {
     streamFn = createOllamaThinkingWrapper(streamFn, false);
-  } else if (ctx.thinkingLevel) {
+  } else if (isNativeOllamaTransport && ctx.thinkingLevel) {
     // Any non-off ThinkLevel (minimal, low, medium, high, xhigh, adaptive, max)
     // should enable Ollama's native thinking mode.
     streamFn = createOllamaThinkingWrapper(streamFn, true);

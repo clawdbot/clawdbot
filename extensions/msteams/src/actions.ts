@@ -1,12 +1,13 @@
 import { Type } from "@sinclair/typebox";
-import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
+import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { ChannelMessageActionName, ChannelPlugin } from "./channel-api.js";
+import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
@@ -270,11 +271,10 @@ export function describeMSTeamsMessageTool({
           "channel-info",
         ] satisfies ChannelMessageActionName[])
       : [],
-    capabilities: enabled ? ["cards"] : [],
+    capabilities: enabled ? ["presentation"] : [],
     schema: enabled
       ? {
           properties: {
-            card: createMessageToolCardSchema(),
             pinnedMessageId: Type.Optional(
               Type.String({
                 description:
@@ -290,8 +290,13 @@ export function describeMSTeamsMessageTool({
 export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
   describeMessageTool: describeMSTeamsMessageTool,
   handleAction: async (ctx) => {
-    if (ctx.action === "send" && ctx.params.card) {
-      const card = ctx.params.card as Record<string, unknown>;
+    const presentation =
+      ctx.action === "send" ? normalizeMessagePresentation(ctx.params.presentation) : undefined;
+    if (ctx.action === "send" && presentation) {
+      const card = buildMSTeamsPresentationCard({
+        presentation,
+        text: resolveActionContent(ctx.params),
+      });
       return await runWithRequiredActionTarget({
         actionLabel: "Card send",
         toolParams: ctx.params,

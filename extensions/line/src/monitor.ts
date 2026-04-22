@@ -102,6 +102,7 @@ export function clearLineRuntimeStateForTests() {
 }
 
 function startLineLoadingKeepalive(params: {
+  cfg: OpenClawConfig;
   userId: string;
   accountId?: string;
   intervalMs?: number;
@@ -116,6 +117,7 @@ function startLineLoadingKeepalive(params: {
       return;
     }
     void showLoadingAnimation(params.userId, {
+      cfg: params.cfg,
       accountId: params.accountId,
       loadingSeconds,
     }).catch(() => {});
@@ -189,11 +191,15 @@ export async function monitorLineProvider(
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
 
       const displayNamePromise = ctx.userId
-        ? getUserDisplayName(ctx.userId, { accountId: ctx.accountId })
+        ? getUserDisplayName(ctx.userId, { cfg: config, accountId: ctx.accountId })
         : Promise.resolve(ctxPayload.From);
 
       const stopLoading = shouldShowLoading
-        ? startLineLoadingKeepalive({ userId: ctx.userId!, accountId: ctx.accountId })
+        ? startLineLoadingKeepalive({
+            cfg: config,
+            userId: ctx.userId!,
+            accountId: ctx.accountId,
+          })
         : null;
 
       const displayName = await displayNamePromise;
@@ -218,7 +224,10 @@ export async function monitorLineProvider(
               const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
               if (ctx.userId && !ctx.isGroup) {
-                void showLoadingAnimation(ctx.userId, { accountId: ctx.accountId }).catch(() => {});
+                void showLoadingAnimation(ctx.userId, {
+                  cfg: config,
+                  accountId: ctx.accountId,
+                }).catch(() => {});
               }
 
               const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
@@ -228,6 +237,7 @@ export async function monitorLineProvider(
                 replyToken,
                 replyTokenUsed,
                 accountId: ctx.accountId,
+                cfg: config,
                 textLimit,
                 deps: {
                   buildTemplateMessageFromPayload,
@@ -280,7 +290,7 @@ export async function monitorLineProvider(
             await replyMessageLine(
               replyToken,
               [{ type: "text", text: "Sorry, I encountered an error processing your message." }],
-              { accountId: ctx.accountId },
+              { cfg: config, accountId: ctx.accountId },
             );
           } catch (replyErr) {
             runtime.error?.(danger(`line: error reply failed: ${String(replyErr)}`));

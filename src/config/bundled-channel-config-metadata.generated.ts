@@ -15154,6 +15154,24 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   additionalProperties: false,
                 },
               },
+              systemPrompt: {
+                type: "string",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        direct: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              systemPrompt: {
+                type: "string",
+              },
             },
             additionalProperties: false,
           },
@@ -15404,6 +15422,24 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         },
                         additionalProperties: false,
                       },
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              direct: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    systemPrompt: {
+                      type: "string",
                     },
                   },
                   additionalProperties: false,

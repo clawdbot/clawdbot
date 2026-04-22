@@ -590,6 +590,7 @@ describe("TelegramPollingSession", () => {
       connected: false,
       lastConnectedAt: null,
       lastEventAt: null,
+      lastTransportActivityAt: null,
     });
     const connectedPatch = setStatus.mock.calls.find(
       ([patch]) => (patch as Record<string, unknown>).connected === true,
@@ -599,9 +600,11 @@ describe("TelegramPollingSession", () => {
       mode: "polling",
       lastConnectedAt: expect.any(Number),
       lastEventAt: expect.any(Number),
+      lastTransportActivityAt: expect.any(Number),
       lastError: null,
     });
     expect(connectedPatch?.lastConnectedAt).toBe(connectedPatch?.lastEventAt);
+    expect(connectedPatch?.lastTransportActivityAt).toBe(connectedPatch?.lastEventAt);
 
     abort.abort();
     resolveFirstTask();
@@ -681,6 +684,7 @@ describe("TelegramPollingSession", () => {
       mode: "polling",
       lastConnectedAt: null,
       lastEventAt: null,
+      lastTransportActivityAt: null,
     });
     expect(disconnectedPatches[1]?.[0]).toEqual({
       mode: "polling",

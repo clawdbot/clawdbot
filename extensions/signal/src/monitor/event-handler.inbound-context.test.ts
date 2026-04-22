@@ -139,11 +139,26 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", expect.any(Object));
+    expect(sendTypingMock).toHaveBeenCalledWith(
+      "+15550001111",
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            signal: expect.objectContaining({ dmPolicy: "open" }),
+          }),
+        }),
+      }),
+    );
     expect(sendReadReceiptMock).toHaveBeenCalledWith(
       "signal:+15550001111",
       1700000000000,
-      expect.any(Object),
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            signal: expect.objectContaining({ dmPolicy: "open" }),
+          }),
+        }),
+      }),
     );
   });
 

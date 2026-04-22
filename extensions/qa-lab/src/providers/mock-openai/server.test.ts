@@ -1015,7 +1015,84 @@ describe("qa mock openai server", () => {
         {
           content: [
             {
-              text: "Protocol note: delegated fanout complete. Alpha=ALPHA-OK. Beta=BETA-OK.",
+              text: "subagent-1: ok\nsubagent-2: ok",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("completes subagent fanout from a continuation turn without tool output", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+    const spawn = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    });
+    expect(spawn.status).toBe(200);
+    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+
+    const secondSpawn = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+          },
+        ],
+      }),
+    });
+    expect(secondSpawn.status).toBe(200);
+    expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+
+    const phaseOnlyFinal = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Continue.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(phaseOnlyFinal.status).toBe(200);
+    expect(await phaseOnlyFinal.json()).toMatchObject({
+      output: [
+        {
+          content: [
+            {
+              text: "subagent-1: ok\nsubagent-2: ok",
             },
           ],
         },

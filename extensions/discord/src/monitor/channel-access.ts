@@ -1,8 +1,11 @@
 function readDiscordChannelPropertySafe(channel: unknown, key: string): unknown {
-  if (!channel || typeof channel !== "object" || !(key in channel)) {
+  if (!channel || typeof channel !== "object") {
     return undefined;
   }
   try {
+    if (!(key in channel)) {
+      return undefined;
+    }
     return (channel as Record<string, unknown>)[key];
   } catch {
     return undefined;
@@ -40,6 +43,10 @@ export function resolveDiscordChannelNameSafe(channel: unknown): string | undefi
 
 export function resolveDiscordChannelTopicSafe(channel: unknown): string | undefined {
   return resolveDiscordChannelStringPropertySafe(channel, "topic");
+}
+
+export function resolveDiscordChannelParentIdSafe(channel: unknown): string | undefined {
+  return resolveDiscordChannelStringPropertySafe(channel, "parentId");
 }
 
 export function resolveDiscordChannelInfoSafe(channel: unknown): DiscordChannelInfoSafe {

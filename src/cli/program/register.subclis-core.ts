@@ -111,7 +111,7 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerSandboxCli",
     },
     {
-      commandNames: ["tui"],
+      commandNames: ["tui", "terminal", "chat"],
       loadModule: () => import("../tui-cli.js"),
       exportName: "registerTuiCli",
     },

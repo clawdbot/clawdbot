@@ -304,6 +304,7 @@ async function fetchAttachment(params: {
 }
 
 async function deliverReplies(params: {
+  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
   baseUrl: string;
@@ -324,6 +325,7 @@ async function deliverReplies(params: {
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
         await sendMessageSignal(target, chunk, {
+          cfg: params.cfg,
           baseUrl,
           account,
           maxBytes,
@@ -332,6 +334,7 @@ async function deliverReplies(params: {
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         await sendMessageSignal(target, caption ?? "", {
+          cfg: params.cfg,
           baseUrl,
           account,
           mediaUrl,
@@ -465,7 +468,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       sendReadReceipts,
       readReceiptsViaDaemon,
       fetchAttachment,
-      deliverReplies: (params) => deliverReplies({ ...params, chunkMode }),
+      deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,
       shouldEmitSignalReactionNotification,

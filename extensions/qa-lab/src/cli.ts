@@ -45,6 +45,7 @@ async function runQaSuite(opts: {
   cpus?: number;
   memory?: string;
   disk?: string;
+  preflight?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
@@ -239,6 +240,7 @@ export function registerQaLabCli(program: Command) {
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
       Number(value),
     )
+    .option("--preflight", "Run a single-scenario bootstrap preflight and stop", false)
     .option(
       "--allow-failures",
       "Write artifacts without setting a failing exit code when scenarios fail",
@@ -268,6 +270,7 @@ export function registerQaLabCli(program: Command) {
         cpus?: number;
         memory?: string;
         disk?: string;
+        preflight?: boolean;
       }) => {
         await runQaSuite({
           repoRoot: opts.repoRoot,
@@ -287,6 +290,7 @@ export function registerQaLabCli(program: Command) {
           cpus: opts.cpus,
           memory: opts.memory,
           disk: opts.disk,
+          preflight: opts.preflight,
         });
       },
     );

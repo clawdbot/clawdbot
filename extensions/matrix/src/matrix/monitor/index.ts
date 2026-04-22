@@ -356,6 +356,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       needsRoomAliasesForConfig,
     });
     threadBindingManager = await createMatrixThreadBindingManager({
+      cfg,
       accountId: effectiveAccountId,
       auth,
       client,

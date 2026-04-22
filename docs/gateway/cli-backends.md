@@ -143,6 +143,8 @@ The provider id becomes the left side of your model ref:
 1. **Selects a backend** based on the provider prefix (`codex-cli/...`).
 2. **Builds a system prompt** using the same OpenClaw prompt + workspace context.
 3. **Executes the CLI** with a session id (if supported) so history stays consistent.
+   The bundled `claude-cli` backend keeps a Claude stdio process alive per
+   OpenClaw session and sends follow-up turns over stream-json stdin.
 4. **Parses output** (JSON or plain text) and returns the final text.
 5. **Persists session ids** per backend, so follow-ups reuse the same CLI session.
 
@@ -179,6 +181,10 @@ child process environment for the run.
   - `always`: always send a session id (new UUID if none stored).
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
+- The bundled `claude-cli` backend uses `liveSession: "claude-stdio"` so
+  follow-up turns reuse the live Claude process while it is active. If the
+  Gateway restarts or the idle process exits, OpenClaw resumes from the stored
+  Claude session id.
 
 Serialization notes:
 

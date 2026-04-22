@@ -430,13 +430,6 @@ describe("resolvePermissionRequest", () => {
         action: "list",
       },
     },
-    {
-      toolName: "whatsapp_login",
-      title: "whatsapp_login: start",
-      rawInput: {
-        name: "whatsapp_login",
-      },
-    },
   ] as const)(
     "prompts for shared owner-only backstop tools: $toolName",
     async ({ toolName, title, rawInput }) => {

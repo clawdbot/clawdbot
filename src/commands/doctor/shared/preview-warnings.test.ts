@@ -50,6 +50,10 @@ vi.mock("./channel-doctor.js", () => ({
       ];
     },
   ),
+  createChannelDoctorEmptyAllowlistPolicyHooks: vi.fn(() => ({
+    extraWarningsForAccount: () => [],
+    shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
+  })),
   shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: vi.fn(() => false),
 }));
 

@@ -70,8 +70,8 @@ import {
   consumeCompactionSafeguardCancelReason,
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
-import { applyPiCompactionSettingsFromConfig } from "../pi-settings.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
+import { applyPiCompactionSettingsFromConfig } from "../pi-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
@@ -132,7 +132,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
-import { collectAllowedToolNames } from "./tool-name-allowlist.js";
+import { collectAllowedToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -839,10 +839,14 @@ export async function compactEmbeddedPiSessionDirect(
         contextTokenBudget: ctxInfo.tokens,
       });
 
-      const { builtInTools, customTools } = splitSdkTools({
+      const { customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
+      // Pi treats `tools` as a name allowlist. Compaction uses the same custom
+      // tool path as normal turns, so pass names here to keep those tools active
+      // across compaction retries.
+      const sessionToolAllowlist = toSessionToolAllowlist(allowedToolNames);
 
       const providerStreamFn = resolveCompactionProviderStream({
         effectiveModel,
@@ -853,6 +857,7 @@ export async function compactEmbeddedPiSessionDirect(
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
         provider,
         modelApi: effectiveModel.api,
+        modelBaseUrl: effectiveModel.baseUrl,
       });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({
@@ -879,7 +884,7 @@ export async function compactEmbeddedPiSessionDirect(
             modelRegistry,
             model: effectiveModel,
             thinkingLevel: mapThinkingLevel(thinkLevel),
-            tools: builtInTools,
+            tools: sessionToolAllowlist,
             customTools,
             sessionManager,
             settingsManager,

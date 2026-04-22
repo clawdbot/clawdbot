@@ -14,8 +14,12 @@ export type LinkChannelContext = {
 
 export async function resolveLinkChannelContext(
   cfg: OpenClawConfig,
+  options: { sourceConfig?: OpenClawConfig } = {},
 ): Promise<LinkChannelContext | null> {
-  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg)) {
+  const sourceConfig = options.sourceConfig ?? cfg;
+  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
+    activationSourceConfig: sourceConfig,
+  })) {
     const { defaultAccountId, account, enabled, configured } =
       await resolveDefaultChannelAccountContext(plugin, cfg, {
         mode: "read_only",

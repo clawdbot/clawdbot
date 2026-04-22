@@ -35,6 +35,7 @@ describe("createTtsTool", () => {
         provider: "test",
         media: {
           mediaUrl: "/tmp/reply.opus",
+          trustedLocalMedia: true,
           audioAsVoice: true,
         },
       },

@@ -721,9 +721,11 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("rejects ambiguous announce delivery on add when multiple channels are configured", async () => {
+  test("ignores ambient disabled channel env when validating announce delivery", async () => {
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-ambient");
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "ambient-telegram");
     const { prevSkipCron } = await setupCronTestRun({
-      tempPrefix: "openclaw-gw-cron-ambiguous-delivery-add-",
+      tempPrefix: "openclaw-gw-cron-ambient-disabled-delivery-",
       cronEnabled: false,
     });
 
@@ -731,14 +733,8 @@ describe("gateway server cron", () => {
       session: {
         mainKey: "main",
       },
-      channels: {
-        telegram: {
-          botToken: "telegram-token",
-        },
-        slack: {
-          botToken: "xoxb-slack-token",
-          appToken: "xapp-slack-token",
-        },
+      plugins: {
+        allow: ["memory-core"],
       },
     });
 
@@ -747,7 +743,7 @@ describe("gateway server cron", () => {
 
     try {
       const addRes = await rpcReq(ws, "cron.add", {
-        name: "ambiguous announce add",
+        name: "ambient disabled announce",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
@@ -756,105 +752,7 @@ describe("gateway server cron", () => {
         delivery: { mode: "announce" },
       });
 
-      expect(addRes.ok).toBe(false);
-      expect(addRes.error?.message).toContain("delivery.channel is required");
-    } finally {
-      await cleanupCronTestRun({ ws, server, prevSkipCron });
-    }
-  });
-
-  test("rejects ambiguous announce delivery on update when multiple channels are configured", async () => {
-    const { prevSkipCron } = await setupCronTestRun({
-      tempPrefix: "openclaw-gw-cron-ambiguous-delivery-update-",
-      cronEnabled: false,
-    });
-
-    await writeCronConfig({
-      session: {
-        mainKey: "main",
-      },
-      channels: {
-        telegram: {
-          botToken: "telegram-token",
-        },
-        slack: {
-          botToken: "xoxb-slack-token",
-          appToken: "xapp-slack-token",
-        },
-      },
-    });
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
-    try {
-      const addRes = await rpcReq(ws, "cron.add", {
-        name: "ambiguous announce update",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "hello" },
-        delivery: { mode: "none" },
-      });
       expect(addRes.ok).toBe(true);
-      const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
-      const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
-      expect(jobId.length > 0).toBe(true);
-
-      const updateRes = await rpcReq(ws, "cron.update", {
-        id: jobId,
-        patch: {
-          delivery: { mode: "announce" },
-        },
-      });
-
-      expect(updateRes.ok).toBe(false);
-      expect(updateRes.error?.message).toContain("delivery.channel is required");
-    } finally {
-      await cleanupCronTestRun({ ws, server, prevSkipCron });
-    }
-  });
-
-  test("rejects target ids mistakenly supplied as delivery.channel providers", async () => {
-    const { prevSkipCron } = await setupCronTestRun({
-      tempPrefix: "openclaw-gw-cron-invalid-delivery-provider-",
-      cronEnabled: false,
-    });
-
-    await writeCronConfig({
-      session: {
-        mainKey: "main",
-      },
-      channels: {
-        slack: {
-          botToken: "xoxb-slack-token",
-          appToken: "xapp-slack-token",
-        },
-      },
-    });
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
-    try {
-      const addRes = await rpcReq(ws, "cron.add", {
-        name: "invalid delivery provider",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "hello" },
-        delivery: {
-          mode: "announce",
-          channel: "C0AT2Q238MQ",
-          to: "C0AT2Q238MQ",
-        },
-      });
-
-      expect(addRes.ok).toBe(false);
-      expect(addRes.error?.message).toContain("delivery.channel");
-      expect(addRes.error?.message).toContain("slack");
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

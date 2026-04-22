@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/tencent-provider",
+  "version": "2026.4.10",
+  "private": true,
+  "description": "OpenClaw Tencent Cloud provider plugin (TokenHub + Token Plan)",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

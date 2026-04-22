@@ -67,15 +67,13 @@ Name lookup:
 
 - `send`
   - Channels: WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Matrix/Microsoft Teams
-  - Required: `--target`, plus `--message` or `--media`
-  - Optional: `--media`, `--interactive`, `--buttons`, `--components`, `--card`, `--reply-to`, `--thread-id`, `--gif-playback`, `--force-document`, `--silent`
-  - Shared interactive payloads: `--interactive` sends a channel-native interactive JSON payload when supported
-  - Telegram only: `--buttons` (requires `channels.telegram.capabilities.inlineButtons` to allow it)
+  - Required: `--target`, plus `--message`, `--media`, or `--presentation`
+  - Optional: `--media`, `--presentation`, `--delivery`, `--pin`, `--reply-to`, `--thread-id`, `--gif-playback`, `--force-document`, `--silent`
+  - Shared presentation payloads: `--presentation` sends semantic blocks (`text`, `context`, `divider`, `buttons`, `select`) that core renders through the selected channel's declared capabilities. See [Message Presentation](/plugins/message-presentation).
+  - Generic delivery preferences: `--delivery` accepts delivery hints such as `{ "pin": true }`; `--pin` is shorthand for pinned delivery when the channel supports it.
   - Telegram only: `--force-document` (send images and GIFs as documents to avoid Telegram compression)
   - Telegram only: `--thread-id` (forum topic id)
   - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
-  - Discord only: `--components` JSON payload
-  - Adaptive-card channels: `--card` JSON payload when supported
   - Telegram + Discord: `--silent`
   - WhatsApp only: `--gif-playback`
 
@@ -208,22 +206,22 @@ openclaw message send --channel discord \
   --target channel:123 --message "hi" --reply-to 456
 ```
 
-Send a Discord message with components:
+Send a message with semantic buttons:
 
 ```
 openclaw message send --channel discord \
   --target channel:123 --message "Choose:" \
-  --components '{"text":"Choose a path","blocks":[{"type":"actions","buttons":[{"label":"Approve","style":"success"},{"label":"Decline","style":"danger"}]}]}'
+  --presentation '{"blocks":[{"type":"buttons","buttons":[{"label":"Approve","value":"approve","style":"success"},{"label":"Decline","value":"decline","style":"danger"}]}]}'
 ```
 
-See [Discord components](/channels/discord#interactive-components) for the full schema.
+Core renders the same `presentation` payload into Discord components, Slack blocks, Telegram inline buttons, Mattermost props, or Teams/Feishu cards depending on channel capability. See [Message Presentation](/plugins/message-presentation) for the full contract and fallback rules.
 
-Send a shared interactive payload:
+Send a richer presentation payload:
 
 ```bash
 openclaw message send --channel googlechat --target spaces/AAA... \
   --message "Choose:" \
-  --interactive '{"text":"Choose a path","blocks":[{"type":"actions","buttons":[{"label":"Approve"},{"label":"Decline"}]}]}'
+  --presentation '{"title":"Deploy approval","tone":"warning","blocks":[{"type":"text","text":"Choose a path"},{"type":"buttons","buttons":[{"label":"Approve","value":"approve"},{"label":"Decline","value":"decline"}]}]}'
 ```
 
 Create a Discord poll:
@@ -277,19 +275,19 @@ openclaw message react --channel signal \
   --emoji "✅" --target-author-uuid 123e4567-e89b-12d3-a456-426614174000
 ```
 
-Send Telegram inline buttons:
+Send Telegram inline buttons through generic presentation:
 
 ```
 openclaw message send --channel telegram --target @mychat --message "Choose:" \
-  --buttons '[ [{"text":"Yes","callback_data":"cmd:yes"}], [{"text":"No","callback_data":"cmd:no"}] ]'
+  --presentation '{"blocks":[{"type":"buttons","buttons":[{"label":"Yes","value":"cmd:yes"},{"label":"No","value":"cmd:no"}]}]}'
 ```
 
-Send a Teams Adaptive Card:
+Send a Teams card through generic presentation:
 
 ```bash
 openclaw message send --channel msteams \
   --target conversation:19:abc@thread.tacv2 \
-  --card '{"type":"AdaptiveCard","version":"1.5","body":[{"type":"TextBlock","text":"Status update"}]}'
+  --presentation '{"title":"Status update","blocks":[{"type":"text","text":"Build completed"}]}'
 ```
 
 Send a Telegram image as a document to avoid compression:

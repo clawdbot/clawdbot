@@ -20,11 +20,31 @@ describe("command secret targets module import", () => {
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
     expect(mod.getModelsCommandSecretTargetIds().has("models.providers.*.apiKey")).toBe(true);
     expect(mod.getQrRemoteCommandSecretTargetIds().has("gateway.remote.token")).toBe(true);
-    expect(
-      mod.getAgentRuntimeCommandSecretTargetIds().has("agents.defaults.memorySearch.remote.apiKey"),
-    ).toBe(true);
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
     expect(() => mod.getChannelsCommandSecretTargetIds()).toThrow("registry touched too early");
+    expect(listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads registry lazily for agent runtime plugin credential targets", async () => {
+    const listSecretTargetRegistryEntries = vi.fn(() => [
+      { id: "plugins.entries.example.config.webSearch.apiKey" },
+      { id: "plugins.entries.example.config.other.apiKey" },
+      { id: "channels.telegram.botToken" },
+    ]);
+
+    vi.doMock("../secrets/target-registry.js", () => ({
+      discoverConfigSecretTargetsByIds: vi.fn(() => []),
+      listSecretTargetRegistryEntries,
+    }));
+
+    const mod = await import("./command-secret-targets.js");
+
+    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
+    const ids = mod.getAgentRuntimeCommandSecretTargetIds();
+    expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.example.config.webSearch.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.example.config.other.apiKey")).toBe(false);
+    expect(ids.has("channels.telegram.botToken")).toBe(false);
     expect(listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
   });
 

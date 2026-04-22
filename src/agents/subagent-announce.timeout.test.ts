@@ -453,6 +453,32 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).not.toContain("data");
   });
 
+  it("does not announce cached reply text when the child run terminally failed", async () => {
+    chatHistoryMessages = [
+      { role: "assistant", content: [{ type: "text", text: "stale history output" }] },
+      { role: "toolResult", content: [{ type: "text", text: "stale tool output" }] },
+    ];
+
+    await runAnnounceFlowForTest("run-terminal-error-no-stale-output", {
+      outcome: { status: "error", error: "All models failed (2): timeout" },
+      roundOneReply: "stale frozen output",
+      fallbackReply: "older fallback output",
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        result?: string;
+        status?: string;
+        statusLabel?: string;
+      }>) ?? [];
+    expect(internalEvents[0]?.status).toBe("error");
+    expect(internalEvents[0]?.statusLabel).toContain("All models failed");
+    expect(internalEvents[0]?.result).toBe("(no output)");
+    expect(directAgentCall?.params?.message).not.toContain("stale");
+    expect(directAgentCall?.params?.message).not.toContain("older fallback");
+  });
+
   it("preserves NO_REPLY when timeout history ends with silence after earlier progress", async () => {
     chatHistoryMessages = [
       {

@@ -206,6 +206,7 @@ export async function startInboxMonitor(
     ({ monitorWebInbox } = await import("./inbound.js"));
   }
   const listener = await monitorWebInbox({
+    cfg: mockLoadConfig() as never,
     verbose: false,
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,

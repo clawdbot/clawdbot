@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -9,7 +10,6 @@ import { sendMessageIMessage } from "../send.js";
 import {
   chunkTextWithMode,
   convertMarkdownTables,
-  loadConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
 } from "./deliver.runtime.js";
@@ -17,6 +17,7 @@ import type { SentMessageCache } from "./echo-cache.js";
 import { sanitizeOutboundText } from "./sanitize-outbound.js";
 
 export async function deliverReplies(params: {
+  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
   client: Awaited<ReturnType<typeof createIMessageRpcClient>>;
@@ -29,7 +30,7 @@ export async function deliverReplies(params: {
   const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
     params;
   const scope = `${accountId ?? ""}:${target}`;
-  const cfg = loadConfig();
+  const { cfg } = params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "imessage",
@@ -47,6 +48,7 @@ export async function deliverReplies(params: {
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
         const sent = await sendMessageIMessage(target, chunk, {
+          config: params.cfg,
           maxBytes,
           client,
           accountId,
@@ -60,6 +62,7 @@ export async function deliverReplies(params: {
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         const sent = await sendMessageIMessage(target, caption ?? "", {
+          config: params.cfg,
           mediaUrl,
           maxBytes,
           client,

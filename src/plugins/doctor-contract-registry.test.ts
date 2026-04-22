@@ -63,26 +63,69 @@ describe("doctor-contract-registry getJiti", () => {
 
   it("prefers doctor-contract-api over the broader contract-api surface", () => {
     const pluginRoot = makeTempDir();
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.js"),
-      "export default {};\n",
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'doctor'], message: 'doctor contract' }] };\n",
       "utf-8",
     );
-    fs.writeFileSync(path.join(pluginRoot, "contract-api.js"), "export default {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(pluginRoot, "contract-api.cjs"),
+      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'broad'], message: 'broad contract' }] };\n",
+      "utf-8",
+    );
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
       diagnostics: [],
     });
 
-    listPluginDoctorLegacyConfigRules({
-      workspaceDir: pluginRoot,
-      env: {},
+    try {
+      expect(
+        listPluginDoctorLegacyConfigRules({
+          workspaceDir: pluginRoot,
+          env: {},
+        }),
+      ).toEqual([
+        {
+          path: ["plugins", "entries", "demo", "doctor"],
+          message: "doctor contract",
+        },
+      ]);
+      expect(mocks.createJiti).not.toHaveBeenCalled();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("uses native require for compatible JavaScript contract modules", () => {
+    const pluginRoot = makeTempDir();
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'legacy'], message: 'legacy demo key' }] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
     });
 
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
-      path.join(pluginRoot, "doctor-contract-api.js"),
-    );
+    try {
+      expect(
+        listPluginDoctorLegacyConfigRules({
+          workspaceDir: pluginRoot,
+          env: {},
+        }),
+      ).toEqual([
+        {
+          path: ["plugins", "entries", "demo", "legacy"],
+          message: "legacy demo key",
+        },
+      ]);
+      expect(mocks.createJiti).not.toHaveBeenCalled();
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {

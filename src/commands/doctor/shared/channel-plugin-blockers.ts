@@ -1,5 +1,5 @@
-import { listPotentialConfiguredChannelIds } from "../../../channels/config-presence.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { listExplicitConfiguredChannelIdsForConfig } from "../../../plugins/channel-plugin-ids.js";
 import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
@@ -39,9 +39,7 @@ export function scanConfiguredChannelPluginBlockers(
   if (!hasExplicitChannelPluginBlockerConfig(cfg)) {
     return [];
   }
-  const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(cfg, env).map((id) => id.trim()),
-  );
+  const configuredChannelIds = new Set(listExplicitConfiguredChannelIdsForConfig(cfg));
   if (configuredChannelIds.size === 0) {
     return [];
   }

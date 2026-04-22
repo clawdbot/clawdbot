@@ -63,6 +63,38 @@ describe("qa channel transport", () => {
     expect(call).toHaveBeenCalledTimes(2);
   });
 
+  it("surfaces the last reported qa-channel account status on timeout", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+    const call = vi.fn().mockResolvedValue({
+      channelAccounts: {
+        "qa-channel": [{ accountId: "default", running: false, restartPending: true }],
+      },
+    });
+
+    await expect(
+      transport.waitReady({
+        gateway: { call },
+        timeoutMs: 5,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toThrow(
+      'timed out after 5ms waiting for qa-channel ready; last status: {"accountId":"default","running":false,"restartPending":true}',
+    );
+  });
+
+  it("surfaces the last probe error on timeout", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+    const call = vi.fn().mockRejectedValue(new Error("channels.status exploded"));
+
+    await expect(
+      transport.waitReady({
+        gateway: { call },
+        timeoutMs: 5,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toThrow("last probe error: channels.status exploded");
+  });
+
   it("inherits the shared normalized message capabilities", async () => {
     const transport = createQaChannelTransport(createQaBusState());
 

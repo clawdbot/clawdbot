@@ -6,6 +6,10 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   }),
 }));
 
+const WHATSAPP_ACTIVE_LISTENER_TEST_CFG = {
+  channels: { whatsapp: { accounts: { work: { enabled: true } }, defaultAccount: "work" } },
+};
+
 type ActiveListenerModule = typeof import("./active-listener.js");
 
 const activeListenerModuleUrl = new URL("./active-listener.ts", import.meta.url).href;
@@ -59,8 +63,8 @@ describe("active WhatsApp listener view", () => {
 
     const mod = await importActiveListenerModule(`default-${Date.now()}`);
 
-    expect(mod.resolveWebAccountId()).toBe("work");
-    expect(mod.getActiveWebListener()).toBe(listener);
+    expect(mod.resolveWebAccountId({ cfg: WHATSAPP_ACTIVE_LISTENER_TEST_CFG })).toBe("work");
+    expect(mod.getActiveWebListener("work")).toBe(listener);
   });
 
   it("returns null when the controller has no active listener for the account", async () => {

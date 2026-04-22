@@ -743,11 +743,11 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 
-  describe("card-only send behavior", () => {
+  describe("presentation-only send behavior", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({
         ok: true,
-        card: params.card ?? null,
+        presentation: params.presentation ?? null,
         message: params.message ?? null,
       }),
     );
@@ -764,7 +764,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig(),
       actions: {
-        describeMessageTool: () => ({ actions: ["send"] }),
+        describeMessageTool: () => ({ actions: ["send"], capabilities: ["presentation"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -788,7 +788,7 @@ describe("runMessageAction plugin dispatch", () => {
       vi.clearAllMocks();
     });
 
-    it("allows card-only sends without text or media", async () => {
+    it("allows presentation-only sends without text or media", async () => {
       const cfg = {
         channels: {
           cardchat: {
@@ -797,10 +797,8 @@ describe("runMessageAction plugin dispatch", () => {
         },
       } as OpenClawConfig;
 
-      const card = {
-        type: "AdaptiveCard",
-        version: "1.4",
-        body: [{ type: "TextBlock", text: "Card-only payload" }],
+      const presentation = {
+        blocks: [{ type: "text", text: "Presentation-only payload" }],
       };
 
       const result = await runMessageAction({
@@ -809,7 +807,7 @@ describe("runMessageAction plugin dispatch", () => {
         params: {
           channel: "cardchat",
           target: "channel:test-card",
-          card,
+          presentation,
         },
         dryRun: false,
       });
@@ -819,7 +817,7 @@ describe("runMessageAction plugin dispatch", () => {
       expect(handleAction).toHaveBeenCalled();
       expect(result.payload).toMatchObject({
         ok: true,
-        card,
+        presentation,
       });
     });
   });
@@ -994,11 +992,11 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 
-  describe("components parsing", () => {
+  describe("presentation parsing", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({
         ok: true,
-        components: params.components ?? null,
+        presentation: params.presentation ?? null,
       }),
     );
 
@@ -1014,7 +1012,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig({}),
       actions: {
-        describeMessageTool: () => ({ actions: ["send"] }),
+        describeMessageTool: () => ({ actions: ["send"], capabilities: ["presentation"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -1038,10 +1036,9 @@ describe("runMessageAction plugin dispatch", () => {
       vi.clearAllMocks();
     });
 
-    it("parses components JSON strings before plugin dispatch", async () => {
-      const components = {
-        text: "hello",
-        buttons: [{ label: "A", customId: "a" }],
+    it("parses presentation JSON strings before plugin dispatch", async () => {
+      const presentation = {
+        blocks: [{ type: "buttons", buttons: [{ label: "A", value: "a" }] }],
       };
       const result = await runMessageAction({
         cfg: {} as OpenClawConfig,
@@ -1050,17 +1047,17 @@ describe("runMessageAction plugin dispatch", () => {
           channel: "componentchat",
           target: "channel:123",
           message: "hi",
-          components: JSON.stringify(components),
+          presentation: JSON.stringify(presentation),
         },
         dryRun: false,
       });
 
       expect(result.kind).toBe("send");
       expect(handleAction).toHaveBeenCalled();
-      expect(result.payload).toMatchObject({ ok: true, components });
+      expect(result.payload).toMatchObject({ ok: true, presentation });
     });
 
-    it("throws on invalid components JSON strings", async () => {
+    it("throws on invalid presentation JSON strings", async () => {
       await expect(
         runMessageAction({
           cfg: {} as OpenClawConfig,
@@ -1069,11 +1066,11 @@ describe("runMessageAction plugin dispatch", () => {
             channel: "componentchat",
             target: "channel:123",
             message: "hi",
-            components: "{not-json}",
+            presentation: "{not-json}",
           },
           dryRun: false,
         }),
-      ).rejects.toThrow(/--components must be valid JSON/);
+      ).rejects.toThrow(/--presentation must be valid JSON/);
 
       expect(handleAction).not.toHaveBeenCalled();
     });

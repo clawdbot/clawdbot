@@ -1,5 +1,5 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
@@ -51,7 +51,7 @@ export async function sendMessageWhatsApp(
   body: string,
   options: {
     verbose: boolean;
-    cfg?: OpenClawConfig;
+    cfg: OpenClawConfig;
     mediaUrl?: string;
     mediaUrls?: readonly string[];
     mediaAccess?: {
@@ -77,7 +77,7 @@ export async function sendMessageWhatsApp(
   }
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const cfg = options.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp send");
   const { listener: active, accountId: resolvedAccountId } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
@@ -161,6 +161,21 @@ export async function sendMessageWhatsApp(
   }
 }
 
+export async function sendTypingWhatsApp(
+  to: string,
+  options: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+  },
+): Promise<void> {
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp typing send");
+  const { listener: active } = requireOutboundActiveWebListener({
+    cfg,
+    accountId: options.accountId,
+  });
+  await active.sendComposingTo(to);
+}
+
 export async function sendReactionWhatsApp(
   chatJid: string,
   messageId: string,
@@ -170,10 +185,11 @@ export async function sendReactionWhatsApp(
     fromMe?: boolean;
     participant?: string;
     accountId?: string;
+    cfg: OpenClawConfig;
   },
 ): Promise<void> {
   const correlationId = generateSecureUuid();
-  const cfg = loadConfig();
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp reaction");
   const { listener: active } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
@@ -211,11 +227,11 @@ export async function sendReactionWhatsApp(
 export async function sendPollWhatsApp(
   to: string,
   poll: PollInput,
-  options: { verbose: boolean; accountId?: string; cfg?: OpenClawConfig },
+  options: { verbose: boolean; accountId?: string; cfg: OpenClawConfig },
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const cfg = options.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp poll");
   const { listener: active } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,

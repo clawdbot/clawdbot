@@ -410,6 +410,10 @@ async function runPackageInstallUpdate(params: {
       const doctorStep = await runUpdateStep({
         name: `${CLI_NAME} doctor`,
         argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive"],
+        env: {
+          ...process.env,
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        },
         timeoutMs: params.timeoutMs,
         progress: params.progress,
       });

@@ -352,6 +352,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         },
         sendPairingReply: async (text) => {
           await sendMessageIMessage(sender, text, {
+            config: cfg,
             client: getActiveClient(),
             maxBytes: mediaMaxBytes,
             accountId: accountInfo.accountId,
@@ -450,6 +451,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           return;
         }
         await deliverReplies({
+          cfg,
           replies: [payload],
           target,
           client: getActiveClient(),

@@ -36,6 +36,7 @@ apps/android/benchmark/results/
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
+apps/macos-mlx-tts/.build/
 apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
 apps/shared/OpenClawKit/Package.resolved
@@ -57,6 +58,7 @@ vendor/
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
 apps/macos/.build/**
+apps/macos-mlx-tts/.build/**
 **/*.bun-build
 apps/ios/*.xcfilelist
 

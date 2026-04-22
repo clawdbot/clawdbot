@@ -25,6 +25,7 @@ import { generateImage, listRuntimeImageGenerationProviders } from "../image-gen
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import {
   describeImageFile,
+  describeImageFileWithModel,
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
@@ -749,21 +750,32 @@ async function runImageDescribe(params: {
   model?: string;
 }) {
   const cfg = loadConfig();
+  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const activeModel = requireProviderModelOverride(params.model);
   const outputs = await Promise.all(
     params.files.map(async (filePath) => {
-      const result = await describeImageFile({
-        filePath: path.resolve(filePath),
-        cfg,
-        activeModel,
-      });
+      const resolvedPath = path.resolve(filePath);
+      const result = activeModel
+        ? await describeImageFileWithModel({
+            filePath: resolvedPath,
+            cfg,
+            agentDir,
+            provider: activeModel.provider,
+            model: activeModel.model,
+            prompt: "Describe the image.",
+          })
+        : await describeImageFile({
+            filePath: resolvedPath,
+            cfg,
+            agentDir,
+          });
       if (!result.text) {
-        throw new Error(`No description returned for image: ${path.resolve(filePath)}`);
+        throw new Error(`No description returned for image: ${resolvedPath}`);
       }
       return {
-        path: path.resolve(filePath),
+        path: resolvedPath,
         text: result.text,
-        provider: result.provider,
+        provider: activeModel?.provider ?? ("provider" in result ? result.provider : undefined),
         model: result.model,
         kind: "image.description",
       };

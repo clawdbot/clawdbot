@@ -62,6 +62,7 @@ async function startWebInboxMonitor(params: {
   }
   const onMessage = vi.fn();
   const base = {
+    cfg: (params.config ?? mockLoadConfig()) as never,
     verbose: false,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),

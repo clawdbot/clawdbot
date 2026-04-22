@@ -65,8 +65,8 @@ android {
         applicationId = "ai.openclaw.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 2026042000
-        versionName = "2026.4.20"
+        versionCode = 2026042200
+        versionName = "2026.4.22"
         ndk {
             // Support all major ABIs — native libs are tiny (~47 KB per ABI)
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
@@ -182,13 +182,13 @@ ktlint {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.02.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.03.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
-    implementation("androidx.activity:activity-compose:1.12.2")
+    implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.webkit:webkit:1.15.0")
 
     implementation("androidx.compose.ui:ui")
@@ -204,17 +204,17 @@ dependencies {
     implementation("com.google.android.material:material:1.13.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
     implementation("androidx.security:security-crypto:1.1.0")
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.83")
-    implementation("org.commonmark:commonmark:0.27.1")
-    implementation("org.commonmark:commonmark-ext-autolink:0.27.1")
-    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.27.1")
-    implementation("org.commonmark:commonmark-ext-gfm-tables:0.27.1")
-    implementation("org.commonmark:commonmark-ext-task-list-items:0.27.1")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.84")
+    implementation("org.commonmark:commonmark:0.28.0")
+    implementation("org.commonmark:commonmark-ext-autolink:0.28.0")
+    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.28.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.28.0")
+    implementation("org.commonmark:commonmark-ext-task-list-items:0.28.0")
 
     // CameraX (for node.invoke camera.* parity)
     implementation("androidx.camera:camera-core:1.5.2")
@@ -228,11 +228,11 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
-    testImplementation("io.kotest:kotest-runner-junit5-jvm:6.1.3")
-    testImplementation("io.kotest:kotest-assertions-core-jvm:6.1.3")
+    testImplementation("io.kotest:kotest-runner-junit5-jvm:6.1.11")
+    testImplementation("io.kotest:kotest-assertions-core-jvm:6.1.11")
     testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
     testImplementation("org.robolectric:robolectric:4.16.1")
-    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:6.0.2")
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:6.0.3")
 }
 
 tasks.withType<Test>().configureEach {

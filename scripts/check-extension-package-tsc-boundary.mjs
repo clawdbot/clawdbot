@@ -17,6 +17,10 @@ import path, { dirname, join, resolve } from "node:path";
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
 const tscBin = require.resolve("typescript/bin/tsc");
+const tsgoBin = join(
+  dirname(require.resolve("@typescript/native-preview/package.json")),
+  "bin/tsgo.js",
+);
 const prepareBoundaryArtifactsBin = resolve(
   repoRoot,
   "scripts/prepare-extension-package-boundary-artifacts.mjs",
@@ -673,7 +677,7 @@ async function runCompileCheck(extensionIds) {
           });
         },
         args: [
-          tscBin,
+          tsgoBin,
           "-p",
           resolve(repoRoot, "extensions", extensionId, "tsconfig.json"),
           "--noEmit",

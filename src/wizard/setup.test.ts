@@ -69,7 +69,7 @@ const finalizeSetupWizard = vi.hoisted(() =>
       message = undefined;
     }
 
-    await runTui({ deliver: false, message });
+    await runTui({ local: true, deliver: false, message });
     return { launchedTui: true };
   }),
 );
@@ -468,6 +468,7 @@ describe("runSetupWizard", () => {
 
     expect(runTui).toHaveBeenCalledWith(
       expect.objectContaining({
+        local: true,
         deliver: false,
         message: params.expectedMessage,
       }),

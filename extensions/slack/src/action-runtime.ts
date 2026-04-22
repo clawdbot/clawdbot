@@ -172,10 +172,8 @@ export async function handleSlackAction(
   const buildActionOpts = (operation: "read" | "write") => {
     const token = getTokenForOperation(operation);
     const tokenOverride = token && token !== botToken ? token : undefined;
-    if (!accountId && !tokenOverride) {
-      return undefined;
-    }
     return {
+      cfg,
       ...(accountId ? { accountId } : {}),
       ...(tokenOverride ? { token: tokenOverride } : {}),
     };

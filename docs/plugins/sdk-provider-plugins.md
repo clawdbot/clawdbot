@@ -229,10 +229,23 @@ API key auth, and dynamic model resolution.
             baseUrl: "https://api.acme-ai.com/v1",
             models: [{ id: "acme-large", name: "Acme Large" }],
           }),
+          buildStaticProvider: () => ({
+            api: "openai-completions",
+            baseUrl: "https://api.acme-ai.com/v1",
+            models: [{ id: "acme-large", name: "Acme Large" }],
+          }),
         },
       },
     });
     ```
+
+    `buildProvider` is the live catalog path used when OpenClaw can resolve real
+    provider auth. It may perform provider-specific discovery. Use
+    `buildStaticProvider` only for offline rows that are safe to show before auth
+    is configured; it must not require credentials or make network requests.
+    OpenClaw's `models list --all` display currently executes static catalogs
+    only for bundled provider plugins, with an empty config, empty env, and no
+    agent/workspace paths.
 
     If your auth flow also needs to patch `models.providers.*`, aliases, and
     the agent default model during onboarding, use the preset helpers from

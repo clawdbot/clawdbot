@@ -51,6 +51,22 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
+  it("extracts structured media trust markers", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            trustedLocalMedia: true,
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      trustedLocalMedia: true,
+    });
+  });
+
   it("extracts MEDIA: path from text content block", () => {
     const result = {
       content: [

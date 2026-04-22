@@ -6,6 +6,10 @@ import {
 } from "../../inbound-policy.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
+import {
+  resolveWhatsAppDirectSystemPrompt,
+  resolveWhatsAppGroupSystemPrompt,
+} from "../../system-prompt.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";
@@ -227,12 +231,25 @@ export async function processMessage(params: {
     pipelineResponsePrefix: replyPipeline.responsePrefix,
   });
 
+  // Resolve combined conversation system prompt using the group or direct surface.
+  const conversationSystemPrompt =
+    params.msg.chatType === "group"
+      ? resolveWhatsAppGroupSystemPrompt({
+          accountConfig: account,
+          groupId: conversationId,
+        })
+      : resolveWhatsAppDirectSystemPrompt({
+          accountConfig: account,
+          peerId: dmRouteTarget ?? params.msg.from,
+        });
+
   const ctxPayload = buildWhatsAppInboundContext({
     combinedBody,
     commandAuthorized,
     conversationId,
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
+    groupSystemPrompt: conversationSystemPrompt,
     msg: params.msg,
     route: params.route,
     sender: {

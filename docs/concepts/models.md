@@ -167,6 +167,10 @@ Shows configured models by default. Useful flags:
 - `--plain`: one model per line
 - `--json`: machine‑readable output
 
+`--all` includes bundled provider-owned static catalog rows before auth is
+configured, so discovery-only views can show models that are unavailable until
+you add matching provider credentials.
+
 ### `models status`
 
 Shows the resolved primary model, fallbacks, image model, and an auth overview

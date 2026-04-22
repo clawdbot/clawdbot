@@ -4,6 +4,7 @@ import {
   fetchWithSsrFGuard,
   generateNextcloudTalkSignature,
   getNextcloudTalkRuntime,
+  requireRuntimeConfig,
   resolveMarkdownTableMode,
   resolveNextcloudTalkAccount,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -11,12 +12,12 @@ import {
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 type NextcloudTalkSendOpts = {
+  cfg: CoreConfig;
   baseUrl?: string;
   secret?: string;
   accountId?: string;
   replyTo?: string;
   verbose?: boolean;
-  cfg?: CoreConfig;
 };
 
 function resolveCredentials(
@@ -54,7 +55,7 @@ function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts): {
   baseUrl: string;
   secret: string;
 } {
-  const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
+  const cfg = requireRuntimeConfig(opts.cfg, "Nextcloud Talk send") as CoreConfig;
   const account = resolveNextcloudTalkAccount({
     cfg,
     accountId: opts.accountId,
@@ -83,7 +84,7 @@ function recordNextcloudTalkOutboundActivity(accountId: string): void {
 export async function sendMessageNextcloudTalk(
   to: string,
   text: string,
-  opts: NextcloudTalkSendOpts = {},
+  opts: NextcloudTalkSendOpts,
 ): Promise<NextcloudTalkSendResult> {
   const { cfg, account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const roomToken = normalizeRoomToken(to);
@@ -192,7 +193,7 @@ export async function sendReactionNextcloudTalk(
   roomToken: string,
   messageId: string,
   reaction: string,
-  opts: Omit<NextcloudTalkSendOpts, "replyTo"> = {},
+  opts: Omit<NextcloudTalkSendOpts, "replyTo">,
 ): Promise<{ ok: true }> {
   const { account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const normalizedToken = normalizeRoomToken(roomToken);

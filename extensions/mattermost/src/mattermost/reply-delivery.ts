@@ -1,5 +1,6 @@
 import {
   deliverTextOrMediaReply,
+  isReasoningReplyPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -15,7 +16,7 @@ type SendMattermostMessage = (
   to: string,
   text: string,
   opts: {
-    cfg?: OpenClawConfig;
+    cfg: OpenClawConfig;
     accountId?: string;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
@@ -35,6 +36,9 @@ export async function deliverMattermostReplyPayload(params: {
   tableMode: MarkdownTableMode;
   sendMessage: SendMattermostMessage;
 }): Promise<void> {
+  if (isReasoningReplyPayload(params.payload)) {
+    return;
+  }
   const reply = resolveSendableOutboundReplyParts(params.payload, {
     text: params.core.channel.text.convertMarkdownTables(
       params.payload.text ?? "",

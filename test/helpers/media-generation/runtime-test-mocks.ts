@@ -22,6 +22,7 @@ export type GenerationRuntimeMocks = {
   resolveAgentModelFallbackValues: ResettableReturnMock;
   resolveAgentModelPrimaryValue: ResettableReturnMock;
   debug: ResettableMock;
+  warn: ResettableMock;
 };
 
 export function resetGenerationRuntimeMocks(mocks: GenerationRuntimeMocks): void {
@@ -42,4 +43,5 @@ export function resetGenerationRuntimeMocks(mocks: GenerationRuntimeMocks): void
   mocks.resolveAgentModelPrimaryValue.mockReset();
   mocks.resolveAgentModelPrimaryValue.mockReturnValue(undefined);
   mocks.debug.mockReset();
+  mocks.warn.mockReset();
 }

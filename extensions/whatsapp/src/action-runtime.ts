@@ -64,6 +64,7 @@ export async function handleWhatsAppAction(
       fromMe,
       participant: participant ?? undefined,
       accountId: resolved.accountId,
+      cfg,
     });
     if (!remove && !isEmpty) {
       return jsonResult({ ok: true, added: emoji });

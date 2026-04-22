@@ -52,6 +52,7 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildMoonshotProvider,
+      buildStaticProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>

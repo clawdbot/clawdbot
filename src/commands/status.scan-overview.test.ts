@@ -13,8 +13,8 @@ const mocks = vi.hoisted(() => ({
   buildChannelsTable: vi.fn(),
 }));
 
-vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  hasConfiguredChannelsForReadOnlyScope: mocks.hasPotentialConfiguredChannels,
 }));
 
 vi.mock("../cli/command-config-resolution.js", () => ({

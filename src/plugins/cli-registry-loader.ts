@@ -108,14 +108,16 @@ export async function loadPluginCliCommandRegistryWithContext(params: {
   primaryCommand?: string;
   loaderOptions?: PluginCliLoaderOptions;
 }): Promise<PluginCliRegistryLoadResult> {
+  const onlyPluginIds = resolvePrimaryCommandPluginIds(params.context, params.primaryCommand);
   return {
     ...params.context,
     registry: loadOpenClawPlugins(
-      buildPluginCliLoaderParams(
-        params.context,
-        { primaryCommand: params.primaryCommand },
-        params.loaderOptions,
-      ),
+      buildPluginRuntimeLoadOptions(params.context, {
+        ...params.loaderOptions,
+        ...(onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+        activate: false,
+        cache: false,
+      }),
     ),
   };
 }

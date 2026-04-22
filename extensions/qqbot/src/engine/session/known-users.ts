@@ -10,7 +10,7 @@ import path from "node:path";
 import type { ChatScope } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
-import { getQQBotDataDir } from "../utils/platform.js";
+import { getQQBotDataDir, getQQBotDataPath } from "../utils/platform.js";
 
 /** Persisted record for a user who has interacted with the bot. */
 export interface KnownUser {
@@ -24,18 +24,17 @@ export interface KnownUser {
   interactionCount: number;
 }
 
-const KNOWN_USERS_DIR = getQQBotDataDir("data");
-const KNOWN_USERS_FILE = path.join(KNOWN_USERS_DIR, "known-users.json");
-
 let usersCache: Map<string, KnownUser> | null = null;
 const SAVE_THROTTLE_MS = 5000;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let isDirty = false;
 
 function ensureDir(): void {
-  if (!fs.existsSync(KNOWN_USERS_DIR)) {
-    fs.mkdirSync(KNOWN_USERS_DIR, { recursive: true });
-  }
+  getQQBotDataDir("data");
+}
+
+function getKnownUsersFile(): string {
+  return path.join(getQQBotDataPath("data"), "known-users.json");
 }
 
 function makeUserKey(user: Partial<KnownUser>): string {
@@ -49,8 +48,9 @@ function loadUsersFromFile(): Map<string, KnownUser> {
   }
   usersCache = new Map();
   try {
-    if (fs.existsSync(KNOWN_USERS_FILE)) {
-      const data = fs.readFileSync(KNOWN_USERS_FILE, "utf-8");
+    const knownUsersFile = getKnownUsersFile();
+    if (fs.existsSync(knownUsersFile)) {
+      const data = fs.readFileSync(knownUsersFile, "utf-8");
       const users = JSON.parse(data) as KnownUser[];
       for (const user of users) {
         usersCache.set(makeUserKey(user), user);
@@ -81,7 +81,7 @@ function doSaveUsersToFile(): void {
   try {
     ensureDir();
     fs.writeFileSync(
-      KNOWN_USERS_FILE,
+      getKnownUsersFile(),
       JSON.stringify(Array.from(usersCache.values()), null, 2),
       "utf-8",
     );

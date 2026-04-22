@@ -211,6 +211,7 @@ export async function channelsStatusCommand(
         },
         configuredChannels: listConfiguredChannelIdsForReadOnlyScope({
           config: resolvedConfig,
+          activationSourceConfig: cfg,
           env: process.env,
           includePersistedAuthState: false,
         }),

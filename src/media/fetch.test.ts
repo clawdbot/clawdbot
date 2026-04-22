@@ -57,27 +57,27 @@ async function expectRemoteMediaMaxBytesError(params: {
   ).rejects.toThrow("exceeds maxBytes");
 }
 
-async function expectRedactedTelegramFetchError(params: {
-  telegramFileUrl: string;
-  telegramToken: string;
-  redactedTelegramToken: string;
+async function expectRedactedBotTokenFetchError(params: {
+  botFileUrl: string;
+  botToken: string;
+  redactedBotToken: string;
   fetchImpl: Parameters<typeof fetchRemoteMedia>[0]["fetchImpl"];
 }) {
   const error = await fetchRemoteMedia({
-    url: params.telegramFileUrl,
+    url: params.botFileUrl,
     fetchImpl: params.fetchImpl,
     lookupFn: makeLookupFn(),
     maxBytes: 1024,
     ssrfPolicy: {
-      allowedHostnames: ["api.telegram.org"],
+      allowedHostnames: ["files.example.test"],
       allowRfc2544BenchmarkRange: true,
     },
   }).catch((err: unknown) => err as Error);
 
   expect(error).toBeInstanceOf(Error);
   const errorText = error instanceof Error ? String(error) : "";
-  expect(errorText).not.toContain(params.telegramToken);
-  expect(errorText).toContain(`bot${params.redactedTelegramToken}`);
+  expect(errorText).not.toContain(params.botToken);
+  expect(errorText).toContain(`bot${params.redactedBotToken}`);
 }
 
 async function expectFetchRemoteMediaRejected(params: {
@@ -172,9 +172,9 @@ function createFetchRemoteMediaParams(
 }
 
 describe("fetchRemoteMedia", () => {
-  const telegramToken = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
-  const redactedTelegramToken = `${telegramToken.slice(0, 6)}…${telegramToken.slice(-4)}`;
-  const telegramFileUrl = `https://api.telegram.org/file/bot${telegramToken}/photos/1.jpg`;
+  const botToken = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
+  const redactedBotToken = `${botToken.slice(0, 6)}…${botToken.slice(-4)}`;
+  const botFileUrl = `https://files.example.test/file/bot${botToken}/photos/1.jpg`;
 
   beforeAll(async () => {
     ({ fetchRemoteMedia } = await import("./fetch.js"));
@@ -225,20 +225,20 @@ describe("fetchRemoteMedia", () => {
 
   it.each([
     {
-      name: "redacts Telegram bot tokens from fetch failure messages",
+      name: "redacts bot tokens from fetch failure messages",
       fetchImpl: vi.fn(async () => {
-        throw new Error(`dial failed for ${telegramFileUrl}`);
+        throw new Error(`dial failed for ${botFileUrl}`);
       }),
     },
     {
-      name: "redacts Telegram bot tokens from HTTP error messages",
+      name: "redacts bot tokens from HTTP error messages",
       fetchImpl: vi.fn(async () => new Response("unauthorized", { status: 401 })),
     },
   ] as const)("$name", async ({ fetchImpl }) => {
-    await expectRedactedTelegramFetchError({
-      telegramFileUrl,
-      telegramToken,
-      redactedTelegramToken,
+    await expectRedactedBotTokenFetchError({
+      botFileUrl,
+      botToken,
+      redactedBotToken,
       fetchImpl,
     });
   });
@@ -295,7 +295,7 @@ describe("fetchRemoteMedia", () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
 
     await fetchRemoteMedia({
-      url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+      url: "https://files.example.test/file/bot123/photos/test.jpg",
       fetchImpl,
       lookupFn: makeLookupFn(),
       trustExplicitProxyDns: true,

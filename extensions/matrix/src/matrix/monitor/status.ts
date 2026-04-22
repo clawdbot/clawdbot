@@ -1,5 +1,8 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  createConnectedChannelStatusPatch,
+  createTransportActivityStatusPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { formatMatrixErrorMessage } from "../errors.js";
 import {
   isMatrixDisconnectedSyncState,
@@ -52,11 +55,14 @@ export function createMatrixMonitorStatusController(params: {
     });
   };
 
-  const noteConnected = (at = Date.now()) => {
+  const noteConnected = (at = Date.now(), options?: { transportActivity?: boolean }) => {
     if (status.connected === true) {
       status.lastEventAt = at;
     } else {
       Object.assign(status, createConnectedChannelStatusPatch(at));
+    }
+    if (options?.transportActivity) {
+      Object.assign(status, createTransportActivityStatusPatch(at));
     }
     status.lastError = null;
     status.lastDisconnect = null;
@@ -83,7 +89,10 @@ export function createMatrixMonitorStatusController(params: {
   return {
     noteSyncState(state: MatrixSyncState, error?: unknown, at = Date.now()) {
       if (isMatrixReadySyncState(state)) {
-        noteConnected(at);
+        // matrix-js-sdk emits SYNCING after each successful /sync response.
+        // PREPARED can be cache-backed and CATCHUP is a lifecycle bridge, so
+        // neither should refresh transport liveness.
+        noteConnected(at, { transportActivity: state === "SYNCING" });
         return;
       }
       if (isMatrixDisconnectedSyncState(state)) {

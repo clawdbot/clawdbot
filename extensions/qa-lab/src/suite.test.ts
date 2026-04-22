@@ -28,6 +28,23 @@ describe("qa suite", () => {
     expect(qaSuiteProgressTesting.shouldLogQaSuiteProgress({ CI: "false" })).toBe(false);
   });
 
+  it("resolves transport-ready timeout from params and env", () => {
+    expect(qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(undefined, {})).toBe(
+      120_000,
+    );
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(undefined, {
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
+      }),
+    ).toBe(180_000);
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(undefined, {
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
+      }),
+    ).toBe(120_000);
+    expect(qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(90_000, {})).toBe(90_000);
+  });
+
   it("applies OPENCLAW_QA_SUITE_PROGRESS override and falls back on invalid values", () => {
     expect(
       qaSuiteProgressTesting.shouldLogQaSuiteProgress({

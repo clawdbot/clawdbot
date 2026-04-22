@@ -3,10 +3,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
-import {
-  createMessageToolButtonsSchema,
-  createMessageToolCardSchema,
-} from "../../plugin-sdk/channel-actions.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
@@ -24,38 +20,12 @@ type DescribeMessageTool = NonNullable<
 type MessageToolDiscoveryContext = Parameters<DescribeMessageTool>[0];
 type MessageToolSchema = NonNullable<ReturnType<DescribeMessageTool>>["schema"];
 
-function createDiscordMessageToolComponentsSchema() {
-  return Type.Object({ type: Type.Literal("discord-components") });
-}
-
-function createSlackMessageToolBlocksSchema() {
-  return Type.Array(Type.Object({}, { additionalProperties: true }));
-}
-
 function createTelegramPollExtraToolSchemas() {
   return {
     pollDurationSeconds: Type.Optional(Type.Number()),
     pollAnonymous: Type.Optional(Type.Boolean()),
     pollPublic: Type.Optional(Type.Boolean()),
   };
-}
-
-function createCardSchemaPlugin(params: {
-  id: string;
-  label: string;
-  docsPath: string;
-  blurb: string;
-}) {
-  return createChannelPlugin({
-    ...params,
-    actions: ["send"],
-    capabilities: ["cards"],
-    toolSchema: () => ({
-      properties: {
-        card: createMessageToolCardSchema(),
-      },
-    }),
-  });
 }
 
 const mocks = vi.hoisted(() => ({
@@ -408,13 +378,8 @@ describe("message tool schema scoping", () => {
     docsPath: "/channels/telegram",
     blurb: "Telegram test plugin.",
     actions: ["send", "react", "poll"],
-    capabilities: ["interactive", "buttons"],
+    capabilities: ["presentation"],
     toolSchema: () => [
-      {
-        properties: {
-          buttons: createMessageToolButtonsSchema(),
-        },
-      },
       {
         properties: createTelegramPollExtraToolSchemas(),
         visibility: "all-configured",
@@ -428,12 +393,7 @@ describe("message tool schema scoping", () => {
     docsPath: "/channels/discord",
     blurb: "Discord test plugin.",
     actions: ["send", "poll", "poll-vote"],
-    capabilities: ["interactive", "components"],
-    toolSchema: () => ({
-      properties: {
-        components: createDiscordMessageToolComponentsSchema(),
-      },
-    }),
+    capabilities: ["presentation"],
   });
 
   const slackPlugin = createChannelPlugin({
@@ -442,12 +402,7 @@ describe("message tool schema scoping", () => {
     docsPath: "/channels/slack",
     blurb: "Slack test plugin.",
     actions: ["send", "react"],
-    capabilities: ["interactive", "blocks"],
-    toolSchema: () => ({
-      properties: {
-        blocks: createSlackMessageToolBlocksSchema(),
-      },
-    }),
+    capabilities: ["presentation"],
   });
 
   afterEach(() => {
@@ -457,42 +412,22 @@ describe("message tool schema scoping", () => {
   it.each([
     {
       provider: "telegram",
-      expectComponents: false,
-      expectBlocks: false,
-      expectButtons: true,
-      expectButtonStyle: true,
       expectTelegramPollExtras: true,
       expectedActions: ["send", "react", "poll", "poll-vote"],
     },
     {
       provider: "discord",
-      expectComponents: true,
-      expectBlocks: false,
-      expectButtons: false,
-      expectButtonStyle: false,
       expectTelegramPollExtras: true,
       expectedActions: ["send", "poll", "poll-vote", "react"],
     },
     {
       provider: "slack",
-      expectComponents: false,
-      expectBlocks: true,
-      expectButtons: false,
-      expectButtonStyle: false,
       expectTelegramPollExtras: true,
       expectedActions: ["send", "react", "poll", "poll-vote"],
     },
   ])(
     "scopes schema fields for $provider",
-    ({
-      provider,
-      expectComponents,
-      expectBlocks,
-      expectButtons,
-      expectButtonStyle,
-      expectTelegramPollExtras,
-      expectedActions,
-    }) => {
+    ({ provider, expectTelegramPollExtras, expectedActions }) => {
       setActivePluginRegistry(
         createTestRegistry([
           { pluginId: "telegram", source: "test", plugin: telegramPlugin },
@@ -508,30 +443,10 @@ describe("message tool schema scoping", () => {
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
 
-      if (expectComponents) {
-        expect(properties.components).toBeDefined();
-      } else {
-        expect(properties.components).toBeUndefined();
-      }
-      if (expectBlocks) {
-        expect(properties.blocks).toBeDefined();
-      } else {
-        expect(properties.blocks).toBeUndefined();
-      }
-      if (expectButtons) {
-        expect(properties.buttons).toBeDefined();
-      } else {
-        expect(properties.buttons).toBeUndefined();
-      }
-      if (expectButtonStyle) {
-        const buttonItemProps =
-          (
-            properties.buttons as {
-              items?: { items?: { properties?: Record<string, unknown> } };
-            }
-          )?.items?.items?.properties ?? {};
-        expect(buttonItemProps.style).toBeDefined();
-      }
+      expect(properties.presentation).toBeDefined();
+      expect(properties.components).toBeUndefined();
+      expect(properties.blocks).toBeUndefined();
+      expect(properties.buttons).toBeUndefined();
       for (const action of expectedActions) {
         expect(actionEnum).toContain(action);
       }
@@ -564,64 +479,6 @@ describe("message tool schema scoping", () => {
     expect(actionEnum).toContain("poll");
   });
 
-  it.each([
-    {
-      provider: "feishu",
-      plugin: createCardSchemaPlugin({
-        id: "feishu",
-        label: "Feishu",
-        docsPath: "/channels/feishu",
-        blurb: "Feishu test plugin.",
-      }),
-    },
-    {
-      provider: "msteams",
-      plugin: createCardSchemaPlugin({
-        id: "msteams",
-        label: "MSTeams",
-        docsPath: "/channels/msteams",
-        blurb: "MSTeams test plugin.",
-      }),
-    },
-  ])(
-    "keeps $provider card schema optional after merging into the message tool schema",
-    ({ plugin }) => {
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]),
-      );
-
-      const tool = createMessageTool({
-        config: {} as never,
-        currentChannelProvider: plugin.id,
-      });
-      const schema = tool.parameters as {
-        properties?: Record<string, unknown>;
-        required?: string[];
-      };
-
-      expect(schema.properties?.card).toBeDefined();
-      expect(schema.required ?? []).not.toContain("card");
-    },
-  );
-
-  it("keeps buttons schema optional so plain sends do not require buttons", () => {
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
-    );
-
-    const tool = createMessageTool({
-      config: {} as never,
-      currentChannelProvider: "telegram",
-    });
-    const schema = tool.parameters as {
-      properties?: Record<string, unknown>;
-      required?: string[];
-    };
-
-    expect(schema.properties?.buttons).toBeDefined();
-    expect(schema.required ?? []).not.toContain("buttons");
-  });
-
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
     const telegramPluginWithConfig = createChannelPlugin({
       id: "telegram",
@@ -634,22 +491,16 @@ describe("message tool schema scoping", () => {
         return {
           actions:
             telegramCfg?.actions?.poll === false ? ["send", "react"] : ["send", "react", "poll"],
-          capabilities: ["interactive", "buttons"],
-          schema: [
-            {
-              properties: {
-                buttons: createMessageToolButtonsSchema(),
-              },
-            },
-            ...(telegramCfg?.actions?.poll === false
+          capabilities: ["presentation"],
+          schema:
+            telegramCfg?.actions?.poll === false
               ? []
               : [
                   {
                     properties: createTelegramPollExtraToolSchemas(),
                     visibility: "all-configured" as const,
                   },
-                ]),
-          ],
+                ],
         };
       },
     });
@@ -681,7 +532,7 @@ describe("message tool schema scoping", () => {
     expect(properties.pollPublic).toBeUndefined();
   });
 
-  it("uses discovery account scope for capability-gated shared fields", () => {
+  it("uses discovery account scope for capability-gated presentation", () => {
     const scopedInteractivePlugin = createChannelPlugin({
       id: "telegram",
       label: "Telegram",
@@ -689,7 +540,7 @@ describe("message tool schema scoping", () => {
       blurb: "Telegram test plugin.",
       describeMessageTool: ({ accountId }) => ({
         actions: ["send"],
-        capabilities: accountId === "ops" ? ["interactive"] : [],
+        capabilities: accountId === "ops" ? ["presentation"] : [],
       }),
     });
 
@@ -709,8 +560,8 @@ describe("message tool schema scoping", () => {
       currentChannelProvider: "telegram",
     });
 
-    expect(getToolProperties(scopedTool).interactive).toBeDefined();
-    expect(getToolProperties(unscopedTool).interactive).toBeUndefined();
+    expect(getToolProperties(scopedTool).presentation).toBeDefined();
+    expect(getToolProperties(unscopedTool).presentation).toBeUndefined();
   });
 
   it("uses discovery account scope for other configured channel actions", () => {
@@ -765,7 +616,7 @@ describe("message tool schema scoping", () => {
         seenContexts.push({ phase: "describeMessageTool", ...ctx });
         return {
           actions: ["send", "react"],
-          capabilities: ["interactive"],
+          capabilities: ["presentation"],
         };
       },
     });

@@ -74,6 +74,7 @@ describe("matrix thread bindings", () => {
     } = {},
   ) {
     return createMatrixThreadBindingManager({
+      cfg: {},
       accountId,
       auth: params.auth ?? auth,
       client: matrixClient,
@@ -170,6 +171,7 @@ describe("matrix thread bindings", () => {
 
   it("creates child Matrix thread bindings from a top-level room context", async () => {
     await createMatrixThreadBindingManager({
+      cfg: {},
       accountId,
       auth,
       client: matrixClient,
@@ -193,6 +195,7 @@ describe("matrix thread bindings", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro root", {
+      cfg: {},
       client: {},
       accountId: "ops",
     });
@@ -214,6 +217,7 @@ describe("matrix thread bindings", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro thread", {
+      cfg: {},
       client: {},
       accountId: "ops",
       threadId: "$thread",
@@ -236,6 +240,7 @@ describe("matrix thread bindings", () => {
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
       await createMatrixThreadBindingManager({
+        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -280,6 +285,7 @@ describe("matrix thread bindings", () => {
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
       await createMatrixThreadBindingManager({
+        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -333,6 +339,7 @@ describe("matrix thread bindings", () => {
     const logVerboseMessage = vi.fn();
     try {
       await createMatrixThreadBindingManager({
+        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -387,6 +394,7 @@ describe("matrix thread bindings", () => {
 
   it("sends threaded farewell messages when bindings are unbound", async () => {
     await createMatrixThreadBindingManager({
+      cfg: {},
       accountId: "ops",
       auth,
       client: {} as never,
@@ -420,6 +428,7 @@ describe("matrix thread bindings", () => {
       "room:!room:example",
       expect.stringContaining("Session ended automatically"),
       expect.objectContaining({
+        cfg: {},
         accountId: "ops",
         threadId: "$thread",
       }),
@@ -569,6 +578,7 @@ describe("matrix thread bindings", () => {
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
       const manager = await createMatrixThreadBindingManager({
+        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,

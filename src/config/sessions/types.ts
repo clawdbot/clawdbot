@@ -74,6 +74,7 @@ export type CliSessionBinding = {
   authEpoch?: string;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
 };
 
 export type SessionCompactionCheckpointReason =

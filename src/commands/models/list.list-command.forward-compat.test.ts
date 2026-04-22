@@ -58,8 +58,10 @@ const mocks = vi.hoisted(() => {
     loadModelsConfigWithSource: vi.fn(),
     ensureOpenClawModelsJson: vi.fn(),
     ensureAuthProfileStore: vi.fn(),
+    resolveOpenClawAgentDir: vi.fn(),
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
+    loadProviderCatalogModelsForList: vi.fn(),
     resolveConfiguredEntries: vi.fn(),
     printModelTable: vi.fn(),
     listProfilesForProvider: vi.fn(),
@@ -75,6 +77,7 @@ function resetMocks() {
   });
   mocks.ensureOpenClawModelsJson.mockResolvedValue({ wrote: false });
   mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {}, order: {} });
+  mocks.resolveOpenClawAgentDir.mockReturnValue("/tmp/openclaw-agent");
   mocks.loadModelRegistry.mockResolvedValue({
     models: [],
     availableKeys: new Set(),
@@ -83,6 +86,7 @@ function resetMocks() {
     },
   });
   mocks.loadModelCatalog.mockResolvedValue([]);
+  mocks.loadProviderCatalogModelsForList.mockResolvedValue([]);
   mocks.resolveConfiguredEntries.mockReturnValue({
     entries: [
       {
@@ -138,8 +142,10 @@ function installModelsListCommandForwardCompatMocks() {
   vi.doMock("./list.runtime.js", () => ({
     ensureOpenClawModelsJson: mocks.ensureOpenClawModelsJson,
     ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+    resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
     listProfilesForProvider: mocks.listProfilesForProvider,
     loadModelCatalog: mocks.loadModelCatalog,
+    loadProviderCatalogModelsForList: mocks.loadProviderCatalogModelsForList,
     resolveModelWithRegistry: mocks.resolveModelWithRegistry,
     resolveEnvApiKey: vi.fn().mockReturnValue(undefined),
     resolveAwsSdkEnvVarName: vi.fn().mockReturnValue(undefined),
@@ -160,6 +166,7 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
   const rows: unknown[] = [];
   const context = {
     cfg: mocks.resolvedConfig,
+    agentDir: "/tmp/openclaw-agent",
     authStore: mocks.ensureAuthProfileStore(),
     availableKeys: loaded.availableKeys,
     configuredByKey: new Map(),

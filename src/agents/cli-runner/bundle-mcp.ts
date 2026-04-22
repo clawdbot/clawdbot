@@ -22,6 +22,7 @@ type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
   env?: Record<string, string>;
 };
 
@@ -255,6 +256,49 @@ async function writeGeminiSystemSettings(
   };
 }
 
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sortJsonValue(entry));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.keys(value)
+      .toSorted()
+      .map((key) => [key, sortJsonValue(value[key])]),
+  );
+}
+
+function normalizeOpenClawLoopbackUrl(value: string): string {
+  const match =
+    /^(http:\/\/(?:127\.0\.0\.1|localhost|\[::1\])):\d+(\/mcp)$/.exec(value.trim()) ?? undefined;
+  if (!match) {
+    return value;
+  }
+  return `${match[1]}:<openclaw-loopback>${match[2]}`;
+}
+
+function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
+  const canonicalServers = Object.fromEntries(
+    Object.entries(config.mcpServers).map(([name, server]) => {
+      if (name !== "openclaw" || typeof server.url !== "string") {
+        return [name, sortJsonValue(server)];
+      }
+      return [
+        name,
+        sortJsonValue({
+          ...server,
+          url: normalizeOpenClawLoopbackUrl(server.url),
+        }),
+      ];
+    }),
+  ) as BundleMcpConfig["mcpServers"];
+  return {
+    mcpServers: sortJsonValue(canonicalServers) as BundleMcpConfig["mcpServers"],
+  };
+}
+
 async function prepareModeSpecificBundleMcpConfig(params: {
   mode: CliBundleMcpMode;
   backend: CliBackendConfig;
@@ -263,6 +307,12 @@ async function prepareModeSpecificBundleMcpConfig(params: {
 }): Promise<PreparedCliBundleMcpConfig> {
   const serializedConfig = `${JSON.stringify(params.mergedConfig, null, 2)}\n`;
   const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
+  const serializedResumeConfig = `${JSON.stringify(
+    canonicalizeBundleMcpConfigForResume(params.mergedConfig),
+    null,
+    2,
+  )}\n`;
+  const mcpResumeHash = crypto.createHash("sha256").update(serializedResumeConfig).digest("hex");
 
   if (params.mode === "codex-config-overrides") {
     return {
@@ -275,6 +325,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
         ),
       },
       mcpConfigHash,
+      mcpResumeHash,
       env: params.env,
     };
   }
@@ -284,6 +335,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     return {
       backend: params.backend,
       mcpConfigHash,
+      mcpResumeHash,
       env: settings.env,
       cleanup: settings.cleanup,
     };
@@ -302,6 +354,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
       ),
     },
     mcpConfigHash,
+    mcpResumeHash,
     env: params.env,
     cleanup: async () => {
       await fs.rm(tempDir, { recursive: true, force: true });

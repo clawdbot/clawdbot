@@ -13,7 +13,15 @@ import { resolveConfiguredOpenAIBaseUrl, toOpenAIDataUrl } from "./shared.js";
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
-const OPENAI_SUPPORTED_SIZES = ["1024x1024", "1024x1536", "1536x1024"] as const;
+const OPENAI_SUPPORTED_SIZES = [
+  "1024x1024",
+  "1536x1024",
+  "1024x1536",
+  "2048x2048",
+  "2048x1152",
+  "3840x2160",
+  "2160x3840",
+] as const;
 const OPENAI_MAX_INPUT_IMAGES = 5;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 

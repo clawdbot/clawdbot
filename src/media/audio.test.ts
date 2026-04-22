@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   isVoiceCompatibleAudio,
-  TELEGRAM_VOICE_AUDIO_EXTENSIONS,
-  TELEGRAM_VOICE_MIME_TYPES,
+  VOICE_MESSAGE_AUDIO_EXTENSIONS,
+  VOICE_MESSAGE_MIME_TYPES,
 } from "./audio.js";
 
 describe("isVoiceCompatibleAudio", () => {
@@ -28,7 +28,7 @@ describe("isVoiceCompatibleAudio", () => {
     {
       name: "returns true for supported MIME types",
       cases: [
-        ...Array.from(TELEGRAM_VOICE_MIME_TYPES, (contentType) => ({
+        ...Array.from(VOICE_MESSAGE_MIME_TYPES, (contentType) => ({
           opts: { contentType, fileName: null },
           expected: true,
         })),
@@ -38,7 +38,7 @@ describe("isVoiceCompatibleAudio", () => {
     },
     {
       name: "returns true for supported extensions",
-      cases: Array.from(TELEGRAM_VOICE_AUDIO_EXTENSIONS, (ext) => ({
+      cases: Array.from(VOICE_MESSAGE_AUDIO_EXTENSIONS, (ext) => ({
         opts: { fileName: `voice${ext}` },
         expected: true,
       })),

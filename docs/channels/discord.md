@@ -593,6 +593,7 @@ Default slash command settings:
     - `channels.discord.streamMode` is a legacy alias and is auto-migrated.
     - `partial` edits a single preview message as tokens arrive.
     - `block` emits draft-sized chunks (use `draftChunk` to tune size and breakpoints).
+    - Media, error, and explicit-reply finals cancel pending preview edits without flushing a temporary draft before normal delivery.
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same draft preview message (default: `true`). Set `false` to keep separate tool/progress messages.
 
     Example:

@@ -58,6 +58,7 @@ function resolveIrcEffectiveAllowlists(params: {
 
 async function deliverIrcReply(params: {
   payload: OutboundReplyPayload;
+  cfg: CoreConfig;
   target: string;
   accountId: string;
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;
@@ -70,6 +71,7 @@ async function deliverIrcReply(params: {
         await params.sendReply(params.target, text, replyToId);
       } else {
         await sendMessageIrc(params.target, text, {
+          cfg: params.cfg,
           accountId: params.accountId,
           replyTo: replyToId,
         });
@@ -218,6 +220,7 @@ export async function handleIrcInbound(params: {
             sendPairingReply: async (text) => {
               await deliverIrcReply({
                 payload: { text },
+                cfg: config,
                 target: message.senderNick,
                 accountId: account.accountId,
                 sendReply: params.sendReply,
@@ -340,6 +343,7 @@ export async function handleIrcInbound(params: {
     deliver: async (payload) => {
       await deliverIrcReply({
         payload,
+        cfg: config,
         target: peerId,
         accountId: account.accountId,
         sendReply: params.sendReply,

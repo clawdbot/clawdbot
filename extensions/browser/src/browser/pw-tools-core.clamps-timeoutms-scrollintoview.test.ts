@@ -60,6 +60,12 @@ describe("pw-tools-core", () => {
       errorMessage: 'Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible',
       expectedMessage: /not found or not visible/i,
     },
+    {
+      name: "bare locator timeouts into snapshot hints",
+      errorMessage:
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator('aria-ref=ax13')",
+      expectedMessage: /not found or not visible/i,
+    },
   ])("rewrites $name", async ({ errorMessage, expectedMessage }) => {
     const click = vi.fn(async () => {
       throw new Error(errorMessage);

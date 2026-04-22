@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
@@ -16,7 +15,6 @@ import {
   listEnabledDiscordAccounts,
   resolveDiscordAccount,
 } from "./accounts.js";
-import { createDiscordMessageToolComponentsSchema } from "./message-tool-schema.js";
 
 let discordChannelActionsRuntimePromise:
   | Promise<typeof import("./channel-actions.runtime.js")>
@@ -157,12 +155,7 @@ function describeDiscordMessageTool({
   }
   return {
     actions: Array.from(actions),
-    capabilities: ["interactive", "components"],
-    schema: {
-      properties: {
-        components: Type.Optional(createDiscordMessageToolComponentsSchema()),
-      },
-    },
+    capabilities: ["presentation"],
   };
 }
 

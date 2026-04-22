@@ -1,4 +1,3 @@
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode, TtsProvider } from "../config/types.tts.js";
 import type {
@@ -8,6 +7,7 @@ import type {
   TtsDirectiveParseResult,
 } from "../tts/provider-types.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "../tts/tts-types.js";
+import type { ReplyPayload } from "./reply-payload.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
 export type { TtsDirectiveOverrides, TtsDirectiveParseResult };

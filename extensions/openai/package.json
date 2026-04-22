@@ -5,7 +5,7 @@
   "description": "OpenClaw OpenAI provider plugins",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.67.68",
+    "@mariozechner/pi-ai": "0.68.1",
     "ws": "^8.20.0"
   },
   "devDependencies": {

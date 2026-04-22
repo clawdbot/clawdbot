@@ -1,9 +1,22 @@
-import type { InteractiveReply } from "../interactive/payload.js";
+import type {
+  InteractiveReply,
+  MessagePresentation,
+  ReplyPayloadDelivery,
+} from "../interactive/payload.js";
 
 export type ReplyPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  /** Internal-only trust signal for gateway webchat local media embedding. */
+  trustedLocalMedia?: boolean;
+  /** Treat media as live-only content and avoid persisting the underlying media reference. */
+  sensitiveMedia?: boolean;
+  /** Channel-agnostic rich presentation. Core degrades or asks the channel renderer to map it. */
+  presentation?: MessagePresentation;
+  /** Channel-agnostic delivery preferences, e.g. pin the sent message when supported. */
+  delivery?: ReplyPayloadDelivery;
+  /** Internal legacy representation used by existing approval/reply helpers during migration. */
   interactive?: InteractiveReply;
   btw?: {
     question: string;

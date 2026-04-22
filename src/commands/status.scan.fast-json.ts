@@ -13,7 +13,7 @@ type StatusJsonScanPolicy = {
   commandName: string;
   allowMissingConfigFastPath?: boolean;
   includeChannelSummary?: boolean;
-  resolveHasConfiguredChannels: (cfg: OpenClawConfig) => boolean;
+  resolveHasConfiguredChannels: (cfg: OpenClawConfig, sourceConfig: OpenClawConfig) => boolean;
   resolveMemory: Parameters<typeof executeStatusScanFromOverview>[0]["resolveMemory"];
 };
 
@@ -58,9 +58,10 @@ export async function scanStatusJsonFast(
     commandName: "status --json",
     allowMissingConfigFastPath: true,
     includeChannelSummary: false,
-    resolveHasConfiguredChannels: (cfg) =>
+    resolveHasConfiguredChannels: (cfg, sourceConfig) =>
       hasConfiguredChannelsForReadOnlyScope({
         config: cfg,
+        activationSourceConfig: sourceConfig,
         env: process.env,
         includePersistedAuthState: false,
       }),

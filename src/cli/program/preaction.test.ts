@@ -266,6 +266,16 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
+  it("lets configure own config validation and plugin loading", async () => {
+    await runPreAction({
+      parseArgv: ["configure"],
+      processArgv: ["node", "openclaw", "configure"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
   it("only allows invalid config for explicit Matrix reinstall requests", async () => {
     await runPreAction({
       parseArgv: ["plugins", "install", "@openclaw/matrix"],

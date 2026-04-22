@@ -38,8 +38,8 @@ beforeEach(() => {
 describe("plugin-sdk drainPendingDeliveries", () => {
   it("injects the lazy outbound deliver runtime when no deliver fn is provided", async () => {
     await drainPendingDeliveries({
-      drainKey: "whatsapp:test",
-      logLabel: "WhatsApp reconnect drain",
+      drainKey: "demo:test",
+      logLabel: "Demo reconnect drain",
       cfg: {},
       log,
       selectEntry: () => ({ match: false }),
@@ -56,8 +56,8 @@ describe("plugin-sdk drainPendingDeliveries", () => {
     const deliver = vi.fn(async () => []);
 
     await drainPendingDeliveries({
-      drainKey: "whatsapp:test",
-      logLabel: "WhatsApp reconnect drain",
+      drainKey: "demo:test",
+      logLabel: "Demo reconnect drain",
       cfg: {},
       log,
       deliver,

@@ -43,9 +43,6 @@ if (
 ) {
   // Imported as a dependency — skip all entry-point side effects.
 } else {
-  const { installGaxiosFetchCompat } = await import("./infra/gaxios-fetch-compat.js");
-
-  await installGaxiosFetchCompat();
   process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();

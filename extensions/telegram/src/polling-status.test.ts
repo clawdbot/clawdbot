@@ -15,12 +15,14 @@ describe("createTelegramPollingStatusPublisher", () => {
       connected: false,
       lastConnectedAt: null,
       lastEventAt: null,
+      lastTransportActivityAt: null,
     });
     expect(setStatus).toHaveBeenNthCalledWith(2, {
       mode: "polling",
       connected: true,
       lastConnectedAt: 1234,
       lastEventAt: 1234,
+      lastTransportActivityAt: 1234,
       lastError: null,
     });
     expect(setStatus).toHaveBeenNthCalledWith(3, {

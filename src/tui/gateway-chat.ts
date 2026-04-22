@@ -24,7 +24,14 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
-import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
+import type {
+  ChatSendOptions,
+  TuiAgentsList,
+  TuiBackend,
+  TuiEvent,
+  TuiModelChoice,
+  TuiSessionList,
+} from "./tui-backend.js";
 
 export type GatewayConnectionOptions = {
   url?: string;
@@ -32,20 +39,7 @@ export type GatewayConnectionOptions = {
   password?: string;
 };
 
-export type ChatSendOptions = {
-  sessionKey: string;
-  message: string;
-  thinking?: string;
-  deliver?: boolean;
-  timeoutMs?: number;
-  runId?: string;
-};
-
-export type GatewayEvent = {
-  event: string;
-  payload?: unknown;
-  seq?: number;
-};
+export type GatewayEvent = TuiEvent;
 
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
@@ -96,70 +90,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export type GatewaySessionList = {
-  ts: number;
-  path: string;
-  count: number;
-  defaults?: {
-    model?: string | null;
-    modelProvider?: string | null;
-    contextTokens?: number | null;
-  };
-  sessions: Array<
-    Pick<
-      SessionInfo,
-      | "thinkingLevel"
-      | "fastMode"
-      | "verboseLevel"
-      | "reasoningLevel"
-      | "model"
-      | "contextTokens"
-      | "inputTokens"
-      | "outputTokens"
-      | "totalTokens"
-      | "modelProvider"
-      | "displayName"
-    > & {
-      key: string;
-      sessionId?: string;
-      updatedAt?: number | null;
-      fastMode?: boolean;
-      sendPolicy?: string;
-      responseUsage?: ResponseUsageMode;
-      label?: string;
-      provider?: string;
-      groupChannel?: string;
-      space?: string;
-      subject?: string;
-      chatType?: string;
-      lastProvider?: string;
-      lastTo?: string;
-      lastAccountId?: string;
-      derivedTitle?: string;
-      lastMessagePreview?: string;
-    }
-  >;
-};
+export type GatewaySessionList = TuiSessionList;
+export type GatewayAgentsList = TuiAgentsList;
+export type GatewayModelChoice = TuiModelChoice;
 
-export type GatewayAgentsList = {
-  defaultId: string;
-  mainKey: string;
-  scope: SessionScope;
-  agents: Array<{
-    id: string;
-    name?: string;
-  }>;
-};
-
-export type GatewayModelChoice = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-};
-
-export class GatewayChatClient {
+export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;

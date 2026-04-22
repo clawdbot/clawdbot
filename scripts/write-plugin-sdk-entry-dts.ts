@@ -37,8 +37,9 @@ const RUNTIME_SHIMS: Partial<Record<string, string>> = {
   ].join("\n"),
 };
 
-// `tsc` emits declarations under `dist/plugin-sdk/src/plugin-sdk/*` because the source lives
-// at `src/plugin-sdk/*` and `rootDir` is `.` (repo root, to support cross-src/extensions refs).
+// TypeScript declaration emit writes files under `dist/plugin-sdk/src/plugin-sdk/*` because the
+// source lives at `src/plugin-sdk/*` and `rootDir` is `.` (repo root, to support
+// cross-src/extensions refs).
 //
 // Our package export map points subpath `types` at `dist/plugin-sdk/<entry>.d.ts`, so we
 // generate stable entry d.ts files that re-export the real declarations.

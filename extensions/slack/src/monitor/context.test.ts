@@ -15,6 +15,7 @@ function createTestContext() {
     app: { client: {} } as App,
     runtime: {} as RuntimeEnv,
     botUserId: "U_BOT",
+    botId: "B_BOT",
     teamId: "T_EXPECTED",
     apiAppId: "A_EXPECTED",
     historyLimit: 0,

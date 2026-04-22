@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
+const pinMessageTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
+  pinMessageTelegram: (...args: unknown[]) => pinMessageTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
@@ -10,6 +12,7 @@ import { telegramOutbound } from "./outbound-adapter.js";
 
 describe("telegramOutbound", () => {
   beforeEach(() => {
+    pinMessageTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
   });
 
@@ -93,5 +96,26 @@ describe("telegramOutbound", () => {
       (sendMessageTelegramMock.mock.calls[1]?.[2] as Record<string, unknown>)?.buttons,
     ).toBeUndefined();
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
+  });
+
+  it("passes delivery pin notify requests to Telegram pinning", async () => {
+    pinMessageTelegramMock.mockResolvedValueOnce({ ok: true, messageId: "tg-1", chatId: "12345" });
+
+    await telegramOutbound.pinDeliveredMessage?.({
+      cfg: {} as never,
+      target: { channel: "telegram", to: "12345", accountId: "ops" },
+      messageId: "tg-1",
+      pin: { enabled: true, notify: true },
+    });
+
+    expect(pinMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "tg-1",
+      expect.objectContaining({
+        accountId: "ops",
+        notify: true,
+        verbose: false,
+      }),
+    );
   });
 });

@@ -72,6 +72,9 @@ let sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
 
 describe("telegram proxy client", () => {
   const proxyUrl = "http://proxy.test:8080";
+  const TELEGRAM_PROXY_CFG = {
+    channels: { telegram: { accounts: { foo: { proxy: proxyUrl } } } },
+  };
 
   const prepareProxyFetch = () => {
     const proxyFetch = vi.fn();
@@ -108,9 +111,7 @@ describe("telegram proxy client", () => {
     botApi.setMessageReaction.mockResolvedValue(undefined);
     botApi.deleteMessage.mockResolvedValue(true);
     botCtorSpy.mockClear();
-    loadConfig.mockReturnValue({
-      channels: { telegram: { accounts: { foo: { proxy: proxyUrl } } } },
-    });
+    loadConfig.mockReturnValue(TELEGRAM_PROXY_CFG);
     makeProxyFetch.mockClear();
     resolveTelegramFetch.mockClear();
   });
@@ -120,8 +121,16 @@ describe("telegram proxy client", () => {
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "production");
 
-    await sendMessageTelegram("123", "first", { token: "tok", accountId: "foo" });
-    await sendMessageTelegram("123", "second", { token: "tok", accountId: "foo" });
+    await sendMessageTelegram("123", "first", {
+      cfg: TELEGRAM_PROXY_CFG,
+      token: "tok",
+      accountId: "foo",
+    });
+    await sendMessageTelegram("123", "second", {
+      cfg: TELEGRAM_PROXY_CFG,
+      token: "tok",
+      accountId: "foo",
+    });
 
     expect(makeProxyFetch).toHaveBeenCalledTimes(1);
     expect(resolveTelegramFetch).toHaveBeenCalledTimes(1);
@@ -145,15 +154,30 @@ describe("telegram proxy client", () => {
   it.each([
     {
       name: "sendMessage",
-      run: () => sendMessageTelegram("123", "hi", { token: "tok", accountId: "foo" }),
+      run: () =>
+        sendMessageTelegram("123", "hi", {
+          cfg: TELEGRAM_PROXY_CFG,
+          token: "tok",
+          accountId: "foo",
+        }),
     },
     {
       name: "reactions",
-      run: () => reactMessageTelegram("123", "456", "✅", { token: "tok", accountId: "foo" }),
+      run: () =>
+        reactMessageTelegram("123", "456", "✅", {
+          cfg: TELEGRAM_PROXY_CFG,
+          token: "tok",
+          accountId: "foo",
+        }),
     },
     {
       name: "deleteMessage",
-      run: () => deleteMessageTelegram("123", "456", { token: "tok", accountId: "foo" }),
+      run: () =>
+        deleteMessageTelegram("123", "456", {
+          cfg: TELEGRAM_PROXY_CFG,
+          token: "tok",
+          accountId: "foo",
+        }),
     },
   ])("uses proxy fetch for $name", async (testCase) => {
     const { fetchImpl } = prepareProxyFetch();

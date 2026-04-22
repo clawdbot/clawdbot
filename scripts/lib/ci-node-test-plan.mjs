@@ -90,7 +90,7 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.logging.config.ts",
           "test/vitest/vitest.process.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
       },
       {
         shardName: "core-runtime-media-ui",
@@ -101,7 +101,7 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.ui.config.ts",
           "test/vitest/vitest.wizard.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
       },
       {
         shardName: "core-runtime-shared",
@@ -112,7 +112,7 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
       },
     ],
   ],
@@ -176,7 +176,7 @@ const SPLIT_NODE_SHARDS = new Map([
     ],
   ],
 ]);
-const DIST_DEPENDENT_NODE_SHARD_NAMES = new Set(["core-support-boundary", "core-runtime"]);
+const DIST_DEPENDENT_NODE_SHARD_NAMES = new Set(["core-support-boundary"]);
 
 function formatNodeTestShardCheckName(shardName) {
   const normalizedShardName = shardName.startsWith("core-unit-")

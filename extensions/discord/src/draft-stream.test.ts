@@ -78,4 +78,50 @@ describe("createDiscordDraftStream", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("discord stream preview stopped"));
     expect(stream.messageId()).toBeUndefined();
   });
+
+  it("discardPending keeps an existing preview but ignores later updates", async () => {
+    const rest = {
+      post: vi.fn(async () => ({ id: "m1" })),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+    });
+
+    stream.update("first draft");
+    await stream.flush();
+    await stream.discardPending();
+    stream.update("late draft");
+    await stream.flush();
+
+    expect(rest.post).toHaveBeenCalledTimes(1);
+    expect(rest.patch).not.toHaveBeenCalled();
+    expect(rest.delete).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("m1");
+  });
+
+  it("seal keeps an existing preview and cancels pending final overwrites", async () => {
+    const rest = {
+      post: vi.fn(async () => ({ id: "m1" })),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+    });
+
+    stream.update("first draft");
+    await stream.flush();
+    stream.update("stale final draft");
+    await stream.seal();
+
+    expect(rest.post).toHaveBeenCalledTimes(1);
+    expect(rest.patch).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("m1");
+  });
 });

@@ -7,6 +7,8 @@ type DraftEditFn = NonNullable<DraftStreamParams["edit"]>;
 type DraftRemoveFn = NonNullable<DraftStreamParams["remove"]>;
 type DraftWarnFn = NonNullable<DraftStreamParams["warn"]>;
 
+const TEST_CFG = {};
+
 function createDraftStreamHarness(
   params: {
     maxChars?: number;
@@ -27,6 +29,7 @@ function createDraftStreamHarness(
   const warn = params.warn ?? vi.fn<DraftWarnFn>();
   const stream = createSlackDraftStream({
     target: "channel:C123",
+    cfg: TEST_CFG,
     token: "xoxb-test",
     throttleMs: 250,
     maxChars: params.maxChars,
@@ -50,6 +53,7 @@ describe("createSlackDraftStream", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(edit).toHaveBeenCalledTimes(1);
     expect(edit).toHaveBeenCalledWith("C123", "111.222", "hello world", {
+      cfg: TEST_CFG,
       token: "xoxb-test",
       accountId: undefined,
     });
@@ -130,6 +134,22 @@ describe("createSlackDraftStream", () => {
     });
     expect(stream.messageId()).toBeUndefined();
     expect(stream.channelId()).toBeUndefined();
+  });
+
+  it("discardPending stops late updates without deleting the visible preview", async () => {
+    const { stream, send, edit, remove } = createDraftStreamHarness();
+
+    stream.update("hello");
+    await stream.flush();
+    await stream.discardPending();
+    stream.update("late");
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(edit).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("111.222");
+    expect(stream.channelId()).toBe("C123");
   });
 
   it("clear is a no-op when no preview message exists", async () => {

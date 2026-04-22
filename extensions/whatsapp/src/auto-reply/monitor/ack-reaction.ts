@@ -74,6 +74,7 @@ export async function maybeSendAckReaction(params: {
     fromMe: false,
     participant: sender.jid ?? undefined,
     accountId: params.accountId,
+    cfg: params.cfg,
   }).catch((err) => {
     params.warn(
       {

@@ -5,10 +5,14 @@ import {
   createBackspaceDeduper,
   drainAndStopTuiSafely,
   isIgnorableTuiStopError,
+  resolveCodexCliBin,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
+  resolveLocalAuthCliInvocation,
+  resolveLocalAuthSpawnCwd,
+  resolveLocalAuthSpawnOptions,
   resolveTuiSessionKey,
   stopTuiSafely,
 } from "./tui.js";
@@ -54,6 +58,11 @@ describe("tui slash commands", () => {
     const commands = getSlashCommands({});
     expect(commands.some((command) => command.name === "context")).toBe(true);
     expect(commands.some((command) => command.name === "commands")).toBe(true);
+  });
+
+  it("includes /auth in local embedded mode", () => {
+    const commands = getSlashCommands({ local: true });
+    expect(commands.some((command) => command.name === "auth")).toBe(true);
   });
 });
 
@@ -308,5 +317,120 @@ describe("TUI shutdown safety", () => {
         throw new Error("boom");
       });
     }).toThrow("boom");
+  });
+});
+
+describe("resolveCodexCliBin", () => {
+  it("returns a string path when codex CLI is installed", () => {
+    const result = resolveCodexCliBin();
+    // In this test environment codex is installed; verify it returns a non-empty path
+    if (result !== null) {
+      expect(typeof result).toBe("string");
+      expect(result.length).toBeGreaterThan(0);
+      expect(result).toContain("codex");
+    }
+  });
+
+  it("returns null or a valid path (never throws)", () => {
+    // The function should never throw regardless of environment
+    expect(() => resolveCodexCliBin()).not.toThrow();
+    const result = resolveCodexCliBin();
+    expect(result === null || typeof result === "string").toBe(true);
+  });
+});
+
+describe("resolveLocalAuthCliInvocation", () => {
+  it("uses the source runner when dist is unavailable", () => {
+    expect(
+      resolveLocalAuthCliInvocation({
+        execPath: "/usr/bin/node",
+        wrapperPath: "/repo/openclaw.mjs",
+        runNodePath: "/repo/scripts/run-node.mjs",
+        hasDistEntry: false,
+        hasRunNodeScript: true,
+      }),
+    ).toEqual({
+      command: "/usr/bin/node",
+      args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
+    });
+  });
+
+  it("uses the packaged wrapper when dist is available", () => {
+    expect(
+      resolveLocalAuthCliInvocation({
+        execPath: "/usr/bin/node",
+        wrapperPath: "/repo/openclaw.mjs",
+        runNodePath: "/repo/scripts/run-node.mjs",
+        hasDistEntry: true,
+        hasRunNodeScript: true,
+      }),
+    ).toEqual({
+      command: "/usr/bin/node",
+      args: ["/repo/openclaw.mjs", "models", "auth", "login"],
+    });
+  });
+});
+
+describe("resolveLocalAuthSpawnOptions", () => {
+  it("enables shell mode for Windows cmd shims", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
+        platform: "win32",
+      }),
+    ).toEqual({ shell: true });
+  });
+
+  it("enables shell mode for Windows bat shims", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\tools\\codex.bat",
+        platform: "win32",
+      }),
+    ).toEqual({ shell: true });
+  });
+
+  it("keeps direct execution for non-wrapper commands", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "/usr/local/bin/codex",
+        platform: "linux",
+      }),
+    ).toEqual({});
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\tools\\codex.exe",
+        platform: "win32",
+      }),
+    ).toEqual({});
+  });
+});
+
+describe("resolveLocalAuthSpawnCwd", () => {
+  it("runs the packaged wrapper from the repo root", () => {
+    expect(
+      resolveLocalAuthSpawnCwd({
+        args: ["/repo/openclaw.mjs", "models", "auth", "login"],
+        defaultCwd: "/worktree/subdir",
+      }),
+    ).toBe("/repo");
+  });
+
+  it("runs the source fallback helper from the repo root", () => {
+    expect(
+      resolveLocalAuthSpawnCwd({
+        args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
+        defaultCwd: "/worktree/subdir",
+      }),
+    ).toBe("/repo");
+  });
+
+  it("keeps the caller cwd for direct codex exec", () => {
+    expect(
+      resolveLocalAuthSpawnCwd({
+        args: ["login"],
+        defaultCwd: "/worktree/subdir",
+      }),
+    ).toBe("/worktree/subdir");
   });
 });

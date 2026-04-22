@@ -66,12 +66,13 @@ jobs:
       - name: Validate release tag and package metadata
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_MAIN_REF: origin/main
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
+          RELEASE_MAIN_REF="refs/remotes/origin/${WORKFLOW_REF_NAME}"
           export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
           pnpm release:openclaw:npm:check
 
       - name: Summarize next step

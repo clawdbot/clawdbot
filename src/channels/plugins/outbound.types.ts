@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
 import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
+import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type {
   ChannelOutboundTargetMode,
@@ -33,6 +34,18 @@ export type ChannelOutboundContext = {
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
   payload: ReplyPayload;
+};
+
+export type ChannelPresentationCapabilities = {
+  supported?: boolean;
+  buttons?: boolean;
+  selects?: boolean;
+  context?: boolean;
+  divider?: boolean;
+};
+
+export type ChannelDeliveryCapabilities = {
+  pin?: boolean;
 };
 
 export type ChannelOutboundPayloadHint =
@@ -78,6 +91,19 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     hint?: ChannelOutboundPayloadHint;
   }) => Promise<void> | void;
+  presentationCapabilities?: ChannelPresentationCapabilities;
+  deliveryCapabilities?: ChannelDeliveryCapabilities;
+  renderPresentation?: (params: {
+    payload: ReplyPayload;
+    presentation: MessagePresentation;
+    ctx: ChannelOutboundPayloadContext;
+  }) => Promise<ReplyPayload | null> | ReplyPayload | null;
+  pinDeliveredMessage?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelOutboundTargetRef;
+    messageId: string;
+    pin: ReplyPayloadDeliveryPin;
+  }) => Promise<void> | void;
   /**
    * @deprecated Use shouldTreatDeliveredTextAsVisible instead.
    */
@@ -89,6 +115,7 @@ export type ChannelOutboundAdapter = {
     kind: "tool" | "block" | "final";
     text?: string;
   }) => boolean;
+  preferFinalAssistantVisibleText?: boolean;
   targetsMatchForReplySuppression?: (params: {
     originTarget: string;
     targetKey: string;

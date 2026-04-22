@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   hasMeaningfulChannelConfig,
   hasPotentialConfiguredChannels,
+  listPotentialConfiguredChannelPresenceSignals,
   listPotentialConfiguredChannelIds,
 } from "./config-presence.js";
 
@@ -90,6 +91,11 @@ describe("config presence", () => {
       expectedConfigured: true,
       options: { includePersistedAuthState: false },
     });
+    expect(
+      listPotentialConfiguredChannelPresenceSignals({}, env, {
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([{ channelId: "matrix", source: "env" }]);
   });
 
   it("detects persisted Matrix credentials without config or env", () => {

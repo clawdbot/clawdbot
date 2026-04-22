@@ -117,6 +117,7 @@ describe("linePlugin outbound.sendPayload", () => {
       "line:user:1",
       "OpenClaw: your access has been approved.",
       {
+        cfg,
         accountId: "primary",
         channelAccessToken: "token-primary",
       },

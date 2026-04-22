@@ -1,14 +1,12 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
 } from "../../plugins/jiti-loader-cache.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-
-const nodeRequire = createRequire(import.meta.url);
+import { tryNativeRequireJavaScriptModule } from "../../plugins/native-module-require.js";
+export { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 
 function createModuleLoader() {
   const jitiLoaders: PluginJitiLoaderCache = new Map();
@@ -26,12 +24,6 @@ function createModuleLoader() {
 }
 
 let loadModule = createModuleLoader();
-
-export function isJavaScriptModulePath(modulePath: string): boolean {
-  return [".js", ".mjs", ".cjs"].includes(
-    normalizeLowercaseStringOrEmpty(path.extname(modulePath)),
-  );
-}
 
 export function resolveCompiledBundledModulePath(modulePath: string): string {
   const compiledDistModulePath = modulePath.replace(
@@ -91,11 +83,12 @@ export function loadChannelPluginModule(params: {
   }
   const safePath = opened.path;
   fs.closeSync(opened.fd);
-  if (process.platform === "win32" && params.shouldTryNativeRequire?.(safePath)) {
-    try {
-      return nodeRequire(safePath);
-    } catch {
-      // Fall back to the Jiti loader path when require() cannot handle the entry.
+  if (params.shouldTryNativeRequire?.(safePath)) {
+    const nativeModule = tryNativeRequireJavaScriptModule(safePath, {
+      allowWindows: true,
+    });
+    if (nativeModule.ok) {
+      return nativeModule.moduleExport;
     }
   }
   return loadModule(safePath)(safePath);

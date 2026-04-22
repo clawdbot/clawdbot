@@ -636,7 +636,37 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("message: Send messages and channel actions");
     expect(prompt).toContain("### message tool");
+    expect(prompt).toContain("Use `message` for proactive sends + channel actions");
+    expect(prompt).toContain("For `action=send`, include `target` and `message`.");
     expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
+  });
+
+  it("gates sub-agent orchestration guidance on available tools", () => {
+    const messagingPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message", "sessions_send"],
+    });
+    const spawnOnlyPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+    });
+    const orchestrationPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+    });
+
+    expect(messagingPrompt).not.toContain("Sub-agent orchestration");
+    expect(messagingPrompt).not.toContain("sessions_spawn(...)");
+    expect(messagingPrompt).not.toContain("subagents(action=list|steer|kill)");
+
+    expect(spawnOnlyPrompt).toContain(
+      "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work.",
+    );
+    expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
+
+    expect(orchestrationPrompt).toContain(
+      "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; use `subagents(action=list|steer|kill)` to manage already-spawned children.",
+    );
   });
 
   it("reapplies provider prompt contributions", () => {

@@ -91,6 +91,13 @@ function resolveChannelTargetId(params: {
     return target;
   }
 
+  const explicitConversationId = resolveConversationIdFromTargets({
+    targets: [target],
+  });
+  if (explicitConversationId) {
+    return explicitConversationId;
+  }
+
   const parsed = parseExplicitTargetForChannel(params.channel, target);
   const parsedTarget = normalizeOptionalString(parsed?.to);
   if (parsedTarget) {
@@ -101,10 +108,7 @@ function resolveChannelTargetId(params: {
     );
   }
 
-  const explicitConversationId = resolveConversationIdFromTargets({
-    targets: [target],
-  });
-  return explicitConversationId ?? target;
+  return target;
 }
 
 function buildThreadingContext(params: {

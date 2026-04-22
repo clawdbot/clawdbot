@@ -22,6 +22,7 @@ function createStubPluginRegistry(): PluginRegistry {
     musicGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    embeddedExtensionFactories: [],
     memoryEmbeddingProviders: [],
     textTransforms: [],
     agentHarnesses: [],

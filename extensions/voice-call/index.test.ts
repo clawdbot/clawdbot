@@ -75,7 +75,7 @@ function setup(config: Record<string, unknown>): Registered {
     registerService: () => {},
     resolvePath: (p: string) => p,
   });
-  void plugin.register(api);
+  plugin.register(api);
   return { methods, tools };
 }
 

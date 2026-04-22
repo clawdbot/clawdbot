@@ -4,6 +4,12 @@ import type { MatrixClient } from "../sdk.js";
 import * as sendModule from "../send.js";
 import { editMatrixMessage, readMatrixMessages } from "./messages.js";
 
+const MATRIX_ACTION_TEST_CFG = {
+  channels: {
+    matrix: {},
+  },
+};
+
 function installMatrixActionTestRuntime(): void {
   setMatrixRuntime({
     config: {
@@ -110,13 +116,15 @@ describe("matrix message actions", () => {
     const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
 
     try {
+      const cfg = {} as never;
       const result = await editMatrixMessage("!room:example.org", "$original", "hello", {
+        cfg,
         timeoutMs: 12_345,
       });
 
       expect(result).toEqual({ eventId: "evt-edit" });
       expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "hello", {
-        cfg: undefined,
+        cfg,
         accountId: undefined,
         client: undefined,
         timeoutMs: 12_345,
@@ -137,7 +145,7 @@ describe("matrix message actions", () => {
       "!room:example.org",
       "$original",
       "hello @alice:example.org and @bob:example.org",
-      { client },
+      { cfg: MATRIX_ACTION_TEST_CFG, client },
     );
 
     expect(result).toEqual({ eventId: "evt-edit" });
@@ -162,7 +170,7 @@ describe("matrix message actions", () => {
       "!room:example.org",
       "$original",
       "hello again @alice:example.org",
-      { client },
+      { cfg: MATRIX_ACTION_TEST_CFG, client },
     );
 
     expect(result).toEqual({ eventId: "evt-edit" });

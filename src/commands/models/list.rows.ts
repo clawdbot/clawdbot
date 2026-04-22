@@ -5,7 +5,11 @@ import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
-import { loadModelCatalog, resolveModelWithRegistry } from "./list.runtime.js";
+import {
+  loadModelCatalog,
+  loadProviderCatalogModelsForList,
+  resolveModelWithRegistry,
+} from "./list.runtime.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 import { isLocalBaseUrl, modelKey } from "./shared.js";
 
@@ -18,6 +22,7 @@ type RowFilter = {
 
 type RowBuilderContext = {
   cfg: OpenClawConfig;
+  agentDir: string;
   authStore: AuthProfileStore;
   availableKeys?: Set<string>;
   configuredByKey: ConfiguredByKey;
@@ -142,6 +147,43 @@ export async function appendCatalogSupplementRows(params: {
         config: params.context.cfg,
       })
     ) {
+      continue;
+    }
+    params.rows.push(
+      buildRow({
+        model,
+        key,
+        context: params.context,
+        allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+      }),
+    );
+    params.seenKeys.add(key);
+  }
+
+  if (params.context.filter.local) {
+    return;
+  }
+
+  for (const model of await loadProviderCatalogModelsForList({
+    cfg: params.context.cfg,
+    agentDir: params.context.agentDir,
+    providerFilter: params.context.filter.provider,
+  })) {
+    if (!matchesRowFilter(params.context.filter, model)) {
+      continue;
+    }
+    if (
+      shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: params.context.cfg,
+      })
+    ) {
+      continue;
+    }
+    const key = modelKey(model.provider, model.id);
+    if (params.seenKeys.has(key)) {
       continue;
     }
     params.rows.push(

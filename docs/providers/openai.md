@@ -158,17 +158,17 @@ The bundled `openai` plugin registers image generation through the `image_genera
 
 | Capability                | Value                              |
 | ------------------------- | ---------------------------------- |
-| Default model             | `openai/gpt-image-1`               |
+| Default model             | `openai/gpt-image-2`               |
 | Max images per request    | 4                                  |
 | Edit mode                 | Enabled (up to 5 reference images) |
-| Size overrides            | Supported                          |
+| Size overrides            | Supported, including 2K/4K sizes   |
 | Aspect ratio / resolution | Not forwarded to OpenAI Images API |
 
 ```json5
 {
   agents: {
     defaults: {
-      imageGenerationModel: { primary: "openai/gpt-image-1" },
+      imageGenerationModel: { primary: "openai/gpt-image-2" },
     },
   },
 }
@@ -177,6 +177,22 @@ The bundled `openai` plugin registers image generation through the `image_genera
 <Note>
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
+
+`gpt-image-2` is the default for both OpenAI text-to-image generation and image
+editing. `gpt-image-1` remains usable as an explicit model override, but new
+OpenAI image workflows should use `openai/gpt-image-2`.
+
+Generate:
+
+```
+/tool image_generate model=openai/gpt-image-2 prompt="A polished launch poster for OpenClaw on macOS" size=3840x2160 count=1
+```
+
+Edit:
+
+```
+/tool image_generate model=openai/gpt-image-2 prompt="Preserve the object shape, change the material to translucent glass" image=/path/to/reference.png size=1024x1536
+```
 
 ## Video generation
 

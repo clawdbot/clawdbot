@@ -26,6 +26,7 @@
  */
 
 import fs from "node:fs";
+import path from "node:path";
 import { getCredentialBackupFile, getLegacyCredentialBackupFile } from "../utils/data-paths.js";
 
 interface CredentialBackup {
@@ -42,6 +43,7 @@ export function saveCredentialBackup(accountId: string, appId: string, clientSec
   }
   try {
     const backupPath = getCredentialBackupFile(accountId);
+    fs.mkdirSync(path.dirname(backupPath), { recursive: true });
     const data: CredentialBackup = {
       accountId,
       appId,
@@ -86,9 +88,11 @@ export function loadCredentialBackup(accountId?: string): CredentialBackup | nul
       }
       if (data.accountId) {
         try {
-          const tmpPath = `${getCredentialBackupFile(data.accountId)}.tmp`;
+          const backupPath = getCredentialBackupFile(data.accountId);
+          fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+          const tmpPath = `${backupPath}.tmp`;
           fs.writeFileSync(tmpPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-          fs.renameSync(tmpPath, getCredentialBackupFile(data.accountId));
+          fs.renameSync(tmpPath, backupPath);
           fs.unlinkSync(legacy);
         } catch {
           /* ignore migration errors */

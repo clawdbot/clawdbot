@@ -17,7 +17,6 @@ interface QQBotChannelConfig extends QQBotAccountConfig {
   defaultAccount?: string;
 }
 
-
 /** List all configured QQBot account IDs. */
 export function listQQBotAccountIds(cfg: OpenClawConfig): string[] {
   return listAccountIds(cfg as unknown as Record<string, unknown>);

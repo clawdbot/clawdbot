@@ -235,6 +235,7 @@ async function authorizeSlackInboundMessage(params: {
       resolveSenderName: ctx.resolveUserName,
       sendPairingReply: async (text) => {
         await sendMessageSlack(message.channel, text, {
+          cfg: ctx.cfg,
           token: ctx.botToken,
           client: ctx.app.client,
           accountId: account.accountId,
@@ -557,6 +558,7 @@ export async function prepareSlackMessage(params: {
     isBotMessage,
     botToken: ctx.botToken,
     mediaMaxBytes: ctx.mediaMaxBytes,
+    resolveUserName: ctx.resolveUserName,
   });
   if (!resolvedMessageContent) {
     return null;

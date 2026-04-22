@@ -119,4 +119,35 @@ describe("draft-stream-controls", () => {
     expect(messageId).toBeUndefined();
     expect(deleteMessage).toHaveBeenCalledWith("m-4");
   });
+
+  it("lifecycle seal ignores late updates without clearing the preview id", async () => {
+    const state = { stopped: false, final: false };
+    let messageId: string | undefined = "m-5";
+    const sendOrEditStreamMessage = vi.fn(async () => true);
+    const deleteMessage = vi.fn(async () => {});
+
+    const lifecycle = createFinalizableDraftLifecycle({
+      throttleMs: 250,
+      state,
+      sendOrEditStreamMessage,
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
+      warnPrefix: "cleanup failed",
+    });
+
+    lifecycle.update("stale");
+    await lifecycle.seal();
+    lifecycle.update("late");
+    await lifecycle.loop.flush();
+
+    expect(state.final).toBe(true);
+    expect(messageId).toBe("m-5");
+    expect(sendOrEditStreamMessage).toHaveBeenCalledTimes(1);
+    expect(sendOrEditStreamMessage).toHaveBeenCalledWith("stale");
+    expect(deleteMessage).not.toHaveBeenCalled();
+  });
 });

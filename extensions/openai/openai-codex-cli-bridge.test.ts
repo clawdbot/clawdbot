@@ -71,6 +71,7 @@ describe("prepareOpenAICodexCliExecution", () => {
         refresh_token: "refresh-token",
         account_id: "acct-123",
       },
+      last_refresh: expect.any(String),
     });
     if (process.platform !== "win32") {
       const authStat = await fs.stat(path.join(result?.env?.CODEX_HOME ?? "", "auth.json"));

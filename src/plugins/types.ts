@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { ExtensionFactory, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
@@ -1084,6 +1084,14 @@ export type ProviderPlugin = {
    */
   catalog?: ProviderPluginCatalog;
   /**
+   * Offline provider catalog for display-only surfaces.
+   *
+   * Unlike `catalog`, this hook must not perform network I/O or require real
+   * credentials. Use it for bundled/static rows that can be shown before auth is
+   * configured.
+   */
+  staticCatalog?: ProviderPluginCatalog;
+  /**
    * Legacy alias for catalog.
    * Kept for compatibility with existing provider plugins.
    */
@@ -1667,11 +1675,11 @@ export type OpenClawPluginGatewayMethod = {
  * Context passed to plugin command handlers.
  */
 export type PluginCommandContext = {
-  /** The sender's identifier (e.g., Telegram user ID) */
+  /** The sender's identifier (for example a channel-scoped user ID) */
   senderId?: string;
-  /** The channel/surface (e.g., "telegram", "discord") */
+  /** The channel/surface (for example "chat" or "team-chat") */
   channel: string;
-  /** Provider channel id (e.g., "telegram") */
+  /** Provider channel id */
   channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
@@ -1727,7 +1735,7 @@ export type OpenClawPluginCommandDefinition = {
   /**
    * Optional native-command aliases for slash/menu surfaces.
    * `default` applies to all native providers unless a provider-specific
-   * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
+   * override exists (for example `{ default: "talkvoice", teamChat: "voice2" }`).
    */
   nativeNames?: Partial<Record<string, string>> & { default?: string };
   /**
@@ -1999,6 +2007,8 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness) => void;
+  /** Register a Pi embedded extension factory for OpenClaw embedded runs. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"pi"`. */
+  registerEmbeddedExtensionFactory: (factory: ExtensionFactory) => void;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,

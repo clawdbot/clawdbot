@@ -350,7 +350,7 @@ export async function runBeforeToolCallHook(args: {
             reason: "Approval cancelled (run aborted)",
           };
         }
-        log.warn(`plugin approval gateway request failed, falling back to block: ${String(err)}`);
+        log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
         return {
           blocked: true,
           reason: "Plugin approval required (gateway unavailable)",

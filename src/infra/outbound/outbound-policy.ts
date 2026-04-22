@@ -1,20 +1,20 @@
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  getChannelMessageAdapter,
-  type CrossContextComponentsBuilder,
-} from "./channel-adapters.js";
+import type { MessagePresentation } from "../../interactive/payload.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
+
+export type CrossContextPresentationBuilder = (message: string) => MessagePresentation;
 
 export type CrossContextDecoration = {
   prefix: string;
   suffix: string;
-  componentsBuilder?: CrossContextComponentsBuilder;
+  presentationBuilder?: CrossContextPresentationBuilder;
 };
 
 const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
@@ -181,20 +181,19 @@ export async function buildCrossContextDecoration(params: {
   const prefix = prefixTemplate.replaceAll("{channel}", originLabel);
   const suffix = suffixTemplate.replaceAll("{channel}", originLabel);
 
-  const adapter = getChannelMessageAdapter(params.channel);
-  const componentsBuilder = adapter.supportsComponentsV2
-    ? adapter.buildCrossContextComponents
-      ? (message: string) =>
-          adapter.buildCrossContextComponents!({
-            originLabel,
-            message,
-            cfg: params.cfg,
-            accountId: params.accountId ?? undefined,
-          })
-      : undefined
+  const buildPresentation = getChannelPlugin(params.channel)?.messaging
+    ?.buildCrossContextPresentation;
+  const presentationBuilder = buildPresentation
+    ? (message: string) =>
+        buildPresentation({
+          originLabel,
+          message,
+          cfg: params.cfg,
+          accountId: params.accountId ?? undefined,
+        })
     : undefined;
 
-  return { prefix, suffix, componentsBuilder };
+  return { prefix, suffix, presentationBuilder };
 }
 
 export function shouldApplyCrossContextMarker(action: ChannelMessageActionName): boolean {
@@ -204,20 +203,20 @@ export function shouldApplyCrossContextMarker(action: ChannelMessageActionName):
 export function applyCrossContextDecoration(params: {
   message: string;
   decoration: CrossContextDecoration;
-  preferComponents: boolean;
+  preferPresentation: boolean;
 }): {
   message: string;
-  componentsBuilder?: CrossContextComponentsBuilder;
-  usedComponents: boolean;
+  presentation?: MessagePresentation;
+  usedPresentation: boolean;
 } {
-  const useComponents = params.preferComponents && params.decoration.componentsBuilder;
-  if (useComponents) {
+  const usePresentation = params.preferPresentation && params.decoration.presentationBuilder;
+  if (usePresentation) {
     return {
       message: params.message,
-      componentsBuilder: params.decoration.componentsBuilder,
-      usedComponents: true,
+      presentation: params.decoration.presentationBuilder?.(params.message),
+      usedPresentation: true,
     };
   }
   const message = `${params.decoration.prefix}${params.message}${params.decoration.suffix}`;
-  return { message, usedComponents: false };
+  return { message, usedPresentation: false };
 }

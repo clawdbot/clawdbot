@@ -20,6 +20,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     musicGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    embeddedExtensionFactories: [],
     memoryEmbeddingProviders: [],
     agentHarnesses: [],
     gatewayHandlers: {},

@@ -29,6 +29,16 @@ vi.mock("./client.js", () => ({
 let sendReactionSignal: typeof import("./send-reactions.js").sendReactionSignal;
 let removeReactionSignal: typeof import("./send-reactions.js").removeReactionSignal;
 
+const SIGNAL_TEST_CFG = {
+  channels: {
+    signal: {
+      accounts: {
+        default: {},
+      },
+    },
+  },
+};
+
 describe("sendReactionSignal", () => {
   beforeAll(async () => {
     ({ sendReactionSignal, removeReactionSignal } = await import("./send-reactions.js"));
@@ -39,7 +49,9 @@ describe("sendReactionSignal", () => {
   });
 
   it("uses recipients array and targetAuthor for uuid dms", async () => {
-    await sendReactionSignal("uuid:123e4567-e89b-12d3-a456-426614174000", 123, "🔥");
+    await sendReactionSignal("uuid:123e4567-e89b-12d3-a456-426614174000", 123, "🔥", {
+      cfg: SIGNAL_TEST_CFG,
+    });
 
     const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(rpcMock).toHaveBeenCalledWith("sendReaction", expect.any(Object), expect.any(Object));
@@ -52,6 +64,7 @@ describe("sendReactionSignal", () => {
 
   it("uses groupIds array and maps targetAuthorUuid", async () => {
     await sendReactionSignal("", 123, "✅", {
+      cfg: SIGNAL_TEST_CFG,
       groupId: "group-id",
       targetAuthorUuid: "uuid:123e4567-e89b-12d3-a456-426614174000",
     });
@@ -63,7 +76,7 @@ describe("sendReactionSignal", () => {
   });
 
   it("defaults targetAuthor to recipient for removals", async () => {
-    await removeReactionSignal("+15551230000", 456, "❌");
+    await removeReactionSignal("+15551230000", 456, "❌", { cfg: SIGNAL_TEST_CFG });
 
     const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(params.recipients).toEqual(["+15551230000"]);

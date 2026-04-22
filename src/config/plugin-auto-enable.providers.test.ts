@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import {
   makeIsolatedEnv,
@@ -6,7 +6,9 @@ import {
   resetPluginAutoEnableTestState,
 } from "./plugin-auto-enable.test-helpers.js";
 
-afterEach(() => {
+const env = makeIsolatedEnv();
+
+afterAll(() => {
   resetPluginAutoEnableTestState();
 });
 
@@ -23,7 +25,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
@@ -44,7 +46,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
@@ -66,7 +68,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
@@ -89,7 +91,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
@@ -108,7 +110,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
@@ -127,7 +129,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
@@ -145,7 +147,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.openai).toBeUndefined();
@@ -164,7 +166,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([
         {
           id: "acme",
@@ -192,7 +194,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([
         {
           id: "acme",
@@ -224,7 +226,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([
         {
           id: "acme",
@@ -254,7 +256,7 @@ describe("applyPluginAutoEnable providers", () => {
           enabled: true,
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.acpx?.enabled).toBe(true);
@@ -269,7 +271,7 @@ describe("applyPluginAutoEnable providers", () => {
           backend: "custom-runtime",
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();

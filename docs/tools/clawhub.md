@@ -297,7 +297,8 @@ Code plugins must include the required OpenClaw metadata in `package.json`:
   "version": "1.0.0",
   "type": "module",
   "openclaw": {
-    "extensions": ["./index.ts"],
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"],
     "compat": {
       "pluginApi": ">=2026.3.24-beta.2",
       "minGatewayVersion": "2026.3.24-beta.2"
@@ -309,6 +310,11 @@ Code plugins must include the required OpenClaw metadata in `package.json`:
   }
 }
 ```
+
+Published packages should ship built JavaScript and point `runtimeExtensions`
+at that output. Git checkout installs can still fall back to TypeScript source
+when no built files exist, but built runtime entries avoid runtime TypeScript
+compilation in startup, doctor, and plugin loading paths.
 
 ## Advanced details (technical)
 

@@ -86,6 +86,7 @@ import {
   resolveHeartbeatSummaryForAgent,
   type HeartbeatSummary,
 } from "./heartbeat-summary.js";
+import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   areHeartbeatsEnabled,
@@ -224,6 +225,21 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
       DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
+}
+
+function isHeartbeatTypingEnabled(params: { cfg: OpenClawConfig; hasChatDelivery: boolean }) {
+  if (!params.hasChatDelivery) {
+    return false;
+  }
+  const agentCfg = params.cfg.agents?.defaults;
+  const typingMode = params.cfg.session?.typingMode ?? agentCfg?.typingMode;
+  return typingMode !== "never";
+}
+
+function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
+  const agentCfg = cfg.agents?.defaults;
+  const configured = agentCfg?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
+  return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
 function resolveHeartbeatSession(
@@ -987,6 +1003,34 @@ export async function runHeartbeatOnce(opts: {
   const canAttemptHeartbeatOk = Boolean(
     visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
+  const hasChatDelivery = Boolean(
+    delivery.channel !== "none" && delivery.to && (visibility.showAlerts || visibility.showOk),
+  );
+  const heartbeatTypingIntervalSeconds = resolveHeartbeatTypingIntervalSeconds(cfg);
+  const heartbeatChannelPlugin =
+    delivery.channel !== "none" ? resolveHeartbeatChannelPlugin(delivery.channel) : undefined;
+  const heartbeatTyping =
+    delivery.channel !== "none" &&
+    isHeartbeatTypingEnabled({
+      cfg,
+      hasChatDelivery,
+    })
+      ? createHeartbeatTypingCallbacks({
+          cfg,
+          target: {
+            channel: delivery.channel,
+            ...(delivery.to !== undefined ? { to: delivery.to } : {}),
+            ...(delivery.accountId !== undefined ? { accountId: delivery.accountId } : {}),
+            ...(delivery.threadId !== undefined ? { threadId: delivery.threadId } : {}),
+          },
+          ...(heartbeatChannelPlugin ? { plugin: heartbeatChannelPlugin } : {}),
+          ...(opts.deps ? { deps: opts.deps } : {}),
+          ...(heartbeatTypingIntervalSeconds !== undefined
+            ? { typingIntervalSeconds: heartbeatTypingIntervalSeconds }
+            : {}),
+          log,
+        })
+      : undefined;
   const maybeSendHeartbeatOk = async () => {
     if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
       return false;
@@ -1016,6 +1060,7 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
+    await heartbeatTyping?.onReplyStart();
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const timeoutOverrideSeconds =
@@ -1264,6 +1309,8 @@ export async function runHeartbeatOnce(opts: {
     });
     log.error(`heartbeat failed: ${reason}`, { error: reason });
     return { status: "failed", reason };
+  } finally {
+    heartbeatTyping?.onCleanup?.();
   }
 }
 

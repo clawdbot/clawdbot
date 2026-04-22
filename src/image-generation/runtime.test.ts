@@ -148,6 +148,9 @@ describe("image-generation runtime", () => {
         error: "OpenAI API key missing",
       },
     ]);
+    expect(mocks.warn).toHaveBeenCalledWith(
+      "image-generation candidate failed: openai/gpt-image-1: OpenAI API key missing",
+    );
   });
 
   it("drops unsupported provider geometry overrides and reports them", async () => {

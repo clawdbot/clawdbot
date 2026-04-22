@@ -241,6 +241,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
+"extensions: tokenjuice":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tokenjuice/**"
 "extensions: webhooks":
   - changed-files:
       - any-glob-to-any-file:
@@ -269,6 +273,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: tencent":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tencent/**"
 "extensions: stepfun":
   - changed-files:
       - any-glob-to-any-file:

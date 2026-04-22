@@ -127,6 +127,53 @@ async function startQaChannelTestHarness(params?: {
 }
 
 describe("qa-channel plugin", () => {
+  it("derives thread-aware outbound session routes from explicit thread targets", async () => {
+    const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: "thread:qa-room/thread-1",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:qa-channel:channel:thread:qa-room/thread-1",
+      baseSessionKey: "agent:main:qa-channel:channel:thread:qa-room/thread-1",
+    });
+    expect(route?.threadId).toBeUndefined();
+  });
+
+  it("recovers thread-aware outbound session routes from currentSessionKey", async () => {
+    const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: "channel:qa-room",
+      currentSessionKey: "agent:main:qa-channel:channel:channel:qa-room:thread:thread-1",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:qa-channel:channel:channel:qa-room:thread:thread-1",
+      baseSessionKey: "agent:main:qa-channel:channel:channel:qa-room",
+      threadId: "thread-1",
+    });
+  });
+
+  it('does not recover currentSessionKey threads for shared dmScope "main" DMs', async () => {
+    const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: "dm:alice",
+      currentSessionKey: "agent:main:main:thread:thread-1",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+    });
+    expect(route?.threadId).toBeUndefined();
+  });
+
   it("roundtrips inbound DM traffic through the qa bus", { timeout: 20_000 }, async () => {
     const harness = await startQaChannelTestHarness({ allowFrom: ["*"] });
 

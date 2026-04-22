@@ -133,7 +133,7 @@ export async function collectStatusScanOverview(params: {
   showSecrets: boolean;
   runtime?: RuntimeEnv;
   allowMissingConfigFastPath?: boolean;
-  resolveHasConfiguredChannels?: (cfg: OpenClawConfig) => boolean;
+  resolveHasConfiguredChannels?: (cfg: OpenClawConfig, sourceConfig: OpenClawConfig) => boolean;
   includeChannelsData?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   progress?: {
@@ -177,8 +177,8 @@ export async function collectStatusScanOverview(params: {
   });
   params.progress?.tick();
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
-    ? params.resolveHasConfiguredChannels(cfg)
-    : hasConfiguredChannelsForReadOnlyScope({ config: cfg });
+    ? params.resolveHasConfiguredChannels(cfg, sourceConfig)
+    : hasConfiguredChannelsForReadOnlyScope({ config: cfg, activationSourceConfig: sourceConfig });
   const osSummary = resolveOsSummary();
   const bootstrap = await createStatusScanCoreBootstrap<
     Awaited<ReturnType<typeof getAgentLocalStatusesFn>>

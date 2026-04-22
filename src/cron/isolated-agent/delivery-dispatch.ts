@@ -80,7 +80,7 @@ export function matchesMessagingToolDeliveryTarget(
   if (provider && provider !== "message" && provider !== channel) {
     return false;
   }
-  if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
+  if (delivery.accountId && target.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
   // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on

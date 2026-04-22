@@ -458,9 +458,6 @@ function isConversationLikeIdentity(value: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized.includes("@g.us")) {
-    return true;
-  }
   if (normalized.startsWith("chat_id:")) {
     return true;
   }

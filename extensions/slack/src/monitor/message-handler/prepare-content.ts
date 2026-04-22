@@ -1,3 +1,4 @@
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/infra-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
@@ -13,6 +14,41 @@ export type SlackResolvedMessageContent = {
   rawBody: string;
   effectiveDirectMedia: SlackMediaResult[] | null;
 };
+
+const SLACK_MENTION_RESOLUTION_CONCURRENCY = 4;
+const SLACK_MENTION_RESOLUTION_MAX_LOOKUPS_PER_MESSAGE = 20;
+
+function collectUniqueSlackMentionIds(texts: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const mentionIds: string[] = [];
+  for (const text of texts) {
+    if (!text) {
+      continue;
+    }
+    for (const match of text.matchAll(/<@([A-Z0-9]+)(?:\|[^>]+)?>/gi)) {
+      const userId = match[1];
+      if (!userId || seen.has(userId)) {
+        continue;
+      }
+      seen.add(userId);
+      mentionIds.push(userId);
+    }
+  }
+  return mentionIds;
+}
+
+function renderSlackUserMentions(
+  text: string | undefined,
+  renderedMentions: ReadonlyMap<string, string | null>,
+): string | undefined {
+  if (!text || renderedMentions.size === 0) {
+    return text;
+  }
+  return text.replace(/<@([A-Z0-9]+)(?:\|[^>]+)?>/gi, (full, userId: string) => {
+    const rendered = renderedMentions.get(userId);
+    return rendered ?? full;
+  });
+}
 
 function filterInheritedParentFiles(params: {
   files: SlackFile[] | undefined;
@@ -43,6 +79,7 @@ export async function resolveSlackMessageContent(params: {
   isBotMessage: boolean;
   botToken: string;
   mediaMaxBytes: number;
+  resolveUserName?: (userId: string) => Promise<{ name?: string }>;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
     files: params.message.files,
@@ -90,11 +127,47 @@ export async function resolveSlackMessageContent(params: {
           .join("\n")
       : undefined;
 
+  const textParts = [
+    normalizeOptionalString(params.message.text),
+    attachmentContent?.text,
+    botAttachmentText,
+  ];
+  const renderedMentions = new Map<string, string | null>();
+  const resolveUserName = params.resolveUserName;
+  if (resolveUserName) {
+    const mentionIds = collectUniqueSlackMentionIds(textParts);
+    const lookupIds = mentionIds.slice(0, SLACK_MENTION_RESOLUTION_MAX_LOOKUPS_PER_MESSAGE);
+    const skippedLookups = mentionIds.length - lookupIds.length;
+    if (skippedLookups > 0) {
+      logVerbose(
+        `slack: skipping ${skippedLookups} mention lookup(s) beyond per-message cap (${SLACK_MENTION_RESOLUTION_MAX_LOOKUPS_PER_MESSAGE})`,
+      );
+    }
+    const { results } = await runTasksWithConcurrency({
+      tasks: lookupIds.map((userId) => async () => {
+        const user = await resolveUserName(userId);
+        const renderedName = normalizeOptionalString(user?.name);
+        return { userId, rendered: renderedName ? `<@${userId}> (${renderedName})` : null };
+      }),
+      limit: SLACK_MENTION_RESOLUTION_CONCURRENCY,
+    });
+    for (const result of results) {
+      if (!result) {
+        continue;
+      }
+      renderedMentions.set(result.userId, result.rendered);
+    }
+  }
+
+  const renderedMessageText = renderSlackUserMentions(textParts[0], renderedMentions);
+  const renderedAttachmentText = renderSlackUserMentions(textParts[1], renderedMentions);
+  const renderedBotAttachmentText = renderSlackUserMentions(textParts[2], renderedMentions);
+
   const rawBody =
     [
-      normalizeOptionalString(params.message.text),
-      attachmentContent?.text,
-      botAttachmentText,
+      renderedMessageText,
+      renderedAttachmentText,
+      renderedBotAttachmentText,
       mediaPlaceholder,
       fileOnlyPlaceholder,
     ]

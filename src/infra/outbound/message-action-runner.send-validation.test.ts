@@ -44,7 +44,7 @@ describe("runMessageAction send validation", () => {
     ).rejects.toThrow(/message required/i);
   });
 
-  it("allows send when only shared interactive payloads are provided", async () => {
+  it("allows send when only presentation payloads are provided", async () => {
     const result = await runDrySend({
       cfg: {
         channels: {
@@ -56,7 +56,7 @@ describe("runMessageAction send validation", () => {
       actionParams: {
         channel: "forum",
         target: "123456",
-        interactive: {
+        presentation: {
           blocks: [
             {
               type: "buttons",
@@ -70,13 +70,13 @@ describe("runMessageAction send validation", () => {
     expect(result.kind).toBe("send");
   });
 
-  it("allows send when only channel-specific blocks are provided", async () => {
+  it("allows send when only generic presentation blocks are provided", async () => {
     const result = await runDrySend({
       cfg: workspaceConfig,
       actionParams: {
         channel: "workspace",
         target: "#C12345678",
-        blocks: [{ type: "divider" }],
+        presentation: { blocks: [{ type: "divider" }] },
       },
       toolContext: { currentChannelId: "C12345678" },
     });

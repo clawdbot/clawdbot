@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createConfigIO } from "./io.js";
+import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 // Mock the plugin manifest registry so we can register a fake channel whose
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression
@@ -241,24 +242,44 @@ describe("config io write", () => {
         gateway: { mode: "local" },
         channels: { telegram: { enabled: true, dmPolicy: "pairing" } },
         agents: { list: [{ id: "main", default: true, workspace: "/tmp/openclaw-main" }] },
-        tools: { profile: "safe" },
+        tools: { profile: "messaging" },
         commands: { ownerDisplay: "hash" },
-      };
-      await fs.writeFile(configPath, `${JSON.stringify(original, null, 2)}\n`, "utf-8");
+      } satisfies ConfigFileSnapshot["config"];
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
       const warn = vi.fn();
       const io = createConfigIO({
         env: { VITEST: "true" } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger: { warn, error: vi.fn() },
       });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: originalRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: original,
+        config: original,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
 
-      await expect(io.writeConfigFile({ update: { channel: "beta" } })).rejects.toMatchObject({
+      await expect(
+        io.writeConfigFile(
+          { update: { channel: "beta" } },
+          {
+            baseSnapshot,
+          },
+        ),
+      ).rejects.toMatchObject({
         code: "CONFIG_WRITE_REJECTED",
       });
 
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(
-        `${JSON.stringify(original, null, 2)}\n`,
-      );
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
       const entries = await fs.readdir(path.dirname(configPath));
       expect(entries.some((entry) => entry.includes(".rejected."))).toBe(true);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("Config write rejected:"));

@@ -25,8 +25,8 @@ jobs:
   parity-gate:
     name: Run the GPT-5.4 / Opus 4.6 parity gate against the qa-lab mock
     if: ${{ github.event.pull_request.draft != true }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 20
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 30
     env:
       # Fence the gate off from any real provider credentials. The qa-lab
       # mock server + auth staging (PR N) should be enough to produce a
@@ -34,18 +34,24 @@ jobs:
       # leak into the job env, fail hard instead of silently running
       # against a live provider and burning real budget.
       #
-      # The parity pack has 11 isolated scenario workers. Letting qa suite
-      # fan out to its default "all scenarios at once" mode on smaller CI
-      # VMs makes the short strict-agentic scenarios flaky, especially the
-      # approval-turn followthrough gate that expects a fast post-approval
-      # read within a 30s agent.wait timeout.
-      QA_PARITY_CONCURRENCY: "2"
+      # The parity pack has 11 isolated scenario workers. It exercises a real
+      # gateway child plus mock model turns and subagents, so keep it serial in
+      # CI even on the larger runner. Concurrent isolated gateway workers make
+      # the short strict-agentic scenarios flaky, especially the approval-turn
+      # followthrough gate that expects a fast post-approval read within a 30s
+      # agent.wait timeout.
+      QA_PARITY_CONCURRENCY: "1"
+      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
       OPENCLAW_LIVE_OPENAI_KEY: ""
       OPENCLAW_LIVE_ANTHROPIC_KEY: ""
       OPENCLAW_LIVE_GEMINI_KEY: ""
       OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
+      # The parity suite is a private QA command. Build that exact runtime up
+      # front so CI never tests a public dist plus a later no-clean QA overlay.
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout PR
         uses: actions/checkout@v6
@@ -54,7 +60,7 @@ jobs:
         uses: pnpm/action-setup@v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22.18.0"
           cache: "pnpm"
@@ -62,6 +68,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run parity preflight
+        run: |
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --model openai/gpt-5.4 \
+            --alt-model anthropic/claude-opus-4-6 \
+            --preflight
       - name: Run GPT-5.4 lane
         run: |
           pnpm openclaw qa suite \

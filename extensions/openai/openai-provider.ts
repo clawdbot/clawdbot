@@ -185,8 +185,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
       createProviderApiKeyAuthMethod({
         providerId: PROVIDER_ID,
         methodId: "api-key",
-        label: "OpenAI API key",
-        hint: "Direct OpenAI API key",
+        label: "OpenAI API Key",
+        hint: "Use your OpenAI API key directly",
         optionKey: "openaiApiKey",
         flagName: "--openai-api-key",
         envVar: "OPENAI_API_KEY",
@@ -196,10 +196,10 @@ export function buildOpenAIProvider(): ProviderPlugin {
         applyConfig: (cfg) => applyOpenAIConfig(cfg),
         wizard: {
           choiceId: "openai-api-key",
-          choiceLabel: "OpenAI API key",
+          choiceLabel: "OpenAI API Key",
           groupId: "openai",
           groupLabel: "OpenAI",
-          groupHint: "Codex OAuth + API key",
+          groupHint: "API key + Codex auth",
         },
       }),
     ],

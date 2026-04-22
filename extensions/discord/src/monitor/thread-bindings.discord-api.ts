@@ -124,7 +124,7 @@ export function isDiscordThreadGoneError(err: unknown): boolean {
 }
 
 export async function maybeSendBindingMessage(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   record: ThreadBindingRecord;
   text: string;
   preferWebhook?: boolean;

@@ -31,6 +31,4 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "gateway",
   // Node command relay can reach system.run on paired hosts
   "nodes",
-  // Interactive setup — requires terminal QR scan, hangs on HTTP
-  "whatsapp_login",
 ] as const;

@@ -13,6 +13,10 @@ type PluginContractEntry = {
   plugin: Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config">;
 };
 
+type PluginContractRef = {
+  id: ChannelId;
+};
+
 function toPluginContractEntry(plugin: ChannelPlugin): PluginContractEntry {
   const existingMeta = getBundledChannelCatalogEntry(plugin.id)?.channel;
   return {
@@ -45,4 +49,11 @@ export function getPluginContractRegistryShard(params: {
     const plugin = getBundledChannelPlugin(id);
     return plugin ? [toPluginContractEntry(plugin)] : [];
   });
+}
+
+export function getPluginContractRegistryShardRefs(params: {
+  shardIndex: number;
+  shardCount: number;
+}): PluginContractRef[] {
+  return getBundledChannelPluginIdsForShard(params).map((id) => ({ id }));
 }

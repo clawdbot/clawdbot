@@ -5,19 +5,21 @@ import path, { resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
-const tscBin = require.resolve("typescript/bin/tsc");
+const tsgoBin = path.join(
+  path.dirname(require.resolve("@typescript/native-preview/package.json")),
+  "bin/tsgo.js",
+);
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
 
-const ROOT_DTS_INPUTS = [
+const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
-  "tsconfig.plugin-sdk.dts.json",
-  "src/channels/plugins",
   "src/plugin-sdk",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
   "src/types",
 ];
+const ROOT_DTS_INPUTS = ["tsconfig.plugin-sdk.dts.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
 const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/src/plugin-sdk/error-runtime.d.ts",
@@ -25,15 +27,7 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/src/plugin-sdk/provider-auth.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/video-generation.d.ts",
 ];
-const PACKAGE_DTS_INPUTS = [
-  "tsconfig.json",
-  "packages/plugin-sdk/tsconfig.json",
-  "src/channels/plugins",
-  "src/plugin-sdk",
-  "src/video-generation/dashscope-compatible.ts",
-  "src/video-generation/types.ts",
-  "src/types",
-];
+const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
 const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
@@ -250,13 +244,13 @@ export async function main(argv = process.argv.slice(2)) {
     const rootDtsFresh =
       isArtifactSetFresh({
         inputPaths: ROOT_DTS_INPUTS,
-        outputPaths: [ROOT_DTS_STAMP],
+        outputPaths: [ROOT_DTS_STAMP, ...ROOT_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(ROOT_DTS_REQUIRED_OUTPUTS);
     const packageDtsFresh =
       isArtifactSetFresh({
         inputPaths: PACKAGE_DTS_INPUTS,
-        outputPaths: [PACKAGE_DTS_STAMP],
+        outputPaths: [PACKAGE_DTS_STAMP, ...PACKAGE_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(PACKAGE_DTS_REQUIRED_OUTPUTS);
     const entryShimsFresh = isArtifactSetFresh({
@@ -277,7 +271,7 @@ export async function main(argv = process.argv.slice(2)) {
         });
         pendingSteps.push({
           label: "plugin-sdk boundary dts",
-          args: [tscBin, "-p", "tsconfig.plugin-sdk.dts.json"],
+          args: [tsgoBin, "-p", "tsconfig.plugin-sdk.dts.json"],
           timeoutMs: 300_000,
           stampPath: ROOT_DTS_STAMP,
         });
@@ -292,7 +286,7 @@ export async function main(argv = process.argv.slice(2)) {
       });
       pendingSteps.push({
         label: "plugin-sdk package boundary dts",
-        args: [tscBin, "-p", "packages/plugin-sdk/tsconfig.json"],
+        args: [tsgoBin, "-p", "packages/plugin-sdk/tsconfig.json"],
         timeoutMs: 300_000,
         stampPath: PACKAGE_DTS_STAMP,
       });

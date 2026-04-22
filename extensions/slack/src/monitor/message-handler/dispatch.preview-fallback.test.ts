@@ -9,7 +9,7 @@ const deliverRepliesMock = vi.fn(async () => {});
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
 let mockedDispatchSequence: Array<{
   kind: "tool" | "block" | "final";
-  payload: { text: string };
+  payload: { text: string; isError?: boolean; mediaUrl?: string; mediaUrls?: string[] };
 }> = [];
 
 const noop = () => {};
@@ -20,6 +20,8 @@ function createDraftStreamStub() {
     update: noop,
     flush: noopAsync,
     clear: noopAsync,
+    discardPending: noopAsync,
+    seal: noopAsync,
     stop: noop,
     forceNewMessage: noop,
     messageId: () => "171234.567",
@@ -213,6 +215,7 @@ vi.mock("../config.runtime.js", () => ({
 
 vi.mock("../replies.js", () => ({
   createSlackReplyDeliveryPlan: () => ({
+    peekThreadTs: () => THREAD_TS,
     nextThreadTs: () => THREAD_TS,
     markSent: () => {},
   }),
@@ -234,7 +237,7 @@ vi.mock("../reply.runtime.js", () => ({
   dispatchInboundMessage: async (params: {
     dispatcher: {
       deliver: (
-        payload: { text: string },
+        payload: { text: string; isError?: boolean; mediaUrl?: string; mediaUrls?: string[] },
         info: { kind: "tool" | "block" | "final" },
       ) => Promise<void>;
     };
@@ -293,7 +296,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
-    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(2);
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
     expect(deliverRepliesMock).toHaveBeenNthCalledWith(
       1,
@@ -309,5 +312,55 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         replies: [expect.objectContaining({ text: SAME_TEXT })],
       }),
     );
+  });
+
+  it("does not flush draft previews for media finals before normal delivery", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: { text: "Photo", mediaUrl: "https://example.com/a.png" },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not flush draft previews for error finals before normal delivery", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: { text: "Something failed", isError: true },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 });

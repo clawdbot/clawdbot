@@ -211,6 +211,78 @@ function resolveAssistantMediaAuthToken(req: IncomingMessage): string | undefine
   }
 }
 
+function resolveControlUiReadAuthToken(
+  req: IncomingMessage,
+  opts?: { allowQueryToken?: boolean },
+): string | undefined {
+  const bearer = getBearerToken(req);
+  if (bearer) {
+    return bearer;
+  }
+  if (!opts?.allowQueryToken) {
+    return undefined;
+  }
+  return resolveAssistantMediaAuthToken(req);
+}
+
+async function authorizeControlUiReadRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts?: {
+    auth?: ResolvedGatewayAuth;
+    trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
+    rateLimiter?: AuthRateLimiter;
+    allowQueryToken?: boolean;
+  },
+): Promise<boolean> {
+  if (!opts?.auth) {
+    return true;
+  }
+
+  const token = resolveControlUiReadAuthToken(req, {
+    allowQueryToken: opts.allowQueryToken,
+  });
+  const authResult = await authorizeHttpGatewayConnect({
+    auth: opts.auth,
+    connectAuth: token ? { token, password: token } : null,
+    req,
+    browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
+    rateLimiter: opts.rateLimiter,
+  });
+  if (!authResult.ok) {
+    sendGatewayAuthFailure(res, authResult);
+    return false;
+  }
+
+  const trustDeclaredOperatorScopes =
+    authResult.method !== "token" &&
+    authResult.method !== "password" &&
+    authResult.method !== "none";
+  if (!trustDeclaredOperatorScopes) {
+    return true;
+  }
+
+  const requestedScopes = resolveTrustedHttpOperatorScopes(req, {
+    trustDeclaredOperatorScopes,
+  });
+  const scopeAuth = authorizeOperatorScopesForMethod("assistant.media.get", requestedScopes);
+  if (!scopeAuth.allowed) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: `missing scope: ${scopeAuth.missingScope}`,
+      },
+    });
+    return false;
+  }
+
+  return true;
+}
+
 type AssistantMediaAvailability =
   | { available: true }
   | { available: false; reason: string; code: string };
@@ -297,41 +369,16 @@ export async function handleControlUiAssistantMediaRequest(
   }
 
   applyControlUiSecurityHeaders(res);
-  if (opts?.auth) {
-    const token = resolveAssistantMediaAuthToken(req);
-    const authResult = await authorizeHttpGatewayConnect({
-      auth: opts.auth,
-      connectAuth: token ? { token, password: token } : null,
-      req,
-      browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
-      trustedProxies: opts.trustedProxies,
-      allowRealIpFallback: opts.allowRealIpFallback,
-      rateLimiter: opts.rateLimiter,
-    });
-    if (!authResult.ok) {
-      sendGatewayAuthFailure(res, authResult);
-      return true;
-    }
-    const trustDeclaredOperatorScopes =
-      authResult.method !== "token" &&
-      authResult.method !== "password" &&
-      authResult.method !== "none";
-    if (trustDeclaredOperatorScopes) {
-      const requestedScopes = resolveTrustedHttpOperatorScopes(req, {
-        trustDeclaredOperatorScopes,
-      });
-      const scopeAuth = authorizeOperatorScopesForMethod("assistant.media.get", requestedScopes);
-      if (!scopeAuth.allowed) {
-        sendJson(res, 403, {
-          ok: false,
-          error: {
-            type: "forbidden",
-            message: `missing scope: ${scopeAuth.missingScope}`,
-          },
-        });
-        return true;
-      }
-    }
+  if (
+    !(await authorizeControlUiReadRequest(req, res, {
+      auth: opts?.auth,
+      trustedProxies: opts?.trustedProxies,
+      allowRealIpFallback: opts?.allowRealIpFallback,
+      rateLimiter: opts?.rateLimiter,
+      allowQueryToken: true,
+    }))
+  ) {
+    return true;
   }
   const source = normalizeAssistantMediaSource(url.searchParams.get("source") ?? "");
   if (!source) {
@@ -401,11 +448,18 @@ export async function handleControlUiAssistantMediaRequest(
   }
 }
 
-export function handleControlUiAvatarRequest(
+export async function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { basePath?: string; resolveAvatar: (agentId: string) => ControlUiAvatarResolution },
-): boolean {
+  opts: {
+    basePath?: string;
+    resolveAvatar: (agentId: string) => ControlUiAvatarResolution;
+    auth?: ResolvedGatewayAuth;
+    trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
+    rateLimiter?: AuthRateLimiter;
+  },
+): Promise<boolean> {
   const urlRaw = req.url;
   if (!urlRaw) {
     return false;
@@ -425,6 +479,16 @@ export function handleControlUiAvatarRequest(
   }
 
   applyControlUiSecurityHeaders(res);
+  if (
+    !(await authorizeControlUiReadRequest(req, res, {
+      auth: opts.auth,
+      trustedProxies: opts.trustedProxies,
+      allowRealIpFallback: opts.allowRealIpFallback,
+      rateLimiter: opts.rateLimiter,
+    }))
+  ) {
+    return true;
+  }
 
   const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
   const agentId = agentIdParts[0] ?? "";

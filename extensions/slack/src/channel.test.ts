@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import { slackPlugin } from "./channel.js";
@@ -110,12 +109,8 @@ describe("slackPlugin actions", () => {
     });
 
     expect(discovery?.actions).toContain("send");
-    expect(discovery?.capabilities).toEqual(expect.arrayContaining(["blocks", "interactive"]));
-    expect(discovery?.schema).toMatchObject({
-      properties: {
-        blocks: expect.any(Object),
-      },
-    });
+    expect(discovery?.capabilities).toEqual(expect.arrayContaining(["presentation"]));
+    expect(discovery?.schema).toBeUndefined();
   });
 
   it("honors the selected Slack account during message tool discovery", () => {
@@ -171,7 +166,7 @@ describe("slackPlugin actions", () => {
     expect(slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" })).toMatchObject(
       {
         actions: ["send"],
-        capabilities: ["blocks"],
+        capabilities: ["presentation"],
       },
     );
     expect(slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "work" })).toMatchObject({
@@ -185,7 +180,7 @@ describe("slackPlugin actions", () => {
         "download-file",
         "upload-file",
       ],
-      capabilities: expect.arrayContaining(["blocks", "interactive"]),
+      capabilities: expect.arrayContaining(["presentation"]),
     });
   });
 
@@ -221,10 +216,15 @@ describe("slackPlugin actions", () => {
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
       "user:U12345678",
       expect.stringContaining("approved"),
+      expect.objectContaining({
+        accountId: "work",
+        cfg,
+        token: "xoxb-work",
+      }),
     );
   });
 
-  it("keeps blocks optional in the message tool schema", () => {
+  it("does not expose Slack-native message tool schema", () => {
     const discovery = slackPlugin.actions?.describeMessageTool({
       cfg: {
         channels: {
@@ -235,12 +235,7 @@ describe("slackPlugin actions", () => {
         },
       } as OpenClawConfig,
     });
-    const schema = discovery?.schema;
-    if (!schema || Array.isArray(schema)) {
-      throw new Error("expected slack message-tool schema");
-    }
-
-    expect(Type.Object(schema.properties).required).toBeUndefined();
+    expect(discovery?.schema).toBeUndefined();
   });
 
   it("treats interactive reply payloads as structured Slack payloads", () => {
@@ -319,6 +314,26 @@ describe("slackPlugin status", () => {
       status: 200,
       bot: { id: "B1", name: "openclaw-bot" },
       team: { id: "T1", name: "OpenClaw" },
+    });
+  });
+
+  it("recovers thread routing from mixed-case Slack session keys", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+
+    const route = await resolveRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      target: "channel:C1",
+      currentSessionKey: "agent:main:slack:channel:C1:thread:1712345678.123456",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:slack:channel:c1:thread:1712345678.123456",
+      baseSessionKey: "agent:main:slack:channel:c1",
+      threadId: "1712345678.123456",
     });
   });
 });
@@ -482,18 +497,8 @@ describe("slackPlugin outbound", () => {
       payload: {
         text: "hello",
         mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
-        channelData: {
-          slack: {
-            blocks: [
-              {
-                type: "section",
-                text: {
-                  type: "plain_text",
-                  text: "Block body",
-                },
-              },
-            ],
-          },
+        presentation: {
+          blocks: [{ type: "text", text: "Block body" }],
         },
       },
       accountId: "default",
@@ -529,7 +534,7 @@ describe("slackPlugin outbound", () => {
           {
             type: "section",
             text: {
-              type: "plain_text",
+              type: "mrkdwn",
               text: "Block body",
             },
           },

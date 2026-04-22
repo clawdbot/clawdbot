@@ -4,7 +4,7 @@ inputs:
   pnpm-version:
     description: pnpm version to activate via corepack.
     required: false
-    default: "10.32.1"
+    default: "10.33.0"
   cache-key-suffix:
     description: Suffix appended to the cache key.
     required: false

@@ -482,6 +482,10 @@ vi.mock("../channels/config-presence.js", () => ({
     ),
   listPotentialConfiguredChannelIds: (cfg: { channels?: Record<string, unknown> }) =>
     Object.keys(cfg.channels ?? {}).filter((key) => key !== "defaults" && key !== "modelByChannel"),
+  listPotentialConfiguredChannelPresenceSignals: (cfg: { channels?: Record<string, unknown> }) =>
+    Object.keys(cfg.channels ?? {})
+      .filter((key) => key !== "defaults" && key !== "modelByChannel")
+      .map((channelId) => ({ channelId, source: "config" })),
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({

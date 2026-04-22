@@ -242,6 +242,38 @@ describe("runConfigureWizard", () => {
     );
   });
 
+  it("keeps startup gateway hint probes bounded", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        remote: {
+          url: "wss://gateway.example.test",
+          token: "token",
+        },
+      },
+    });
+    queueWizardPrompts({
+      select: ["local", "__continue"],
+      confirm: [],
+    });
+
+    await runConfigureWizard({ command: "configure" }, createRuntime());
+
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: 300,
+      }),
+    );
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://gateway.example.test",
+        token: "token",
+        timeoutMs: 300,
+      }),
+    );
+  });
+
   it("exits with code 1 when configure wizard is cancelled", async () => {
     const runtime = createRuntime();
     setupBaseWizardState();

@@ -56,6 +56,8 @@ export function resolveModelDisplayName(params: ModelDisplaySelectionParams): st
 type SessionInfoModelSelectionParams = {
   currentProvider?: string | null;
   currentModel?: string | null;
+  defaultProvider?: string | null;
+  defaultModel?: string | null;
   entryProvider?: string | null;
   entryModel?: string | null;
   overrideProvider?: string | null;
@@ -66,25 +68,27 @@ export function resolveSessionInfoModelSelection(params: SessionInfoModelSelecti
   modelProvider?: string;
   model?: string;
 } {
+  const fallbackProvider = params.currentProvider ?? params.defaultProvider ?? undefined;
+  const fallbackModel = params.currentModel ?? params.defaultModel ?? undefined;
+
   if (params.entryProvider !== undefined || params.entryModel !== undefined) {
     return {
-      modelProvider: params.entryProvider ?? params.currentProvider ?? undefined,
-      model: params.entryModel ?? params.currentModel ?? undefined,
+      modelProvider: params.entryProvider ?? fallbackProvider,
+      model: params.entryModel ?? fallbackModel,
     };
   }
 
   const overrideModel = params.overrideModel?.trim();
   if (overrideModel) {
     const overrideProvider = params.overrideProvider?.trim();
-    const currentProvider = params.currentProvider ?? undefined;
     return {
-      modelProvider: overrideProvider || currentProvider,
+      modelProvider: overrideProvider || fallbackProvider,
       model: overrideModel,
     };
   }
 
   return {
-    modelProvider: params.currentProvider ?? undefined,
-    model: params.currentModel ?? undefined,
+    modelProvider: fallbackProvider,
+    model: fallbackModel,
   };
 }

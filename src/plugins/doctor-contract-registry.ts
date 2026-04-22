@@ -7,6 +7,7 @@ import { asNullableRecord } from "../shared/record-coerce.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import { resolvePluginCacheInputs, type PluginSourceRoots } from "./roots.js";
 
 const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
@@ -49,6 +50,14 @@ function getJiti(modulePath: string) {
     modulePath,
     importerUrl: import.meta.url,
   });
+}
+
+function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
+  const nativeModule = tryNativeRequireJavaScriptModule(modulePath);
+  if (nativeModule.ok) {
+    return nativeModule.moduleExport as PluginDoctorContractModule;
+  }
+  return getJiti(modulePath)(modulePath) as PluginDoctorContractModule;
 }
 
 function buildDoctorContractCacheKey(params: {
@@ -225,7 +234,7 @@ function loadPluginDoctorContractEntry(
   }
   let mod: PluginDoctorContractModule;
   try {
-    mod = getJiti(contractSource)(contractSource) as PluginDoctorContractModule;
+    mod = loadPluginDoctorContractModule(contractSource);
   } catch {
     cache.set(record.id, null);
     return null;

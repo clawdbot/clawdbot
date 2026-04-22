@@ -247,6 +247,7 @@ export async function monitorWebChannel(
             });
 
             return (await (listenerFactory ?? attachWebInboxToSocket)({
+              cfg,
               verbose,
               accountId: account.accountId,
               authDir: account.authDir,

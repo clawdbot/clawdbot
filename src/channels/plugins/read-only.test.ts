@@ -155,6 +155,117 @@ module.exports = {
   return { pluginDir, fullMarker, setupMarker };
 }
 
+function writeBundledSetupChannelPlugin(
+  options: {
+    pluginId?: string;
+    channelId?: string;
+    envVar?: string;
+  } = {},
+) {
+  const bundledRoot = makeTempDir();
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+  const pluginId = options.pluginId ?? "bundled-chat";
+  const channelId = options.channelId ?? pluginId;
+  const envVar = options.envVar ?? "BUNDLED_CHAT_TOKEN";
+  const pluginDir = path.join(bundledRoot, pluginId);
+  fs.mkdirSync(pluginDir, { recursive: true });
+  const fullMarker = path.join(pluginDir, "full-loaded.txt");
+  const setupMarker = path.join(pluginDir, "setup-loaded.txt");
+
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify(
+      {
+        name: `@openclaw/${pluginId}`,
+        version: "1.0.0",
+        type: "commonjs",
+        openclaw: {
+          extensions: ["./index.cjs"],
+          setupEntry: "./setup-entry.cjs",
+          channel: {
+            id: channelId,
+            label: "Bundled Chat",
+            selectionLabel: "Bundled Chat",
+            docsPath: `/channels/${channelId}`,
+            blurb: "bundled setup entry",
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: pluginId,
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+        channels: [channelId],
+        channelEnvVars: {
+          [channelId]: [envVar],
+        },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "index.cjs"),
+    `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  kind: "bundled-channel-entry",
+  id: ${JSON.stringify(pluginId)},
+  name: "Bundled Chat",
+  description: "full entry",
+  register() {},
+  loadChannelPlugin() {
+    return {
+      id: ${JSON.stringify(channelId)},
+      meta: { id: ${JSON.stringify(channelId)}, label: "Bundled Chat" },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ accountId: "default", token: "configured" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    };
+  },
+};`,
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "setup-entry.cjs"),
+    `module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin() {
+    require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+    return {
+      id: ${JSON.stringify(channelId)},
+      meta: {
+        id: ${JSON.stringify(channelId)},
+        label: "Bundled Chat",
+        selectionLabel: "Bundled Chat",
+        docsPath: ${JSON.stringify(`/channels/${channelId}`)},
+        blurb: "bundled setup entry",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ accountId: "default", token: "configured" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    };
+  },
+};`,
+    "utf-8",
+  );
+
+  return { bundledRoot, pluginDir, fullMarker, setupMarker, pluginId, channelId, envVar };
+}
+
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
 });
@@ -362,6 +473,100 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
         (entry) => entry.id === "channels.external-chat.token",
       ),
     ).toBe(true);
+    expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("does not promote disabled external channels from manifest env", () => {
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+    });
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          "external-chat": { enabled: false },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat-plugin"],
+        },
+      } as never,
+      {
+        env: { ...process.env, EXTERNAL_CHAT_TOKEN: "configured" },
+        includePersistedAuthState: false,
+      },
+    );
+
+    expect(plugins.some((entry) => entry.id === "external-chat")).toBe(false);
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("does not promote disabled bundled channels from ambient env", () => {
+    const { channelId, envVar, fullMarker, setupMarker } = writeBundledSetupChannelPlugin();
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        plugins: {
+          allow: ["memory-core"],
+        },
+      } as never,
+      {
+        env: { ...process.env, [envVar]: "configured" },
+        includePersistedAuthState: false,
+      },
+    );
+
+    expect(plugins.some((entry) => entry.id === channelId)).toBe(false);
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("does not promote explicitly disabled bundled channels from ambient env", () => {
+    const { channelId, envVar, fullMarker, pluginId, setupMarker } =
+      writeBundledSetupChannelPlugin();
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          [channelId]: { enabled: false },
+        },
+        plugins: {
+          entries: {
+            [pluginId]: { enabled: true },
+          },
+        },
+      } as never,
+      {
+        env: { ...process.env, [envVar]: "configured" },
+        includePersistedAuthState: false,
+      },
+    );
+
+    expect(plugins.some((entry) => entry.id === channelId)).toBe(false);
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("keeps explicitly enabled bundled channels visible from env configuration", () => {
+    const { channelId, envVar, fullMarker, pluginId, setupMarker } =
+      writeBundledSetupChannelPlugin();
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        plugins: {
+          allow: [pluginId],
+          entries: {
+            [pluginId]: { enabled: true },
+          },
+        },
+      } as never,
+      {
+        env: { ...process.env, [envVar]: "configured" },
+        includePersistedAuthState: false,
+      },
+    );
+
+    const plugin = plugins.find((entry) => entry.id === channelId);
+    expect(plugin?.meta.blurb).toBe("bundled setup entry");
     expect(fs.existsSync(setupMarker)).toBe(true);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });

@@ -129,8 +129,8 @@ type ChannelManagerOptions = {
    * plugins to access advanced Plugin SDK features (AI dispatch, routing,
    * text processing, etc.).
    *
-   * Built-in channels (slack, discord, telegram) typically don't use this
-   * because they can directly import internal modules from the monorepo.
+   * Bundled channels typically don't use this because they can directly
+   * import internal modules from the monorepo.
    *
    * This field is optional - omitting it maintains backward compatibility
    * with existing channels. When provided, it must be a real

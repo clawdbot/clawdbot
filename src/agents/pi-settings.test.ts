@@ -25,7 +25,11 @@ describe("applyPiCompactionSettingsFromConfig", () => {
 
   it("can restore reserveTokens after a simulated resource loader reload drops them below floor", () => {
     const cfg = {
-      agents: { defaults: { compaction: { reserveTokensFloor: DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } } },
+      agents: {
+        defaults: {
+          compaction: { reserveTokensFloor: DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR },
+        },
+      },
     } as const;
     let reserve = 16_384;
     const keep = 20_000;

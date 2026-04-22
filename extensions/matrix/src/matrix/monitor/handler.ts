@@ -121,6 +121,7 @@ type MatrixAllowBotsMode = "off" | "mentions" | "all";
 type MatrixDraftStreamHandle = {
   update: (text: string) => void;
   stop: () => Promise<string | undefined>;
+  discardPending: () => Promise<void>;
   eventId: () => string | undefined;
   mustDeliverFinalNormally: () => boolean;
   matchesPreparedText: (text: string) => boolean;
@@ -1547,10 +1548,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
               const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
-              await draftStream.stop();
-              const draftEventId = draftStream.eventId();
-
               if (draftConsumed) {
+                await draftStream.discardPending();
                 await deliverMatrixReplies({
                   cfg,
                   replies: [payload],
@@ -1572,11 +1571,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 replyToMode !== "off" &&
                 !threadTarget &&
                 payloadReplyToId !== currentDraftReplyToId;
-              const mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
+              let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
+              const canPotentiallyFinalizeDraft =
+                Boolean(payload.text?.trim()) &&
+                !payload.isError &&
+                !payloadReplyMismatch &&
+                !mustDeliverFinalNormally;
+
+              if (canPotentiallyFinalizeDraft) {
+                await draftStream.stop();
+                mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
+              } else {
+                await draftStream.discardPending();
+              }
+              const draftEventId = draftStream.eventId();
 
               if (
                 draftEventId &&
                 payload.text &&
+                !payload.isError &&
                 !hasMedia &&
                 !payloadReplyMismatch &&
                 !mustDeliverFinalNormally
@@ -1666,7 +1679,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 draftConsumed = true;
               } else {
                 const draftRedacted =
-                  Boolean(draftEventId) && (payloadReplyMismatch || mustDeliverFinalNormally);
+                  Boolean(draftEventId) &&
+                  (payload.isError || payloadReplyMismatch || mustDeliverFinalNormally);
                 if (draftRedacted && draftEventId) {
                   await redactMatrixDraftEvent(client, roomId, draftEventId);
                 }

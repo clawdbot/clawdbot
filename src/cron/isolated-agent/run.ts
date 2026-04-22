@@ -13,6 +13,7 @@ import type {
   CronJob,
   CronRunTelemetry,
 } from "../types.js";
+import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import {
   isHeartbeatOnlyResponse,
   resolveCronPayloadOutcome,
@@ -142,15 +143,32 @@ function normalizeCronTraceTarget(
   };
 }
 
+type MessagingToolTargetMatcher = (
+  target: { provider?: string; to?: string; accountId?: string },
+  delivery: { channel?: string; to?: string; accountId?: string },
+) => boolean;
+
 function normalizeMessagingToolTarget(
   target: MessagingToolSend,
+  resolvedDelivery: ResolvedCronDeliveryTarget,
+  matchesMessagingToolDeliveryTarget: MessagingToolTargetMatcher,
 ): CronDeliveryTraceMessageTarget | undefined {
   const channel = target.provider?.trim();
   if (!channel) {
     return undefined;
   }
+  const traceChannel =
+    channel === "message" &&
+    resolvedDelivery.ok &&
+    matchesMessagingToolDeliveryTarget(target, {
+      channel: resolvedDelivery.channel,
+      to: resolvedDelivery.to,
+      accountId: resolvedDelivery.accountId,
+    })
+      ? resolvedDelivery.channel
+      : channel;
   return {
-    channel,
+    channel: traceChannel,
     ...(target.to ? { to: target.to } : {}),
     ...(target.accountId ? { accountId: target.accountId } : {}),
     ...(target.threadId ? { threadId: target.threadId } : {}),
@@ -161,6 +179,7 @@ function buildCronDeliveryTrace(params: {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   messagingToolSentTargets: MessagingToolSend[];
+  matchesMessagingToolDeliveryTarget: MessagingToolTargetMatcher;
   fallbackUsed: boolean;
   delivered: boolean;
 }): CronDeliveryTrace {
@@ -195,7 +214,13 @@ function buildCronDeliveryTrace(params: {
         error: params.resolvedDelivery.error.message,
       };
   const messageToolSentTo = params.messagingToolSentTargets
-    .map((target) => normalizeMessagingToolTarget(target))
+    .map((target) =>
+      normalizeMessagingToolTarget(
+        target,
+        params.resolvedDelivery,
+        params.matchesMessagingToolDeliveryTarget,
+      ),
+    )
     .filter((target): target is CronDeliveryTraceMessageTarget => Boolean(target));
   return {
     ...(intended ? { intended } : {}),
@@ -761,7 +786,9 @@ async function finalizeCronRun(params: {
     payloads,
     runLevelError: finalRunResult.meta?.error,
     finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
-    preferFinalAssistantVisibleText: prepared.resolvedDelivery.channel === "telegram",
+    preferFinalAssistantVisibleText: (
+      await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
+    ).preferFinalAssistantVisibleText,
   });
   const resolveRunOutcome = (result?: {
     delivered?: boolean;
@@ -836,6 +863,7 @@ async function finalizeCronRun(params: {
     deliveryPlan: prepared.deliveryPlan,
     resolvedDelivery: prepared.resolvedDelivery,
     messagingToolSentTargets,
+    matchesMessagingToolDeliveryTarget,
     fallbackUsed: deliveryResult.deliveryAttempted && !skipMessagingToolDelivery,
     delivered: deliveryResult.delivered,
   });

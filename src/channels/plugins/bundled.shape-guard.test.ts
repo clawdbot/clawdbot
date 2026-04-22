@@ -549,6 +549,92 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
+  it("loads bundled setup entries from external staged runtime deps", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-setup-runtime-deps-"));
+    const stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-stage-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const previousPluginStageDir = process.env.OPENCLAW_PLUGIN_STAGE_DIR;
+    const pluginDir = path.join(root, "dist", "extensions", "alpha");
+    const testGlobal = globalThis as typeof globalThis & {
+      __bundledSetupRuntimeDepMarker?: string;
+    };
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/alpha",
+        version: "2026.4.21",
+        type: "module",
+        dependencies: {
+          "alpha-runtime-dep": "1.0.0",
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.js"),
+      [
+        "import { marker } from 'alpha-runtime-dep';",
+        "globalThis.__bundledSetupRuntimeDepMarker = marker;",
+        "export default {",
+        "  kind: 'bundled-channel-setup-entry',",
+        "  loadSetupPlugin() {",
+        "    return { id: 'alpha', meta: { label: marker }, config: {} };",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageRoot;
+    const { resolveBundledRuntimeDependencyInstallRoot } =
+      await import("../../plugins/bundled-runtime-deps.js");
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginDir);
+    const depRoot = path.join(installRoot, "node_modules", "alpha-runtime-dep");
+    fs.mkdirSync(depRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(depRoot, "package.json"),
+      JSON.stringify({
+        name: "alpha-runtime-dep",
+        version: "1.0.0",
+        type: "module",
+        main: "index.js",
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(depRoot, "index.js"), "export const marker = 'staged-alpha';\n");
+
+    mockAlphaDistExtensionRuntime();
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(root, "dist", "extensions");
+
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-setup-runtime-deps",
+      );
+
+      expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("staged-alpha");
+      expect(testGlobal.__bundledSetupRuntimeDepMarker).toBe("staged-alpha");
+    } finally {
+      restoreBundledPluginsDir(previousBundledPluginsDir);
+      if (previousPluginStageDir === undefined) {
+        delete process.env.OPENCLAW_PLUGIN_STAGE_DIR;
+      } else {
+        process.env.OPENCLAW_PLUGIN_STAGE_DIR = previousPluginStageDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(stageRoot, { recursive: true, force: true });
+      delete testGlobal.__bundledSetupRuntimeDepMarker;
+    }
+  });
+
   it("keeps channel entrypoints on the dedicated entry-contract SDK surface", () => {
     const offenders = collectBundledChannelEntrypointOffenders(
       bundledPluginRoots,

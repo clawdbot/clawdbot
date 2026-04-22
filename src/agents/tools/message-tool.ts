@@ -54,36 +54,39 @@ function buildRoutingSchema() {
   };
 }
 
-const interactiveOptionSchema = Type.Object({
+const presentationOptionSchema = Type.Object({
   label: Type.String(),
   value: Type.String(),
 });
 
-const interactiveButtonSchema = Type.Object({
+const presentationButtonSchema = Type.Object({
   label: Type.String(),
-  value: Type.String(),
+  value: Type.Optional(Type.String()),
+  url: Type.Optional(Type.String()),
   style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger"])),
 });
 
-const interactiveBlockSchema = Type.Object({
-  type: stringEnum(["text", "buttons", "select"]),
+const presentationBlockSchema = Type.Object({
+  type: stringEnum(["text", "context", "divider", "buttons", "select"]),
   text: Type.Optional(Type.String()),
-  buttons: Type.Optional(Type.Array(interactiveButtonSchema)),
+  buttons: Type.Optional(Type.Array(presentationButtonSchema)),
   placeholder: Type.Optional(Type.String()),
-  options: Type.Optional(Type.Array(interactiveOptionSchema)),
+  options: Type.Optional(Type.Array(presentationOptionSchema)),
 });
 
-const interactiveMessageSchema = Type.Object(
+const presentationMessageSchema = Type.Object(
   {
-    blocks: Type.Array(interactiveBlockSchema),
+    title: Type.Optional(Type.String()),
+    tone: Type.Optional(stringEnum(["info", "success", "warning", "danger", "neutral"])),
+    blocks: Type.Array(presentationBlockSchema),
   },
   {
     description:
-      "Shared interactive message payload for buttons and selects. Channels render this into their native components when supported.",
+      "Shared presentation payload for rich text, buttons, selects, and context. Core degrades unsupported blocks to text.",
   },
 );
 
-function buildSendSchema(options: { includeInteractive: boolean }) {
+function buildSendSchema(options: { includePresentation: boolean; includeDeliveryPin: boolean }) {
   const props: Record<string, TSchema> = {
     message: Type.Optional(Type.String()),
     effectId: Type.Optional(
@@ -130,10 +133,31 @@ function buildSendSchema(options: { includeInteractive: boolean }) {
           "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
       }),
     ),
-    interactive: Type.Optional(interactiveMessageSchema),
   };
-  if (!options.includeInteractive) {
-    delete props.interactive;
+  if (options.includePresentation) {
+    props.presentation = Type.Optional(presentationMessageSchema);
+  }
+  if (options.includeDeliveryPin) {
+    props.delivery = Type.Optional(
+      Type.Object(
+        {
+          pin: Type.Optional(
+            Type.Union([
+              Type.Boolean(),
+              Type.Object({
+                enabled: Type.Boolean(),
+                notify: Type.Optional(Type.Boolean()),
+                required: Type.Optional(Type.Boolean()),
+              }),
+            ]),
+          ),
+        },
+        {
+          description:
+            "Shared delivery preferences. pin requests that the sent message be pinned when the channel supports it.",
+        },
+      ),
+    );
   }
   return props;
 }
@@ -353,7 +377,8 @@ function buildChannelManagementSchema() {
 }
 
 function buildMessageToolSchemaProps(options: {
-  includeInteractive: boolean;
+  includePresentation: boolean;
+  includeDeliveryPin: boolean;
   extraProperties?: Record<string, TSchema>;
 }) {
   return {
@@ -377,7 +402,8 @@ function buildMessageToolSchemaProps(options: {
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
   options: {
-    includeInteractive: boolean;
+    includePresentation: boolean;
+    includeDeliveryPin: boolean;
     extraProperties?: Record<string, TSchema>;
   },
 ) {
@@ -389,7 +415,8 @@ function buildMessageToolSchemaFromActions(
 }
 
 const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
-  includeInteractive: true,
+  includePresentation: true,
+  includeDeliveryPin: true,
 });
 
 type MessageToolOptions = {
@@ -494,13 +521,18 @@ function resolveIncludeCapability(
   return channelSupportsMessageCapability(params.cfg, capability);
 }
 
-function resolveIncludeInteractive(params: MessageToolDiscoveryParams): boolean {
-  return resolveIncludeCapability(params, "interactive");
+function resolveIncludePresentation(params: MessageToolDiscoveryParams): boolean {
+  return resolveIncludeCapability(params, "presentation");
+}
+
+function resolveIncludeDeliveryPin(params: MessageToolDiscoveryParams): boolean {
+  return resolveIncludeCapability(params, "delivery-pin");
 }
 
 function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
   const actions = resolveMessageToolSchemaActions(params);
-  const includeInteractive = resolveIncludeInteractive(params);
+  const includePresentation = resolveIncludePresentation(params);
+  const includeDeliveryPin = resolveIncludeDeliveryPin(params);
   const extraProperties = resolveChannelMessageToolSchemaProperties(
     buildMessageActionDiscoveryInput(
       params,
@@ -508,7 +540,8 @@ function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
     ),
   );
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
-    includeInteractive,
+    includePresentation,
+    includeDeliveryPin,
     extraProperties,
   });
 }

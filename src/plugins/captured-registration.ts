@@ -1,3 +1,4 @@
+import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
@@ -6,10 +7,10 @@ import type {
   AnyAgentTool,
   AgentHarness,
   CliBackendPlugin,
+  OpenClawPluginApi,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
   MusicGenerationProviderPlugin,
-  OpenClawPluginApi,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
   PluginTextTransformRegistration,
@@ -35,6 +36,7 @@ export type CapturedPluginRegistration = {
   cliRegistrars: CapturedPluginCliRegistration[];
   cliBackends: CliBackendPlugin[];
   textTransforms: PluginTextTransformRegistration[];
+  embeddedExtensionFactories: ExtensionFactory[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
@@ -57,6 +59,7 @@ export function createCapturedPluginRegistration(params?: {
   const cliRegistrars: CapturedPluginCliRegistration[] = [];
   const cliBackends: CliBackendPlugin[] = [];
   const textTransforms: PluginTextTransformRegistration[] = [];
+  const embeddedExtensionFactories: ExtensionFactory[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
@@ -81,6 +84,7 @@ export function createCapturedPluginRegistration(params?: {
     cliRegistrars,
     cliBackends,
     textTransforms,
+    embeddedExtensionFactories,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -130,6 +134,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerAgentHarness(harness: AgentHarness) {
           agentHarnesses.push(harness);
+        },
+        registerEmbeddedExtensionFactory(factory: ExtensionFactory) {
+          embeddedExtensionFactories.push(factory);
         },
         registerCliBackend(backend: CliBackendPlugin) {
           cliBackends.push(backend);

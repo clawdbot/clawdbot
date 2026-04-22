@@ -52,6 +52,7 @@ export type ConfigProps = {
   onSectionChange: (section: string | null) => void;
   onSubsectionChange: (section: string | null) => void;
   onReload: () => void;
+  onReset: () => void;
   onSave: () => void;
   onApply: () => void;
   onUpdate: () => void;
@@ -958,6 +959,9 @@ export function renderConfig(props: ConfigProps) {
               : nothing}
             <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
               ${props.loading ? t("common.loading") : t("common.reload")}
+            </button>
+            <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
+              Clear pending updates
             </button>
             <button class="btn btn--sm primary" ?disabled=${!canSave} @click=${props.onSave}>
               ${props.saving ? "Saving…" : "Save"}

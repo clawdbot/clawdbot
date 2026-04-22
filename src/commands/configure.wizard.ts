@@ -52,6 +52,8 @@ import { setupSkills } from "./onboard-skills.js";
 type ConfigureSectionChoice = WizardSection | "__continue";
 type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js");
 
+const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
+
 let setupPluginConfigModulePromise: Promise<SetupPluginConfigModule> | undefined;
 
 function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
@@ -386,33 +388,42 @@ export async function runConfigureWizard(
     }
 
     const localUrl = "ws://127.0.0.1:18789";
-    const baseLocalProbeToken = await resolveGatewaySecretInputForWizard({
-      cfg: baseConfig,
-      value: baseConfig.gateway?.auth?.token,
-      path: "gateway.auth.token",
-    });
-    const baseLocalProbePassword = await resolveGatewaySecretInputForWizard({
-      cfg: baseConfig,
-      value: baseConfig.gateway?.auth?.password,
-      path: "gateway.auth.password",
-    });
-    const localProbe = await probeGatewayReachable({
-      url: localUrl,
-      token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
-      password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
-    });
     const remoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url) ?? "";
-    const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
-      cfg: baseConfig,
-      value: baseConfig.gateway?.remote?.token,
-      path: "gateway.remote.token",
-    });
-    const remoteProbe = remoteUrl
-      ? await probeGatewayReachable({
-          url: remoteUrl,
-          token: baseRemoteProbeToken,
-        })
-      : null;
+    const localProbePromise = (async () => {
+      const [baseLocalProbeToken, baseLocalProbePassword] = await Promise.all([
+        resolveGatewaySecretInputForWizard({
+          cfg: baseConfig,
+          value: baseConfig.gateway?.auth?.token,
+          path: "gateway.auth.token",
+        }),
+        resolveGatewaySecretInputForWizard({
+          cfg: baseConfig,
+          value: baseConfig.gateway?.auth?.password,
+          path: "gateway.auth.password",
+        }),
+      ]);
+      return probeGatewayReachable({
+        url: localUrl,
+        token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
+        password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
+        timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
+      });
+    })();
+    const remoteProbePromise = remoteUrl
+      ? (async () => {
+          const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
+            cfg: baseConfig,
+            value: baseConfig.gateway?.remote?.token,
+            path: "gateway.remote.token",
+          });
+          return probeGatewayReachable({
+            url: remoteUrl,
+            token: baseRemoteProbeToken,
+            timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
+          });
+        })()
+      : Promise.resolve(null);
+    const [localProbe, remoteProbe] = await Promise.all([localProbePromise, remoteProbePromise]);
 
     const mode = guardCancel(
       await select({

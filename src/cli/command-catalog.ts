@@ -37,7 +37,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["channels"], policy: { loadPlugins: "always" } },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
   { commandPath: ["agents"], policy: { loadPlugins: "always" } },
-  { commandPath: ["configure"], policy: { loadPlugins: "always" } },
+  { commandPath: ["configure"], policy: { bypassConfigGuard: true, loadPlugins: "never" } },
   {
     commandPath: ["status"],
     policy: {

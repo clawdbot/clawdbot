@@ -1,20 +1,15 @@
+import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./empty-allowlist-policy.js";
 import { asObjectRecord } from "./object.js";
 
-export type EmptyAllowlistAccountScanParams = {
-  account: DoctorAccountRecord;
-  channelName: string;
-  dmPolicy?: string;
-  effectiveAllowFrom?: DoctorAllowFromList;
-  parent?: DoctorAccountRecord;
-  prefix: string;
-};
-
 type ScanEmptyAllowlistPolicyWarningsParams = {
   doctorFixCommand: string;
-  extraWarningsForAccount?: (params: EmptyAllowlistAccountScanParams) => string[];
+  extraWarningsForAccount?: (params: ChannelDoctorEmptyAllowlistAccountContext) => string[];
+  shouldSkipDefaultEmptyGroupAllowlistWarning?: (
+    params: ChannelDoctorEmptyAllowlistAccountContext,
+  ) => boolean;
 };
 
 export function scanEmptyAllowlistPolicyWarnings(
@@ -53,9 +48,12 @@ export function scanEmptyAllowlistPolicyWarnings(
       ...collectEmptyAllowlistPolicyWarningsForAccount({
         account,
         channelName,
+        cfg,
         doctorFixCommand: params.doctorFixCommand,
         parent,
         prefix,
+        shouldSkipDefaultEmptyGroupAllowlistWarning:
+          params.shouldSkipDefaultEmptyGroupAllowlistWarning,
       }),
     );
     if (params.extraWarningsForAccount) {

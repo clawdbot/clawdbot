@@ -30,7 +30,7 @@ type ProbeMatrix = (params: {
 type SendMessageMatrix = (
   to: string,
   message: string,
-  options?: { accountId?: string },
+  options: { cfg: CoreConfig; accountId?: string },
 ) => Promise<unknown>;
 
 export function createMatrixProbeAccount(params: {
@@ -80,13 +80,18 @@ export function createMatrixPairingText(sendMessageMatrix: SendMessageMatrix) {
     notify: async ({
       id,
       message,
+      cfg,
       accountId,
     }: {
       id: string;
       message: string;
+      cfg: CoreConfig;
       accountId?: string;
     }) => {
-      await sendMessageMatrix(`user:${id}`, message, accountId ? { accountId } : {});
+      await sendMessageMatrix(`user:${id}`, message, {
+        cfg,
+        ...(accountId ? { accountId } : {}),
+      });
     },
   };
 }

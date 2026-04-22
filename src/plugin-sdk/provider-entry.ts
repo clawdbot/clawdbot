@@ -27,14 +27,18 @@ export type SingleProviderPluginApiKeyAuthOptions = Omit<
 export type SingleProviderPluginCatalogOptions =
   | {
       buildProvider: Parameters<typeof buildSingleProviderApiKeyCatalog>[0]["buildProvider"];
+      buildStaticProvider?: Parameters<typeof buildSingleProviderApiKeyCatalog>[0]["buildProvider"];
       allowExplicitBaseUrl?: boolean;
       run?: never;
       order?: never;
+      staticRun?: never;
     }
   | {
       run: ProviderPluginCatalog["run"];
+      staticRun?: ProviderPluginCatalog["run"];
       order?: ProviderPluginCatalog["order"];
       buildProvider?: never;
+      buildStaticProvider?: never;
       allowExplicitBaseUrl?: never;
     };
 
@@ -54,7 +58,7 @@ export type SingleProviderPluginOptions = {
     catalog: SingleProviderPluginCatalogOptions;
   } & Omit<
     ProviderPlugin,
-    "id" | "label" | "docsPath" | "aliases" | "envVars" | "auth" | "catalog"
+    "id" | "label" | "docsPath" | "aliases" | "envVars" | "auth" | "catalog" | "staticCatalog"
   >;
   register?: (api: OpenClawPluginApi) => void;
 };
@@ -146,6 +150,22 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
               }),
           };
         }
+        const staticCatalog: ProviderPluginCatalog | undefined =
+          "run" in provider.catalog
+            ? provider.catalog.staticRun
+              ? {
+                  order: provider.catalog.order ?? "simple",
+                  run: provider.catalog.staticRun,
+                }
+              : undefined
+            : provider.catalog.buildStaticProvider
+              ? {
+                  order: "simple",
+                  run: async () => ({
+                    provider: await provider.catalog.buildStaticProvider!(),
+                  }),
+                }
+              : undefined;
         api.registerProvider({
           id: providerId,
           label: provider.label,
@@ -154,10 +174,20 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           ...(envVars ? { envVars } : {}),
           auth,
           catalog,
+          ...(staticCatalog ? { staticCatalog } : {}),
           ...Object.fromEntries(
             Object.entries(provider).filter(
               ([key]) =>
-                !["id", "label", "docsPath", "aliases", "envVars", "auth", "catalog"].includes(key),
+                ![
+                  "id",
+                  "label",
+                  "docsPath",
+                  "aliases",
+                  "envVars",
+                  "auth",
+                  "catalog",
+                  "staticCatalog",
+                ].includes(key),
             ),
           ),
         });

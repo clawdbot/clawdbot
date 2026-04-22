@@ -44,6 +44,13 @@ describe("command-path-policy", () => {
   });
 
   it("resolves mixed startup-only rules", () => {
+    expect(resolveCliCommandPathPolicy(["configure"])).toEqual({
+      bypassConfigGuard: true,
+      routeConfigGuard: "never",
+      loadPlugins: "never",
+      hideBanner: false,
+      ensureCliPath: true,
+    });
     expect(resolveCliCommandPathPolicy(["config", "validate"])).toEqual({
       bypassConfigGuard: true,
       routeConfigGuard: "never",

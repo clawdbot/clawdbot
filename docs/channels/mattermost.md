@@ -244,6 +244,31 @@ Notes:
 - Retries apply to transient failures such as rate limits, 5xx responses, and network or timeout errors.
 - 4xx client errors other than `429` are treated as permanent and are not retried.
 
+## Preview streaming
+
+Mattermost streams thinking, tool activity, and partial reply text into a single **draft preview post** that finalizes in place when the final answer is safe to send. The preview updates on the same post id instead of spamming the channel with per-chunk messages. Media/error finals cancel pending preview edits and use normal delivery instead of flushing a throwaway preview post.
+
+Enable via `channels.mattermost.streaming`:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      streaming: "partial", // off | partial | block | progress
+    },
+  },
+}
+```
+
+Notes:
+
+- `partial` is the usual choice: one preview post that is edited as the reply grows, then finalized with the complete answer.
+- `block` uses append-style draft chunks inside the preview post.
+- `progress` shows a status preview while generating and only posts the final answer at completion.
+- `off` disables preview streaming.
+- If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
+- See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.
+
 ## Reactions (message tool)
 
 - Use `message action=react` with `channel=mattermost`.

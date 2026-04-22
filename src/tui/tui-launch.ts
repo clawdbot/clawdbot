@@ -60,6 +60,9 @@ function buildCurrentCliEntryArgs(): string[] {
 
 function buildTuiCliArgs(opts: TuiOptions): string[] {
   const args = [...filterTuiExecArgv(process.execArgv), ...buildCurrentCliEntryArgs(), "tui"];
+  if (opts.local) {
+    args.push("--local");
+  }
   appendOption(args, "--url", opts.url);
   appendOption(args, "--token", opts.token);
   appendOption(args, "--password", opts.password);

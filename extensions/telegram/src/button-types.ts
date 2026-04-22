@@ -30,6 +30,9 @@ function chunkInteractiveButtons(
 ) {
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
     const row = buttons.slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE).flatMap((button) => {
+      if (!button.value) {
+        return [];
+      }
       const callbackData = sanitizeTelegramCallbackData(button.value);
       if (!callbackData) {
         return [];

@@ -18,6 +18,10 @@ let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
+const WHATSAPP_TEST_CFG: OpenClawConfig = {
+  channels: { whatsapp: {} },
+};
+
 vi.mock("./connection-controller-registry.js", async () => {
   const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
     "./connection-controller-registry.js",
@@ -94,7 +98,10 @@ describe("web outbound", () => {
   });
 
   it("sends message via active listener", async () => {
-    const result = await sendMessageWhatsApp("+1555", "hi", { verbose: false });
+    const result = await sendMessageWhatsApp("+1555", "hi", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+    });
     expect(result).toEqual({
       messageId: "msg123",
       toJid: "1555@s.whatsapp.net",
@@ -134,7 +141,10 @@ describe("web outbound", () => {
   });
 
   it("trims leading whitespace before sending text and captions", async () => {
-    await sendMessageWhatsApp("+1555", "\n \thello", { verbose: false });
+    await sendMessageWhatsApp("+1555", "\n \thello", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+    });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "hello", undefined, undefined);
 
     const buf = Buffer.from("img");
@@ -145,13 +155,17 @@ describe("web outbound", () => {
     });
     await sendMessageWhatsApp("+1555", "\n \tcaption", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/pic.jpg",
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "caption", buf, "image/jpeg");
   });
 
   it("skips whitespace-only text sends without media", async () => {
-    const result = await sendMessageWhatsApp("+1555", "\n \t", { verbose: false });
+    const result = await sendMessageWhatsApp("+1555", "\n \t", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+    });
 
     expect(result).toEqual({
       messageId: "",
@@ -164,13 +178,25 @@ describe("web outbound", () => {
   it("throws a helpful error when no active listener exists", async () => {
     hoisted.controllerListeners.clear();
     await expect(
-      sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        accountId: "work",
+      }),
     ).rejects.toThrow(/No active WhatsApp Web listener/);
     await expect(
-      sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        accountId: "work",
+      }),
     ).rejects.toThrow(/channels login/);
     await expect(
-      sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        accountId: "work",
+      }),
     ).rejects.toThrow(/account: work/);
   });
 
@@ -183,6 +209,7 @@ describe("web outbound", () => {
     });
     await sendMessageWhatsApp("+1555", "voice note", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/voice.ogg",
     });
     expect(sendMessage).toHaveBeenLastCalledWith(
@@ -202,6 +229,7 @@ describe("web outbound", () => {
     });
     await sendMessageWhatsApp("+1555", "clip", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/video.mp4",
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "clip", buf, "video/mp4");
@@ -216,6 +244,7 @@ describe("web outbound", () => {
     });
     await sendMessageWhatsApp("+1555", "gif", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/anim.mp4",
       gifPlayback: true,
     });
@@ -233,6 +262,7 @@ describe("web outbound", () => {
     });
     await sendMessageWhatsApp("+1555", "pic", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/pic.jpg",
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
@@ -247,6 +277,7 @@ describe("web outbound", () => {
     });
     await sendMessageWhatsApp("+1555", "pic", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       mediaUrls: ["   ", " /tmp/pic.jpg "],
     });
     expect(loadWebMediaMock).toHaveBeenCalledWith(
@@ -268,6 +299,7 @@ describe("web outbound", () => {
     });
     await sendMessageWhatsApp("+1555", "doc", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/file.pdf",
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
@@ -322,7 +354,7 @@ describe("web outbound", () => {
     const result = await sendPollWhatsApp(
       "+1555",
       { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 2 },
-      { verbose: false },
+      { verbose: false, cfg: WHATSAPP_TEST_CFG },
     );
     expect(result).toEqual({
       messageId: "poll123",
@@ -344,7 +376,7 @@ describe("web outbound", () => {
     await sendPollWhatsApp(
       "+1555",
       { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 1 },
-      { verbose: false },
+      { verbose: false, cfg: WHATSAPP_TEST_CFG },
     );
 
     await vi.waitFor(
@@ -365,6 +397,7 @@ describe("web outbound", () => {
   it("sends reactions via active listener", async () => {
     await sendReactionWhatsApp("1555@s.whatsapp.net", "msg123", "✅", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       fromMe: false,
     });
     expect(sendReaction).toHaveBeenCalledWith(

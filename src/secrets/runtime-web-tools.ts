@@ -303,15 +303,13 @@ function setResolvedWebSearchApiKey(params: {
   provider: PluginWebSearchProviderEntry;
   value: string;
 }): void {
+  if (params.provider.setConfiguredCredentialValue) {
+    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+    return;
+  }
   const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
   const web = ensureObject(tools, "web");
   const search = ensureObject(web, "search");
-  if (params.provider.setConfiguredCredentialValue) {
-    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
-    if (params.provider.id !== "brave") {
-      return;
-    }
-  }
   params.provider.setCredentialValue(search, params.value);
 }
 
@@ -416,8 +414,7 @@ function readConfiguredProviderCredential(params: {
   config: OpenClawConfig;
   search: Record<string, unknown> | undefined;
 }): unknown {
-  const configuredValue = params.provider.getConfiguredCredentialValue?.(params.config);
-  return configuredValue ?? params.provider.getCredentialValue(params.search);
+  return params.provider.getConfiguredCredentialValue?.(params.config);
 }
 
 function inactivePathsForProvider(provider: PluginWebSearchProviderEntry): string[] {
@@ -560,25 +557,6 @@ export async function resolveRuntimeWebTools(params: {
     diagnostics: [],
   };
   if (search || hasPluginWebSearchConfig) {
-    let searchCompatibilityOnlyPluginIds: string[] = [];
-    if (
-      !rawProvider &&
-      !hasPluginWebSearchConfig &&
-      isRecord(search) &&
-      Object.prototype.hasOwnProperty.call(search, "apiKey")
-    ) {
-      const { resolveManifestContractPluginIdsByCompatibilityRuntimePath } =
-        await loadRuntimeWebToolsManifest();
-      searchCompatibilityOnlyPluginIds = resolveManifestContractPluginIdsByCompatibilityRuntimePath(
-        {
-          contract: "webSearchProviders",
-          path: "tools.web.search.apiKey",
-          origin: "bundled",
-          config: params.sourceConfig,
-          env,
-        },
-      );
-    }
     const searchSurface = await resolveRuntimeWebProviderSurface({
       contract: "webSearchProviders",
       rawProvider,
@@ -595,12 +573,6 @@ export async function resolveRuntimeWebTools(params: {
           sourceConfig: params.sourceConfig,
           context: params.context,
           configuredBundledPluginId,
-          onlyPluginIds:
-            configuredBundledPluginId === undefined &&
-            searchCompatibilityOnlyPluginIds.length > 0 &&
-            !(await getHasCustomWebSearchRisk())
-              ? searchCompatibilityOnlyPluginIds
-              : undefined,
           hasCustomWebSearchPluginRisk: await getHasCustomWebSearchRisk(),
         }),
       sortProviders: sortWebSearchProvidersForAutoDetect,

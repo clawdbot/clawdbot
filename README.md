@@ -165,7 +165,7 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 
 - Chat commands: `/status`, `/new`, `/reset`, `/compact`, `/think <level>`, `/verbose on|off`, `/trace on|off`, `/usage off|tokens|full`, `/restart`, `/activation mention|always`
 - Session tools: `sessions_list`, `sessions_history`, `sessions_send`
-- Skills registry: [ClawHub](https://clawhub.com)
+- Skills registry: [ClawHub](https://clawhub.ai)
 - Architecture overview: [Architecture](https://docs.openclaw.ai/concepts/architecture)
 
 ## Docs by goal

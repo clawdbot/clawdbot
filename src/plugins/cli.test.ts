@@ -298,6 +298,8 @@ describe("registerPluginCliCommands", () => {
         autoEnabledReasons: {
           demo: ["demo configured"],
         },
+        activate: false,
+        cache: false,
       }),
     );
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();

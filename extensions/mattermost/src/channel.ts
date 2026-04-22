@@ -1,5 +1,3 @@
-import { Type } from "@sinclair/typebox";
-import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -10,6 +8,11 @@ import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import {
+  normalizeMessagePresentation,
+  presentationToInteractiveReply,
+  renderMessagePresentationFallbackText,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -98,15 +101,7 @@ function describeMattermostMessageTool({
 
   return {
     actions,
-    capabilities: enabledAccounts.length > 0 ? ["buttons"] : [],
-    schema:
-      enabledAccounts.length > 0
-        ? {
-            properties: {
-              buttons: Type.Optional(createMessageToolButtonsSchema()),
-            },
-          }
-        : null,
+    capabilities: enabledAccounts.length > 0 ? ["presentation"] : [],
   };
 }
 
@@ -180,7 +175,15 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error("Mattermost send requires a target (to).");
     }
 
-    const message = typeof params.message === "string" ? params.message : "";
+    const presentation = normalizeMessagePresentation(params.presentation);
+    const message = presentation
+      ? renderMessagePresentationFallbackText({
+          text: typeof params.message === "string" ? params.message : "",
+          presentation,
+        })
+      : typeof params.message === "string"
+        ? params.message
+        : "";
     // Match the shared runner semantics: trim empty reply IDs away before
     // falling back from replyToId to replyTo on direct plugin calls.
     const replyToId =
@@ -193,9 +196,26 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const result = await (
       await loadMattermostChannelRuntime()
     ).sendMessageMattermost(to, message, {
+      cfg,
       accountId: resolvedAccountId,
       replyToId,
-      buttons: Array.isArray(params.buttons) ? params.buttons : undefined,
+      buttons: presentation
+        ? presentationToInteractiveReply(presentation)
+            ?.blocks.filter((block) => block.type === "buttons")
+            .map((block) =>
+              block.buttons.flatMap((button) =>
+                button.value
+                  ? [
+                      {
+                        text: button.label,
+                        callback_data: button.value,
+                        style: button.style,
+                      },
+                    ]
+                  : [],
+              ),
+            )
+        : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl,
     });

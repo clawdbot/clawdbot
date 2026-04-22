@@ -11,6 +11,12 @@ const OPENROUTER_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+const OPENROUTER_KIMI_K2_6_COST = {
+  input: 0.8,
+  output: 3.5,
+  cacheRead: 0.2,
+  cacheWrite: 0,
+};
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {
   return (baseUrl ?? "").trim().replace(/\/+$/, "");
@@ -58,6 +64,15 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
         cost: OPENROUTER_DEFAULT_COST,
         contextWindow: 262144,
         maxTokens: 65536,
+      },
+      {
+        id: "moonshotai/kimi-k2.6",
+        name: "MoonshotAI: Kimi K2.6",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: OPENROUTER_KIMI_K2_6_COST,
+        contextWindow: 262144,
+        maxTokens: 262144,
       },
     ],
   };

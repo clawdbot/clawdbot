@@ -14,14 +14,5 @@ export function extractSimpleExplicitGroupId(raw: string | undefined | null): st
     const joined = parts.slice(1).join(":");
     return joined.replace(/:topic:.*$/, "") || undefined;
   }
-  if (parts.length >= 2 && parts[0] === "whatsapp") {
-    const joined = parts
-      .slice(1)
-      .join(":")
-      .replace(/:topic:.*$/, "");
-    if (/@g\.us$/i.test(joined)) {
-      return joined || undefined;
-    }
-  }
   return undefined;
 }

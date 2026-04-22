@@ -158,7 +158,7 @@ function isValidBase64(value: string): boolean {
  * Node's Buffer.from silently drops invalid base64 characters rather than
  * throwing. A material size discrepancy means the source string contained
  * embedded garbage that was silently stripped, which would produce a corrupted
- * file on disk. ±3 bytes of slack accounts for base64 padding rounding.
+ * file on disk. ±3 bytes of leeway accounts for base64 padding rounding.
  *
  * IMPORTANT: this is an input-validation check (4xx client error).
  * It MUST be called OUTSIDE the MediaOffloadError try/catch so that

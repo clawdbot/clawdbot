@@ -282,8 +282,9 @@ function buildSlackCommandArgMenuBlocks(params: {
 export async function registerSlackMonitorSlashCommands(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
+  trackEvent?: () => void;
 }): Promise<void> {
-  const { ctx, account } = params;
+  const { ctx, account, trackEvent } = params;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
 
@@ -313,6 +314,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         );
         return;
       }
+      trackEvent?.();
       if (!prompt.trim()) {
         await ack({
           text: "Message required.",
@@ -768,6 +770,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         runtime.log?.("slack: drop slash arg options payload (mismatched app/team)");
         return;
       }
+      trackEvent?.();
       const typedBody = body as {
         value?: string;
         user?: { id?: string };

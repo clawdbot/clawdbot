@@ -6,7 +6,6 @@ import { isMainModule } from "./infra/is-main.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 
 type LegacyCliDeps = {
-  installGaxiosFetchCompat: () => Promise<void>;
   runCli: (argv: string[]) => Promise<void>;
 };
 
@@ -36,11 +35,8 @@ export let saveSessionStore: LibraryExports["saveSessionStore"];
 export let waitForever: LibraryExports["waitForever"];
 
 async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
-  const [{ installGaxiosFetchCompat }, { runCli }] = await Promise.all([
-    import("./infra/gaxios-fetch-compat.js"),
-    import("./cli/run-main.js"),
-  ]);
-  return { installGaxiosFetchCompat, runCli };
+  const { runCli } = await import("./cli/run-main.js");
+  return { runCli };
 }
 
 // Legacy direct file entrypoint only. Package root exports now live in library.ts.
@@ -48,8 +44,7 @@ export async function runLegacyCliEntry(
   argv: string[] = process.argv,
   deps?: LegacyCliDeps,
 ): Promise<void> {
-  const { installGaxiosFetchCompat, runCli } = deps ?? (await loadLegacyCliDeps());
-  await installGaxiosFetchCompat();
+  const { runCli } = deps ?? (await loadLegacyCliDeps());
   await runCli(argv);
 }
 

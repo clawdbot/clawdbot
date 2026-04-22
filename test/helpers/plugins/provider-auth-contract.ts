@@ -347,7 +347,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
               },
             },
           ],
-          defaultModel: "github-copilot/claude-opus-4.6",
+          defaultModel: "github-copilot/claude-opus-4.7",
         });
       } finally {
         if (previousIsTTYDescriptor) {

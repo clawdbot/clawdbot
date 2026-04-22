@@ -4,6 +4,17 @@ import { makeDiscordRest } from "./send.test-harness.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { dmScope: "main" } })));
 
+const DISCORD_TEST_CFG = {
+  channels: {
+    discord: {
+      accounts: {
+        default: {},
+      },
+    },
+  },
+  session: { dmScope: "main" },
+} as const;
+
 vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
     "openclaw/plugin-sdk/config-runtime",
@@ -75,6 +86,7 @@ describe("sendDiscordComponentMessage", () => {
         blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
       },
       {
+        cfg: DISCORD_TEST_CFG,
         rest,
         token: "t",
         sessionKey: "agent:main:discord:channel:dm-1",
@@ -103,6 +115,7 @@ describe("sendDiscordComponentMessage", () => {
         blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
       },
       {
+        cfg: DISCORD_TEST_CFG,
         rest,
         token: "t",
         sessionKey: "agent:main:discord:channel:chan-1",
@@ -153,6 +166,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       "channel:chan-1",
       { blocks: [{ type: "text", text: "report" }] },
       {
+        cfg: DISCORD_TEST_CFG,
         token: "t",
         mediaUrl: "https://example.com/report.pdf",
         mediaReadFile: readFileMock,
@@ -189,6 +203,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
         },
       },
       {
+        cfg: DISCORD_TEST_CFG,
         rest,
         token: "t",
         mediaUrl: "https://example.com/report.pdf",
@@ -219,6 +234,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
         blocks: [{ type: "file", file: "attachment://report.pdf", spoiler: true }],
       },
       {
+        cfg: DISCORD_TEST_CFG,
         rest,
         token: "t",
         mediaUrl: "https://example.com/report.pdf",
@@ -246,6 +262,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
         },
       },
       {
+        cfg: DISCORD_TEST_CFG,
         rest,
         token: "t",
         mediaUrl: "https://example.com/report.pdf",

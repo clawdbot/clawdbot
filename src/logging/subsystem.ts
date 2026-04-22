@@ -154,7 +154,7 @@ export function stripRedundantSubsystemPrefixForConsole(
     return message;
   }
 
-  // Common duplication: "[discord] discord: ..." (when a message manually includes the subsystem tag).
+  // Common duplication when a message manually includes the subsystem tag.
   if (message.startsWith("[")) {
     const closeIdx = message.indexOf("]");
     if (closeIdx > 1) {

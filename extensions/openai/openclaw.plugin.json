@@ -15,24 +15,48 @@
       "method": "oauth",
       "choiceId": "openai-codex",
       "deprecatedChoiceIds": ["codex-cli"],
-      "choiceLabel": "OpenAI Codex (ChatGPT OAuth)",
-      "choiceHint": "Browser sign-in",
+      "choiceLabel": "OpenAI Codex Browser Login",
+      "choiceHint": "Sign in with OpenAI in your browser",
+      "assistantPriority": -30,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex OAuth + API key"
+      "groupHint": "API key + Codex auth"
+    },
+    {
+      "provider": "openai-codex",
+      "method": "device-code",
+      "choiceId": "openai-codex-device-code",
+      "choiceLabel": "OpenAI Codex Device Pairing",
+      "choiceHint": "Pair in browser with a device code",
+      "assistantPriority": -10,
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "API key + Codex auth"
+    },
+    {
+      "provider": "openai-codex",
+      "method": "import-codex-cli",
+      "choiceId": "openai-codex-import",
+      "choiceLabel": "Import Existing Codex Login",
+      "choiceHint": "Import an existing ~/.codex login",
+      "assistantPriority": -20,
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "API key + Codex auth"
     },
     {
       "provider": "openai",
       "method": "api-key",
       "choiceId": "openai-api-key",
-      "choiceLabel": "OpenAI API key",
+      "choiceLabel": "OpenAI API Key",
+      "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex OAuth + API key",
+      "groupHint": "API key + Codex auth",
       "optionKey": "openaiApiKey",
       "cliFlag": "--openai-api-key",
       "cliOption": "--openai-api-key <key>",
-      "cliDescription": "OpenAI API key"
+      "cliDescription": "OpenAI API Key"
     }
   ],
   "contracts": {
@@ -43,6 +67,25 @@
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["openai"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "openai": {
+      "capabilities": ["image", "audio"],
+      "defaultModels": {
+        "image": "gpt-5.4-mini",
+        "audio": "gpt-4o-transcribe"
+      },
+      "autoPriority": {
+        "image": 10,
+        "audio": 10
+      }
+    },
+    "openai-codex": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "gpt-5.4"
+      }
+    }
   },
   "configSchema": {
     "type": "object",

@@ -10,15 +10,11 @@ function createHarness(params: {
 }
 
 describe("slackOutbound sendPayload", () => {
-  it("forwards Slack blocks from channelData", async () => {
+  it("renders presentation blocks", async () => {
     const { run, sendMock, to } = createHarness({
       payload: {
         text: "Fallback summary",
-        channelData: {
-          slack: {
-            blocks: [{ type: "divider" }],
-          },
-        },
+        presentation: { blocks: [{ type: "divider" }] },
       },
     });
 
@@ -33,43 +29,6 @@ describe("slackOutbound sendPayload", () => {
       }),
     );
     expect(result).toMatchObject({ channel: "slack", messageId: "sl-1" });
-  });
-
-  it("accepts blocks encoded as JSON strings in Slack channelData", async () => {
-    const { run, sendMock, to } = createHarness({
-      payload: {
-        channelData: {
-          slack: {
-            blocks: '[{"type":"section","text":{"type":"mrkdwn","text":"hello"}}]',
-          },
-        },
-      },
-    });
-
-    await run();
-
-    expect(sendMock).toHaveBeenCalledWith(
-      to,
-      "",
-      expect.objectContaining({
-        blocks: [{ type: "section", text: { type: "mrkdwn", text: "hello" } }],
-      }),
-    );
-  });
-
-  it("rejects invalid Slack blocks from channelData", async () => {
-    const { run, sendMock } = createHarness({
-      payload: {
-        channelData: {
-          slack: {
-            blocks: {},
-          },
-        },
-      },
-    });
-
-    await expect(run()).rejects.toThrow(/blocks must be an array/i);
-    expect(sendMock).not.toHaveBeenCalled();
   });
 
   it("sends media before a separate interactive blocks message", async () => {
@@ -119,11 +78,7 @@ describe("slackOutbound sendPayload", () => {
   it("fails when merged Slack blocks exceed the platform limit", async () => {
     const { run, sendMock } = createHarness({
       payload: {
-        channelData: {
-          slack: {
-            blocks: Array.from({ length: 50 }, () => ({ type: "divider" })),
-          },
-        },
+        presentation: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
         interactive: {
           blocks: [
             {

@@ -66,6 +66,7 @@
   "simple-completion-runtime",
   "speech-core",
   "plugin-runtime",
+  "skills-runtime",
   "channel-secret-basic-runtime",
   "channel-secret-runtime",
   "channel-secret-tts-runtime",

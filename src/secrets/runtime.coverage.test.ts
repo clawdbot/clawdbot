@@ -54,6 +54,8 @@ const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
   buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
 const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
   "channels.googlechat.accounts.*.serviceAccount",
+  // Doctor migrates legacy web search config into plugin-owned webSearch config.
+  "tools.web.search.apiKey",
   "tools.web.fetch.firecrawl.apiKey",
 ]);
 

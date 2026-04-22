@@ -11,4 +11,8 @@ export { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-
 export { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 export { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-export { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded-runner/runs.js";
+export {
+  isEmbeddedPiRunActive,
+  queueEmbeddedPiMessage,
+  resolveActiveEmbeddedRunSessionId,
+} from "./pi-embedded-runner/runs.js";

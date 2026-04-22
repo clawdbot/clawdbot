@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
+type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
 
@@ -10,6 +11,7 @@ function createHarness(params?: {
   getGatewayStatus?: ReturnType<typeof vi.fn>;
   patchSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
+  runAuthFlow?: RunAuthFlow;
   setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
   refreshSessionInfo?: ReturnType<typeof vi.fn>;
@@ -17,6 +19,8 @@ function createHarness(params?: {
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
   activeChatRunId?: string | null;
+  pendingOptimisticUserMessage?: boolean;
+  opts?: { local?: boolean };
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
@@ -33,10 +37,15 @@ function createHarness(params?: {
   const refreshSessionInfo = params?.refreshSessionInfo ?? vi.fn().mockResolvedValue(undefined);
   const applySessionInfoFromPatch = params?.applySessionInfoFromPatch ?? vi.fn();
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
+  const runAuthFlow: RunAuthFlow | undefined =
+    params?.runAuthFlow ??
+    (params?.opts?.local
+      ? (vi.fn().mockResolvedValue({ exitCode: 0, signal: null }) as unknown as RunAuthFlow)
+      : undefined);
   const state = {
     currentSessionKey: "agent:main:main",
     activeChatRunId: params?.activeChatRunId ?? null,
-    pendingOptimisticUserMessage: false,
+    pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
@@ -45,7 +54,7 @@ function createHarness(params?: {
     client: { sendChat, getGatewayStatus, patchSession, resetSession } as never,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
-    opts: {},
+    opts: params?.opts ?? {},
     state: state as never,
     deliverDefault: false,
     openOverlay: vi.fn(),
@@ -62,6 +71,7 @@ function createHarness(params?: {
     noteLocalBtwRunId,
     forgetLocalRunId: vi.fn(),
     forgetLocalBtwRunId: vi.fn(),
+    runAuthFlow,
     requestExit: vi.fn(),
   });
 
@@ -78,6 +88,7 @@ function createHarness(params?: {
     loadHistory,
     refreshSessionInfo,
     applySessionInfoFromPatch,
+    runAuthFlow,
     setActivityStatus,
     noteLocalRunId,
     noteLocalBtwRunId,
@@ -257,6 +268,48 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+
+  it("runs /auth through the local auth flow and refreshes session info", async () => {
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
+    const { handleCommand, addSystem, setActivityStatus } = createHarness({
+      opts: { local: true },
+      refreshSessionInfo,
+      runAuthFlow,
+    });
+
+    await handleCommand("/auth openai-codex");
+
+    expect(runAuthFlow).toHaveBeenCalledWith({ provider: "openai-codex" });
+    expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+    expect(addSystem).toHaveBeenCalledWith(
+      "opening auth flow for openai-codex; TUI will resume when it exits",
+    );
+    expect(addSystem).toHaveBeenCalledWith("auth flow finished for openai-codex");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+  });
+
+  it("rejects /auth in non-local mode", async () => {
+    const { handleCommand, addSystem } = createHarness();
+
+    await handleCommand("/auth");
+
+    expect(addSystem).toHaveBeenCalledWith("auth login is only available in local embedded mode");
+  });
+
+  it("blocks /auth while an optimistic run is still pending", async () => {
+    const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
+    const { handleCommand, addSystem } = createHarness({
+      opts: { local: true },
+      pendingOptimisticUserMessage: true,
+      runAuthFlow,
+    });
+
+    await handleCommand("/auth openai-codex");
+
+    expect(runAuthFlow).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("abort the current run before /auth");
   });
 
   it("rejects invalid /activation values before patching the session", async () => {

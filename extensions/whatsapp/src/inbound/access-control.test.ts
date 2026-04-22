@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   readAllowFromStoreMock,
   sendMessageMock,
+  getAccessControlTestConfig,
   setAccessControlTestConfig,
   setupAccessControlTestHarness,
   upsertPairingRequestMock,
@@ -18,6 +19,7 @@ beforeAll(async () => {
 
 async function checkUnauthorizedWorkDmSender() {
   return checkInboundAccessControl({
+    cfg: getAccessControlTestConfig() as never,
     accountId: "work",
     from: "+15550001111",
     selfE164: "+15550009999",
@@ -61,6 +63,7 @@ describe("checkInboundAccessControl pairing grace", () => {
   async function runPairingGraceCase(messageTimestampMs: number) {
     const connectedAtMs = 1_000_000;
     return await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
       accountId: "default",
       from: "+15550001111",
       selfE164: "+15550009999",
@@ -178,6 +181,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     setAccessControlTestConfig(cfg);
 
     const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
       accountId: "default",
       from: "+15550009999",
       selfE164: "+15550009999",
@@ -214,6 +218,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     setAccessControlTestConfig(cfg);
 
     const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
       accountId: "default",
       from: "+15550001111",
       selfE164: "+15550009999",
@@ -241,6 +246,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     setAccessControlTestConfig(cfg);
 
     const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
       accountId: "default",
       from: "+15550009999",
       selfE164: "+15550009999",

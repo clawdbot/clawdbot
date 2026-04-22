@@ -224,6 +224,22 @@ export function resolveAgentAvatarUrl(
   return null;
 }
 
+// Chat-render variant: accept `blob:` URLs (produced locally by
+// `URL.createObjectURL` after an authenticated avatar fetch) in addition to
+// config-sanitized candidates. The config path still gates untrusted
+// http(s)/data sources through `resolveAgentAvatarUrl`.
+export function resolveChatAvatarRenderUrl(
+  candidate: string | null | undefined,
+  agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  agentIdentity?: AgentIdentityResult | null,
+): string | null {
+  const trimmed = normalizeOptionalString(candidate);
+  if (trimmed?.startsWith("blob:")) {
+    return trimmed;
+  }
+  return resolveAgentAvatarUrl(agent, agentIdentity);
+}
+
 export function agentLogoUrl(basePath: string): string {
   const base = normalizeOptionalString(basePath)?.replace(/\/$/, "") ?? "";
   return base ? `${base}/favicon.svg` : "favicon.svg";

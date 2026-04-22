@@ -131,6 +131,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
   });
   const threadBindingManager = threadBindingPolicy.enabled
     ? createTelegramThreadBindingManager({
+        cfg,
         accountId: account.accountId,
         idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
           cfg,

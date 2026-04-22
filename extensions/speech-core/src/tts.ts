@@ -932,9 +932,19 @@ export async function textToSpeechTelephony(params: {
         logVerbose(`TTS telephony: provider ${provider} skipped (${resolvedProvider.message})`);
         continue;
       }
-      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
-        typeof resolvedProvider.provider.synthesizeTelephony
-      >;
+      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony;
+      if (!synthesizeTelephony) {
+        const message = `${provider}: unsupported for telephony`;
+        errors.push(message);
+        attempts.push({
+          provider,
+          outcome: "skipped",
+          reasonCode: "unsupported_for_telephony",
+          error: message,
+        });
+        logVerbose(`TTS telephony: provider ${provider} skipped (${message})`);
+        continue;
+      }
       const synthesis = await synthesizeTelephony({
         text: params.text,
         cfg: params.cfg,

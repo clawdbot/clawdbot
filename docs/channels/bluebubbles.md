@@ -363,7 +363,7 @@ BlueBubbles supports advanced message actions when enabled in config:
 
 Available actions:
 
-- **react**: Add/remove tapback reactions (`messageId`, `emoji`, `remove`)
+- **react**: Add/remove tapback reactions (`messageId`, `emoji`, `remove`). iMessage's native tapback set is `love`, `like`, `dislike`, `laugh`, `emphasize`, and `question`. When an agent picks an emoji outside that set (for example `👀`), the reaction tool falls back to `love` so the tapback still renders instead of failing the whole request. Configured ack reactions still validate strictly and error on unknown values.
 - **edit**: Edit a sent message (`messageId`, `text`)
 - **unsend**: Unsend a message (`messageId`)
 - **reply**: Reply to a specific message (`messageId`, `text`, `to`)
@@ -553,6 +553,10 @@ Prefer `chat_guid` for stable routing:
 - `chat_identifier:...`
 - Direct handles: `+15555550123`, `user@example.com`
   - If a direct handle does not have an existing DM chat, OpenClaw will create one via `POST /api/v1/chat/new`. This requires the BlueBubbles Private API to be enabled.
+
+### iMessage vs SMS routing
+
+When the same handle has both an iMessage and an SMS chat on the Mac (for example a phone number that is iMessage-registered but has also received green-bubble fallbacks), OpenClaw prefers the iMessage chat and never silently downgrades to SMS. To force the SMS chat, use an explicit `sms:` target prefix (for example `sms:+15555550123`). Handles without a matching iMessage chat still send through whatever chat BlueBubbles reports.
 
 ## Security
 

@@ -245,7 +245,10 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     const hasBuiltinPrimary =
-      primary !== null && program.commands.some((command) => command.name() === primary);
+      primary !== null &&
+      program.commands.some(
+        (command) => command.name() === primary || command.aliases().includes(primary),
+      );
     const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
       argv: parseArgv,
       primary,
@@ -264,7 +267,12 @@ export async function runCli(argv: string[] = process.argv) {
         },
       );
       if (config) {
-        if (primary && !program.commands.some((command) => command.name() === primary)) {
+        if (
+          primary &&
+          !program.commands.some(
+            (command) => command.name() === primary || command.aliases().includes(primary),
+          )
+        ) {
           const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
           if (missingPluginCommandMessage) {
             throw new Error(missingPluginCommandMessage);

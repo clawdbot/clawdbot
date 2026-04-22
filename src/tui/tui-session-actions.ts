@@ -8,7 +8,7 @@ import {
 } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ChatLog } from "./components/chat-log.js";
-import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
+import type { TuiAgentsList, TuiBackend } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
@@ -17,7 +17,7 @@ type SessionActionBtwPresenter = {
 };
 
 type SessionActionContext = {
-  client: GatewayChatClient;
+  client: TuiBackend;
   chatLog: ChatLog;
   btw: SessionActionBtwPresenter;
   tui: TUI;
@@ -66,7 +66,7 @@ export function createSessionActions(context: SessionActionContext) {
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
 
-  const applyAgentsResult = (result: GatewayAgentsList) => {
+  const applyAgentsResult = (result: TuiAgentsList) => {
     state.agentDefaultId = normalizeAgentId(result.defaultId);
     state.sessionMainKey = normalizeMainKey(result.mainKey);
     state.sessionScope = result.scope ?? state.sessionScope;
@@ -126,6 +126,8 @@ export function createSessionActions(context: SessionActionContext) {
     return resolveSessionInfoModelSelection({
       currentProvider: state.sessionInfo.modelProvider,
       currentModel: state.sessionInfo.model,
+      defaultProvider: lastSessionDefaults?.modelProvider,
+      defaultModel: lastSessionDefaults?.model,
       entryProvider: entry?.modelProvider,
       entryModel: entry?.model,
       overrideProvider: entry?.providerOverride,

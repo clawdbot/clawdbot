@@ -17,6 +17,10 @@ export function setAccessControlTestConfig(next: Record<string, unknown>): void 
   loadConfigMock.mockReturnValue(config);
 }
 
+export function getAccessControlTestConfig(): Record<string, unknown> {
+  return config;
+}
+
 export function setupAccessControlTestHarness(): void {
   beforeEach(() => {
     config = {

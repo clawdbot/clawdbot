@@ -109,19 +109,14 @@ describe("resolveSlackAccount allowFrom precedence", () => {
   });
 });
 
-describe("resolveSlackAccount tolerateUnresolvedSecrets", () => {
-  // The static `SlackAccountConfig.botToken` type is `string` because it
-  // models the post-resolution shape, but the runtime cfg snapshot can still
-  // hold an unresolved `SecretRef` object for inactive channel targets (per
-  // the inspect/strict separation in #66818). Cast via `unknown` so the test
-  // can construct that runtime-only shape without weakening the production
-  // type. See #68237.
+describe("resolveSlackAccount active secret surfaces", () => {
+  const secretRef = { source: "exec", provider: "default", id: "slack_token" } as const;
   const cfgWithUnresolvedBotTokenRef = {
     channels: {
       slack: {
         accounts: {
           default: {
-            botToken: { source: "exec", provider: "default", id: "slack_bot_token" },
+            botToken: secretRef,
             allowFrom: ["U999"],
           },
         },
@@ -129,7 +124,7 @@ describe("resolveSlackAccount tolerateUnresolvedSecrets", () => {
     },
   } as unknown as OpenClawConfig;
 
-  it("throws by default when the snapshot still holds an unresolved SecretRef botToken", () => {
+  it("throws when an enabled account still has an unresolved active bot token SecretRef", () => {
     expect(() =>
       resolveSlackAccount({
         cfg: cfgWithUnresolvedBotTokenRef,
@@ -138,100 +133,83 @@ describe("resolveSlackAccount tolerateUnresolvedSecrets", () => {
     ).toThrowError(/channels\.slack\.accounts\.default\.botToken/);
   });
 
-  it("returns undefined credentials without throwing when tolerateUnresolvedSecrets is set", () => {
-    const resolved = resolveSlackAccount({
-      cfg: cfgWithUnresolvedBotTokenRef,
-      accountId: "default",
-      tolerateUnresolvedSecrets: true,
-    });
-
-    expect(resolved.botToken).toBeUndefined();
-    expect(resolved.botTokenSource).toBe("none");
-    // Surrounding account info still resolves so callers with an explicit
-    // override (for example sendMessageSlack receiving opts.token) can keep
-    // operating.
-    expect(resolved.accountId).toBe("default");
-    expect(resolved.config.allowFrom).toEqual(["U999"]);
-  });
-
-  it("still returns resolved string credentials in tolerant mode", () => {
+  it("does not read credentials for disabled accounts", () => {
     const resolved = resolveSlackAccount({
       cfg: {
         channels: {
           slack: {
             accounts: {
-              default: { botToken: "xoxb-resolved", appToken: "xapp-resolved" },
+              default: {
+                enabled: false,
+                botToken: secretRef,
+                appToken: secretRef,
+                userToken: secretRef,
+                allowFrom: ["U999"],
+              },
             },
           },
         },
-      },
+      } as unknown as OpenClawConfig,
       accountId: "default",
-      tolerateUnresolvedSecrets: true,
+    });
+
+    expect(resolved.botToken).toBeUndefined();
+    expect(resolved.botTokenSource).toBe("none");
+    expect(resolved.appToken).toBeUndefined();
+    expect(resolved.appTokenSource).toBe("none");
+    expect(resolved.userToken).toBeUndefined();
+    expect(resolved.userTokenSource).toBe("none");
+    expect(resolved.accountId).toBe("default");
+    expect(resolved.config.allowFrom).toEqual(["U999"]);
+  });
+
+  it("does not read socket-only app token for HTTP mode accounts", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            accounts: {
+              default: {
+                mode: "http",
+                botToken: "xoxb-resolved",
+                appToken: secretRef,
+                signingSecret: "signing-secret",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      accountId: "default",
     });
 
     expect(resolved.botToken).toBe("xoxb-resolved");
     expect(resolved.botTokenSource).toBe("config");
-    expect(resolved.appToken).toBe("xapp-resolved");
-    expect(resolved.appTokenSource).toBe("config");
+    expect(resolved.appToken).toBeUndefined();
+    expect(resolved.appTokenSource).toBe("none");
   });
 
-  it("does not silently fall back to SLACK_*_TOKEN env vars in tolerant mode when all credentials are configured as SecretRef (credential confusion guard)", () => {
-    // Each credential is configured as a SecretRef. In tolerant mode none of
-    // them resolves, so per-credential env gating must block all three env
-    // vars; otherwise a stray `SLACK_*_TOKEN` would silently impersonate the
-    // operator-configured account (CWE-287 credential confusion).
-    const cfgAllSecretRefs = {
-      channels: {
-        slack: {
-          accounts: {
-            default: {
-              botToken: { source: "exec", provider: "default", id: "slack_bot_token" },
-              appToken: { source: "exec", provider: "default", id: "slack_app_token" },
-              userToken: { source: "exec", provider: "default", id: "slack_user_token" },
+  it("throws when a socket-mode account still has an unresolved active app token SecretRef", () => {
+    expect(() =>
+      resolveSlackAccount({
+        cfg: {
+          channels: {
+            slack: {
+              accounts: {
+                default: {
+                  mode: "socket",
+                  botToken: "xoxb-resolved",
+                  appToken: secretRef,
+                },
+              },
             },
           },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const previousBotToken = process.env.SLACK_BOT_TOKEN;
-    const previousAppToken = process.env.SLACK_APP_TOKEN;
-    const previousUserToken = process.env.SLACK_USER_TOKEN;
-    process.env.SLACK_BOT_TOKEN = "xoxb-env-fallback";
-    process.env.SLACK_APP_TOKEN = "xapp-env-fallback";
-    process.env.SLACK_USER_TOKEN = "xoxp-env-fallback";
-    try {
-      const resolved = resolveSlackAccount({
-        cfg: cfgAllSecretRefs,
+        } as unknown as OpenClawConfig,
         accountId: "default",
-        tolerateUnresolvedSecrets: true,
-      });
-
-      expect(resolved.botToken).toBeUndefined();
-      expect(resolved.botTokenSource).toBe("none");
-      expect(resolved.appToken).toBeUndefined();
-      expect(resolved.appTokenSource).toBe("none");
-      expect(resolved.userToken).toBeUndefined();
-      expect(resolved.userTokenSource).toBe("none");
-    } finally {
-      if (previousBotToken === undefined) {
-        delete process.env.SLACK_BOT_TOKEN;
-      } else {
-        process.env.SLACK_BOT_TOKEN = previousBotToken;
-      }
-      if (previousAppToken === undefined) {
-        delete process.env.SLACK_APP_TOKEN;
-      } else {
-        process.env.SLACK_APP_TOKEN = previousAppToken;
-      }
-      if (previousUserToken === undefined) {
-        delete process.env.SLACK_USER_TOKEN;
-      } else {
-        process.env.SLACK_USER_TOKEN = previousUserToken;
-      }
-    }
+      }),
+    ).toThrowError(/channels\.slack\.accounts\.default\.appToken/);
   });
 
-  it("preserves SLACK_BOT_TOKEN env fallback in tolerant mode when no config token is set (env-only setups)", () => {
+  it("preserves env fallback when no active config token is set", () => {
     const previousBotToken = process.env.SLACK_BOT_TOKEN;
     const previousAppToken = process.env.SLACK_APP_TOKEN;
     process.env.SLACK_BOT_TOKEN = "xoxb-env-only";
@@ -252,7 +230,6 @@ describe("resolveSlackAccount tolerateUnresolvedSecrets", () => {
           },
         },
         accountId: "default",
-        tolerateUnresolvedSecrets: true,
       });
 
       expect(resolved.botToken).toBe("xoxb-env-only");
@@ -273,36 +250,31 @@ describe("resolveSlackAccount tolerateUnresolvedSecrets", () => {
     }
   });
 
-  it("blocks env fallback per-credential: unresolved SecretRef on botToken does not leak SLACK_APP_TOKEN", () => {
+  it("does not use env fallback for inactive credentials", () => {
     const previousBotToken = process.env.SLACK_BOT_TOKEN;
     const previousAppToken = process.env.SLACK_APP_TOKEN;
     process.env.SLACK_BOT_TOKEN = "xoxb-env-bot";
     process.env.SLACK_APP_TOKEN = "xapp-env-app";
     try {
-      // botToken has an unresolved SecretRef (env fallback should be
-      // blocked), but appToken is unset (env fallback should still fire).
-      // This proves the gating is per-credential, not whole-account.
       const resolved = resolveSlackAccount({
         cfg: {
           channels: {
             slack: {
               accounts: {
                 default: {
-                  botToken: { source: "exec", provider: "default", id: "slack_bot_token" },
+                  enabled: false,
                 },
               },
             },
           },
-        } as unknown as OpenClawConfig,
+        },
         accountId: "default",
-        tolerateUnresolvedSecrets: true,
       });
 
       expect(resolved.botToken).toBeUndefined();
       expect(resolved.botTokenSource).toBe("none");
-      // appToken was never configured → env fallback still fires.
-      expect(resolved.appToken).toBe("xapp-env-app");
-      expect(resolved.appTokenSource).toBe("env");
+      expect(resolved.appToken).toBeUndefined();
+      expect(resolved.appTokenSource).toBe("none");
     } finally {
       if (previousBotToken === undefined) {
         delete process.env.SLACK_BOT_TOKEN;

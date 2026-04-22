@@ -13,6 +13,31 @@ read_when:
 Every plugin exports a default entry object. The SDK provides three helpers for
 creating them.
 
+For installed plugins, `package.json` should point runtime loading at built
+JavaScript when available:
+
+```json
+{
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"],
+    "setupEntry": "./src/setup-entry.ts",
+    "runtimeSetupEntry": "./dist/setup-entry.js"
+  }
+}
+```
+
+`extensions` and `setupEntry` remain valid source entries for workspace and git
+checkout development. `runtimeExtensions` and `runtimeSetupEntry` are preferred
+when OpenClaw loads an installed package and let npm packages avoid runtime
+TypeScript compilation. If an installed package only declares a TypeScript
+source entry, OpenClaw will use a matching built `dist/*.js` peer when one
+exists, then fall back to the TypeScript source.
+
+All entry paths must stay inside the plugin package directory. Runtime entries
+and inferred built JavaScript peers do not make an escaping `extensions` or
+`setupEntry` source path valid.
+
 <Tip>
   **Looking for a walkthrough?** See [Channel Plugins](/plugins/sdk-channel-plugins)
   or [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.

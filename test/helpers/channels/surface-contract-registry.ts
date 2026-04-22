@@ -30,12 +30,21 @@ type ThreadingContractEntry = {
   plugin: Pick<ChannelPlugin, "id" | "threading">;
 };
 
+type ThreadingContractRef = {
+  id: ChannelId;
+};
+
 type DirectoryContractEntry = {
   id: string;
   plugin: Pick<ChannelPlugin, "id" | "directory">;
   coverage: "lookups" | "presence";
   cfg?: OpenClawConfig;
   accountId?: string;
+};
+
+type DirectoryContractRef = {
+  id: ChannelId;
+  coverage: "lookups" | "presence";
 };
 
 let surfaceContractRegistryCache: SurfaceContractEntry[] | undefined;
@@ -115,6 +124,13 @@ export function getSurfaceContractRegistryShard(params: {
   });
 }
 
+export function getSurfaceContractRegistryShardIds(params: {
+  shardIndex: number;
+  shardCount: number;
+}): readonly ChannelId[] {
+  return getBundledChannelPluginIdsForShard(params);
+}
+
 export function getThreadingContractRegistry(): ThreadingContractEntry[] {
   threadingContractRegistryCache ??= listBundledChannelPluginIds()
     .filter((id) => threadingContractPluginIds.has(id))
@@ -149,6 +165,15 @@ export function getThreadingContractRegistryShard(params: {
           ]
         : [];
     });
+}
+
+export function getThreadingContractRegistryShardRefs(params: {
+  shardIndex: number;
+  shardCount: number;
+}): ThreadingContractRef[] {
+  return getBundledChannelPluginIdsForShard(params)
+    .filter((id) => threadingContractPluginIds.has(id))
+    .map((id) => ({ id }));
 }
 
 const directoryPresenceOnlyIds = new Set(["whatsapp", "zalouser"]);
@@ -189,4 +214,16 @@ export function getDirectoryContractRegistryShard(params: {
           ]
         : [];
     });
+}
+
+export function getDirectoryContractRegistryShardRefs(params: {
+  shardIndex: number;
+  shardCount: number;
+}): DirectoryContractRef[] {
+  return getBundledChannelPluginIdsForShard(params)
+    .filter((id) => directoryContractPluginIds.has(id))
+    .map((id) => ({
+      id,
+      coverage: directoryPresenceOnlyIds.has(id) ? "presence" : "lookups",
+    }));
 }

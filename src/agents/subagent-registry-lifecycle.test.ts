@@ -328,7 +328,48 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(captureSubagentCompletionReply).toHaveBeenCalledWith(entry.childSessionKey, {
       waitForReply: false,
+      outcome: {
+        status: "ok",
+        startedAt: 2_000,
+        endedAt: 4_000,
+        elapsedMs: 2_000,
+      },
     });
+  });
+
+  it("does not freeze stale reply text for terminal error outcomes", async () => {
+    const persist = vi.fn();
+    const captureSubagentCompletionReply = vi.fn(async () => "stale assistant text");
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "error", error: "All models failed (2): timeout" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
+    expect(entry.frozenResultText).toBeNull();
+    expect(taskExecutorMocks.failTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        error: "All models failed (2): timeout",
+        progressSummary: undefined,
+      }),
+    );
+    expect(persist).toHaveBeenCalled();
   });
 
   it("does not re-run announce flow after completion was already delivered", async () => {

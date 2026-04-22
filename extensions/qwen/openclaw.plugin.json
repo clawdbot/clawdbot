@@ -6,6 +6,18 @@
     "mediaUnderstandingProviders": ["qwen"],
     "videoGenerationProviders": ["qwen"]
   },
+  "mediaUnderstandingProviderMetadata": {
+    "qwen": {
+      "capabilities": ["image", "video"],
+      "defaultModels": {
+        "image": "qwen-vl-max-latest",
+        "video": "qwen-vl-max-latest"
+      },
+      "autoPriority": {
+        "video": 15
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "qwen": ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
   },

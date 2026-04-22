@@ -25,6 +25,7 @@ import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   createOllamaEmbeddingProvider,
 } from "./src/embedding-provider.js";
+import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import { ollamaMemoryEmbeddingProviderAdapter } from "./src/memory-embedding-adapter.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
@@ -55,6 +56,7 @@ export default definePluginEntry({
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
     api.registerMemoryEmbeddingProvider(ollamaMemoryEmbeddingProviderAdapter);
+    api.registerMediaUnderstandingProvider(ollamaMediaUnderstandingProvider);
     const pluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
     api.registerWebSearchProvider(createOllamaWebSearchProvider());
     api.registerProvider({

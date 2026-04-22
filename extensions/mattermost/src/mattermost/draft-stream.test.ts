@@ -100,6 +100,45 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBeUndefined();
   });
 
+  it("discardPending keeps the preview post but ignores later updates", async () => {
+    const { client, calls } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      rootId: "root-1",
+      throttleMs: 0,
+    });
+
+    stream.update("Working...");
+    await stream.flush();
+    await stream.discardPending();
+    stream.update("Late update");
+    await stream.flush();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.path).toBe("/posts");
+    expect(stream.postId()).toBe("post-1");
+  });
+
+  it("seal keeps the preview post and cancels pending final overwrites", async () => {
+    const { client, calls } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      rootId: "root-1",
+      throttleMs: 0,
+    });
+
+    stream.update("Working...");
+    await stream.flush();
+    stream.update("Stale final draft");
+    await stream.seal();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.path).toBe("/posts");
+    expect(stream.postId()).toBe("post-1");
+  });
+
   it("stop flushes the last pending update and ignores later ones", async () => {
     const { client, calls } = createMockClient();
     const stream = createMattermostDraftStream({

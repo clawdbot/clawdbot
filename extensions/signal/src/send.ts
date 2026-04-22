@@ -1,4 +1,4 @@
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
@@ -9,7 +9,7 @@ import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   baseUrl?: string;
   account?: string;
   accountId?: string;
@@ -31,7 +31,10 @@ export type SignalSendResult = {
   timestamp?: number;
 };
 
-export type SignalRpcOpts = Pick<SignalSendOpts, "baseUrl" | "account" | "accountId" | "timeoutMs">;
+export type SignalRpcOpts = Pick<
+  SignalSendOpts,
+  "cfg" | "baseUrl" | "account" | "accountId" | "timeoutMs"
+>;
 
 export type SignalReceiptType = "read" | "viewed";
 
@@ -40,13 +43,16 @@ type SignalTarget =
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
 
-async function resolveSignalRpcAccountInfo(
-  opts: Pick<SignalSendOpts, "cfg" | "baseUrl" | "account" | "accountId">,
-) {
+async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
   if (opts.baseUrl?.trim() && opts.account?.trim()) {
     return undefined;
   }
-  const cfg = opts.cfg ?? loadConfig();
+  if (!opts.cfg) {
+    throw new Error(
+      "Signal RPC account resolution requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const cfg = requireRuntimeConfig(opts.cfg, "Signal RPC account resolution");
   return resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
@@ -118,9 +124,9 @@ function buildTargetParams(
 export async function sendMessageSignal(
   to: string,
   text: string,
-  opts: SignalSendOpts = {},
+  opts: SignalSendOpts,
 ): Promise<SignalSendResult> {
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Signal send");
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
@@ -215,7 +221,7 @@ export async function sendMessageSignal(
 
 export async function sendTypingSignal(
   to: string,
-  opts: SignalRpcOpts & { stop?: boolean } = {},
+  opts: SignalRpcOpts & { stop?: boolean },
 ): Promise<boolean> {
   const accountInfo = await resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
@@ -243,7 +249,7 @@ export async function sendTypingSignal(
 export async function sendReadReceiptSignal(
   to: string,
   targetTimestamp: number,
-  opts: SignalRpcOpts & { type?: SignalReceiptType } = {},
+  opts: SignalRpcOpts & { type?: SignalReceiptType },
 ): Promise<boolean> {
   if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
     return false;

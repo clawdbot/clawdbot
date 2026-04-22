@@ -51,7 +51,6 @@ struct OpenClawApp: App {
                 animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
                 iconState: self.effectiveIconState)
         }
-        .menuBarExtraStyle(.menu)
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
             self.statusItem = item
             MenuSessionsInjector.shared.install(into: item)
@@ -59,6 +58,7 @@ struct OpenClawApp: App {
             self.installStatusItemMouseHandler(for: item)
             self.updateHoverHUDSuppression()
         }
+        .menuBarExtraStyle(.menu)
         .onChange(of: self.state.isPaused) { _, paused in
             self.applyStatusItemAppearance(paused: paused, sleeping: self.isGatewaySleeping)
             if self.state.connectionMode == .local {

@@ -1,5 +1,4 @@
 import Foundation
-import MLXAudioTTS
 import OSLog
 
 // swiftformat:disable wrap wrapMultilineStatementBraces trailingCommas redundantSelf extensionAccessControl
@@ -18,13 +17,14 @@ final class TalkMLXSpeechSynthesizer {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.mlx")
     private var currentToken = UUID()
-    private var modelRepo: String?
-    private var model: (any SpeechGenerationModel)?
+    private var currentProcess: Process?
 
     private init() {}
 
     func stop() {
         self.currentToken = UUID()
+        self.currentProcess?.terminate()
+        self.currentProcess = nil
     }
 
     func synthesize(
@@ -39,59 +39,93 @@ final class TalkMLXSpeechSynthesizer {
         let token = UUID()
         self.currentToken = token
 
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-mlx-tts-\(token.uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let outputURL = tempDir.appendingPathComponent("speech.wav")
+        let invocation = Self.helperInvocation()
         let resolvedRepo = Self.resolvedModelRepo(modelRepo)
-        let rawModel = try await self.loadModel(
-            modelRepo: resolvedRepo,
-            token: token)
-        let model = UncheckedSpeechModel(raw: rawModel)
+        var arguments = invocation.argumentPrefix
+        arguments += [
+            "--text", trimmed,
+            "--model", resolvedRepo,
+            "--output", outputURL.path,
+        ]
+        if let language = language?.trimmingCharacters(in: .whitespacesAndNewlines), !language.isEmpty {
+            arguments += ["--language", language]
+        }
+        if let voicePreset = voicePreset?.trimmingCharacters(in: .whitespacesAndNewlines), !voicePreset.isEmpty {
+            arguments += ["--voice", voicePreset]
+        }
+
+        self.logger.info("talk mlx helper start modelRepo=\(resolvedRepo, privacy: .public)")
+        let process = Process()
+        process.executableURL = invocation.executableURL
+        process.arguments = arguments
+        let stderr = Pipe()
+        process.standardError = stderr
+        process.standardOutput = Pipe()
+        self.currentProcess = process
+
+        let status: Int32
+        do {
+            status = try await Self.run(process)
+        } catch {
+            self.currentProcess = nil
+            self.logger.error("talk mlx helper launch failed: \(error.localizedDescription, privacy: .public)")
+            throw SynthesizeError.modelLoadFailed(invocation.displayName)
+        }
+        self.currentProcess = nil
+
         guard self.currentToken == token else {
             throw SynthesizeError.canceled
         }
-
-        let audioData: Data
-        do {
-            let audio = try await model.generateAudio(
-                text: trimmed,
-                voice: voicePreset,
-                language: language)
-            audioData = Self.makeWavData(
-                samples: audio,
-                sampleRate: Double(model.sampleRateValue()))
-        } catch {
+        guard status == 0 else {
+            let errorText = Self.readPipe(stderr)
             self.logger.error(
-                "talk mlx generation failed: \(error.localizedDescription, privacy: .public)")
+                "talk mlx helper failed status=\(status, privacy: .public): \(errorText, privacy: .public)")
             throw SynthesizeError.audioGenerationFailed
         }
 
-        guard self.currentToken == token else {
-            throw SynthesizeError.canceled
+        do {
+            return try Data(contentsOf: outputURL)
+        } catch {
+            self.logger.error("talk mlx helper output missing: \(error.localizedDescription, privacy: .public)")
+            throw SynthesizeError.audioGenerationFailed
         }
-        return audioData
     }
 
-    private func loadModel(
-        modelRepo: String,
-        token: UUID) async throws -> any SpeechGenerationModel {
-        if let model = self.model, self.modelRepo == modelRepo {
-            return model
+    private struct HelperInvocation {
+        let executableURL: URL
+        let argumentPrefix: [String]
+        let displayName: String
+    }
+
+    private static func helperInvocation() -> HelperInvocation {
+        let fileManager = FileManager.default
+        if let override = ProcessInfo.processInfo.environment["OPENCLAW_MLX_TTS_BIN"], !override.isEmpty {
+            return HelperInvocation(
+                executableURL: URL(fileURLWithPath: override),
+                argumentPrefix: [],
+                displayName: override)
         }
 
-        self.logger.info("talk mlx loading modelRepo=\(modelRepo, privacy: .public)")
-        do {
-            let model = try await TTS.loadModel(modelRepo: modelRepo)
-            guard self.currentToken == token else {
-                throw SynthesizeError.canceled
+        if let executableDir = Bundle.main.executableURL?.deletingLastPathComponent() {
+            let bundled = executableDir.appendingPathComponent("openclaw-mlx-tts")
+            if fileManager.isExecutableFile(atPath: bundled.path) {
+                return HelperInvocation(
+                    executableURL: bundled,
+                    argumentPrefix: [],
+                    displayName: bundled.path)
             }
-            self.model = model
-            self.modelRepo = modelRepo
-            return model
-        } catch is CancellationError {
-            throw SynthesizeError.canceled
-        } catch {
-            self.logger.error(
-                "talk mlx load failed: \(error.localizedDescription, privacy: .public)")
-            throw SynthesizeError.modelLoadFailed(modelRepo)
         }
+
+        return HelperInvocation(
+            executableURL: URL(fileURLWithPath: "/usr/bin/env"),
+            argumentPrefix: ["openclaw-mlx-tts"],
+            displayName: "openclaw-mlx-tts")
     }
 
     private static func resolvedModelRepo(_ modelRepo: String?) -> String {
@@ -99,80 +133,26 @@ final class TalkMLXSpeechSynthesizer {
         return trimmed.isEmpty ? Self.defaultModelRepo : trimmed
     }
 
-    private static func makeWavData(samples: [Float], sampleRate: Double) -> Data {
-        let channels: UInt16 = 1
-        let bitsPerSample: UInt16 = 16
-        let blockAlign = channels * (bitsPerSample / 8)
-        let sampleRateInt = UInt32(sampleRate.rounded())
-        let byteRate = sampleRateInt * UInt32(blockAlign)
-        let dataSize = UInt32(samples.count) * UInt32(blockAlign)
-
-        var data = Data(capacity: Int(44 + dataSize))
-        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) // RIFF
-        data.appendLEUInt32(36 + dataSize)
-        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) // WAVE
-
-        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) // fmt
-        data.appendLEUInt32(16)
-        data.appendLEUInt16(1)
-        data.appendLEUInt16(channels)
-        data.appendLEUInt32(sampleRateInt)
-        data.appendLEUInt32(byteRate)
-        data.appendLEUInt16(blockAlign)
-        data.appendLEUInt16(bitsPerSample)
-
-        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // data
-        data.appendLEUInt32(dataSize)
-
-        for sample in samples {
-            let clamped = max(-1.0, min(1.0, sample))
-            let scaled = Int16((clamped * Float(Int16.max)).rounded())
-            data.appendLEInt16(scaled)
+    private static func run(_ process: Process) async throws -> Int32 {
+        try await withCheckedThrowingContinuation { continuation in
+            process.terminationHandler = { process in
+                continuation.resume(returning: process.terminationStatus)
+            }
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
         }
-        return data
+    }
+
+    private static func readPipe(_ pipe: Pipe) -> String {
+        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
+        let text = String(data: data, encoding: .utf8) ?? ""
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
 extension TalkMLXSpeechSynthesizer: @unchecked Sendable {}
-
-private struct UncheckedSpeechModel {
-    let raw: any SpeechGenerationModel
-
-    func sampleRateValue() -> Int {
-        raw.sampleRate
-    }
-
-    func generateAudio(
-        text: String,
-        voice: String?,
-        language: String?) async throws -> [Float] {
-        let generatedAudio = try await raw.generate(
-            text: text,
-            voice: voice,
-            refAudio: nil,
-            refText: nil,
-            language: language)
-        return generatedAudio.asArray(Float.self)
-    }
-}
-
-extension UncheckedSpeechModel: @unchecked Sendable {}
-
-extension Data {
-    fileprivate mutating func appendLEUInt16(_ value: UInt16) {
-        var littleEndian = value.littleEndian
-        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
-    }
-
-    fileprivate mutating func appendLEUInt32(_ value: UInt32) {
-        var littleEndian = value.littleEndian
-        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
-    }
-
-    fileprivate mutating func appendLEInt16(_ value: Int16) {
-        var littleEndian = value.littleEndian
-        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
-    }
-}
 
 // swiftformat:enable wrap wrapMultilineStatementBraces trailingCommas redundantSelf extensionAccessControl

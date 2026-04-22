@@ -4,7 +4,7 @@ import {
   expectCodexBuiltInSuppression,
   expectCodexMissingAuthHint,
   importProviderRuntimeCatalogModule,
-  loadBundledPluginPublicSurfaceSync,
+  loadBundledPluginPublicSurface,
 } from "../../../test/helpers/plugins/provider-catalog.js";
 import type { ProviderPlugin } from "../../../test/helpers/plugins/provider-catalog.js";
 import {
@@ -41,7 +41,7 @@ vi.mock("../../../src/plugins/providers.runtime.js", () => ({
 export function describeOpenAIProviderCatalogContract() {
   const contractDepsPromise = (async () => {
     vi.resetModules();
-    const openaiPlugin = loadBundledPluginPublicSurfaceSync<{
+    const openaiPlugin = await loadBundledPluginPublicSurface<{
       default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
     }>({
       pluginId: "openai",

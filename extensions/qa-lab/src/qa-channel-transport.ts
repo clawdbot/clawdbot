@@ -1,7 +1,9 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { getQaProvider } from "./providers/index.js";
-import { QaStateBackedTransportAdapter, waitForQaTransportCondition } from "./qa-transport.js";
+import { QaStateBackedTransportAdapter } from "./qa-transport.js";
 import type {
   QaTransportActionName,
   QaTransportGatewayConfig,
@@ -20,33 +22,54 @@ async function waitForQaChannelReady(params: {
   timeoutMs?: number;
   pollIntervalMs?: number;
 }) {
-  await waitForQaTransportCondition(
-    async () => {
-      try {
-        const payload = (await params.gateway.call(
-          "channels.status",
-          { probe: false, timeoutMs: 2_000 },
-          { timeoutMs: 5_000 },
-        )) as {
-          channelAccounts?: Record<
-            string,
-            Array<{
-              accountId?: string;
-              running?: boolean;
-              restartPending?: boolean;
-            }>
-          >;
-        };
-        const accounts = payload.channelAccounts?.[QA_CHANNEL_ID] ?? [];
-        const account =
-          accounts.find((entry) => entry.accountId === QA_CHANNEL_ACCOUNT_ID) ?? accounts[0];
-        return account?.running && account.restartPending !== true ? true : undefined;
-      } catch {
-        return undefined;
+  const timeoutMs = params.timeoutMs ?? 45_000;
+  const pollIntervalMs = params.pollIntervalMs ?? 500;
+  const startedAt = Date.now();
+  let lastAccountStatus = "no qa-channel accounts reported";
+  let lastProbeError: string | null = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const payload = (await params.gateway.call(
+        "channels.status",
+        { probe: false, timeoutMs: 2_000 },
+        { timeoutMs: 5_000 },
+      )) as {
+        channelAccounts?: Record<
+          string,
+          Array<{
+            accountId?: string;
+            running?: boolean;
+            restartPending?: boolean;
+          }>
+        >;
+      };
+      const accounts = payload.channelAccounts?.[QA_CHANNEL_ID] ?? [];
+      const account =
+        accounts.find((entry) => entry.accountId === QA_CHANNEL_ACCOUNT_ID) ?? accounts[0];
+      lastProbeError = null;
+      lastAccountStatus = account
+        ? JSON.stringify({
+            accountId: account.accountId ?? null,
+            running: account.running ?? null,
+            restartPending: account.restartPending ?? null,
+          })
+        : "no qa-channel accounts reported";
+      if (account?.running && account.restartPending !== true) {
+        return;
       }
-    },
-    params.timeoutMs ?? 45_000,
-    params.pollIntervalMs ?? 500,
+    } catch (error) {
+      lastProbeError = formatErrorMessage(error);
+    }
+    await sleep(pollIntervalMs);
+  }
+
+  throw new Error(
+    [
+      `timed out after ${timeoutMs}ms waiting for qa-channel ready`,
+      `last status: ${lastAccountStatus}`,
+      ...(lastProbeError ? [`last probe error: ${lastProbeError}`] : []),
+    ].join("; "),
   );
 }
 

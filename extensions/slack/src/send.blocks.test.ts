@@ -3,12 +3,14 @@ import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.
 
 installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
+const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 describe("sendMessageSlack NO_REPLY guard", () => {
   it("suppresses NO_REPLY text before any Slack API call", async () => {
     const client = createSlackSendTestClient();
     const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
     });
 
@@ -20,6 +22,7 @@ describe("sendMessageSlack NO_REPLY guard", () => {
     const client = createSlackSendTestClient();
     const result = await sendMessageSlack("channel:C123", "  NO_REPLY  ", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
     });
 
@@ -31,6 +34,7 @@ describe("sendMessageSlack NO_REPLY guard", () => {
     const client = createSlackSendTestClient();
     await sendMessageSlack("channel:C123", "This is not a NO_REPLY situation", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
     });
 
@@ -41,6 +45,7 @@ describe("sendMessageSlack NO_REPLY guard", () => {
     const client = createSlackSendTestClient();
     const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       blocks: [{ type: "section", text: { type: "mrkdwn", text: "content" } }],
     });
@@ -57,6 +62,7 @@ describe("sendMessageSlack chunking", () => {
 
     await sendMessageSlack("channel:C123", message, {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
     });
 
@@ -75,6 +81,7 @@ describe("sendMessageSlack blocks", () => {
     const client = createSlackSendTestClient();
     const result = await sendMessageSlack("channel:C123", "", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       blocks: [{ type: "divider" }],
     });
@@ -94,6 +101,7 @@ describe("sendMessageSlack blocks", () => {
     const client = createSlackSendTestClient();
     await sendMessageSlack("channel:C123", "", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       blocks: [{ type: "image", image_url: "https://example.com/a.png", alt_text: "Build chart" }],
     });
@@ -109,6 +117,7 @@ describe("sendMessageSlack blocks", () => {
     const client = createSlackSendTestClient();
     await sendMessageSlack("channel:C123", "", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       blocks: [
         {
@@ -132,6 +141,7 @@ describe("sendMessageSlack blocks", () => {
     const client = createSlackSendTestClient();
     await sendMessageSlack("channel:C123", "", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       blocks: [{ type: "file", source: "remote", external_id: "F123" }],
     });
@@ -148,6 +158,7 @@ describe("sendMessageSlack blocks", () => {
     await expect(
       sendMessageSlack("channel:C123", "hi", {
         token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
         client,
         mediaUrl: "https://example.com/image.png",
         blocks: [{ type: "divider" }],
@@ -161,6 +172,7 @@ describe("sendMessageSlack blocks", () => {
     await expect(
       sendMessageSlack("channel:C123", "hi", {
         token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
         client,
         blocks: [],
       }),
@@ -174,6 +186,7 @@ describe("sendMessageSlack blocks", () => {
     await expect(
       sendMessageSlack("channel:C123", "hi", {
         token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
         client,
         blocks,
       }),
@@ -186,6 +199,7 @@ describe("sendMessageSlack blocks", () => {
     await expect(
       sendMessageSlack("channel:C123", "hi", {
         token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
         client,
         blocks: [{} as { type: string }],
       }),

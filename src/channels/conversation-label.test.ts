@@ -47,19 +47,19 @@ describe("resolveConversationLabel", () => {
       name: "does not append ids when the base already contains the id",
       ctx: {
         ChatType: "group",
-        GroupSubject: "Family id:123@g.us",
-        From: "whatsapp:group:123@g.us",
+        GroupSubject: "Family id:room-123@example",
+        From: "demo-channel:group:room-123@example",
       },
-      expected: "Family id:123@g.us",
+      expected: "Family id:room-123@example",
     },
     {
-      name: "appends ids for WhatsApp-like group ids when a subject exists",
+      name: "appends opaque address-like ids when a subject exists",
       ctx: {
         ChatType: "group",
         GroupSubject: "Family",
-        From: "whatsapp:group:123@g.us",
+        From: "demo-channel:group:room-123@example",
       },
-      expected: "Family id:123@g.us",
+      expected: "Family id:room-123@example",
     },
   ] satisfies Array<{ name: string; ctx: MsgContext; expected: string }>)(
     "$name",

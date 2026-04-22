@@ -2,6 +2,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildChannelOutboundSessionRoute,
+  buildThreadAwareOutboundSessionRoute,
   stripChannelTargetPrefix,
   stripTargetKindPrefix,
   type ChannelOutboundSessionRouteParams,
@@ -9,7 +10,6 @@ import {
 import {
   buildOutboundBaseSessionKey,
   normalizeOutboundThreadId,
-  resolveThreadSessionKeys,
   type RoutePeer,
 } from "../../plugin-sdk/routing.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -62,21 +62,19 @@ function buildThreadedChannelRoute(params: {
     accountId: params.accountId,
     peer: params.peer,
   });
-  const normalizedThreadId = normalizeOutboundThreadId(params.threadId);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId: normalizedThreadId,
+  return buildThreadAwareOutboundSessionRoute({
+    route: {
+      sessionKey: baseSessionKey,
+      baseSessionKey,
+      peer: params.peer,
+      chatType: params.chatType,
+      from: params.from,
+      to: params.to,
+    },
+    threadId: params.threadId,
     useSuffix: params.useSuffix,
+    precedence: ["threadId", "replyToId", "currentSession"],
   });
-  return {
-    sessionKey: threadKeys.sessionKey,
-    baseSessionKey,
-    peer: params.peer,
-    chatType: params.chatType,
-    from: params.from,
-    to: params.to,
-    ...(normalizedThreadId !== undefined ? { threadId: params.threadId } : {}),
-  };
 }
 
 function parseForumTargetForTest(raw: string): {

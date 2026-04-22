@@ -742,6 +742,7 @@ Notes:
 - Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
 - Top-level Slack DMs stay off-thread by default, so they do not show the thread-style preview; use thread replies or `typingReaction` if you want visible progress there.
 - Media and non-text payloads fall back to normal delivery.
+- Media/error finals cancel pending preview edits without flushing a temporary draft; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
 Use draft preview instead of Slack native text streaming:

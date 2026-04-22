@@ -101,6 +101,10 @@ describe("deliverWebReply", () => {
     await expectReplySuppressed({ text: "   \n Reasoning:\n_hidden_" });
   });
 
+  it("suppresses payloads that start with a quoted reasoning prefix", async () => {
+    await expectReplySuppressed({ text: " > Reasoning:\n> _hidden_" });
+  });
+
   it("does not suppress messages that mention Reasoning: mid-text", async () => {
     const msg = makeMsg();
 

@@ -1,6 +1,11 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const noopAuth = async () => ({ profiles: [] });
+const OPENAI_WIZARD_GROUP = {
+  groupId: "openai",
+  groupLabel: "OpenAI",
+  groupHint: "API key + Codex auth",
+} as const;
 
 export function createOpenAICodexProvider(): ProviderPlugin {
   return {
@@ -11,19 +16,46 @@ export function createOpenAICodexProvider(): ProviderPlugin {
       {
         id: "oauth",
         kind: "oauth",
-        label: "ChatGPT OAuth",
-        hint: "Browser sign-in",
+        label: "OpenAI Codex Browser Login",
+        hint: "Sign in with OpenAI in your browser",
         run: noopAuth,
+        wizard: {
+          choiceId: "openai-codex",
+          choiceLabel: "OpenAI Codex Browser Login",
+          choiceHint: "Sign in with OpenAI in your browser",
+          assistantPriority: -30,
+          ...OPENAI_WIZARD_GROUP,
+        },
+      },
+      {
+        id: "device-code",
+        kind: "device_code",
+        label: "OpenAI Codex Device Pairing",
+        hint: "Pair in browser with a device code",
+        run: noopAuth,
+        wizard: {
+          choiceId: "openai-codex-device-code",
+          choiceLabel: "OpenAI Codex Device Pairing",
+          choiceHint: "Pair in browser with a device code",
+          assistantPriority: -10,
+          ...OPENAI_WIZARD_GROUP,
+        },
+      },
+      {
+        id: "import-codex-cli",
+        kind: "oauth",
+        label: "Import Existing Codex Login",
+        hint: "Import an existing ~/.codex login",
+        run: noopAuth,
+        wizard: {
+          choiceId: "openai-codex-import",
+          choiceLabel: "Import Existing Codex Login",
+          choiceHint: "Import an existing ~/.codex login",
+          assistantPriority: -20,
+          ...OPENAI_WIZARD_GROUP,
+        },
       },
     ],
-    wizard: {
-      setup: {
-        choiceId: "openai-codex",
-        choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
-        choiceHint: "Browser sign-in",
-        methodId: "oauth",
-      },
-    },
   };
 }
 
@@ -38,15 +70,14 @@ export function createOpenAIProvider(): ProviderPlugin {
       {
         id: "api-key",
         kind: "api_key",
-        label: "OpenAI API key",
-        hint: "Direct OpenAI API key",
+        label: "OpenAI API Key",
+        hint: "Use your OpenAI API key directly",
         run: noopAuth,
         wizard: {
           choiceId: "openai-api-key",
-          choiceLabel: "OpenAI API key",
-          groupId: "openai",
-          groupLabel: "OpenAI",
-          groupHint: "Codex OAuth + API key",
+          choiceLabel: "OpenAI API Key",
+          assistantPriority: -40,
+          ...OPENAI_WIZARD_GROUP,
         },
       },
     ],

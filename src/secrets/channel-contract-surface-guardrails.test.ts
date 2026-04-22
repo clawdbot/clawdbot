@@ -23,6 +23,13 @@ const CORE_SECRET_SURFACE_GUARDS = [
       /channels\.bluebubbles\./,
       /channels\.msteams\./,
       /channels\.nextcloud-talk\./,
+      /plugins\.entries\.(?:brave|google|exa|xai|moonshot|perplexity|firecrawl|tavily|minimax)\.config\.web(?:Search|Fetch)\.apiKey/,
+    ],
+  },
+  {
+    path: "src/cli/command-secret-targets.ts",
+    forbiddenPatterns: [
+      /plugins\.entries\.(?:brave|google|exa|xai|moonshot|perplexity|firecrawl|tavily|minimax)\.config\.web(?:Search|Fetch)\.apiKey/,
     ],
   },
   {
@@ -42,6 +49,45 @@ const CORE_SECRET_SURFACE_GUARDS = [
   {
     path: "src/plugin-sdk/command-auth.ts",
     forbiddenPatterns: [/\bpluginId:\s*"telegram"/],
+  },
+  {
+    path: "src/gateway/channel-health-policy.ts",
+    forbiddenPatterns: [/\btelegram\b/],
+  },
+  {
+    path: "src/channels/model-overrides.ts",
+    forbiddenPatterns: [/\bfeishu\b/],
+  },
+  {
+    path: "src/config/sessions/group.ts",
+    forbiddenPatterns: [/\bwhatsapp\b/, /@g\.us/],
+  },
+  {
+    path: "src/channels/conversation-label.ts",
+    forbiddenPatterns: [/@g\.us/],
+  },
+  {
+    path: "src/auto-reply/command-auth.ts",
+    forbiddenPatterns: [/@g\.us/],
+  },
+  {
+    path: "src/channels/plugins/setup-promotion-helpers.ts",
+    forbiddenPatterns: [/\btelegram\b/],
+  },
+  {
+    path: "src/flows/search-setup.ts",
+    forbiddenPatterns: [/\bbrave\b/],
+  },
+  {
+    path: "src/web-search/runtime.ts",
+    forbiddenPatterns: [/\bbrave\b/],
+  },
+  {
+    path: "src/media-understanding/defaults.ts",
+    forbiddenPatterns: [
+      /\b(?:openai|anthropic|google|groq|deepgram|mistral|minimax|zai|qwen|moonshot|openrouter)\b/,
+      /\b(?:gpt-|claude-|gemini-|whisper-|nova-|voxtral-|MiniMax-|glm-|qwen-|kimi-)\b/,
+    ],
   },
 ] as const;
 

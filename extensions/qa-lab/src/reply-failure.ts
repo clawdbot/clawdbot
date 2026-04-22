@@ -23,6 +23,11 @@ const VISIBLE_REPLY_LEAK_PATTERNS = [
   /\bnot inventing status\b/i,
 ];
 
+const TOOL_BACKED_FAILURE_PATTERNS = [
+  /\btool\s+[a-z0-9_.-]+\s+not found\b/i,
+  /^status:\s*blocked\b/im,
+];
+
 export function extractQaVisibleReplyLeakText(text: string): string | undefined {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -46,6 +51,9 @@ export function extractQaFailureReplyText(text: string): string | undefined {
   const visibleReplyLeak = extractQaVisibleReplyLeakText(trimmed);
   if (visibleReplyLeak) {
     return visibleReplyLeak;
+  }
+  if (TOOL_BACKED_FAILURE_PATTERNS.some((pattern) => pattern.test(trimmed))) {
+    return trimmed;
   }
   return undefined;
 }

@@ -34,6 +34,13 @@ export type NormalizedPluginsConfig = SharedNormalizedPluginsConfig;
 
 let bundledPluginAliasLookupCache: ReadonlyMap<string, string> | undefined;
 
+const BUILT_IN_PLUGIN_ALIAS_FALLBACKS: ReadonlyArray<readonly [alias: string, pluginId: string]> = [
+  ["openai-codex", "openai"],
+  ["google-gemini-cli", "google"],
+  ["minimax-portal", "minimax"],
+  ["minimax-portal-auth", "minimax"],
+] as const;
+
 function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
   if (bundledPluginAliasLookupCache) {
     return bundledPluginAliasLookupCache;
@@ -60,6 +67,9 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
         lookup.set(normalizedLegacyPluginId, plugin.id);
       }
     }
+  }
+  for (const [alias, pluginId] of BUILT_IN_PLUGIN_ALIAS_FALLBACKS) {
+    lookup.set(alias, pluginId);
   }
   bundledPluginAliasLookupCache = lookup;
   return lookup;

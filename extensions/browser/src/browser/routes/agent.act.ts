@@ -419,6 +419,8 @@ export function registerBrowserAgentActRoutes(
                       targetId: tab.targetId,
                       uid: action.ref!,
                       doubleClick: action.doubleClick ?? false,
+                      timeoutMs: action.timeoutMs,
+                      signal: req.signal,
                     }),
                   guard: existingSessionNavigationGuard,
                 });

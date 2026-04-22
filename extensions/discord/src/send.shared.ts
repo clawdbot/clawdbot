@@ -9,6 +9,7 @@ import {
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -118,6 +119,7 @@ async function buildDiscordSendError(
   err: unknown,
   ctx: {
     channelId: string;
+    cfg: OpenClawConfig;
     rest: RequestClient;
     token: string;
     hasMedia: boolean;
@@ -142,6 +144,7 @@ async function buildDiscordSendError(
     const permissions = await fetchChannelPermissionsDiscord(ctx.channelId, {
       rest: ctx.rest,
       token: ctx.token,
+      cfg: ctx.cfg,
     });
     const current = new Set(permissions.permissions);
     const required = ["ViewChannel", "SendMessages"];

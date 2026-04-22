@@ -162,6 +162,7 @@ A single plugin can register any number of capabilities via the `api` object:
 | Video generation       | `api.registerVideoGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web fetch              | `api.registerWebFetchProvider(...)`              | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web search             | `api.registerWebSearchProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Embedded Pi extension  | `api.registerEmbeddedExtensionFactory(...)`      | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
 | Agent tools            | `api.registerTool(...)`                          | Below                                                                           |
 | Custom commands        | `api.registerCommand(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
 | Event hooks            | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
@@ -169,6 +170,11 @@ A single plugin can register any number of capabilities via the `api` object:
 | CLI subcommands        | `api.registerCli(...)`                           | [Entry Points](/plugins/sdk-entrypoints)                                        |
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
+
+Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
+embedded-runner hooks such as async `tool_result` rewriting before the final
+tool result message is emitted. Prefer regular OpenClaw plugin hooks when the
+work does not need Pi extension timing.
 
 If your plugin registers custom gateway RPC methods, keep them on a
 plugin-specific prefix. Core admin namespaces (`config.*`,

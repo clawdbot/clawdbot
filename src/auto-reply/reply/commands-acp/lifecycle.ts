@@ -43,6 +43,7 @@ import {
   type SessionBindingService,
 } from "../../../infra/outbound/session-binding-service.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import type { ReplyPayload } from "../../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   resolveAcpCommandAccountId,
@@ -77,20 +78,19 @@ function resolveAcpBindingLabelNoun(params: {
   return params.conversationId === params.threadId ? "thread" : "conversation";
 }
 
-async function resolveBoundReplyChannelData(params: {
+async function resolveBoundReplyPayload(params: {
   binding: SessionBindingRecord;
   placement: "current" | "child";
-}): Promise<Record<string, unknown> | undefined> {
+}): Promise<Pick<ReplyPayload, "channelData" | "delivery" | "presentation"> | undefined> {
   const channelId = normalizeChannelId(params.binding.conversation.channel);
   if (!channelId) {
     return undefined;
   }
-  const buildChannelData =
-    getChannelPlugin(channelId)?.conversationBindings?.buildBoundReplyChannelData;
-  if (!buildChannelData) {
+  const buildPayload = getChannelPlugin(channelId)?.conversationBindings?.buildBoundReplyPayload;
+  if (!buildPayload) {
     return undefined;
   }
-  const resolved = await buildChannelData({
+  const resolved = await buildPayload({
     operation: "acp-spawn",
     placement: params.placement,
     conversation: params.binding.conversation,
@@ -621,16 +621,16 @@ export async function handleAcpSpawnAction(
     } else {
       parts.push(`Created ${placementLabel} ${boundConversationId} and bound it to ${sessionKey}.`);
     }
-    const channelData = await resolveBoundReplyChannelData({
+    const boundReplyPayload = await resolveBoundReplyPayload({
       binding,
       placement: bindingPlacement,
     });
-    if (channelData) {
+    if (boundReplyPayload) {
       return {
         shouldContinue: false,
         reply: {
           text: parts.join(" "),
-          channelData,
+          ...boundReplyPayload,
         },
       };
     }

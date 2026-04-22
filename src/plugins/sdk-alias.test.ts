@@ -916,12 +916,16 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("keeps bundled plugin dist modules on the aliased Jiti path", () => {
+  it("prefers native jiti for bundled plugin dist .js modules, keeps .ts on aliased path", () => {
+    // Built .js/.mjs/.cjs files under dist/extensions/ should now delegate
+    // to shouldPreferNativeJiti() — which returns true on Linux/macOS for
+    // compiled artifacts, avoiding the slow jiti transform path.
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
         preferBuiltDist: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
+    // TypeScript source files still need jiti's transform pipeline.
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
         preferBuiltDist: true,

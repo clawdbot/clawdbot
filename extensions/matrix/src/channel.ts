@@ -521,6 +521,24 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       lifecycle: {
         runStartupMaintenance: runMatrixStartupMaintenance,
       },
+      heartbeat: {
+        sendTyping: async ({ cfg, to, accountId }) => {
+          await (
+            await loadMatrixChannelRuntime()
+          ).sendTypingMatrix(to, true, {
+            cfg: cfg as CoreConfig,
+            ...(accountId ? { accountId } : {}),
+          });
+        },
+        clearTyping: async ({ cfg, to, accountId }) => {
+          await (
+            await loadMatrixChannelRuntime()
+          ).sendTypingMatrix(to, false, {
+            cfg: cfg as CoreConfig,
+            ...(accountId ? { accountId } : {}),
+          });
+        },
+      },
     },
     security: {
       resolveDmPolicy: resolveMatrixDmPolicy,

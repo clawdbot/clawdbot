@@ -12,6 +12,7 @@ import {
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
+import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
@@ -44,11 +45,9 @@ type ChatRefreshHost = AppViewState & {
 };
 
 export function resolveAssistantAttachmentAuthToken(
-  state: Pick<AppViewState, "settings" | "password">,
+  state: Pick<AppViewState, "hello" | "settings" | "password">,
 ) {
-  return (
-    normalizeOptionalString(state.settings.token) ?? normalizeOptionalString(state.password) ?? null
-  );
+  return resolveControlUiAuthToken(state);
 }
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {

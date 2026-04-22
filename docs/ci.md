@@ -47,7 +47,7 @@ Jobs are ordered so cheap checks fail before expensive ones run:
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`.
 The separate `install-smoke` workflow reuses the same scope script through its own `preflight` job. It computes `run_install_smoke` from the narrower changed-smoke signal, so Docker/install smoke only runs for install, packaging, and container-relevant changes.
 
-Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by `scripts/check-changed.mjs`. That local gate is stricter about architecture boundaries than the broad CI platform scope: core production changes run core prod typecheck plus core tests, core test-only changes run only core test typecheck/tests, extension production changes run extension prod typecheck plus extension tests, and extension test-only changes run only extension test typecheck/tests. Public Plugin SDK or plugin-contract changes expand to extension validation because extensions depend on those core contracts. Unknown root/config changes fail safe to all lanes.
+Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by `scripts/check-changed.mjs`. That local gate is stricter about architecture boundaries than the broad CI platform scope: core production changes run core prod typecheck plus core tests, core test-only changes run only core test typecheck/tests, extension production changes run extension prod typecheck plus extension tests, and extension test-only changes run only extension test typecheck/tests. Public Plugin SDK or plugin-contract changes expand to extension validation because extensions depend on those core contracts. Release metadata-only version bumps run targeted version/config/root-dependency checks. Unknown root/config changes fail safe to all lanes.
 
 On pushes, the `checks` matrix adds the push-only `compat-node22` lane. On pull requests, that lane is skipped and the matrix stays focused on the normal test/channel lanes.
 
@@ -57,11 +57,12 @@ GitHub may mark superseded jobs as `cancelled` when a newer push lands on the sa
 
 ## Runners
 
-| Runner                           | Jobs                                                                                                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `blacksmith-16vcpu-ubuntu-2404`  | `preflight`, `security-scm-fast`, `security-dependency-audit`, `security-fast`, `build-artifacts`, Linux checks, docs checks, Python skills, `android` |
-| `blacksmith-32vcpu-windows-2025` | `checks-windows`                                                                                                                                       |
-| `blacksmith-12vcpu-macos-latest` | `macos-node`, `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                                  |
+| Runner                           | Jobs                                                                                                                                      |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `ubuntu-24.04`                   | `preflight`; install-smoke preflight also uses GitHub-hosted Ubuntu so the Blacksmith matrix can queue earlier                            |
+| `blacksmith-16vcpu-ubuntu-2404`  | `security-scm-fast`, `security-dependency-audit`, `security-fast`, `build-artifacts`, Linux checks, docs checks, Python skills, `android` |
+| `blacksmith-32vcpu-windows-2025` | `checks-windows`                                                                                                                          |
+| `blacksmith-12vcpu-macos-latest` | `macos-node`, `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                     |
 
 ## Local Equivalents
 

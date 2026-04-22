@@ -34,6 +34,7 @@ import {
   normalizeWhatsAppTarget,
 } from "./normalize.js";
 import { getWhatsAppRuntime } from "./runtime.js";
+import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 import {
@@ -169,6 +170,12 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       heartbeat: {
         checkReady: async ({ cfg, accountId, deps }) =>
           await checkWhatsAppHeartbeatReady({ cfg, accountId: accountId ?? undefined, deps }),
+        sendTyping: async ({ cfg, to, accountId }) => {
+          await sendTypingWhatsApp(to, {
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+        },
         resolveRecipients: ({ cfg, opts }) => resolveWhatsAppHeartbeatRecipients(cfg, opts),
       },
       status: createAsyncComputedAccountStatusAdapter<ResolvedWhatsAppAccount>({

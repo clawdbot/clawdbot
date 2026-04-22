@@ -24,7 +24,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "google", pluginLocalRuntimeDeps: ["@google/genai"] },
   {
     pluginId: "googlechat",
-    pluginLocalRuntimeDeps: ["google-auth-library"],
+    pluginLocalRuntimeDeps: ["gaxios", "google-auth-library"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
@@ -86,7 +86,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
   {
     pluginId: "qqbot",
-    pluginLocalRuntimeDeps: ["mpg123-decoder", "silk-wasm"],
+    pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
     mirroredRootRuntimeDeps: ["ws"],
   },
   {

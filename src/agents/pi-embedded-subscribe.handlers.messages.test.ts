@@ -251,6 +251,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(
@@ -269,6 +270,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png"],
       pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(
@@ -290,6 +292,7 @@ describe("consumePendingToolMediaReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(consumePendingToolMediaReply(state)).toEqual({

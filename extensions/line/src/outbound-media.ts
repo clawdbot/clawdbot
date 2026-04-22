@@ -1,3 +1,4 @@
+import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export type LineOutboundMediaKind = "image" | "video" | "audio";
@@ -17,7 +18,11 @@ type ResolveLineOutboundMediaOpts = {
   trackingId?: string;
 };
 
-export function validateLineMediaUrl(url: string): void {
+const LINE_OUTBOUND_MEDIA_SSRF_POLICY: SsrFPolicy = {
+  allowPrivateNetwork: false,
+};
+
+export async function validateLineMediaUrl(url: string): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -30,6 +35,9 @@ export function validateLineMediaUrl(url: string): void {
   if (url.length > 2000) {
     throw new Error(`LINE outbound media URL must be 2000 chars or less (got ${url.length})`);
   }
+  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+    policy: LINE_OUTBOUND_MEDIA_SSRF_POLICY,
+  });
 }
 
 export function detectLineMediaKind(mimeType: string): LineOutboundMediaKind {
@@ -78,10 +86,10 @@ export async function resolveLineOutboundMedia(
 ): Promise<LineOutboundMediaResolved> {
   const trimmedUrl = mediaUrl.trim();
   if (isHttpsUrl(trimmedUrl)) {
-    validateLineMediaUrl(trimmedUrl);
+    await validateLineMediaUrl(trimmedUrl);
     const previewImageUrl = opts.previewImageUrl?.trim();
     if (previewImageUrl) {
-      validateLineMediaUrl(previewImageUrl);
+      await validateLineMediaUrl(previewImageUrl);
     }
     const mediaKind =
       opts.mediaKind ??

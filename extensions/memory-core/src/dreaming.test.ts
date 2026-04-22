@@ -42,6 +42,7 @@ type DreamingPluginApiTestDouble = {
 
 function createLogger() {
   return {
+    debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
@@ -1236,6 +1237,111 @@ describe("gateway startup reconciliation", () => {
         handled: true,
         reason: "memory-core: short-term dreaming disabled",
       });
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("does not emit the cron-unavailable warning on gateway:startup when deps.cron is missing (regression #69939)", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const api: DreamingPluginApiTestDouble = {
+      config: { plugins: { entries: {} } },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: vi.fn(),
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      // Simulate the startup race: gateway:startup fires before deps.cron is attached.
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: {
+            hooks: { internal: { enabled: true } },
+            plugins: {
+              entries: {
+                "memory-core": {
+                  config: {
+                    dreaming: {
+                      enabled: true,
+                      frequency: "15 4 * * *",
+                      timezone: "UTC",
+                    },
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+          deps: {},
+        }),
+      );
+
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("cron service unavailable"),
+      );
+      // The startup-path log should be demoted to debug instead.
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining("cron service not yet available at gateway:startup"),
+      );
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("still warns on runtime reconciliation when cron remains unavailable (preserves #69939 genuine-failure signal)", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      // Startup without cron — must stay silent on warn.
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: api.config,
+          deps: {},
+        }),
+      );
+      expect(logger.warn).not.toHaveBeenCalled();
+
+      // Now a runtime heartbeat reconciliation happens and cron is still missing
+      // (e.g. the cron service genuinely failed to initialize). The warning must fire.
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply(
+        { cleanedBody: "" },
+        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("cron service unavailable"));
     } finally {
       clearInternalHooks();
     }

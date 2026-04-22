@@ -255,7 +255,9 @@ async function loadConfigFromSnapshotForInstall(
     );
   }
   let nextConfig = snapshot.config;
-  for (const mutation of await collectChannelDoctorStaleConfigMutations(snapshot.config)) {
+  for (const mutation of await collectChannelDoctorStaleConfigMutations(snapshot.config, {
+    env: process.env,
+  })) {
     nextConfig = mutation.config;
   }
   return nextConfig;

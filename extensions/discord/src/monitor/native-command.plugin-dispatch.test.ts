@@ -542,10 +542,12 @@ describe("Discord native plugin command dispatch", () => {
                 "thread-123": {
                   enabled: true,
                   requireMention: false,
+                  users: ["owner"],
                 },
                 "parent-456": {
                   enabled: true,
                   requireMention: false,
+                  users: ["owner"],
                 },
               },
             },
@@ -592,6 +594,95 @@ describe("Discord native plugin command dispatch", () => {
         sessionKey: "agent:main:discord:channel:thread-123",
         messageThreadId: "thread-123",
         threadParentId: "parent-456",
+      }),
+    );
+  });
+
+  it("preserves fetched thread parent metadata when interaction parentId getter throws", async () => {
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "345678901234567890": {
+              channels: {
+                "partial-thread-123": {
+                  enabled: true,
+                  requireMention: false,
+                  users: ["owner"],
+                },
+                "partial-parent-456": {
+                  enabled: true,
+                  requireMention: false,
+                  users: ["owner"],
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "cron_jobs",
+      description: "List cron jobs",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction({
+      channelType: ChannelType.PublicThread,
+      channelId: "partial-thread-123",
+      guildId: "345678901234567890",
+      guildName: "Test Guild",
+    });
+    Object.defineProperty(interaction.channel, "parentId", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        throw new Error("Cannot access rawData on partial Channel. Use fetch() to populate data.");
+      },
+    });
+    (interaction.client as { fetchChannel: ReturnType<typeof vi.fn> }).fetchChannel = vi.fn(
+      async (channelId: string) => {
+        if (channelId === "partial-thread-123") {
+          return {
+            id: "partial-thread-123",
+            type: ChannelType.PublicThread,
+            parentId: "partial-parent-456",
+          };
+        }
+        if (channelId === "partial-parent-456") {
+          return { id: "partial-parent-456", type: ChannelType.GuildText, name: "Parent" };
+        }
+        return null;
+      },
+    );
+    const pluginMatch = {
+      command: {
+        name: "cron_jobs",
+        description: "List cron jobs",
+        pluginId: "cron-jobs",
+        acceptsArgs: false,
+        handler: vi.fn().mockResolvedValue({ text: "jobs" }),
+      },
+      args: undefined,
+    };
+
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
+    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      text: "direct plugin output",
+    });
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        from: "discord:channel:partial-thread-123",
+        messageThreadId: "partial-thread-123",
+        threadParentId: "partial-parent-456",
       }),
     );
   });

@@ -17,7 +17,7 @@ import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.4-nano";
-const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
+const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_OPENAI_IMAGE_MODEL?.trim() || "gpt-image-2";
 const LIVE_VISION_MODEL = process.env.OPENCLAW_LIVE_OPENAI_VISION_MODEL?.trim() || "gpt-4.1-mini";
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
@@ -262,8 +262,9 @@ describeLive("openai plugin live", () => {
         cfg,
         agentDir,
         authStore: EMPTY_AUTH_STORE,
-        timeoutMs: 45_000,
-        size: "1024x1024",
+        timeoutMs: 180_000,
+        count: 1,
+        size: "1536x1024",
       });
 
       expect(generated.model).toBe(LIVE_IMAGE_MODEL);
@@ -273,7 +274,7 @@ describeLive("openai plugin live", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 240_000);
 
   it("edits a reference image through the registered image provider", async () => {
     const { imageProviders } = await registerOpenAIPlugin();
@@ -291,8 +292,9 @@ describeLive("openai plugin live", () => {
         cfg,
         agentDir,
         authStore: EMPTY_AUTH_STORE,
-        timeoutMs: 45_000,
-        size: "1024x1024",
+        timeoutMs: 180_000,
+        count: 1,
+        size: "1024x1536",
         inputImages: [
           {
             buffer: createReferencePng(),
@@ -309,7 +311,7 @@ describeLive("openai plugin live", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 240_000);
 
   it("describes a deterministic image through the registered media provider", async () => {
     const { mediaProviders } = await registerOpenAIPlugin();

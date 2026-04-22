@@ -89,8 +89,8 @@ export type MatrixSendResult = {
 };
 
 export type MatrixSendOpts = {
+  cfg: CoreConfig;
   client?: import("../sdk.js").MatrixClient;
-  cfg?: CoreConfig;
   mediaUrl?: string;
   mediaAccess?: {
     localRoots?: readonly string[];

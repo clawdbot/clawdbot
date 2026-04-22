@@ -1,5 +1,4 @@
 import {
-  createMessageToolButtonsSchema,
   createUnionActionGate,
   listTokenSourcedAccounts,
   resolveReactionMessageId,
@@ -146,13 +145,6 @@ function describeTelegramMessageTool({
     actions.add("topic-edit");
   }
   const schema: ChannelMessageToolSchemaContribution[] = [];
-  if (discovery.buttonsEnabled) {
-    schema.push({
-      properties: {
-        buttons: createMessageToolButtonsSchema(),
-      },
-    });
-  }
   if (discovery.pollEnabled) {
     schema.push({
       properties: createTelegramPollExtraToolSchemas(),
@@ -161,7 +153,7 @@ function describeTelegramMessageTool({
   }
   return {
     actions: Array.from(actions),
-    capabilities: discovery.buttonsEnabled ? ["interactive", "buttons"] : [],
+    capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
     schema,
   };
 }

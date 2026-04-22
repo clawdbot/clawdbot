@@ -643,7 +643,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent
       // with deliver: false), seed it from the request's channel/to/threadId params.
-      // Without this, subagent sessions end up with deliveryContext: {channel: "slack"}
+      // Without this, subagent sessions end up with a channel-only deliveryContext
       // and no `to`/`threadId`, which causes announce delivery to either target the
       // wrong channel (when the parent's lastTo drifts) or fail entirely.
       const requestDeliveryHint = normalizeDeliveryContext({

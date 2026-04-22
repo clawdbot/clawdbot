@@ -68,6 +68,7 @@ export const isHeartbeatOnlyResponseMock = createMock();
 export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
+export const getChannelPluginMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -224,6 +225,10 @@ vi.mock("./helpers.js", () => ({
   resolveHeartbeatAckMaxChars: resolveHeartbeatAckMaxCharsMock,
 }));
 
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: getChannelPluginMock,
+}));
+
 vi.mock("./session.js", () => ({
   resolveCronSession: resolveCronSessionMock,
 }));
@@ -375,7 +380,7 @@ function resetRunOutcomeMocks(): void {
   resolveDeliveryTargetMock.mockReset();
   resolveDeliveryTargetMock.mockResolvedValue({
     ok: true,
-    channel: "discord",
+    channel: "messagechat",
     to: "test-target",
     accountId: undefined,
     threadId: undefined,

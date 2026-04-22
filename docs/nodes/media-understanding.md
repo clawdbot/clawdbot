@@ -136,6 +136,9 @@ Rules:
 - If the active primary image model already supports vision natively, OpenClaw
   skips the `[Image]` summary block and passes the original image into the
   model instead.
+- Explicit `openclaw infer image describe --model <provider/model>` requests
+  are different: they run that image-capable provider/model directly, including
+  Ollama refs such as `ollama/qwen2.5vl:7b`.
 - If `<capability>.enabled: true` but no models are configured, OpenClaw tries the
   **active reply model** when its provider supports the capability.
 
@@ -157,6 +160,9 @@ working option**:
      tried before the bundled fallback order.
    - Image-only config providers with an image-capable model auto-register for
      media understanding even when they are not a bundled vendor plugin.
+   - Ollama image understanding is available when selected explicitly, for
+     example through `agents.defaults.imageModel` or
+     `openclaw infer image describe --model ollama/<vision-model>`.
    - Bundled fallback order:
      - Audio: OpenAI → Groq → Deepgram → Google → Mistral
      - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI

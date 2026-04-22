@@ -14,6 +14,7 @@ vi.mock("../channels/plugins/bundled-ids.js", () => ({
 }));
 
 vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
+  listBundledChannelIdsWithPersistedAuthState: () => ["matrix", "whatsapp"],
   hasBundledChannelPersistedAuthState: () => false,
 }));
 

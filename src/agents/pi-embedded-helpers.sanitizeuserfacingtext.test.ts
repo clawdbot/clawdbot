@@ -389,8 +389,8 @@ describe("sanitizeToolCallId", () => {
     it("strips all non-alphanumeric characters", () => {
       expect(sanitizeToolCallId("call_abc-123", "strict")).toBe("callabc123");
       expect(sanitizeToolCallId("call_abc|item:456", "strict")).toBe("callabcitem456");
-      expect(sanitizeToolCallId("whatsapp_login_1768799841527_1", "strict")).toBe(
-        "whatsapplogin17687998415271",
+      expect(sanitizeToolCallId("plugin_login_1768799841527_1", "strict")).toBe(
+        "pluginlogin17687998415271",
       );
     });
   });

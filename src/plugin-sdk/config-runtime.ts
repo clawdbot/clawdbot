@@ -1,6 +1,17 @@
 // Shared config/runtime boundary for plugins that need config loading,
 // config writes, or session-store helpers without importing src internals.
 
+import type { OpenClawConfig } from "../config/types.js";
+
+export function requireRuntimeConfig(config: OpenClawConfig, context: string): OpenClawConfig {
+  if (config) {
+    return config;
+  }
+  throw new Error(
+    `${context} requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.`,
+  );
+}
+
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
   clearRuntimeConfigSnapshot,

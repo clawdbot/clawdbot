@@ -23,13 +23,13 @@ import {
 } from "../../engine/approval/index.js";
 import { getMessageApi, accountToCreds } from "../../engine/messaging/sender.js";
 import type { ChatScope, InlineKeyboard, MessageResponse } from "../../engine/types.js";
-import { ensurePlatformAdapter } from "../bootstrap.js";
 import {
   matchesQQBotApprovalAccount,
   resolveQQBotExecApprovalConfig,
   isQQBotExecApprovalClientEnabled,
   shouldHandleQQBotExecApprovalRequest,
 } from "../../exec-approvals.js";
+import { ensurePlatformAdapter } from "../bootstrap.js";
 import { resolveQQBotAccount } from "../config.js";
 import { getBridgeLogger } from "../logger.js";
 

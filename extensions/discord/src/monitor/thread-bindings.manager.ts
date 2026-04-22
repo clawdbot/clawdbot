@@ -491,7 +491,7 @@ export function createThreadBindingManager(
       }
 
       const introText = bindParams.introText?.trim();
-      if (introText) {
+      if (introText && cfg) {
         void maybeSendBindingMessage({ cfg, record, text: introText });
       }
       return record;
@@ -532,12 +532,14 @@ export function createThreadBindingManager(
         });
         // Use bot send path for farewell messages so unbound threads don't process
         // webhook echoes as fresh inbound turns when allowBots is enabled.
-        void maybeSendBindingMessage({
-          cfg,
-          record: removed,
-          text: farewell,
-          preferWebhook: false,
-        });
+        if (cfg) {
+          void maybeSendBindingMessage({
+            cfg,
+            record: removed,
+            text: farewell,
+            preferWebhook: false,
+          });
+        }
       }
       return removed;
     },

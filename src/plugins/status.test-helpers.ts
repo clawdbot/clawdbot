@@ -128,6 +128,7 @@ export function createPluginLoadResult(
     musicGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    embeddedExtensionFactories: [],
     memoryEmbeddingProviders: [],
     textTransforms: [],
     agentHarnesses: [],

@@ -146,24 +146,28 @@ export function resolveAgentContextLimits(
   return resolveAgentConfig(cfg, agentId)?.contextLimits ?? defaults;
 }
 
-export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
+export function resolveAgentWorkspaceDir(
+  cfg: OpenClawConfig,
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
-    return stripNullBytes(resolveUserPath(configured));
+    return stripNullBytes(resolveUserPath(configured, env));
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const fallback = cfg.agents?.defaults?.workspace?.trim();
   if (id === defaultAgentId) {
     if (fallback) {
-      return stripNullBytes(resolveUserPath(fallback));
+      return stripNullBytes(resolveUserPath(fallback, env));
     }
-    return stripNullBytes(resolveDefaultAgentWorkspaceDir(process.env));
+    return stripNullBytes(resolveDefaultAgentWorkspaceDir(env));
   }
   if (fallback) {
-    return stripNullBytes(path.join(resolveUserPath(fallback), id));
+    return stripNullBytes(path.join(resolveUserPath(fallback, env), id));
   }
-  const stateDir = resolveStateDir(process.env);
+  const stateDir = resolveStateDir(env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
 }
 

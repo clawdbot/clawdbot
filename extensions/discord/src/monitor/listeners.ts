@@ -32,7 +32,10 @@ import {
   resolveDiscordGuildEntry,
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
-import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
+import {
+  resolveDiscordChannelInfoSafe,
+  resolveDiscordChannelParentIdSafe,
+} from "./channel-access.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
@@ -487,7 +490,7 @@ async function handleDiscordReactionEvent(
         return;
       }
     }
-    let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
+    let parentId = resolveDiscordChannelParentIdSafe(channel);
     let parentName: string | undefined;
     let parentSlug = "";
     let reactionBase: { baseText: string; contextKey: string } | null = null;

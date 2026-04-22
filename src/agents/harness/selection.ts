@@ -1,5 +1,6 @@
 import type { AgentEmbeddedHarnessConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { listAgentEntries, resolveSessionAgentIds } from "../agent-scope.js";
@@ -108,13 +109,6 @@ export function selectAgentHarness(params: {
 export async function runAgentHarnessAttemptWithFallback(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  const policy = resolveAgentHarnessPolicy({
-    provider: params.provider,
-    modelId: params.modelId,
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
   const harness = selectAgentHarness({
     provider: params.provider,
     modelId: params.modelId,
@@ -129,11 +123,13 @@ export async function runAgentHarnessAttemptWithFallback(
   try {
     return await harness.runAttempt(params);
   } catch (error) {
-    if (policy.runtime !== "auto" || policy.fallback === "none") {
-      throw error;
-    }
-    log.warn(`${harness.label} failed; falling back to embedded PI backend`, { error });
-    return createPiAgentHarness().runAttempt(params);
+    log.warn(`${harness.label} failed; not falling back to embedded PI backend`, {
+      harnessId: harness.id,
+      provider: params.provider,
+      modelId: params.modelId,
+      error: formatErrorMessage(error),
+    });
+    throw error;
   }
 }
 

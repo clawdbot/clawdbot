@@ -134,7 +134,11 @@ describe("runWebHeartbeatOnce", () => {
 
   it("sends HEARTBEAT_OK when reply is empty and showOk is enabled", async () => {
     await runWebHeartbeatOnce(buildRunArgs());
-    expect(senderMock).toHaveBeenCalledWith("+123", HEARTBEAT_TOKEN, { verbose: false });
+    expect(senderMock).toHaveBeenCalledWith(
+      "+123",
+      HEARTBEAT_TOKEN,
+      expect.objectContaining({ verbose: false, cfg: expect.any(Object) }),
+    );
     expect(state.events).toEqual(
       expect.arrayContaining([expect.objectContaining({ status: "ok-empty", silent: false })]),
     );
@@ -157,7 +161,11 @@ describe("runWebHeartbeatOnce", () => {
     replyResolverMock.mockResolvedValue({ text: HEARTBEAT_TOKEN });
     await runWebHeartbeatOnce(buildRunArgs());
     expect(state.store.k?.updatedAt).toBe(123);
-    expect(senderMock).toHaveBeenCalledWith("+123", HEARTBEAT_TOKEN, { verbose: false });
+    expect(senderMock).toHaveBeenCalledWith(
+      "+123",
+      HEARTBEAT_TOKEN,
+      expect.objectContaining({ verbose: false, cfg: expect.any(Object) }),
+    );
     expect(state.events).toEqual(
       expect.arrayContaining([expect.objectContaining({ status: "ok-token", silent: false })]),
     );

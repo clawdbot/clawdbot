@@ -5,7 +5,7 @@ export type {
 } from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
-export type { ReplyPayload } from "../auto-reply/reply-payload.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type { OpenClawPluginApi, PluginRuntime } from "./channel-plugin-common.js";
 

@@ -1,4 +1,3 @@
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import {
   buildApprovalInteractiveReply,
   type ExecApprovalReplyDecision,
@@ -10,6 +9,7 @@ import {
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { ReplyPayload } from "./reply-payload.js";
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 

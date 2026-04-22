@@ -53,6 +53,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "{sessionId}",
       ],
       output: "jsonl",
+      liveSession: "claude-stdio",
       input: "stdin",
       modelArg: "--model",
       modelAliases: CLAUDE_CLI_MODEL_ALIASES,

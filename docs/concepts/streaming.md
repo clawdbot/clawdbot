@@ -118,11 +118,12 @@ Modes:
 
 ### Channel mapping
 
-| Channel  | `off` | `partial` | `block` | `progress`        |
-| -------- | ----- | --------- | ------- | ----------------- |
-| Telegram | ✅    | ✅        | ✅      | maps to `partial` |
-| Discord  | ✅    | ✅        | ✅      | maps to `partial` |
-| Slack    | ✅    | ✅        | ✅      | ✅                |
+| Channel    | `off` | `partial` | `block` | `progress`        |
+| ---------- | ----- | --------- | ------- | ----------------- |
+| Telegram   | ✅    | ✅        | ✅      | maps to `partial` |
+| Discord    | ✅    | ✅        | ✅      | maps to `partial` |
+| Slack      | ✅    | ✅        | ✅      | ✅                |
+| Mattermost | ✅    | ✅        | ✅      | ✅                |
 
 Slack-only:
 
@@ -148,12 +149,35 @@ Discord:
 - Uses send + edit preview messages.
 - `block` mode uses draft chunking (`draftChunk`).
 - Preview streaming is skipped when Discord block streaming is explicitly enabled.
+- Final media, error, and explicit-reply payloads cancel pending previews without flushing a new draft, then use normal delivery.
 
 Slack:
 
 - `partial` can use Slack native streaming (`chat.startStream`/`append`/`stop`) when available.
 - `block` uses append-style draft previews.
 - `progress` uses status preview text, then final answer.
+- Final media/error payloads and progress finals do not create throwaway draft messages; only text/block finals that can edit the preview flush pending draft text.
+
+Mattermost:
+
+- Streams thinking, tool activity, and partial reply text into a single draft preview post that finalizes in place when the final answer is safe to send.
+- Falls back to sending a fresh final post if the preview post was deleted or is otherwise unavailable at finalize time.
+- Final media/error payloads cancel pending preview updates before normal delivery instead of flushing a temporary preview post.
+
+Matrix:
+
+- Draft previews finalize in place when the final text can reuse the preview event.
+- Media-only, error, and reply-target-mismatch finals cancel pending preview updates before normal delivery; an already-visible stale preview is redacted.
+
+### Tool-progress preview updates
+
+Preview streaming can also include **tool-progress** updates — short status lines like "searching the web", "reading file", or "calling tool" — that appear in the same preview message while tools are running, ahead of the final reply. This keeps multi-step tool turns visually alive rather than silent between the first thinking preview and the final answer.
+
+Supported surfaces:
+
+- **Discord**, **Slack**, and **Telegram** stream tool-progress into the live preview edit.
+- **Mattermost** already folds tool activity into its single draft preview post (see above).
+- Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message.
 
 ## Related
 

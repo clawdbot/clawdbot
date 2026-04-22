@@ -25,6 +25,13 @@ export type WhatsAppGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Optional system prompt for this group. */
+  systemPrompt?: string;
+};
+
+export type WhatsAppDirectConfig = {
+  /** Optional system prompt for this direct chat. */
+  systemPrompt?: string;
 };
 
 export type WhatsAppAckReactionConfig = {
@@ -68,7 +75,7 @@ type WhatsAppSharedConfig = {
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
-  /** Per-DM config overrides keyed by user ID. */
+  /** Per-DM history overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
@@ -81,6 +88,8 @@ type WhatsAppSharedConfig = {
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   groups?: Record<string, WhatsAppGroupConfig>;
+  /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
+  direct?: Record<string, WhatsAppDirectConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
   ackReaction?: WhatsAppAckReactionConfig;
   /**

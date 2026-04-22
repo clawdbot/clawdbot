@@ -72,6 +72,26 @@
   "configContracts": {
     "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
+  "mediaUnderstandingProviderMetadata": {
+    "minimax": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "MiniMax-VL-01"
+      },
+      "autoPriority": {
+        "image": 40
+      }
+    },
+    "minimax-portal": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "MiniMax-VL-01"
+      },
+      "autoPriority": {
+        "image": 50
+      }
+    }
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "MiniMax Coding Plan key",

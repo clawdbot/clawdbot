@@ -1,4 +1,4 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIrcAccount } from "./accounts.js";
 import type { IrcClient } from "./client.js";
@@ -10,7 +10,7 @@ import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 type SendIrcOptions = {
-  cfg?: CoreConfig;
+  cfg: CoreConfig;
   accountId?: string;
   replyTo?: string;
   target?: string;
@@ -51,10 +51,9 @@ function resolveTarget(to: string, opts?: SendIrcOptions): string {
 export async function sendMessageIrc(
   to: string,
   text: string,
-  opts: SendIrcOptions = {},
+  opts: SendIrcOptions,
 ): Promise<SendIrcResult> {
-  const runtime = getIrcRuntime();
-  const cfg = (opts.cfg ?? runtime.config.loadConfig()) as CoreConfig;
+  const cfg = requireRuntimeConfig(opts.cfg, "IRC send") as CoreConfig;
   const account = resolveIrcAccount({
     cfg,
     accountId: opts.accountId,

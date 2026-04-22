@@ -279,6 +279,25 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
         },
       },
+      heartbeat: {
+        sendTyping: async ({ cfg, to, accountId }) => {
+          await (
+            await loadSignalSendRuntime()
+          ).sendTypingSignal(to, {
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+        },
+        clearTyping: async ({ cfg, to, accountId }) => {
+          await (
+            await loadSignalSendRuntime()
+          ).sendTypingSignal(to, {
+            cfg,
+            ...(accountId ? { accountId } : {}),
+            stop: true,
+          });
+        },
+      },
       status: createComputedAccountStatusAdapter<ResolvedSignalAccount, SignalProbe>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
@@ -329,8 +348,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         idLabel: "signalNumber",
         message: PAIRING_APPROVED_MESSAGE,
         normalizeAllowEntry: createPairingPrefixStripper(/^signal:/i),
-        notify: async ({ id, message }) => {
-          await (await loadSignalSendRuntime()).sendMessageSignal(id, message);
+        notify: async ({ cfg, id, message }) => {
+          await (
+            await loadSignalSendRuntime()
+          ).sendMessageSignal(id, message, {
+            cfg,
+          });
         },
       },
     },

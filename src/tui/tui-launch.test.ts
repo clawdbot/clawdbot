@@ -86,6 +86,22 @@ describe("launchTuiCli", () => {
     );
   });
 
+  it("passes local mode through to the relaunched TUI", async () => {
+    const child = createChildProcess();
+    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+
+    await launchTuiCli({ local: true, deliver: false });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["/repo/openclaw.mjs", "tui", "--local"],
+      expect.objectContaining({ stdio: "inherit" }),
+    );
+  });
+
   it("launches compiled CLI shapes without repeating the current command", async () => {
     process.argv[1] = "setup";
     const child = createChildProcess();

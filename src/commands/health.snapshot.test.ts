@@ -25,14 +25,9 @@ type TelegramHealthAccount = {
 };
 
 async function loadFreshHealthModulesForTest() {
-  vi.doMock("../config/config.js", async () => {
-    const actual =
-      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-    return {
-      ...actual,
-      loadConfig: () => testConfig,
-    };
-  });
+  vi.doMock("../config/config.js", () => ({
+    loadConfig: () => testConfig,
+  }));
   vi.doMock("../config/sessions.js", () => ({
     resolveStorePath: () => "/tmp/sessions.json",
     resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
@@ -54,6 +49,9 @@ async function loadFreshHealthModulesForTest() {
     readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
     logWebSelfId: vi.fn(),
     logoutWeb: vi.fn(),
+  }));
+  vi.doMock("../channels/plugins/read-only.js", () => ({
+    listReadOnlyChannelPluginsForConfig: () => [createTelegramHealthPlugin()],
   }));
 
   const [pluginsRuntime, channelTestUtils, health] = await Promise.all([

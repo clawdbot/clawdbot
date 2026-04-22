@@ -141,10 +141,12 @@ describe("openai plugin", () => {
     const authStore = { version: 1, profiles: {} };
     const result = await provider.generateImage({
       provider: "openai",
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "draw a cat",
       cfg: {},
       authStore,
+      count: 2,
+      size: "2048x2048",
     });
 
     expect(resolveApiKeySpy).toHaveBeenCalledWith(
@@ -157,10 +159,10 @@ describe("openai plugin", () => {
       expect.objectContaining({
         url: "https://api.openai.com/v1/images/generations",
         body: {
-          model: "gpt-image-1",
+          model: "gpt-image-2",
           prompt: "draw a cat",
-          n: 1,
-          size: "1024x1024",
+          n: 2,
+          size: "2048x2048",
         },
       }),
     );
@@ -178,7 +180,7 @@ describe("openai plugin", () => {
           revisedPrompt: "revised",
         },
       ],
-      model: "gpt-image-1",
+      model: "gpt-image-2",
     });
   });
 
@@ -193,10 +195,12 @@ describe("openai plugin", () => {
 
     const result = await provider.generateImage({
       provider: "openai",
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "Edit this image",
       cfg: {},
       authStore,
+      count: 2,
+      size: "1536x1024",
       inputImages: [
         { buffer: Buffer.from("x"), mimeType: "image/png" },
         { buffer: Buffer.from("y"), mimeType: "image/jpeg", fileName: "ref.jpg" },
@@ -213,10 +217,10 @@ describe("openai plugin", () => {
       expect.objectContaining({
         url: "https://api.openai.com/v1/images/edits",
         body: {
-          model: "gpt-image-1",
+          model: "gpt-image-2",
           prompt: "Edit this image",
-          n: 1,
-          size: "1024x1024",
+          n: 2,
+          size: "1536x1024",
           images: [
             {
               image_url: "data:image/png;base64,eA==",
@@ -236,7 +240,7 @@ describe("openai plugin", () => {
           fileName: "image-1.png",
         },
       ],
-      model: "gpt-image-1",
+      model: "gpt-image-2",
     });
   });
 
@@ -253,7 +257,7 @@ describe("openai plugin", () => {
     await expect(
       provider.generateImage({
         provider: "openai",
-        model: "gpt-image-1",
+        model: "gpt-image-2",
         prompt: "draw a cat",
         cfg: {
           models: {

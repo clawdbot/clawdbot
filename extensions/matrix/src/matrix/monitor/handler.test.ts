@@ -3231,6 +3231,50 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("does not create a throwaway draft for fast media-only finals", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness();
+    const { deliver, finish } = await dispatch();
+
+    await deliver({ mediaUrl: "https://example.com/image.png" }, { kind: "final" });
+
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
+  it("does not create a throwaway draft for fast error finals", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness();
+    const { deliver, finish } = await dispatch();
+
+    await deliver({ text: "Something failed", isError: true } as never, { kind: "final" });
+
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
+  it("redacts existing drafts for text error finals and uses normal delivery", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness();
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Partial reply" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockClear();
+    await deliver({ text: "Something failed", isError: true } as never, { kind: "final" });
+
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
   it("finalizes partial drafts before reusing unchanged media captions", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
     const { deliver, opts, finish } = await dispatch();

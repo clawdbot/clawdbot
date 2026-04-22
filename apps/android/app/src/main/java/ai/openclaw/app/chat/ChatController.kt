@@ -403,7 +403,7 @@ class ChatController(
 
         val ts = payload["ts"].asLongOrNull() ?: System.currentTimeMillis()
         if (phase == "start") {
-          val args = data?.get("args").asObjectOrNull()
+          val args = data.get("args").asObjectOrNull()
           pendingToolCallsById[toolCallId] =
             ChatPendingToolCall(
               toolCallId = toolCallId,

@@ -68,12 +68,12 @@ const expectAckReactionSent = (accountId: string) => {
     "15551234567@s.whatsapp.net",
     "msg-1",
     "👀",
-    {
+    expect.objectContaining({
       verbose: false,
       fromMe: false,
       participant: undefined,
       accountId,
-    },
+    }),
   );
 };
 

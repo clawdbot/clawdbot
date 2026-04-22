@@ -19,7 +19,7 @@ export default defineBundledChannelEntry({
     exportName: "discordPlugin",
   },
   runtime: {
-    specifier: "./runtime-api.js",
+    specifier: "./runtime-setter-api.js",
     exportName: "setDiscordRuntime",
   },
   accountInspect: {

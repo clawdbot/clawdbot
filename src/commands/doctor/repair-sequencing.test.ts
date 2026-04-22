@@ -35,7 +35,10 @@ vi.mock("./shared/channel-doctor.js", () => ({
     }
     return [];
   },
-  collectChannelDoctorEmptyAllowlistExtraWarnings: () => [],
+  createChannelDoctorEmptyAllowlistPolicyHooks: () => ({
+    extraWarningsForAccount: () => [],
+    shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
+  }),
 }));
 
 vi.mock("./shared/empty-allowlist-scan.js", () => ({

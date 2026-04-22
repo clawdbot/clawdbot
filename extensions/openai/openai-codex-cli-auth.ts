@@ -66,6 +66,18 @@ function readCodexCliAuthFile(env: NodeJS.ProcessEnv): CodexCliAuthFile | null {
   }
 }
 
+export function hasOpenAICodexCliOAuthCredential(params?: { env?: NodeJS.ProcessEnv }): boolean {
+  const authFile = readCodexCliAuthFile(params?.env ?? process.env);
+  if (!authFile || authFile.auth_mode !== "chatgpt") {
+    return false;
+  }
+
+  return Boolean(
+    trimNonEmptyString(authFile.tokens?.access_token) &&
+    trimNonEmptyString(authFile.tokens?.refresh_token),
+  );
+}
+
 function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean {
   return (
     a.type === b.type &&

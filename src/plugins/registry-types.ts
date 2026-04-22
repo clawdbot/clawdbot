@@ -1,3 +1,4 @@
+import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
@@ -144,6 +145,14 @@ export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 export type PluginMemoryEmbeddingProviderRegistration =
   PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
+export type PluginEmbeddedExtensionFactoryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  rawFactory: ExtensionFactory;
+  factory: ExtensionFactory;
+  source: string;
+  rootDir?: string;
+};
 export type PluginAgentHarnessRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -281,6 +290,7 @@ export type PluginRegistry = {
   musicGenerationProviders: PluginMusicGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
+  embeddedExtensionFactories: PluginEmbeddedExtensionFactoryRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;

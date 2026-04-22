@@ -82,6 +82,7 @@ function createScopedCommandTestPlugin(params: {
     signalNumber?: string;
   }) => Record<string, unknown>;
   clearBaseFields: string[];
+  singleAccountKeysToMove?: readonly string[];
   onAccountConfigChanged?: NonNullable<ChannelPlugin["lifecycle"]>["onAccountConfigChanged"];
   onAccountRemoved?: NonNullable<ChannelPlugin["lifecycle"]>["onAccountRemoved"];
   collectStatusIssues?: NonNullable<NonNullable<ChannelPlugin["status"]>["collectStatusIssues"]>;
@@ -102,16 +103,21 @@ function createScopedCommandTestPlugin(params: {
       resolveAllowFrom: () => [],
       formatAllowFrom: (allowFrom) => allowFrom.map(String),
     }),
-    setup: createPatchedAccountSetupAdapter({
-      channelKey: params.id,
-      buildPatch: (input) =>
-        params.buildPatch({
-          token: input.token,
-          botToken: input.botToken,
-          appToken: input.appToken,
-          signalNumber: input.signalNumber,
-        }),
-    }),
+    setup: {
+      ...createPatchedAccountSetupAdapter({
+        channelKey: params.id,
+        buildPatch: (input) =>
+          params.buildPatch({
+            token: input.token,
+            botToken: input.botToken,
+            appToken: input.appToken,
+            signalNumber: input.signalNumber,
+          }),
+      }),
+      ...(params.singleAccountKeysToMove
+        ? { singleAccountKeysToMove: params.singleAccountKeysToMove }
+        : {}),
+    },
     lifecycle:
       params.onAccountConfigChanged || params.onAccountRemoved
         ? {
@@ -135,11 +141,12 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
     accountId?: string | null,
   ) => resolveScopedAccount(cfg, "telegram", accountId) as { botToken?: string };
 
-  return createScopedCommandTestPlugin({
+  const plugin = createScopedCommandTestPlugin({
     id: "telegram",
     label: "Telegram",
     buildPatch: ({ token }) => (token ? { botToken: token } : {}),
     clearBaseFields: ["botToken", "name", "dmPolicy", "allowFrom", "groupPolicy", "streaming"],
+    singleAccountKeysToMove: ["streaming"],
     onAccountConfigChanged: async ({ prevCfg, nextCfg, accountId }) => {
       const prevTelegram = resolveTelegramAccount(prevCfg, accountId);
       const nextTelegram = resolveTelegramAccount(nextCfg, accountId);
@@ -195,6 +202,14 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
         return issues;
       }),
   });
+  return {
+    ...plugin,
+    setup: {
+      ...plugin.setup!,
+      namedAccountPromotionKeys: ["botToken", "tokenFile"],
+      singleAccountKeysToMove: ["streaming"],
+    },
+  };
 }
 
 function createMinimalChannelsCommandRegistryForTests(): ReturnType<typeof createTestRegistry> {

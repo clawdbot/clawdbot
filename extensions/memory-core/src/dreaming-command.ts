@@ -2,7 +2,10 @@ import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memo
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { asRecord } from "./dreaming-shared.js";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import {
+  resolveDreamingBlockedReason,
+  resolveShortTermPromotionDreamingConfig,
+} from "./dreaming.js";
 
 function resolveMemoryCorePluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
   const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
@@ -54,10 +57,12 @@ function formatStatus(cfg: OpenClawConfig): string {
   });
   const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
   const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
+  const blockedReason = resolveDreamingBlockedReason(cfg);
 
   return [
     "Dreaming status:",
     `- enabled: ${formatEnabled(dreaming.enabled)}${timezone}`,
+    ...(blockedReason ? [`- blocked: ${blockedReason}`] : []),
     `- sweep cadence: ${dreaming.frequency}`,
     `- promotion policy: score>=${deep.minScore}, recalls>=${deep.minRecallCount}, uniqueQueries>=${deep.minUniqueQueries}`,
   ].join("\n");

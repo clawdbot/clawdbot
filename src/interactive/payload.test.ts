@@ -4,6 +4,8 @@ import {
   hasReplyContent,
   hasReplyPayloadContent,
   normalizeInteractiveReply,
+  presentationToInteractiveReply,
+  renderMessagePresentationFallbackText,
   resolveInteractiveTextFallback,
 } from "./payload.js";
 
@@ -104,5 +106,28 @@ describe("interactive payload helpers", () => {
       ],
     });
     expect(resolveInteractiveTextFallback({ interactive })).toBe("First\n\nSecond");
+  });
+
+  it("preserves URL-only presentation buttons for native link renderers and fallback text", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Docs", url: "https://example.com/docs" }],
+        },
+      ],
+    };
+
+    expect(presentationToInteractiveReply(presentation)).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Docs", url: "https://example.com/docs" }],
+        },
+      ],
+    });
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      "- Docs: https://example.com/docs",
+    );
   });
 });

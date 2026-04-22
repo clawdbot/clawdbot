@@ -1,6 +1,12 @@
 import type { Block, KnownBlock } from "@slack/web-api";
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
-import type { InteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  presentationToInteractiveReply,
+  reduceInteractiveReply,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import type {
+  InteractiveReply,
+  MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { truncateSlackText } from "./truncate.js";
 
@@ -53,26 +59,33 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
       return state;
     }
     if (block.type === "buttons") {
-      if (block.buttons.length === 0) {
+      const elements = block.buttons.flatMap((button, choiceIndex) => {
+        if (!button.value && !button.url) {
+          return [];
+        }
+        const style = resolveSlackButtonStyle(button.style);
+        return [
+          {
+            type: "button" as const,
+            action_id: buildSlackReplyButtonActionId(state.buttonIndex + 1, choiceIndex),
+            text: {
+              type: "plain_text" as const,
+              text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
+              emoji: true,
+            },
+            ...(button.value ? { value: button.value } : {}),
+            ...(button.url ? { url: button.url } : {}),
+            ...(style ? { style } : {}),
+          },
+        ];
+      });
+      if (elements.length === 0) {
         return state;
       }
       state.blocks.push({
         type: "actions",
         block_id: `openclaw_reply_buttons_${++state.buttonIndex}`,
-        elements: block.buttons.map((button, choiceIndex) => {
-          const style = resolveSlackButtonStyle(button.style);
-          return {
-            type: "button",
-            action_id: buildSlackReplyButtonActionId(state.buttonIndex, choiceIndex),
-            text: {
-              type: "plain_text",
-              text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
-              emoji: true,
-            },
-            value: button.value,
-            ...(style ? { style } : {}),
-          };
-        }),
+        elements,
       });
       return state;
     }
@@ -107,4 +120,51 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
     });
     return state;
   }).blocks;
+}
+
+export function buildSlackPresentationBlocks(presentation?: MessagePresentation): SlackBlock[] {
+  if (!presentation) {
+    return [];
+  }
+  const blocks: SlackBlock[] = [];
+  if (presentation.title) {
+    blocks.push({
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: truncateSlackText(presentation.title, 150),
+        emoji: true,
+      },
+    });
+  }
+  for (const block of presentation.blocks) {
+    if (block.type === "text" || block.type === "context") {
+      const text = block.text.trim();
+      if (!text) {
+        continue;
+      }
+      if (block.type === "context") {
+        blocks.push({
+          type: "context",
+          elements: [{ type: "mrkdwn", text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX) }],
+        });
+      } else {
+        blocks.push({
+          type: "section",
+          text: { type: "mrkdwn", text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX) },
+        });
+      }
+      continue;
+    }
+    if (block.type === "divider") {
+      blocks.push({ type: "divider" });
+    }
+  }
+  const interactive = presentationToInteractiveReply({
+    blocks: presentation.blocks.filter(
+      (block) => block.type === "buttons" || block.type === "select",
+    ),
+  });
+  blocks.push(...buildSlackInteractiveBlocks(interactive));
+  return blocks;
 }

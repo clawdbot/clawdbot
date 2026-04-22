@@ -1,15 +1,18 @@
 import { describe, it } from "vitest";
-import { installChannelPluginContractSuite } from "./registry-contract-suites.js";
-import { getPluginContractRegistryShard } from "./registry-plugin.js";
+import { getBundledChannelPluginAsync } from "./bundled-channel-plugin-loader.js";
+import { channelPluginSurfaceKeys } from "./manifest.js";
+import { expectChannelPluginContract } from "./registry-contract-suites.js";
+import { getPluginContractRegistryShardRefs } from "./registry-plugin.js";
 import {
-  getDirectoryContractRegistryShard,
-  getSurfaceContractRegistryShard,
-  getThreadingContractRegistryShard,
+  getDirectoryContractRegistryShardRefs,
+  getSurfaceContractRegistryShardIds,
+  getThreadingContractRegistryShardRefs,
 } from "./surface-contract-registry.js";
-import { installChannelSurfaceContractSuite } from "./surface-contract-suite.js";
+import { expectChannelSurfaceContract } from "./surface-contract-suite.js";
 import {
-  installChannelDirectoryContractSuite,
-  installChannelThreadingContractSuite,
+  expectChannelDirectoryBaseContract,
+  expectChannelThreadingBaseContract,
+  expectChannelThreadingReturnValuesNormalized,
 } from "./threading-directory-contract-suites.js";
 
 type ContractShardParams = {
@@ -26,66 +29,94 @@ function installEmptyShardSuite(label: string) {
 }
 
 export function installSurfaceContractRegistryShard(params: ContractShardParams) {
-  const entries = getSurfaceContractRegistryShard(params);
-  if (entries.length === 0) {
+  const ids = getSurfaceContractRegistryShardIds(params);
+  if (ids.length === 0) {
     installEmptyShardSuite("surface contract registry shard");
     return;
   }
-  for (const entry of entries) {
-    for (const surface of entry.surfaces) {
-      describe(`${entry.id} ${surface} surface contract`, () => {
-        installChannelSurfaceContractSuite({
-          plugin: entry.plugin,
-          surface,
-        });
+
+  for (const id of ids) {
+    describe(`${id} surface contracts`, () => {
+      it("exposes declared surface contracts", async () => {
+        const plugin = await getBundledChannelPluginAsync(id);
+        if (!plugin) {
+          throw new Error(`Missing bundled channel plugin for ${id}`);
+        }
+        const surfaces = channelPluginSurfaceKeys.filter((surface) => Boolean(plugin[surface]));
+        for (const surface of surfaces) {
+          expectChannelSurfaceContract({
+            plugin,
+            surface,
+          });
+        }
       });
-    }
+    });
   }
 }
 
 export function installDirectoryContractRegistryShard(params: ContractShardParams) {
-  const entries = getDirectoryContractRegistryShard(params);
+  const entries = getDirectoryContractRegistryShardRefs(params);
   if (entries.length === 0) {
     installEmptyShardSuite("directory contract registry shard");
     return;
   }
   for (const entry of entries) {
     describe(`${entry.id} directory contract`, () => {
-      installChannelDirectoryContractSuite({
-        plugin: entry.plugin,
-        coverage: entry.coverage,
-        cfg: entry.cfg,
-        accountId: entry.accountId,
+      it("exposes the base directory contract", async () => {
+        const plugin = await getBundledChannelPluginAsync(entry.id);
+        if (!plugin) {
+          throw new Error(`Missing bundled channel plugin for ${entry.id}`);
+        }
+        await expectChannelDirectoryBaseContract({
+          plugin,
+          coverage: entry.coverage,
+        });
       });
     });
   }
 }
 
 export function installThreadingContractRegistryShard(params: ContractShardParams) {
-  const entries = getThreadingContractRegistryShard(params);
+  const entries = getThreadingContractRegistryShardRefs(params);
   if (entries.length === 0) {
     installEmptyShardSuite("threading contract registry shard");
     return;
   }
   for (const entry of entries) {
     describe(`${entry.id} threading contract`, () => {
-      installChannelThreadingContractSuite({
-        plugin: entry.plugin,
+      it("exposes the base threading contract", async () => {
+        const plugin = await getBundledChannelPluginAsync(entry.id);
+        if (!plugin) {
+          throw new Error(`Missing bundled channel plugin for ${entry.id}`);
+        }
+        expectChannelThreadingBaseContract(plugin);
+      });
+
+      it("keeps threading return values normalized", async () => {
+        const plugin = await getBundledChannelPluginAsync(entry.id);
+        if (!plugin) {
+          throw new Error(`Missing bundled channel plugin for ${entry.id}`);
+        }
+        expectChannelThreadingReturnValuesNormalized(plugin);
       });
     });
   }
 }
 
 export function installPluginContractRegistryShard(params: ContractShardParams) {
-  const entries = getPluginContractRegistryShard(params);
+  const entries = getPluginContractRegistryShardRefs(params);
   if (entries.length === 0) {
     installEmptyShardSuite("plugin contract registry shard");
     return;
   }
   for (const entry of entries) {
     describe(`${entry.id} plugin contract`, () => {
-      installChannelPluginContractSuite({
-        plugin: entry.plugin,
+      it("satisfies the base channel plugin contract", async () => {
+        const plugin = await getBundledChannelPluginAsync(entry.id);
+        if (!plugin) {
+          throw new Error(`Missing bundled channel plugin for ${entry.id}`);
+        }
+        expectChannelPluginContract(plugin);
       });
     });
   }

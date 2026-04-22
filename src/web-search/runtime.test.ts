@@ -122,7 +122,7 @@ describe("web search runtime", () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createCustomSearchProvider({
         credentialPath: "tools.web.search.custom.apiKey",
-        getCredentialValue: () => "configured",
+        requiresCredential: false,
       }),
     ]);
 

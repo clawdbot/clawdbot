@@ -18,7 +18,6 @@ vi.mock("../send.js", () => ({
 }));
 
 vi.mock("./deliver.runtime.js", () => ({
-  loadConfig: vi.fn(() => ({})),
   resolveMarkdownTableMode: vi.fn(() => resolveMarkdownTableModeMock()),
   chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
   resolveChunkMode: vi.fn(() => resolveChunkModeMock()),
@@ -28,6 +27,7 @@ vi.mock("./deliver.runtime.js", () => ({
 let deliverReplies: typeof import("./deliver.js").deliverReplies;
 
 describe("deliverReplies", () => {
+  const IMESSAGE_TEST_CFG = { channels: { imessage: { accounts: { default: {} } } } };
   const runtime = { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv;
   const client = {} as Awaited<ReturnType<typeof import("../client.js").createIMessageRpcClient>>;
 
@@ -44,6 +44,7 @@ describe("deliverReplies", () => {
     chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
 
     await deliverReplies({
+      cfg: IMESSAGE_TEST_CFG,
       replies: [{ text: "first|second", replyToId: "reply-1" }],
       target: "chat_id:10",
       client,
@@ -60,6 +61,7 @@ describe("deliverReplies", () => {
       "first",
       expect.objectContaining({
         client,
+        config: IMESSAGE_TEST_CFG,
         maxBytes: 4096,
         accountId: "default",
         replyToId: "reply-1",
@@ -71,6 +73,7 @@ describe("deliverReplies", () => {
       "second",
       expect.objectContaining({
         client,
+        config: IMESSAGE_TEST_CFG,
         maxBytes: 4096,
         accountId: "default",
         replyToId: "reply-1",
@@ -80,6 +83,7 @@ describe("deliverReplies", () => {
 
   it("propagates payload replyToId through media sends", async () => {
     await deliverReplies({
+      cfg: IMESSAGE_TEST_CFG,
       replies: [
         {
           text: "caption",
@@ -103,6 +107,7 @@ describe("deliverReplies", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/a.jpg",
         client,
+        config: IMESSAGE_TEST_CFG,
         maxBytes: 8192,
         accountId: "acct-2",
         replyToId: "reply-2",
@@ -115,6 +120,7 @@ describe("deliverReplies", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/b.jpg",
         client,
+        config: IMESSAGE_TEST_CFG,
         maxBytes: 8192,
         accountId: "acct-2",
         replyToId: "reply-2",
@@ -133,6 +139,7 @@ describe("deliverReplies", () => {
       .mockResolvedValueOnce({ messageId: "imsg-2", sentText: "second" });
 
     await deliverReplies({
+      cfg: IMESSAGE_TEST_CFG,
       replies: [{ text: "first|second" }],
       target: "chat_id:30",
       client,
@@ -163,6 +170,7 @@ describe("deliverReplies", () => {
     });
 
     await deliverReplies({
+      cfg: IMESSAGE_TEST_CFG,
       replies: [{ mediaUrls: ["https://example.com/a.jpg"] }],
       target: "chat_id:40",
       client,

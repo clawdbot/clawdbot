@@ -399,54 +399,20 @@ export async function hydrateAttachmentParamsForAction(params: {
   });
 }
 
-export function parseButtonsParam(params: Record<string, unknown>): void {
-  const raw = params.buttons;
+export function parseJsonMessageParam(params: Record<string, unknown>, key: string): void {
+  const raw = params[key];
   if (typeof raw !== "string") {
     return;
   }
   const trimmed = raw.trim();
   if (!trimmed) {
-    delete params.buttons;
+    delete params[key];
     return;
   }
   try {
-    params.buttons = JSON.parse(trimmed) as unknown;
+    params[key] = JSON.parse(trimmed) as unknown;
   } catch {
-    throw new Error("--buttons must be valid JSON");
-  }
-}
-
-export function parseCardParam(params: Record<string, unknown>): void {
-  const raw = params.card;
-  if (typeof raw !== "string") {
-    return;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    delete params.card;
-    return;
-  }
-  try {
-    params.card = JSON.parse(trimmed) as unknown;
-  } catch {
-    throw new Error("--card must be valid JSON");
-  }
-}
-
-export function parseComponentsParam(params: Record<string, unknown>): void {
-  const raw = params.components;
-  if (typeof raw !== "string") {
-    return;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    delete params.components;
-    return;
-  }
-  try {
-    params.components = JSON.parse(trimmed) as unknown;
-  } catch {
-    throw new Error("--components must be valid JSON");
+    throw new Error(`--${key} must be valid JSON`);
   }
 }
 

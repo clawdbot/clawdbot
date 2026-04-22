@@ -7,7 +7,7 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
         return {
           describeMessageTool: () => ({
             actions: ["send", "upload-file"],
-            capabilities: ["blocks"],
+            capabilities: ["presentation"],
             schema: null,
           }),
         };
@@ -45,7 +45,7 @@ describe("bundled channel message tool fast path", () => {
     const adapter = resolveBundledChannelMessageToolDiscoveryAdapter("slack");
     expect(adapter?.describeMessageTool?.({ cfg: {} })).toMatchObject({
       actions: ["send", "upload-file"],
-      capabilities: ["blocks"],
+      capabilities: ["presentation"],
     });
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "slack",
@@ -61,7 +61,7 @@ describe("bundled channel message tool fast path", () => {
       }),
     ).toMatchObject({
       actions: ["send", "upload-file"],
-      capabilities: ["blocks"],
+      capabilities: ["presentation"],
     });
   });
 

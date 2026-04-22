@@ -505,6 +505,7 @@ export async function clickViaPlaywright(opts: {
   delayMs?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
@@ -514,6 +515,36 @@ export async function clickViaPlaywright(opts: {
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   const previousUrl = page.url();
+  const signal = opts.signal;
+  let abortListener: (() => void) | undefined;
+  let abortReject: ((reason: unknown) => void) | undefined;
+  let abortPromise: Promise<never> | undefined;
+  if (signal) {
+    abortPromise = new Promise((_, reject) => {
+      abortReject = reject;
+    });
+    void abortPromise.catch(() => {});
+    const disconnect = () => {
+      void forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        reason: "click aborted",
+      }).catch(() => {});
+    };
+    if (signal.aborted) {
+      disconnect();
+      throw signal.reason ?? new Error("aborted");
+    }
+    abortListener = () => {
+      disconnect();
+      abortReject?.(signal.reason ?? new Error("aborted"));
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal.aborted) {
+      abortListener();
+      throw signal.reason ?? new Error("aborted");
+    }
+  }
   try {
     await assertInteractionNavigationCompletedSafely({
       action: async () => {
@@ -523,22 +554,28 @@ export async function clickViaPlaywright(opts: {
           ACT_MAX_CLICK_DELAY_MS,
         );
         if (delayMs > 0) {
-          await locator.hover({ timeout });
+          await awaitActionWithAbort(locator.hover({ timeout }), abortPromise);
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
         if (opts.doubleClick) {
-          await locator.dblclick({
+          await awaitActionWithAbort(
+            locator.dblclick({
+              timeout,
+              button: opts.button,
+              modifiers: opts.modifiers,
+            }),
+            abortPromise,
+          );
+          return;
+        }
+        await awaitActionWithAbort(
+          locator.click({
             timeout,
             button: opts.button,
             modifiers: opts.modifiers,
-          });
-          return;
-        }
-        await locator.click({
-          timeout,
-          button: opts.button,
-          modifiers: opts.modifiers,
-        });
+          }),
+          abortPromise,
+        );
       },
       cdpUrl: opts.cdpUrl,
       page,
@@ -548,6 +585,10 @@ export async function clickViaPlaywright(opts: {
     });
   } catch (err) {
     throw toAIFriendlyError(err, label);
+  } finally {
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
   }
 }
 

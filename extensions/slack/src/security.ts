@@ -1,8 +1,8 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import type { ChannelPlugin } from "./channel-api.js";
-import { collectSlackSecurityAuditFindings } from "./security-audit.js";
 
 const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount>({
   channelKey: "slack",
@@ -36,8 +36,13 @@ const collectSlackSecurityWarnings =
     },
   });
 
+const loadSlackSecurityAuditModule = createLazyRuntimeModule(() => import("./security-audit.js"));
+
 export const slackSecurityAdapter = {
   resolveDmPolicy: resolveSlackDmPolicy,
   collectWarnings: collectSlackSecurityWarnings,
-  collectAuditFindings: collectSlackSecurityAuditFindings,
+  collectAuditFindings: async (params) => {
+    const { collectSlackSecurityAuditFindings } = await loadSlackSecurityAuditModule();
+    return await collectSlackSecurityAuditFindings(params);
+  },
 } satisfies NonNullable<ChannelPlugin<ResolvedSlackAccount>["security"]>;

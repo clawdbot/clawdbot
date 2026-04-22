@@ -5,7 +5,7 @@ import {
   type RequestClient,
 } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { registerDiscordComponentEntries } from "./components-registry.js";
@@ -141,7 +141,7 @@ function collapseClassicComponentText(spec: DiscordComponentMessageSpec): string
 }
 
 type DiscordComponentSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   accountId?: string;
   token?: string;
   rest?: RequestClient;
@@ -244,7 +244,7 @@ async function buildDiscordComponentPayload(params: {
 export async function sendDiscordComponentMessage(
   to: string,
   spec: DiscordComponentMessageSpec,
-  opts: DiscordComponentSendOpts = {},
+  opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
   const classicDecision = getClassicDiscordMessageDecision(spec);
   if (opts.mediaUrl && classicDecision.mode === "classic") {
@@ -263,7 +263,7 @@ export async function sendDiscordComponentMessage(
     });
   }
 
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Discord component send");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
   const { token, rest, request } = createDiscordClient(opts, cfg);
   const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
@@ -293,6 +293,7 @@ export async function sendDiscordComponentMessage(
   } catch (err) {
     throw await buildDiscordSendError(err, {
       channelId,
+      cfg,
       rest,
       token,
       hasMedia: Boolean(opts.mediaUrl),
@@ -320,9 +321,9 @@ export async function editDiscordComponentMessage(
   to: string,
   messageId: string,
   spec: DiscordComponentMessageSpec,
-  opts: DiscordComponentSendOpts = {},
+  opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Discord component edit");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
   const { token, rest, request } = createDiscordClient(opts, cfg);
   const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
@@ -345,6 +346,7 @@ export async function editDiscordComponentMessage(
   } catch (err) {
     throw await buildDiscordSendError(err, {
       channelId,
+      cfg,
       rest,
       token,
       hasMedia: Boolean(opts.mediaUrl),

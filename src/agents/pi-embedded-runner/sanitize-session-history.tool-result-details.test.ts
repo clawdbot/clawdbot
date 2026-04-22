@@ -60,4 +60,25 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
     const serialized = JSON.stringify(sanitized);
     expect(serialized).not.toContain("Ignore previous instructions");
   });
+
+  it("normalizes malformed assistant string content before replay sanitization", async () => {
+    const sm = SessionManager.inMemory();
+
+    const sanitized = await sanitizeSessionHistory({
+      messages: [
+        { role: "assistant", content: "plain reply", timestamp: 1 } as unknown as AgentMessage,
+        { role: "user", content: "continue", timestamp: 2 } satisfies UserMessage,
+      ],
+      modelApi: "openai-responses",
+      provider: "github-copilot",
+      modelId: "gpt-5-mini",
+      sessionManager: sm,
+      sessionId: "test",
+    });
+
+    expect(sanitized[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "plain reply" }],
+    });
+  });
 });

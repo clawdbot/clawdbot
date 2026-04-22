@@ -428,23 +428,34 @@ describe("runDaemonInstall", () => {
       },
     } as never);
 
-    await runDaemonInstall({ json: true, force: true });
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      await runDaemonInstall({ json: true, force: true });
 
-    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: expect.objectContaining({
-          OPENAI_API_KEY: "service-openai-key",
+      expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            OPENAI_API_KEY: "service-openai-key",
+          }),
         }),
-      }),
-    );
-    const [firstArg] =
-      (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
-    const env = firstArg?.env as Record<string, string | undefined>;
-    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
-    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-    expect(env.NODE_OPTIONS).toBeUndefined();
-    expect(env.PATH).not.toContain("/tmp/doctor-bin");
-    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+      );
+      const [firstArg] =
+        (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ??
+        [];
+      const env = firstArg?.env as Record<string, string | undefined>;
+      expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+      expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+      expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+      expect(env.NODE_OPTIONS).toBeUndefined();
+      expect(env.PATH).not.toContain("/tmp/doctor-bin");
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
   });
 });

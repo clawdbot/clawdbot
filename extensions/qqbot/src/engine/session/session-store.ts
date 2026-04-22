@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
-import { getQQBotDataDir } from "../utils/platform.js";
+import { getQQBotDataDir, getQQBotDataPath } from "../utils/platform.js";
 
 /** Persisted gateway session state. */
 export interface SessionState {
@@ -22,7 +22,6 @@ export interface SessionState {
   appId?: string;
 }
 
-const SESSION_DIR = getQQBotDataDir("sessions");
 const SESSION_EXPIRE_TIME = 5 * 60 * 1000;
 const SAVE_THROTTLE_MS = 1000;
 
@@ -36,9 +35,11 @@ const throttleState = new Map<
 >();
 
 function ensureDir(): void {
-  if (!fs.existsSync(SESSION_DIR)) {
-    fs.mkdirSync(SESSION_DIR, { recursive: true });
-  }
+  getQQBotDataDir("sessions");
+}
+
+function getSessionDir(): string {
+  return getQQBotDataPath("sessions");
 }
 
 function encodeAccountIdForFileName(accountId: string): string {
@@ -47,12 +48,12 @@ function encodeAccountIdForFileName(accountId: string): string {
 
 function getLegacySessionPath(accountId: string): string {
   const safeId = accountId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return path.join(SESSION_DIR, `session-${safeId}.json`);
+  return path.join(getSessionDir(), `session-${safeId}.json`);
 }
 
 function getSessionPath(accountId: string): string {
   const encodedId = encodeAccountIdForFileName(accountId);
-  return path.join(SESSION_DIR, `session-${encodedId}.json`);
+  return path.join(getSessionDir(), `session-${encodedId}.json`);
 }
 
 function getCandidateSessionPaths(accountId: string): string[] {
@@ -66,7 +67,7 @@ function isSessionFileName(file: string): boolean {
 }
 
 function readSessionStateFile(file: string): { filePath: string; state: SessionState } {
-  const filePath = path.join(SESSION_DIR, file);
+  const filePath = path.join(getSessionDir(), file);
   const data = fs.readFileSync(filePath, "utf-8");
   return { filePath, state: JSON.parse(data) as SessionState };
 }
@@ -224,8 +225,11 @@ export function updateLastSeq(accountId: string, lastSeq: number): void {
 export function getAllSessions(): SessionState[] {
   const sessions = new Map<string, SessionState>();
   try {
-    ensureDir();
-    const files = fs.readdirSync(SESSION_DIR);
+    const sessionDir = getSessionDir();
+    if (!fs.existsSync(sessionDir)) {
+      return [];
+    }
+    const files = fs.readdirSync(sessionDir);
 
     for (const file of files) {
       if (isSessionFileName(file)) {
@@ -249,13 +253,16 @@ export function getAllSessions(): SessionState[] {
 export function cleanupExpiredSessions(): number {
   let cleaned = 0;
   try {
-    ensureDir();
+    const sessionDir = getSessionDir();
+    if (!fs.existsSync(sessionDir)) {
+      return 0;
+    }
     const now = Date.now();
-    const files = fs.readdirSync(SESSION_DIR);
+    const files = fs.readdirSync(sessionDir);
 
     for (const file of files) {
       if (isSessionFileName(file)) {
-        const filePath = path.join(SESSION_DIR, file);
+        const filePath = path.join(sessionDir, file);
         try {
           const { state } = readSessionStateFile(file);
 

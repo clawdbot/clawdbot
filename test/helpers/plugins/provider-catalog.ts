@@ -4,7 +4,10 @@ export {
   expectCodexMissingAuthHint,
 } from "../../../src/plugins/provider-runtime.test-support.js";
 export type { ProviderPlugin } from "../../../src/plugins/types.js";
-export { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+export {
+  loadBundledPluginPublicSurface,
+  loadBundledPluginPublicSurfaceSync,
+} from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 type ProviderRuntimeCatalogModule = Pick<
   typeof import("../../../src/plugins/provider-runtime.js"),

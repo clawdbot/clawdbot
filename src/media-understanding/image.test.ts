@@ -17,6 +17,7 @@ const hoisted = vi.hoisted(() => ({
   setRuntimeApiKeyMock: vi.fn(),
   discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
+  registerProviderStreamForModelMock: vi.fn(),
 }));
 const {
   completeMock,
@@ -27,6 +28,7 @@ const {
   setRuntimeApiKeyMock,
   discoverModelsMock,
   fetchMock,
+  registerProviderStreamForModelMock,
 } = hoisted;
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -48,6 +50,10 @@ vi.mock("../agents/model-auth.js", () => ({
   getApiKeyForModel: getApiKeyForModelMock,
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   requireApiKey: requireApiKeyMock,
+}));
+
+vi.mock("../agents/provider-stream.js", () => ({
+  registerProviderStreamForModel: registerProviderStreamForModelMock,
 }));
 
 vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
@@ -168,6 +174,16 @@ describe("describeImageWithModel", () => {
       text: "generic ok",
       model: "custom-vision",
     });
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "minimax-portal",
+          id: "custom-vision",
+        }),
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+      }),
+    );
     expect(completeMock).toHaveBeenCalledOnce();
     expect(fetchMock).not.toHaveBeenCalled();
   });

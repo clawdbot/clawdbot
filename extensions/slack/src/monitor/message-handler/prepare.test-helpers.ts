@@ -23,6 +23,7 @@ export function createInboundSlackTestContext(params: {
     app: { client: params.appClient ?? {} } as App,
     runtime: {} as RuntimeEnv,
     botUserId: "B1",
+    botId: "B1",
     teamId: "T1",
     apiAppId: "A1",
     historyLimit: 0,

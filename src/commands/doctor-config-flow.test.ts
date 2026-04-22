@@ -935,26 +935,26 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
     return !groups && !hasOwnStringArray(groupAllowFrom);
   }
 
+  function collectTelegramFirstTimeExtraWarnings(params: {
+    account: Record<string, unknown>;
+    channelName: string;
+    parent?: Record<string, unknown>;
+    prefix: string;
+  }): string[] {
+    if (
+      params.channelName !== "telegram" ||
+      !isTelegramFirstTimeAccount({ account: params.account, parent: params.parent })
+    ) {
+      return [];
+    }
+    return [
+      `- ${params.prefix}: Telegram is in first-time setup mode. DMs use pairing mode. Group messages stay blocked until you add allowed chats under ${params.prefix}.groups (and optional sender IDs under ${params.prefix}.groupAllowFrom), or set ${params.prefix}.groupPolicy to "open" if you want broad group access.`,
+    ];
+  }
+
   return {
     collectChannelDoctorCompatibilityMutations: vi.fn(collectCompatibilityMutations),
-    collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(
-      (params: {
-        account: Record<string, unknown>;
-        channelName: string;
-        parent?: Record<string, unknown>;
-        prefix: string;
-      }) => {
-        if (
-          params.channelName !== "telegram" ||
-          !isTelegramFirstTimeAccount({ account: params.account, parent: params.parent })
-        ) {
-          return [];
-        }
-        return [
-          `- ${params.prefix}: Telegram is in first-time setup mode. DMs use pairing mode. Group messages stay blocked until you add allowed chats under ${params.prefix}.groups (and optional sender IDs under ${params.prefix}.groupAllowFrom), or set ${params.prefix}.groupPolicy to "open" if you want broad group access.`,
-        ];
-      },
-    ),
+    collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(collectTelegramFirstTimeExtraWarnings),
     collectChannelDoctorMutableAllowlistWarnings: vi.fn(
       ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
         const zalouser = asRecord(cfg.channels?.zalouser);
@@ -997,6 +997,11 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
       },
     ),
     collectChannelDoctorStaleConfigMutations: vi.fn(async () => []),
+    createChannelDoctorEmptyAllowlistPolicyHooks: vi.fn(() => ({
+      extraWarningsForAccount: collectTelegramFirstTimeExtraWarnings,
+      shouldSkipDefaultEmptyGroupAllowlistWarning: ({ channelName }: { channelName: string }) =>
+        channelName === "googlechat" || channelName === "telegram",
+    })),
     runChannelDoctorConfigSequences: vi.fn(async () => ({ changeNotes: [], warningNotes: [] })),
     shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: vi.fn(
       ({ channelName }: { channelName: string }) =>

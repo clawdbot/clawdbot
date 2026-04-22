@@ -15,8 +15,10 @@ describe("terminal ansi helpers", () => {
       "next" +
       String.fromCharCode(0) +
       "line" +
-      String.fromCharCode(127);
-    expect(sanitizeForLog(input)).toBe("warnnextline");
+      String.fromCharCode(127) +
+      String.fromCharCode(0x9b) +
+      "done";
+    expect(sanitizeForLog(input)).toBe("warnnextlinedone");
   });
 
   it("measures wide graphemes by terminal cell width", () => {

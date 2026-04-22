@@ -205,6 +205,8 @@ The LINE plugin supports sending images, videos, and audio files through the age
 - **Videos**: sent with explicit preview and content-type handling.
 - **Audio**: sent as LINE audio messages.
 
+Outbound media URLs must be public HTTPS URLs. OpenClaw validates the target hostname before handing the URL to LINE and rejects loopback, link-local, and private-network targets.
+
 Generic media sends fall back to the existing image-only route when a LINE-specific path is not available.
 
 ## Troubleshooting

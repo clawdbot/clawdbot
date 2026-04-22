@@ -88,5 +88,17 @@ describe("model-selection-display", () => {
         model: "anthropic/claude-haiku-4.5",
       });
     });
+
+    it("falls back to configured defaults when runtime session state is empty", () => {
+      expect(
+        resolveSessionInfoModelSelection({
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+        }),
+      ).toEqual({
+        modelProvider: "openai",
+        model: "gpt-5.4",
+      });
+    });
   });
 });

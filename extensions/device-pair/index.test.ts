@@ -251,6 +251,7 @@ describe("device-pair /pair qr", () => {
         gatewayClientScopes: ["operator.write", "operator.pairing"],
       }),
     );
+    const payload = result as { text?: string; mediaUrl?: string; sensitiveMedia?: boolean };
     const text = requireText(result);
 
     expect(pluginApiMocks.renderQrPngBase64).toHaveBeenCalledTimes(1);
@@ -261,11 +262,12 @@ describe("device-pair /pair qr", () => {
       },
     });
     expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
-    expect(text).toContain("![OpenClaw pairing QR](data:image/png;base64,ZmFrZXBuZw==)");
+    expect(payload.mediaUrl).toBe("data:image/png;base64,ZmFrZXBuZw==");
+    expect(payload.sensitiveMedia).toBe(true);
     expect(text).toContain("- Security: single-use bootstrap token");
     expect(text).toContain("**Important:** Run `/pair cleanup` after pairing finishes.");
     expect(text).toContain("If this QR code leaks, run `/pair cleanup` immediately.");
-    expect(text).not.toContain("```");
+    expect(text).not.toContain("![OpenClaw pairing QR]");
   });
 
   it("rejects qr setup for internal gateway callers without operator.pairing", async () => {

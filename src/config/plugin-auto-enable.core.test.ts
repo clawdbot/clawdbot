@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   applyPluginAutoEnable,
   detectPluginAutoEnableCandidates,
@@ -11,7 +11,9 @@ import {
 } from "./plugin-auto-enable.test-helpers.js";
 import { validateConfigObject } from "./validation.js";
 
-afterEach(() => {
+const env = makeIsolatedEnv();
+
+afterAll(() => {
   resetPluginAutoEnableTestState();
 });
 
@@ -21,7 +23,7 @@ describe("applyPluginAutoEnable core", () => {
       config: {
         channels: { slack: { botToken: "x" } },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(candidates).toEqual([
@@ -46,7 +48,7 @@ describe("applyPluginAutoEnable core", () => {
   it("treats an undefined config as empty", () => {
     const result = applyPluginAutoEnable({
       config: undefined,
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config).toEqual({});
@@ -60,7 +62,7 @@ describe("applyPluginAutoEnable core", () => {
         channels: { slack: { botToken: "x" } },
         plugins: { allow: ["telegram"] },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
@@ -77,7 +79,7 @@ describe("applyPluginAutoEnable core", () => {
       config: {
         channels: { slack: { botToken: "x" } },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
@@ -89,7 +91,7 @@ describe("applyPluginAutoEnable core", () => {
       config: {
         channels: { slack: { botToken: "x" } },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(Object.getPrototypeOf(result.autoEnabledReasons)).toBeNull();
@@ -105,7 +107,7 @@ describe("applyPluginAutoEnable core", () => {
           allow: ["telegram"],
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
@@ -123,7 +125,7 @@ describe("applyPluginAutoEnable core", () => {
           allow: ["telegram"],
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
@@ -138,7 +140,7 @@ describe("applyPluginAutoEnable core", () => {
           allow: ["telegram"],
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.allow).toEqual(["telegram"]);
@@ -160,7 +162,7 @@ describe("applyPluginAutoEnable core", () => {
           allow: ["telegram"],
         },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([
         {
           id: "evil-plugin",
@@ -191,7 +193,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.firecrawl?.enabled).toBe(true);
@@ -208,7 +210,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([{ id: "codex", channels: [], providers: ["codex"] }]),
     });
 
@@ -229,7 +231,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([
         {
           id: "codex",
@@ -281,7 +283,7 @@ describe("applyPluginAutoEnable core", () => {
           list: [{ id: "pi" }],
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config).toEqual({
@@ -309,7 +311,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.modelByChannel).toBeUndefined();
@@ -326,7 +328,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
@@ -345,7 +347,7 @@ describe("applyPluginAutoEnable core", () => {
           allow: ["telegram"],
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
@@ -367,7 +369,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.allow).toEqual(["glueclaw", "discord"]);
@@ -388,7 +390,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.allow).toEqual(["glueclaw"]);
@@ -407,12 +409,12 @@ describe("applyPluginAutoEnable core", () => {
           allow: ["telegram"],
         },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     const second = applyPluginAutoEnable({
       config: first.config,
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(first.changes).toHaveLength(1);
@@ -426,7 +428,7 @@ describe("applyPluginAutoEnable core", () => {
         channels: { slack: { botToken: "x" } },
         plugins: { entries: { slack: { enabled: false } } },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBe(false);
@@ -438,7 +440,7 @@ describe("applyPluginAutoEnable core", () => {
       config: {
         channels: { slack: { botToken: "x", enabled: false } },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.channels?.slack?.enabled).toBe(false);
@@ -451,7 +453,7 @@ describe("applyPluginAutoEnable core", () => {
       config: {
         channels: { matrix: { enabled: false } },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([{ id: "matrix", channels: ["matrix"] }]),
     });
 
@@ -478,7 +480,7 @@ describe("applyPluginAutoEnable core", () => {
       config: {
         channels: { apn: { someKey: "value" } },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
     });
 
@@ -492,7 +494,7 @@ describe("applyPluginAutoEnable core", () => {
         channels: { slack: { botToken: "x" } },
         plugins: { enabled: false },
       },
-      env: makeIsolatedEnv(),
+      env,
     });
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBeUndefined();

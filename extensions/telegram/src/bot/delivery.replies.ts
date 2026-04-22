@@ -487,18 +487,20 @@ async function deliverMediaReply(params: {
 }
 
 async function maybePinFirstDeliveredMessage(params: {
-  shouldPin: boolean;
+  pin: NonNullable<ReplyPayload["delivery"]>["pin"] | undefined;
   bot: Bot;
   chatId: string;
   runtime: RuntimeEnv;
   firstDeliveredMessageId?: number;
 }): Promise<void> {
-  if (!params.shouldPin || typeof params.firstDeliveredMessageId !== "number") {
+  const shouldPin = params.pin === true || (typeof params.pin === "object" && params.pin.enabled);
+  if (!shouldPin || typeof params.firstDeliveredMessageId !== "number") {
     return;
   }
+  const notify = typeof params.pin === "object" && params.pin.notify === true;
   try {
     await params.bot.api.pinChatMessage(params.chatId, params.firstDeliveredMessageId, {
-      disable_notification: true,
+      disable_notification: !notify,
     });
   } catch (err) {
     logVerbose(
@@ -705,7 +707,6 @@ export async function deliverReplies(params: {
       const replyToId =
         params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
-      const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
       let firstDeliveredMessageId: number | undefined;
       if (mediaList.length === 0) {
@@ -747,7 +748,7 @@ export async function deliverReplies(params: {
         });
       }
       await maybePinFirstDeliveredMessage({
-        shouldPin: shouldPinFirstMessage,
+        pin: reply.delivery?.pin,
         bot: params.bot,
         chatId: params.chatId,
         runtime: params.runtime,

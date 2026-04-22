@@ -78,6 +78,9 @@ export async function runPreparedCliAgent(
                   ...(context.preparedBackend.mcpConfigHash
                     ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }
                     : {}),
+                  ...(context.preparedBackend.mcpResumeHash
+                    ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
+                    : {}),
                 },
               }
             : {}),

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   formatThreadBindingDurationLabel,
   registerSessionBindingAdapter,
@@ -407,15 +407,14 @@ function shouldExpireByMaxAge(params: {
   return params.now >= params.record.boundAt + maxAgeMs;
 }
 
-export function createTelegramThreadBindingManager(
-  params: {
-    accountId?: string;
-    persist?: boolean;
-    idleTimeoutMs?: number;
-    maxAgeMs?: number;
-    enableSweeper?: boolean;
-  } = {},
-): TelegramThreadBindingManager {
+export function createTelegramThreadBindingManager(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  persist?: boolean;
+  idleTimeoutMs?: number;
+  maxAgeMs?: number;
+  enableSweeper?: boolean;
+}): TelegramThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const existing = getThreadBindingsState().managersByAccountId.get(accountId);
   if (existing) {
@@ -629,7 +628,6 @@ export function createTelegramThreadBindingManager(
       if (placement === "child") {
         const rawConversationId = input.conversation.conversationId?.trim() ?? "";
         const rawParent = input.conversation.parentConversationId?.trim() ?? "";
-        const cfg = loadConfig();
         let chatId = rawParent || rawConversationId;
         if (!chatId) {
           logVerbose(
@@ -648,13 +646,13 @@ export function createTelegramThreadBindingManager(
           (normalizeOptionalString(metadata.label) ?? "") ||
           `Agent: ${targetSessionKey.split(":").pop()}`;
         try {
-          const tokenResolution = resolveTelegramToken(cfg, { accountId });
+          const tokenResolution = resolveTelegramToken(params.cfg, { accountId });
           if (!tokenResolution.token) {
             return null;
           }
           const { createForumTopicTelegram } = await loadTelegramSendModule();
           const result = await createForumTopicTelegram(chatId, threadName, {
-            cfg,
+            cfg: params.cfg,
             token: tokenResolution.token,
             accountId,
           });

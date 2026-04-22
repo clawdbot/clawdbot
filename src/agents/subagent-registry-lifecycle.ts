@@ -187,13 +187,22 @@ export function createSubagentRegistryLifecycleController(params: {
     }
   };
 
-  const freezeRunResultAtCompletion = async (entry: SubagentRunRecord): Promise<boolean> => {
+  const freezeRunResultAtCompletion = async (
+    entry: SubagentRunRecord,
+    outcome: SubagentRunOutcome,
+  ): Promise<boolean> => {
     if (entry.frozenResultText !== undefined) {
       return false;
+    }
+    if (outcome.status === "error") {
+      entry.frozenResultText = null;
+      entry.frozenResultCapturedAt = Date.now();
+      return true;
     }
     try {
       const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
         waitForReply: entry.expectsCompletionMessage === true,
+        outcome,
       });
       entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
@@ -228,7 +237,9 @@ export function createSubagentRegistryLifecycleController(params: {
   };
 
   const refreshFrozenResultFromSession = async (sessionKey: string): Promise<boolean> => {
-    const candidates = listPendingCompletionRunsForSession(sessionKey);
+    const candidates = listPendingCompletionRunsForSession(sessionKey).filter(
+      (entry) => entry.outcome?.status !== "error",
+    );
     if (candidates.length === 0) {
       return false;
     }
@@ -615,7 +626,7 @@ export function createSubagentRegistryLifecycleController(params: {
       mutated = true;
     }
 
-    if (await freezeRunResultAtCompletion(entry)) {
+    if (await freezeRunResultAtCompletion(entry, outcome)) {
       mutated = true;
     }
 

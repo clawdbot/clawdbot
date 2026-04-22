@@ -7,10 +7,16 @@ import {
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import { normalizeInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  normalizeInteractiveReply,
+  normalizeMessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
-import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
+import {
+  buildDiscordInteractiveComponents,
+  buildDiscordPresentationComponents,
+} from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import { readDiscordParentIdParam } from "./runtime.shared.js";
@@ -48,7 +54,7 @@ export async function handleDiscordMessageAction(
     const to = readStringParam(params, "to", { required: true });
     const asVoice = readBooleanParam(params, "asVoice") === true;
     const rawComponents =
-      params.components ??
+      buildDiscordPresentationComponents(normalizeMessagePresentation(params.presentation)) ??
       buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
     const hasComponents =
       Boolean(rawComponents) &&

@@ -91,6 +91,7 @@ function resolveTestSender(
 
 const telegramOutboundForTest: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  preferFinalAssistantVisibleText: true,
   sendText: async () => ({ channel: "telegram", messageId: "telegram-msg" }),
   resolveTarget: ({ to }) => {
     const resolved = resolveRequiredTarget("Telegram", to);

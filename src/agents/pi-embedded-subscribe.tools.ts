@@ -249,6 +249,7 @@ export function filterToolResultMediaUrls(
 export type ToolResultMediaArtifact = {
   mediaUrls: string[];
   audioAsVoice?: boolean;
+  trustedLocalMedia?: boolean;
 };
 
 function readToolResultDetailsMedia(
@@ -292,6 +293,7 @@ export function extractToolResultMediaArtifact(
       return {
         mediaUrls,
         ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
       };
     }
   }

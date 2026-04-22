@@ -165,12 +165,33 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps Slack's narrow runtime-setter sidecar on the bundled public surface", () => {
+    // Regression for #69317: the bundled channel entry now points its
+    // runtime.specifier at runtime-setter-api.js to avoid loading the full
+    // runtime-api barrel during register(). The setter file must therefore
+    // be discoverable as part of Slack's public surface.
+    const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
+    expectArtifactPresence(slack?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
   it("keeps Telegram's narrow runtime setter on the bundled runtime sidecar surface", () => {
     const telegram = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "telegram");
     expectArtifactPresence(telegram?.publicSurfaceArtifacts, {
       contains: ["runtime-setter-api.js"],
     });
     expectArtifactPresence(telegram?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
+  it("keeps Discord's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
+    expectArtifactPresence(discord?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
       contains: ["runtime-setter-api.js"],
     });
   });

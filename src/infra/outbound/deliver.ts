@@ -10,6 +10,8 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
+  ChannelOutboundPayloadContext,
+  ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,7 +23,12 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "../../hooks/message-hook-mappers.js";
-import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import {
+  hasReplyPayloadContent,
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
+  type ReplyPayloadDeliveryPin,
+} from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -76,6 +83,13 @@ type ChannelHandler = {
   supportsMedia: boolean;
   sanitizeText?: (payload: ReplyPayload) => string;
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  renderPresentation?: (payload: ReplyPayload) => Promise<ReplyPayload | null>;
+  pinDeliveredMessage?: (params: {
+    target: ChannelOutboundTargetRef;
+    messageId: string;
+    pin: ReplyPayloadDeliveryPin;
+  }) => Promise<void>;
+  buildTargetRef: (overrides?: { threadId?: string | number | null }) => ChannelOutboundTargetRef;
   shouldSkipPlainTextSanitization?: (payload: ReplyPayload) => boolean;
   resolveEffectiveTextChunkLimit?: (fallbackLimit?: number) => number | undefined;
   sendPayload?: (
@@ -178,6 +192,14 @@ function createPluginHandler(
     threadId: overrides?.threadId ?? baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
   });
+  const buildTargetRef = (overrides?: {
+    threadId?: string | number | null;
+  }): ChannelOutboundTargetRef => ({
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId ?? undefined,
+    threadId: overrides?.threadId ?? baseCtx.threadId,
+  });
   return {
     chunker,
     chunkerMode,
@@ -188,6 +210,34 @@ function createPluginHandler(
       : undefined,
     normalizePayload: outbound.normalizePayload
       ? (payload) => outbound.normalizePayload!({ payload })
+      : undefined,
+    renderPresentation: outbound.renderPresentation
+      ? async (payload) => {
+          const presentation = normalizeMessagePresentation(payload.presentation);
+          if (!presentation) {
+            return payload;
+          }
+          const ctx: ChannelOutboundPayloadContext = {
+            ...resolveCtx({
+              replyToId: payload.replyToId ?? baseCtx.replyToId,
+              threadId: baseCtx.threadId,
+              audioAsVoice: payload.audioAsVoice,
+            }),
+            text: payload.text ?? "",
+            mediaUrl: payload.mediaUrl,
+            payload,
+          };
+          return await outbound.renderPresentation!({ payload, presentation, ctx });
+        }
+      : undefined,
+    pinDeliveredMessage: outbound.pinDeliveredMessage
+      ? async ({ target, messageId, pin }) =>
+          outbound.pinDeliveredMessage!({
+            cfg: params.cfg,
+            target,
+            messageId,
+            pin,
+          })
       : undefined,
     shouldSkipPlainTextSanitization: outbound.shouldSkipPlainTextSanitization
       ? (payload) => outbound.shouldSkipPlainTextSanitization!({ payload })
@@ -229,6 +279,7 @@ function createPluginHandler(
         ...resolveCtx(overrides),
         text,
       }),
+    buildTargetRef,
     sendMedia: async (caption, mediaUrl, overrides) => {
       if (sendMedia) {
         return sendMedia({
@@ -353,6 +404,99 @@ function normalizePayloadsForChannelDelivery(
 
 function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
   return summarizeOutboundPayloadForTransport(payload);
+}
+
+function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
+  const pin = payload.delivery?.pin;
+  if (pin === true) {
+    return { enabled: true };
+  }
+  if (!pin || typeof pin !== "object" || Array.isArray(pin)) {
+    return undefined;
+  }
+  if (!pin.enabled) {
+    return undefined;
+  }
+  const normalized: ReplyPayloadDeliveryPin = { enabled: true };
+  if (pin.notify === true) {
+    normalized.notify = true;
+  }
+  if (pin.required === true) {
+    normalized.required = true;
+  }
+  return normalized;
+}
+
+async function maybePinDeliveredMessage(params: {
+  handler: ChannelHandler;
+  payload: ReplyPayload;
+  target: ChannelOutboundTargetRef;
+  messageId?: string;
+}): Promise<void> {
+  const pin = normalizeDeliveryPin(params.payload);
+  if (!pin) {
+    return;
+  }
+  if (!params.messageId) {
+    if (pin.required) {
+      throw new Error("Delivery pin requested, but no delivered message id was returned.");
+    }
+    log.warn("Delivery pin requested, but no delivered message id was returned.", {
+      channel: params.target.channel,
+      to: params.target.to,
+    });
+    return;
+  }
+  if (!params.handler.pinDeliveredMessage) {
+    if (pin.required) {
+      throw new Error(`Delivery pin is not supported by channel: ${params.target.channel}`);
+    }
+    log.warn("Delivery pin requested, but channel does not support pinning delivered messages.", {
+      channel: params.target.channel,
+      to: params.target.to,
+    });
+    return;
+  }
+  try {
+    await params.handler.pinDeliveredMessage({
+      target: params.target,
+      messageId: params.messageId,
+      pin,
+    });
+  } catch (err) {
+    if (pin.required) {
+      throw err;
+    }
+    log.warn("Delivery pin requested, but channel failed to pin delivered message.", {
+      channel: params.target.channel,
+      to: params.target.to,
+      messageId: params.messageId,
+      error: formatErrorMessage(err),
+    });
+  }
+}
+
+async function renderPresentationForDelivery(
+  handler: ChannelHandler,
+  payload: ReplyPayload,
+): Promise<ReplyPayload> {
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  if (!presentation) {
+    return payload;
+  }
+  const rendered = handler.renderPresentation ? await handler.renderPresentation(payload) : null;
+  if (rendered) {
+    const { presentation: _presentation, ...withoutPresentation } = rendered;
+    return withoutPresentation;
+  }
+  const { presentation: _presentation, ...withoutPresentation } = payload;
+  return {
+    ...withoutPresentation,
+    text: renderMessagePresentationFallbackText({
+      text: payload.text,
+      presentation,
+    }),
+  };
 }
 
 function createMessageSentEmitter(params: {
@@ -687,8 +831,8 @@ async function deliverOutboundPayloadsCore(
       if (hookResult.cancelled) {
         continue;
       }
-      const effectivePayload = hookResult.payload;
-      payloadSummary = hookResult.payloadSummary;
+      const effectivePayload = await renderPresentationForDelivery(handler, hookResult.payload);
+      payloadSummary = buildPayloadSummary(effectivePayload);
 
       params.onPayload?.(payloadSummary);
       const sendOverrides = {
@@ -697,15 +841,23 @@ async function deliverOutboundPayloadsCore(
         audioAsVoice: effectivePayload.audioAsVoice === true ? true : undefined,
         forceDocument: params.forceDocument,
       };
+      const deliveryTarget = handler.buildTargetRef({ threadId: sendOverrides.threadId });
       if (
         handler.sendPayload &&
         hasReplyPayloadContent({
+          presentation: effectivePayload.presentation,
           interactive: effectivePayload.interactive,
           channelData: effectivePayload.channelData,
         })
       ) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
+        await maybePinDeliveredMessage({
+          handler,
+          payload: effectivePayload,
+          target: deliveryTarget,
+          messageId: delivery.messageId,
+        });
         emitMessageSent({
           success: true,
           content: payloadSummary.text,
@@ -720,7 +872,15 @@ async function deliverOutboundPayloadsCore(
         } else {
           await sendTextChunks(payloadSummary.text, sendOverrides);
         }
+        const deliveredResults = results.slice(beforeCount);
         const messageId = results.at(-1)?.messageId;
+        const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
+        await maybePinDeliveredMessage({
+          handler,
+          payload: effectivePayload,
+          target: deliveryTarget,
+          messageId: pinMessageId,
+        });
         emitMessageSent({
           success: results.length > beforeCount,
           content: payloadSummary.text,
@@ -746,7 +906,15 @@ async function deliverOutboundPayloadsCore(
         }
         const beforeCount = results.length;
         await sendTextChunks(fallbackText, sendOverrides);
+        const deliveredResults = results.slice(beforeCount);
         const messageId = results.at(-1)?.messageId;
+        const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
+        await maybePinDeliveredMessage({
+          handler,
+          payload: effectivePayload,
+          target: deliveryTarget,
+          messageId: pinMessageId,
+        });
         emitMessageSent({
           success: results.length > beforeCount,
           content: payloadSummary.text,
@@ -755,6 +923,7 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
 
+      let firstMessageId: string | undefined;
       let lastMessageId: string | undefined;
       await sendMediaWithLeadingCaption({
         mediaUrls: payloadSummary.mediaUrls,
@@ -768,13 +937,21 @@ async function deliverOutboundPayloadsCore(
               sendOverrides,
             );
             results.push(delivery);
+            firstMessageId ??= delivery.messageId;
             lastMessageId = delivery.messageId;
             return;
           }
           const delivery = await handler.sendMedia(caption ?? "", mediaUrl, sendOverrides);
           results.push(delivery);
+          firstMessageId ??= delivery.messageId;
           lastMessageId = delivery.messageId;
         },
+      });
+      await maybePinDeliveredMessage({
+        handler,
+        payload: effectivePayload,
+        target: deliveryTarget,
+        messageId: firstMessageId,
       });
       emitMessageSent({
         success: true,

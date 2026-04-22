@@ -532,6 +532,54 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("preserves media-understanding provider metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      contracts: {
+        mediaUnderstandingProviders: ["openai"],
+      },
+      mediaUnderstandingProviderMetadata: {
+        openai: {
+          capabilities: ["image", "audio", "unknown"],
+          defaultModels: {
+            image: "gpt-5.4-mini",
+            audio: "gpt-4o-transcribe",
+            unknown: "ignored",
+          },
+          autoPriority: {
+            image: 10,
+            audio: 20,
+            video: "ignored",
+          },
+          nativeDocumentInputs: ["pdf", "docx"],
+        },
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.mediaUnderstandingProviderMetadata).toEqual({
+      openai: {
+        capabilities: ["image", "audio"],
+        defaultModels: {
+          image: "gpt-5.4-mini",
+          audio: "gpt-4o-transcribe",
+        },
+        autoPriority: {
+          image: 10,
+          audio: 20,
+        },
+        nativeDocumentInputs: ["pdf"],
+      },
+    });
+  });
+
   it("preserves channel env metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

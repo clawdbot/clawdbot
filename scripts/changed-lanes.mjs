@@ -14,8 +14,21 @@ const TEST_PATH_RE =
   /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$/u;
 const PUBLIC_EXTENSION_CONTRACT_RE =
   /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mjs$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
+export const RELEASE_METADATA_PATHS = new Set([
+  "CHANGELOG.md",
+  "apps/android/app/build.gradle.kts",
+  "apps/ios/CHANGELOG.md",
+  "apps/ios/Config/Version.xcconfig",
+  "apps/ios/fastlane/metadata/en-US/release_notes.txt",
+  "apps/ios/version.json",
+  "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+  "docs/.generated/config-baseline.sha256",
+  "docs/install/updating.md",
+  "package.json",
+  "src/config/schema.base.generated.ts",
+]);
 
-/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "apps" | "docs" | "tooling" | "all"} ChangedLane */
+/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "apps" | "docs" | "tooling" | "releaseMetadata" | "all"} ChangedLane */
 
 /**
  * @typedef {{
@@ -43,6 +56,7 @@ export function createEmptyChangedLanes() {
     apps: false,
     docs: false,
     tooling: false,
+    releaseMetadata: false,
     all: false,
   };
 }
@@ -62,6 +76,20 @@ export function detectChangedLanes(changedPaths) {
 
   if (paths.length === 0) {
     reasons.push("no changed paths");
+    return { paths, lanes, extensionImpactFromCore: false, docsOnly: false, reasons };
+  }
+
+  if (
+    paths.some((changedPath) => RELEASE_METADATA_PATHS.has(changedPath)) &&
+    paths.every(
+      (changedPath) => RELEASE_METADATA_PATHS.has(changedPath) || DOCS_PATH_RE.test(changedPath),
+    )
+  ) {
+    lanes.releaseMetadata = true;
+    lanes.docs = paths.some((changedPath) => DOCS_PATH_RE.test(changedPath));
+    for (const changedPath of paths) {
+      reasons.push(`${changedPath}: release metadata`);
+    }
     return { paths, lanes, extensionImpactFromCore: false, docsOnly: false, reasons };
   }
 

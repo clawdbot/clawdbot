@@ -108,6 +108,89 @@ function getGatewayRetryAfterMs(error: unknown) {
   return null;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isObjectWithStringId(value: unknown): value is { id: string } & Record<string, unknown> {
+  return isPlainObject(value) && typeof value.id === "string";
+}
+
+function applyQaMergePatch(target: unknown, patch: unknown): unknown {
+  if (Array.isArray(target) && Array.isArray(patch)) {
+    const merged = target.map((entry) => structuredClone(entry));
+    const indexById = new Map<string, number>();
+    for (const [index, entry] of merged.entries()) {
+      if (isObjectWithStringId(entry)) {
+        indexById.set(entry.id, index);
+      }
+    }
+    for (const patchEntry of patch) {
+      if (!isObjectWithStringId(patchEntry)) {
+        merged.push(structuredClone(patchEntry));
+        continue;
+      }
+      const existingIndex = indexById.get(patchEntry.id);
+      if (existingIndex === undefined) {
+        merged.push(structuredClone(patchEntry));
+        indexById.set(patchEntry.id, merged.length - 1);
+        continue;
+      }
+      merged[existingIndex] = applyQaMergePatch(merged[existingIndex], patchEntry);
+    }
+    return merged;
+  }
+  if (!isPlainObject(patch)) {
+    return structuredClone(patch);
+  }
+  const base = isPlainObject(target) ? structuredClone(target) : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) {
+      delete base[key];
+      continue;
+    }
+    base[key] = applyQaMergePatch(base[key], value);
+  }
+  return base;
+}
+
+function areJsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    return left.every((entry, index) => areJsonValuesEqual(entry, right[index]));
+  }
+  if (isPlainObject(left) || isPlainObject(right)) {
+    if (!isPlainObject(left) || !isPlainObject(right)) {
+      return false;
+    }
+    const leftKeys = Object.keys(left).toSorted();
+    const rightKeys = Object.keys(right).toSorted();
+    if (!areJsonValuesEqual(leftKeys, rightKeys)) {
+      return false;
+    }
+    return leftKeys.every((key) => areJsonValuesEqual(left[key], right[key]));
+  }
+  return false;
+}
+
+function isConfigPatchNoopForSnapshot(config: Record<string, unknown>, raw: string): boolean {
+  let patch: unknown;
+  try {
+    patch = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!isPlainObject(patch)) {
+    return false;
+  }
+  return areJsonValuesEqual(applyQaMergePatch(config, patch), config);
+}
+
 async function readConfigSnapshot(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   const snapshot = (await env.gateway.call(
     "config.get",
@@ -141,6 +224,15 @@ async function runConfigMutation(params: {
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
+    if (
+      params.action === "config.patch" &&
+      isConfigPatchNoopForSnapshot(snapshot.config, params.raw)
+    ) {
+      // QA scenarios do best-effort cleanup in finally blocks. Skipping
+      // client-known no-op patches keeps that cleanup from burning the
+      // control-plane write budget and making later capability checks flaky.
+      return { ok: true, noop: true };
+    }
     try {
       const result = await params.env.gateway.call(
         params.action,
@@ -235,6 +327,7 @@ export {
   fetchJson,
   formatGatewayPrimaryErrorText,
   getGatewayRetryAfterMs,
+  isConfigPatchNoopForSnapshot,
   isConfigHashConflict,
   isGatewayRestartRace,
   patchConfig,

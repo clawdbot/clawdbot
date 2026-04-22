@@ -24,6 +24,17 @@
     "memoryEmbeddingProviders": ["mistral"],
     "mediaUnderstandingProviders": ["mistral"]
   },
+  "mediaUnderstandingProviderMetadata": {
+    "mistral": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "voxtral-mini-latest"
+      },
+      "autoPriority": {
+        "audio": 50
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

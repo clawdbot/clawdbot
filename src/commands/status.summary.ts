@@ -118,14 +118,15 @@ export async function getStatusSummary(
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
+  const channelScopeConfig =
+    options.sourceConfig === undefined
+      ? { config: cfg }
+      : { config: cfg, activationSourceConfig: options.sourceConfig };
   const needsChannelPlugins =
-    includeChannelSummary &&
-    hasConfiguredChannelsForReadOnlyScope({
-      config: cfg,
-    });
+    includeChannelSummary && hasConfiguredChannelsForReadOnlyScope(channelScopeConfig);
   const linkContext = needsChannelPlugins
     ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
-        resolveLinkChannelContext(cfg),
+        resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
       )
     : null;
   const agentList = listGatewayAgentsBasic(cfg);

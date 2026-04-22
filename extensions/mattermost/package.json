@@ -4,7 +4,6 @@
   "description": "OpenClaw Mattermost channel plugin",
   "type": "module",
   "dependencies": {
-    "@sinclair/typebox": "0.34.49",
     "ws": "^8.20.0"
   },
   "devDependencies": {

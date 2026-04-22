@@ -115,6 +115,63 @@ describe("createChannelOutboundRuntimeSend", () => {
     );
   });
 
+  it("forwards Slack threadTs alias to threadId", async () => {
+    const sendText = vi.fn(async () => ({ channel: "slack", messageId: "slack-1" }));
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({
+      sendText,
+    });
+
+    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+    const runtimeSend = createChannelOutboundRuntimeSend({
+      channelId: "slack" as never,
+      unavailableMessage: "unavailable",
+    });
+
+    await runtimeSend.sendMessage("C123", "hello", {
+      cfg: {},
+      threadTs: "1712345678.123456",
+    });
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        to: "C123",
+        text: "hello",
+        threadId: "1712345678.123456",
+      }),
+    );
+  });
+
+  it("prefers canonical thread fields over Slack aliases", async () => {
+    const sendText = vi.fn(async () => ({ channel: "slack", messageId: "slack-2" }));
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({
+      sendText,
+    });
+
+    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+    const runtimeSend = createChannelOutboundRuntimeSend({
+      channelId: "slack" as never,
+      unavailableMessage: "unavailable",
+    });
+
+    await runtimeSend.sendMessage("C123", "hello", {
+      cfg: {},
+      messageThreadId: "200.000",
+      threadId: "150.000",
+      threadTs: "100.000",
+      replyToMessageId: "400.000",
+      replyToId: "300.000",
+    });
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        threadId: "200.000",
+        replyToId: "400.000",
+      }),
+    );
+  });
+
   it("falls back to sendText when media is present but sendMedia is unavailable", async () => {
     const sendText = vi.fn(async () => ({ channel: "whatsapp", messageId: "wa-3" }));
     mocks.loadChannelOutboundAdapter.mockResolvedValue({

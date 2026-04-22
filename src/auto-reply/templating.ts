@@ -142,9 +142,9 @@ export type MsgContext = {
   SenderTag?: string;
   SenderE164?: string;
   Timestamp?: number;
-  /** Provider label (e.g. whatsapp, telegram). */
+  /** Provider label. */
   Provider?: string;
-  /** Provider surface label (e.g. discord, slack). Prefer this over `Provider` when available. */
+  /** Provider surface label. Prefer this over `Provider` when available. */
   Surface?: string;
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;

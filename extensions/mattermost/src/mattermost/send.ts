@@ -1,4 +1,4 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   convertMarkdownTables,
@@ -30,7 +30,7 @@ import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js"
 import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 export type MattermostSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   botToken?: string;
   baseUrl?: string;
   accountId?: string;
@@ -315,11 +315,16 @@ type MattermostSendContext = {
 
 async function resolveMattermostSendContext(
   to: string,
-  opts: MattermostSendOpts = {},
+  opts: MattermostSendOpts,
 ): Promise<MattermostSendContext> {
   const core = getCore();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
-  const cfg = opts.cfg ?? core.config.loadConfig();
+  if (!opts?.cfg) {
+    throw new Error(
+      "Mattermost send requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const cfg = requireRuntimeConfig(opts.cfg, "Mattermost send");
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
@@ -382,7 +387,7 @@ async function resolveMattermostSendContext(
 
 export async function resolveMattermostSendChannelId(
   to: string,
-  opts: MattermostSendOpts = {},
+  opts: MattermostSendOpts,
 ): Promise<string> {
   return (await resolveMattermostSendContext(to, opts)).channelId;
 }
@@ -390,7 +395,7 @@ export async function resolveMattermostSendChannelId(
 export async function sendMessageMattermost(
   to: string,
   text: string,
-  opts: MattermostSendOpts = {},
+  opts: MattermostSendOpts,
 ): Promise<MattermostSendResult> {
   const core = getCore();
   const logger = core.logging.getChildLogger({ module: "mattermost" });

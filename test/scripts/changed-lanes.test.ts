@@ -152,12 +152,99 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("fails safe for root config changes", () => {
-    const result = detectChangedLanes(["package.json"]);
+    const result = detectChangedLanes(["pnpm-lock.yaml"]);
     const plan = createChangedCheckPlan(result);
 
     expect(result.lanes.all).toBe(true);
     expect(plan.runFullTests).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:all");
+  });
+
+  it("keeps release metadata commits off the full changed gate", () => {
+    const result = detectChangedLanes([
+      "CHANGELOG.md",
+      "apps/android/app/build.gradle.kts",
+      "apps/ios/CHANGELOG.md",
+      "apps/ios/Config/Version.xcconfig",
+      "apps/ios/fastlane/metadata/en-US/release_notes.txt",
+      "apps/ios/version.json",
+      "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+      "docs/.generated/config-baseline.sha256",
+      "package.json",
+      "src/config/schema.base.generated.ts",
+    ]);
+    const plan = createChangedCheckPlan(result, { staged: true });
+
+    expect(result.lanes).toMatchObject({
+      releaseMetadata: true,
+      all: false,
+      core: false,
+      apps: false,
+    });
+    expect(plan.runFullTests).toBe(false);
+    expect(plan.commands.map((command) => command.args[0])).toEqual([
+      "check:no-conflict-markers",
+      "release-metadata:check",
+      "ios:version:check",
+      "config:schema:check",
+      "config:docs:check",
+      "deps:root-ownership:check",
+    ]);
+  });
+
+  it("guards release metadata package changes to the top-level version field", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-release-metadata-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(
+      path.join(dir, "package.json"),
+      `${JSON.stringify({ name: "fixture", version: "2026.4.20", dependencies: { leftpad: "1.0.0" } }, null, 2)}\n`,
+      "utf8",
+    );
+    git(dir, ["add", "package.json"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    writeFileSync(
+      path.join(dir, "package.json"),
+      `${JSON.stringify({ name: "fixture", version: "2026.4.21", dependencies: { leftpad: "1.0.0" } }, null, 2)}\n`,
+      "utf8",
+    );
+    git(dir, ["add", "package.json"]);
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
+        {
+          cwd: dir,
+          stdio: "pipe",
+        },
+      ),
+    ).not.toThrow();
+
+    writeFileSync(
+      path.join(dir, "package.json"),
+      `${JSON.stringify({ name: "fixture", version: "2026.4.21", dependencies: { leftpad: "1.0.1" } }, null, 2)}\n`,
+      "utf8",
+    );
+    git(dir, ["add", "package.json"]);
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
+        {
+          cwd: dir,
+          stdio: "pipe",
+        },
+      ),
+    ).toThrow();
   });
 
   it("routes root test/support changes to the tooling test lane instead of all lanes", () => {
@@ -222,6 +309,7 @@ describe("scripts/changed-lanes", () => {
       apps: false,
       docs: false,
       tooling: false,
+      releaseMetadata: false,
       all: false,
     });
     expect(plan.commands).toEqual([

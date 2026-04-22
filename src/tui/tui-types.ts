@@ -1,4 +1,5 @@
 export type TuiOptions = {
+  local?: boolean;
   url?: string;
   token?: string;
   password?: string;

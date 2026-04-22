@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  clearActiveMcpLoopbackRuntime,
+  clearActiveMcpLoopbackRuntimeByOwnerToken,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
   setActiveMcpLoopbackRuntime,
@@ -70,7 +70,7 @@ export class McpLoopbackToolCache {
 }
 
 export {
-  clearActiveMcpLoopbackRuntime,
+  clearActiveMcpLoopbackRuntimeByOwnerToken,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
   setActiveMcpLoopbackRuntime,

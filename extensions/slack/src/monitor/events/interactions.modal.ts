@@ -238,6 +238,7 @@ export function registerModalLifecycleHandler(params: {
   register: RegisterSlackModalHandler;
   matcher: RegExp;
   ctx: SlackMonitorContext;
+  trackEvent?: () => void;
   interactionType: SlackModalInteractionKind;
   contextPrefix: SlackInteractionContextPrefix;
   summarizeViewState: (values: unknown) => ModalInputSummary[];
@@ -251,6 +252,7 @@ export function registerModalLifecycleHandler(params: {
       );
       return;
     }
+    params.trackEvent?.();
     await emitSlackModalLifecycleEvent({
       ctx: params.ctx,
       body: body as SlackModalBody,

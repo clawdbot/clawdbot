@@ -12,6 +12,9 @@ import {
   FIREWORKS_DEFAULT_CONTEXT_WINDOW,
   FIREWORKS_DEFAULT_MAX_TOKENS,
   FIREWORKS_DEFAULT_MODEL_ID,
+  FIREWORKS_K2_6_CONTEXT_WINDOW,
+  FIREWORKS_K2_6_MAX_TOKENS,
+  FIREWORKS_K2_6_MODEL_ID,
 } from "./provider-catalog.js";
 
 function createFireworksDefaultRuntimeModel(params: { reasoning: boolean }): ProviderRuntimeModel {
@@ -46,14 +49,23 @@ describe("fireworks provider plugin", () => {
     expect(resolved?.method.id).toBe("api-key");
   });
 
-  it("builds the Fireworks Fire Pass starter catalog", async () => {
+  it("builds the Fireworks catalog", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
     const catalogProvider = await runSingleProviderCatalog(provider);
 
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe(FIREWORKS_BASE_URL);
-    expect(catalogProvider.models?.map((model) => model.id)).toEqual([FIREWORKS_DEFAULT_MODEL_ID]);
+    expect(catalogProvider.models?.map((model) => model.id)).toEqual([
+      FIREWORKS_K2_6_MODEL_ID,
+      FIREWORKS_DEFAULT_MODEL_ID,
+    ]);
     expect(catalogProvider.models?.[0]).toMatchObject({
+      reasoning: false,
+      input: ["text", "image"],
+      contextWindow: FIREWORKS_K2_6_CONTEXT_WINDOW,
+      maxTokens: FIREWORKS_K2_6_MAX_TOKENS,
+    });
+    expect(catalogProvider.models?.[1]).toMatchObject({
       reasoning: false,
       input: ["text", "image"],
       contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
@@ -110,6 +122,23 @@ describe("fireworks provider plugin", () => {
     expect(resolved).toMatchObject({
       provider: "fireworks",
       id: "accounts/fireworks/routers/kimi-k2.5-turbo",
+      reasoning: false,
+    });
+  });
+
+  it("disables reasoning metadata for Fireworks Kimi k2.6 dynamic models", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    const resolved = provider.resolveDynamicModel?.(
+      createProviderDynamicModelContext({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/kimi-k2p6",
+        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
+      }),
+    );
+
+    expect(resolved).toMatchObject({
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
       reasoning: false,
     });
   });

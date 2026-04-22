@@ -87,6 +87,7 @@ export function buildWhatsAppInboundContext(params: {
   conversationId: string;
   groupHistory?: GroupHistoryEntry[];
   groupMemberRoster?: Map<string, string>;
+  groupSystemPrompt?: string;
   msg: WebInboundMsg;
   route: ReturnType<typeof resolveAgentRoute>;
   sender: SenderContext;
@@ -132,6 +133,7 @@ export function buildWhatsAppInboundContext(params: {
     SenderE164: params.sender.e164,
     CommandAuthorized: params.commandAuthorized,
     WasMentioned: params.msg.wasMentioned,
+    GroupSystemPrompt: params.groupSystemPrompt,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
     Provider: "whatsapp",
     Surface: "whatsapp",

@@ -1,3 +1,4 @@
+import { QA_BASE_RUNTIME_PLUGIN_IDS } from "../qa-gateway-config.js";
 import type { QaProviderMode } from "./index.js";
 import { getQaProvider } from "./index.js";
 
@@ -45,7 +46,11 @@ export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchI
 
   return {
     plugins: {
-      allow: uniqueNonEmpty(["memory-core", ...enabledPluginIds, ...input.requiredPluginIds]),
+      allow: uniqueNonEmpty([
+        ...QA_BASE_RUNTIME_PLUGIN_IDS,
+        ...enabledPluginIds,
+        ...input.requiredPluginIds,
+      ]),
       ...(enabledPluginIds.length > 0
         ? {
             entries: Object.fromEntries(

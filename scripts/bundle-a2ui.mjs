@@ -192,7 +192,7 @@ async function main() {
     }
   }
 
-  runPnpm(["-s", "exec", "tsc", "-p", path.join(a2uiRendererDir, "tsconfig.json")]);
+  runPnpm(["-s", "exec", "tsgo", "-p", path.join(a2uiRendererDir, "tsconfig.json")]);
 
   const localRolldownCliCandidates = getLocalRolldownCliCandidates(rootDir);
   const localRolldownCli = (

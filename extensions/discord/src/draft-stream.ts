@@ -12,6 +12,8 @@ export type DiscordDraftStream = {
   flush: () => Promise<void>;
   messageId: () => string | undefined;
   clear: () => Promise<void>;
+  discardPending: () => Promise<void>;
+  seal: () => Promise<void>;
   stop: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
@@ -113,7 +115,7 @@ export function createDiscordDraftStream(params: {
     await rest.delete(Routes.channelMessage(channelId, messageId));
   };
 
-  const { loop, update, stop, clear } = createFinalizableDraftLifecycle({
+  const { loop, update, stop, clear, discardPending, seal } = createFinalizableDraftLifecycle({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
@@ -138,6 +140,8 @@ export function createDiscordDraftStream(params: {
     flush: loop.flush,
     messageId: () => streamMessageId,
     clear,
+    discardPending,
+    seal,
     stop,
     forceNewMessage,
   };

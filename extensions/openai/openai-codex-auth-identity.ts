@@ -8,6 +8,7 @@ type CodexJwtPayload = {
     email?: unknown;
   };
   "https://api.openai.com/auth"?: {
+    chatgpt_account_id?: unknown;
     chatgpt_account_user_id?: unknown;
     chatgpt_user_id?: unknown;
     user_id?: unknown;

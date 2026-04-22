@@ -5,6 +5,7 @@ read_when:
   - Setting up conversation-bound ACP sessions on messaging channels
   - Binding a message channel conversation to a persistent ACP session
   - Troubleshooting ACP backend and plugin wiring
+  - Debugging ACP completion delivery or agent-to-agent loops
   - Operating /acp commands from chat
 title: "ACP Agents"
 ---
@@ -360,6 +361,44 @@ Interface details:
 - `resumeSessionId` (optional): resume an existing ACP session instead of creating a new one. The agent replays its conversation history via `session/load`. Requires `runtime: "acp"`.
 - `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
   - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
+
+## Delivery model
+
+ACP sessions can be either interactive workspaces or parent-owned background work. The delivery path depends on that shape.
+
+### Interactive ACP sessions
+
+Interactive sessions are meant to keep talking on a visible chat surface:
+
+- `/acp spawn ... --bind here` binds the current conversation to the ACP session.
+- `/acp spawn ... --thread ...` binds a channel thread/topic to the ACP session.
+- Persistent configured `bindings[].type="acp"` route matching conversations to the same ACP session.
+
+Follow-up messages in the bound conversation route directly to the ACP session, and ACP output is delivered back to that same channel/thread/topic.
+
+### Parent-owned one-shot ACP sessions
+
+One-shot ACP sessions spawned by another agent run are background children, similar to sub-agents:
+
+- The parent asks for work with `sessions_spawn({ runtime: "acp", mode: "run" })`.
+- The child runs in its own ACP harness session.
+- Completion reports back through the internal task-completion announce path.
+- The parent rewrites the child result in normal assistant voice when a user-facing reply is useful.
+
+Do not treat this path as a peer-to-peer chat between parent and child. The child already has a completion channel back to the parent.
+
+### `sessions_send` and A2A delivery
+
+`sessions_send` can target another session after spawn. For normal peer sessions, OpenClaw uses an agent-to-agent (A2A) follow-up path after injecting the message:
+
+- wait for the target session's reply
+- optionally let requester and target exchange a bounded number of follow-up turns
+- ask the target to produce an announce message
+- deliver that announce to the visible channel or thread
+
+That A2A path is a fallback for peer sends where the sender needs a visible follow-up. It stays enabled when an unrelated session can see and message an ACP target, for example under broad `tools.sessions.visibility` settings.
+
+OpenClaw skips the A2A follow-up only when the requester is the parent of its own parent-owned one-shot ACP child. In that case, running A2A on top of task completion can wake the parent with the child's result, forward the parent's reply back into the child, and create a parent/child echo loop. The `sessions_send` result reports `delivery.status="skipped"` for that owned-child case because the completion path is already responsible for the result.
 
 ### Resume an existing session
 

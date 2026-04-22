@@ -6,7 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
-  clearActiveMcpLoopbackRuntime,
+  clearActiveMcpLoopbackRuntimeByOwnerToken,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
   setActiveMcpLoopbackRuntime,
@@ -22,6 +22,7 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 export {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  resolveMcpLoopbackBearerToken,
 } from "./mcp-http.loopback-runtime.js";
 
 type McpLoopbackServer = {
@@ -54,11 +55,13 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
 }> {
-  const token = crypto.randomBytes(32).toString("hex");
+  const ownerToken = crypto.randomBytes(32).toString("hex");
+  const nonOwnerToken = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();
 
   const httpServer = createHttpServer((req, res) => {
-    if (!validateMcpLoopbackRequest({ req, res, token })) {
+    const auth = validateMcpLoopbackRequest({ req, res, ownerToken, nonOwnerToken });
+    if (!auth) {
       return;
     }
 
@@ -67,7 +70,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const body = await readMcpHttpBody(req);
         const parsed: JsonRpcRequest | JsonRpcRequest[] = JSON.parse(body);
         const cfg = loadConfig();
-        const requestContext = resolveMcpRequestContext(req, cfg);
+        const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
@@ -144,7 +147,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   if (!address || typeof address === "string") {
     throw new Error("mcp loopback did not bind to a TCP port");
   }
-  setActiveMcpLoopbackRuntime({ port: address.port, token });
+  setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
   const server: McpLoopbackServer = {
@@ -153,7 +156,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
       new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (!error) {
-            clearActiveMcpLoopbackRuntime(token);
+            clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
             if (activeMcpLoopbackServer === server) {
               activeMcpLoopbackServer = undefined;
             }

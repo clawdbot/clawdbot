@@ -15,7 +15,7 @@ describe("Slack message tool public API", () => {
       }),
     ).toMatchObject({
       actions: expect.arrayContaining(["send", "upload-file", "read"]),
-      capabilities: expect.arrayContaining(["blocks"]),
+      capabilities: expect.arrayContaining(["presentation"]),
     });
   });
 

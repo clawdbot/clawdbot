@@ -204,7 +204,8 @@ function trimBootstrapContent(
   }
   if (headChars === 0 && tailChars === 0 && trimmed.length > 0) {
     const singleHeadMarker = resolvedMarkerTemplate(1, 0);
-    const singleHeadLength = 1 + singleHeadMarker.length + separatorCharsFor(1, 0, singleHeadMarker);
+    const singleHeadLength =
+      1 + singleHeadMarker.length + separatorCharsFor(1, 0, singleHeadMarker);
     if (singleHeadLength <= maxChars) {
       headChars = 1;
       marker = singleHeadMarker;

@@ -1,5 +1,6 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { writeFileWithinRoot } from "openclaw/plugin-sdk/infra-runtime";
 import type {
   SandboxFsBridge,
   SandboxFsStat,
@@ -78,16 +79,12 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const parentDir = path.dirname(hostPath);
-    if (params.mkdir !== false) {
-      await fsPromises.mkdir(parentDir, { recursive: true });
-    }
-    const tempPath = path.join(
-      parentDir,
-      `.openclaw-openshell-write-${path.basename(hostPath)}-${process.pid}-${Date.now()}`,
-    );
-    await fsPromises.writeFile(tempPath, buffer);
-    await fsPromises.rename(tempPath, hostPath);
+    await writeFileWithinRoot({
+      rootDir: target.mountHostRoot,
+      relativePath: path.relative(target.mountHostRoot, hostPath),
+      data: buffer,
+      mkdir: params.mkdir,
+    });
     await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
   }
 

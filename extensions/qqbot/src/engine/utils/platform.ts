@@ -41,9 +41,14 @@ export function getHomeDir(): string {
   return getPlatformAdapter().getTempDir();
 }
 
+/** Return a path under `~/.openclaw/qqbot` without creating it. */
+export function getQQBotDataPath(...subPaths: string[]): string {
+  return path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
+}
+
 /** Return a path under `~/.openclaw/qqbot`, creating it on demand. */
 export function getQQBotDataDir(...subPaths: string[]): string {
-  const dir = path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
+  const dir = getQQBotDataPath(...subPaths);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -51,13 +56,18 @@ export function getQQBotDataDir(...subPaths: string[]): string {
 }
 
 /**
- * Return a path under `~/.openclaw/media/qqbot`, creating it on demand.
+ * Return a path under `~/.openclaw/media/qqbot` without creating it.
  *
- * Unlike `getQQBotDataDir`, this lives under OpenClaw's core media allowlist so
+ * Unlike `getQQBotDataPath`, this lives under OpenClaw's core media allowlist so
  * downloaded images and audio can be accessed by framework media tooling.
  */
+export function getQQBotMediaPath(...subPaths: string[]): string {
+  return path.join(getHomeDir(), ".openclaw", "media", "qqbot", ...subPaths);
+}
+
+/** Return a path under `~/.openclaw/media/qqbot`, creating it on demand. */
 export function getQQBotMediaDir(...subPaths: string[]): string {
-  const dir = path.join(getHomeDir(), ".openclaw", "media", "qqbot", ...subPaths);
+  const dir = getQQBotMediaPath(...subPaths);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -286,8 +296,8 @@ export function resolveQQBotLocalMediaPath(p: string): string {
   }
 
   const homeDir = getHomeDir();
-  const mediaRoot = getQQBotMediaDir();
-  const dataRoot = getQQBotDataDir();
+  const mediaRoot = getQQBotMediaPath();
+  const dataRoot = getQQBotDataPath();
   const workspaceRoot = path.join(homeDir, ".openclaw", "workspace", "qqbot");
   const candidateRoots = [
     { from: workspaceRoot, to: mediaRoot },
@@ -331,7 +341,7 @@ export function resolveQQBotPayloadLocalFilePath(p: string): string | null {
   // attachments under sibling directories (e.g. `media/outbound/`) that are already
   // part of the core media allowlist; we mirror that so auto-routed sends work
   // without leaving the plugin's trust boundary.
-  const allowedRoots = [getOpenClawMediaDir(), getQQBotMediaDir()];
+  const allowedRoots = [getOpenClawMediaDir(), getQQBotMediaPath()];
 
   for (const root of allowedRoots) {
     const resolvedRoot = path.resolve(root);

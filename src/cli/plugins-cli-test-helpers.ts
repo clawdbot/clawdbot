@@ -188,18 +188,22 @@ vi.mock("../plugins/status.js", () => ({
     )) as (typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"],
 }));
 
-vi.mock("../plugins/slots.js", () => ({
-  applyExclusiveSlotSelection: ((
-    params: Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0],
-  ) =>
-    invokeMock<
-      [Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0]],
-      ReturnType<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>
-    >(
-      applyExclusiveSlotSelection,
-      params,
-    )) as (typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"],
-}));
+vi.mock("../plugins/slots.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/slots.js")>();
+  return {
+    ...actual,
+    applyExclusiveSlotSelection: ((
+      params: Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0],
+    ) =>
+      invokeMock<
+        [Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0]],
+        ReturnType<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>
+      >(
+        applyExclusiveSlotSelection,
+        params,
+      )) as (typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"],
+  };
+});
 
 vi.mock("../plugins/uninstall.js", () => ({
   uninstallPlugin: ((

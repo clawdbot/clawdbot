@@ -69,7 +69,7 @@ export default definePluginEntry({
             credential,
           },
         ],
-        defaultModel: "github-copilot/claude-opus-4.6",
+        defaultModel: "github-copilot/claude-opus-4.7",
       };
     }
 

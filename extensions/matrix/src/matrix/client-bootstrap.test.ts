@@ -14,6 +14,8 @@ const {
   resolveMatrixAuthContextMock,
 } = matrixClientResolverMocks;
 
+const TEST_CFG = {};
+
 vi.mock("../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
 }));
@@ -56,6 +58,7 @@ describe("client bootstrap", () => {
 
     await expect(
       resolveRuntimeMatrixClientWithReadiness({
+        cfg: TEST_CFG,
         accountId: "default",
         readiness: "prepared",
       }),
@@ -72,6 +75,7 @@ describe("client bootstrap", () => {
     await expect(
       withResolvedRuntimeMatrixClient(
         {
+          cfg: TEST_CFG,
           accountId: "default",
           readiness: "started",
         },

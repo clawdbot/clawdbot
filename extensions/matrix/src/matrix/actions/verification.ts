@@ -1,5 +1,5 @@
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { formatMatrixEncryptionUnavailableError } from "../encryption-guidance.js";
 import { withResolvedActionClient, withStartedActionClient } from "./client.js";
@@ -10,7 +10,12 @@ function requireCrypto(
   opts: MatrixActionClientOpts,
 ): NonNullable<import("../sdk.js").MatrixClient["crypto"]> {
   if (!client.crypto) {
-    const cfg = opts.cfg ?? (getMatrixRuntime().config.loadConfig() as CoreConfig);
+    if (!opts.cfg) {
+      throw new Error(
+        "Matrix verification actions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+      );
+    }
+    const cfg = requireRuntimeConfig(opts.cfg, "Matrix verification actions") as CoreConfig;
     throw new Error(formatMatrixEncryptionUnavailableError(cfg, opts.accountId));
   }
   return client.crypto;

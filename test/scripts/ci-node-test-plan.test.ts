@@ -53,16 +53,10 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .filter((shard) => shard.requiresDist)
       .map((shard) => shard.shardName);
 
-    expect(requiresDistShardNames).toEqual([
-      "core-support-boundary",
-      "core-runtime-infra",
-      "core-runtime-media-ui",
-      "core-runtime-shared",
-      "agentic-plugins",
-    ]);
+    expect(requiresDistShardNames).toEqual(["core-support-boundary", "agentic-plugins"]);
   });
 
-  it("splits core runtime configs into smaller dist-dependent shards", () => {
+  it("splits core runtime configs into smaller source-only shards", () => {
     const runtimeShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-runtime-"))
       .map((shard) => ({
@@ -81,7 +75,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.logging.config.ts",
           "test/vitest/vitest.process.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
         shardName: "core-runtime-infra",
       },
       {
@@ -92,7 +86,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.ui.config.ts",
           "test/vitest/vitest.wizard.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
         shardName: "core-runtime-media-ui",
       },
       {
@@ -103,7 +97,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
         shardName: "core-runtime-shared",
       },
     ]);

@@ -266,4 +266,71 @@ describe("resolveMatrixOutboundSessionRoute", () => {
 
     expectCurrentDmRoomRoute(route);
   });
+
+  it("recovers channel thread routes from currentSessionKey and preserves Matrix event-id case", () => {
+    const route = resolveMatrixOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: "room:!Ops:Example.Org",
+      currentSessionKey: "agent:main:matrix:channel:!ops:example.org:thread:$RootEvent:Example.Org",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:matrix:channel:!ops:example.org:thread:$RootEvent:Example.Org",
+      baseSessionKey: "agent:main:matrix:channel:!ops:example.org",
+      threadId: "$RootEvent:Example.Org",
+    });
+  });
+
+  it("resolves per-room DM metadata from the base key when currentSessionKey has a thread suffix", () => {
+    const storedSession = createStoredDirectDmSession();
+    const route = resolveUserRoute({
+      cfg: createMatrixRouteConfig({
+        [currentDmSessionKey]: storedSession,
+      }),
+      accountId: "ops",
+      target: "@alice:example.org",
+    });
+    const threadedRoute = resolveMatrixOutboundSessionRoute({
+      cfg: createMatrixRouteConfig({
+        [route?.baseSessionKey ?? currentDmSessionKey]: storedSession,
+      }),
+      agentId: "main",
+      accountId: "ops",
+      target: "@alice:example.org",
+      resolvedTarget: {
+        to: "@alice:example.org",
+        kind: "user",
+        source: "normalized",
+      },
+      currentSessionKey: `${route?.baseSessionKey}:thread:$DmRoot:Example.Org`,
+    });
+
+    expect(threadedRoute).toMatchObject({
+      sessionKey: `${route?.baseSessionKey}:thread:$DmRoot:Example.Org`,
+      baseSessionKey: route?.baseSessionKey,
+      to: "room:!dm:example.org",
+      threadId: "$DmRoot:Example.Org",
+    });
+  });
+
+  it('does not recover currentSessionKey threads for shared dmScope "main" DMs', () => {
+    const route = resolveMatrixOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: "@alice:example.org",
+      currentSessionKey: "agent:main:main:thread:$DmRoot:Example.Org",
+      resolvedTarget: {
+        to: "@alice:example.org",
+        kind: "user",
+        source: "normalized",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+    });
+    expect(route?.threadId).toBeUndefined();
+  });
 });

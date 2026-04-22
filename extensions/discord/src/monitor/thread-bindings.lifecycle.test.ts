@@ -259,6 +259,7 @@ describe("thread binding lifecycle", () => {
     try {
       const manager = createThreadBindingManager({
         accountId: "default",
+        cfg: {} as OpenClawConfig,
         persist: false,
         enableSweeper: false,
         idleTimeoutMs: 60_000,
@@ -298,6 +299,7 @@ describe("thread binding lifecycle", () => {
     try {
       const manager = createThreadBindingManager({
         accountId: "default",
+        cfg: {} as OpenClawConfig,
         persist: false,
         enableSweeper: false,
         idleTimeoutMs: 0,

@@ -1,4 +1,6 @@
+import { deliverFinalizableDraftPreview } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -276,7 +278,7 @@ type MattermostDraftPreviewDeliverParams = {
   client: MattermostClient;
   draftStream: Pick<
     ReturnType<typeof createMattermostDraftStream>,
-    "flush" | "postId" | "clear" | "stop"
+    "flush" | "postId" | "clear" | "discardPending" | "seal"
   >;
   effectiveReplyToId?: string;
   resolvePreviewFinalText: (text?: string) => string | undefined;
@@ -288,69 +290,53 @@ type MattermostDraftPreviewDeliverParams = {
 export async function deliverMattermostReplyWithDraftPreview(
   params: MattermostDraftPreviewDeliverParams,
 ): Promise<void> {
-  if (params.payload.isReasoning) {
+  if (isReasoningReplyPayload(params.payload)) {
     return;
   }
 
-  const isFinal = params.info.kind === "final";
-  let previewPostId: string | undefined;
-  if (isFinal) {
-    await params.draftStream.flush();
-    const hasMedia =
-      Boolean(params.payload.mediaUrl) || (params.payload.mediaUrls?.length ?? 0) > 0;
-    const previewFinalText = params.resolvePreviewFinalText(params.payload.text);
-    previewPostId = params.draftStream.postId();
+  await deliverFinalizableDraftPreview({
+    kind: params.info.kind,
+    payload: params.payload,
+    draft: {
+      flush: params.draftStream.flush,
+      clear: params.draftStream.clear,
+      discardPending: params.draftStream.discardPending,
+      seal: params.draftStream.seal,
+      id: params.draftStream.postId,
+    },
+    buildFinalEdit: (payload) => {
+      const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+      const previewFinalText = params.resolvePreviewFinalText(payload.text);
 
-    if (
-      typeof previewPostId === "string" &&
-      !hasMedia &&
-      typeof previewFinalText === "string" &&
-      !params.payload.isError &&
-      canFinalizeMattermostPreviewInPlace({
-        previewRootId: params.effectiveReplyToId,
-        threadRootId: params.effectiveReplyToId,
-        replyToId: params.payload.replyToId,
-      })
-    ) {
-      try {
-        // Seal the preview before the final edit so late draft events cannot
-        // patch over the finalized visible message.
-        await params.draftStream.stop();
-        await updateMattermostPost(params.client, previewPostId, {
-          message: previewFinalText,
-        });
-        params.previewState.finalizedViaPreviewPost = true;
-        return;
-      } catch (err) {
-        params.logVerboseMessage(
-          `mattermost preview final edit failed; falling back to normal send (${String(err)})`,
-        );
+      if (
+        hasMedia ||
+        typeof previewFinalText !== "string" ||
+        payload.isError ||
+        !canFinalizeMattermostPreviewInPlace({
+          previewRootId: params.effectiveReplyToId,
+          threadRootId: params.effectiveReplyToId,
+          replyToId: payload.replyToId,
+        })
+      ) {
+        return undefined;
       }
-    }
-  }
-
-  let finalReplyDelivered = false;
-  try {
-    await params.deliverFinal();
-    finalReplyDelivered = true;
-  } finally {
-    if (
-      isFinal &&
-      typeof previewPostId === "string" &&
-      shouldClearMattermostDraftPreview({
-        finalizedViaPreviewPost: params.previewState.finalizedViaPreviewPost,
-        finalReplyDelivered,
-      })
-    ) {
-      try {
-        await params.draftStream.clear();
-      } catch (err) {
-        params.logVerboseMessage(
-          `mattermost draft preview clear failed after successful final delivery (${String(err)})`,
-        );
-      }
-    }
-  }
+      return { message: previewFinalText };
+    },
+    editFinal: async (previewPostId, edit) => {
+      await updateMattermostPost(params.client, previewPostId, edit);
+    },
+    deliverNormally: async () => {
+      await params.deliverFinal();
+    },
+    onPreviewFinalized: () => {
+      params.previewState.finalizedViaPreviewPost = true;
+    },
+    logPreviewEditFailure: (err) => {
+      params.logVerboseMessage(
+        `mattermost preview final edit failed; falling back to normal send (${String(err)})`,
+      );
+    },
+  });
 }
 
 export function resolveMattermostEffectiveReplyToId(params: {

@@ -1,0 +1,28 @@
+{
+  "id": "tencent",
+  "enabledByDefault": true,
+  "providers": ["tencent-tokenhub"],
+  "providerAuthEnvVars": {
+    "tencent-tokenhub": ["TOKENHUB_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "tencent-tokenhub",
+      "method": "api-key",
+      "choiceId": "tokenhub-api-key",
+      "choiceLabel": "Tencent TokenHub",
+      "groupId": "tencent",
+      "groupLabel": "Tencent Cloud",
+      "groupHint": "Tencent TokenHub",
+      "optionKey": "tokenhubApiKey",
+      "cliFlag": "--tokenhub-api-key",
+      "cliOption": "--tokenhub-api-key <key>",
+      "cliDescription": "Tencent TokenHub API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

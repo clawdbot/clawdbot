@@ -66,7 +66,8 @@ function createDraftStreamMock(postId: string | undefined = "preview-post-1") {
     flush: vi.fn(async () => {}),
     postId: vi.fn(() => postId),
     clear: vi.fn(async () => {}),
-    stop: vi.fn(async () => {}),
+    discardPending: vi.fn(async () => {}),
+    seal: vi.fn(async () => {}),
   };
 }
 
@@ -251,6 +252,29 @@ describe("shouldClearMattermostDraftPreview", () => {
 });
 
 describe("deliverMattermostReplyWithDraftPreview", () => {
+  it("suppresses reasoning-prefixed finals before preview finalization", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "  \n > Reasoning:\n> _hidden_" } as never,
+      info: { kind: "final" },
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverFinal,
+    });
+
+    expect(deliverFinal).not.toHaveBeenCalled();
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  });
+
   it("deletes the preview after a successful normal final send", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = vi.fn(async () => {});
@@ -267,6 +291,8 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
 
     expect(deliverFinal).toHaveBeenCalledTimes(1);
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
   });
@@ -292,6 +318,29 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
 
     expect(deliverFinal).toHaveBeenCalledTimes(1);
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not flush error finals before normal delivery", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "Error", isError: true } as never,
+      info: { kind: "final" },
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverFinal,
+    });
+
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(deliverFinal).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
@@ -316,8 +365,9 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       "preview-post-1",
       expect.objectContaining({ message: "Final answer" }),
     );
-    expect(draftStream.stop).toHaveBeenCalledTimes(1);
-    expect(draftStream.stop.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.seal).toHaveBeenCalledTimes(1);
+    expect(draftStream.seal.mock.invocationCallOrder[0]).toBeLessThan(
       updateMattermostPostSpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(deliverFinal).not.toHaveBeenCalled();
@@ -343,6 +393,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       }),
     ).rejects.toThrow("send failed");
 
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(updateMattermostPostSpy).not.toHaveBeenCalledWith(
       expect.anything(),

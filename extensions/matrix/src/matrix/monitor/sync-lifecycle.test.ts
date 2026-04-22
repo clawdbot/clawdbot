@@ -129,6 +129,42 @@ describe("createMatrixMonitorSyncLifecycle", () => {
     );
   });
 
+  it("only refreshes transport liveness for successful sync responses", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
+    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
+    try {
+      setStatus.mockClear();
+
+      client.emit("sync.state", "PREPARED", null, undefined);
+      expect(setStatus).toHaveBeenLastCalledWith(
+        expect.not.objectContaining({
+          lastTransportActivityAt: expect.any(Number),
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      client.emit("sync.state", "SYNCING", "PREPARED", undefined);
+      const syncAt = Date.now();
+      expect(setStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          lastTransportActivityAt: syncAt,
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      client.emit("sync.state", "CATCHUP", "SYNCING", undefined);
+      expect(setStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          lastTransportActivityAt: syncAt,
+        }),
+      );
+    } finally {
+      lifecycle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not downgrade a fatal error to stopped during shutdown", async () => {
     const { client, lifecycle, setStatus, setStopping, statusController } =
       createSyncLifecycleHarness({

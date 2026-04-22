@@ -40,7 +40,7 @@ function loadDeliverRuntime() {
 export type RouteReplyParams = {
   /** The reply payload to send. */
   payload: ReplyPayload;
-  /** The originating channel type (telegram, slack, etc). */
+  /** The originating channel type. */
   channel: OriginatingChannelType;
   /** The destination chat/channel/user ID. */
   to: string;

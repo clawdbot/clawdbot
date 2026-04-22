@@ -144,6 +144,24 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("falls back to the logo while authenticated avatar routes are loading", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+      {
+        assistantAvatar: "/avatar/main",
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    const img = container.querySelector("img.chat-avatar");
+    expect(img?.getAttribute("src")).toBe("/openclaw-logo.svg");
+  });
+
   it("positions delete confirm by message side", () => {
     const renderDeletable = (role: "user" | "assistant") => {
       const container = document.createElement("div");

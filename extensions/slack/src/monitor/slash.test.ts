@@ -190,8 +190,12 @@ beforeEach(() => {
   resetSlackSlashMocks();
 });
 
-async function registerCommands(ctx: unknown, account: unknown) {
-  await registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+async function registerCommands(ctx: unknown, account: unknown, trackEvent?: () => void) {
+  await registerSlackMonitorSlashCommands({
+    ctx: ctx as never,
+    account: account as never,
+    trackEvent,
+  } as never);
 }
 
 function encodeValue(parts: { command: string; arg: string; value: string; userId: string }) {
@@ -569,6 +573,17 @@ describe("Slack native command argument menus", () => {
     expect(call.ctx?.Body).toBe("/usage tokens");
   });
 
+  it("tracks accepted slash command activity", async () => {
+    const trackingHarness = createArgMenusHarness();
+    const trackEvent = vi.fn();
+    await registerCommands(trackingHarness.ctx, trackingHarness.account, trackEvent);
+    const usageTrackingHandler = requireHandler(trackingHarness.commands, "/usage", "/usage");
+
+    await runCommandHandler(usageTrackingHandler);
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
   it("maps /agentstatus to /status when dispatching", async () => {
     await runCommandHandler(agentStatusHandler);
     expectSingleDispatchedSlashBody("/status");
@@ -639,6 +654,36 @@ describe("Slack native command argument menus", () => {
     expect(optionTexts.some((text) => text.includes("Period 12"))).toBe(true);
   });
 
+  it("tracks accepted external_select option requests", async () => {
+    const trackingHarness = createArgMenusHarness();
+    const trackEvent = vi.fn();
+    await registerCommands(trackingHarness.ctx, trackingHarness.account, trackEvent);
+    const reportExternalTrackingHandler = requireHandler(
+      trackingHarness.commands,
+      "/reportexternal",
+      "/reportexternal",
+    );
+    const argMenuOptionsTrackingHandler = requireHandler(
+      trackingHarness.options,
+      "openclaw_cmdarg",
+      "arg-menu options",
+    );
+    const { blockId } = await runCommandAndResolveActionsBlock(reportExternalTrackingHandler);
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+    trackEvent.mockClear();
+
+    await argMenuOptionsTrackingHandler({
+      ack: ackOptions,
+      body: {
+        user: { id: "U1" },
+        value: "period 12",
+        actions: [{ block_id: blockId }],
+      },
+    });
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects external_select option requests without user identity", async () => {
     const { blockId } = await runCommandAndResolveActionsBlock(reportExternalHandler);
     expect(blockId).toContain("openclaw_cmdarg_ext:");
@@ -670,6 +715,25 @@ describe("Slack native command argument menus", () => {
       text: "That menu is for another user.",
       response_type: "ephemeral",
     });
+  });
+
+  it("tracks accepted arg-menu actions", async () => {
+    const trackingHarness = createArgMenusHarness();
+    const trackEvent = vi.fn();
+    await registerCommands(trackingHarness.ctx, trackingHarness.account, trackEvent);
+    const argMenuTrackingHandler = requireHandler(
+      trackingHarness.actions,
+      /^openclaw_cmdarg/,
+      "arg-menu action",
+    );
+
+    await runArgMenuAction(argMenuTrackingHandler, {
+      action: {
+        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+      },
+    });
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to postEphemeral with token when respond is unavailable", async () => {

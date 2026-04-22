@@ -9,15 +9,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
-import { getQQBotDataDir } from "../utils/platform.js";
+import { getQQBotDataDir, getQQBotDataPath } from "../utils/platform.js";
 import type { RefIndexEntry } from "./types.js";
 
 // Re-export types and format function for convenience.
 export type { RefIndexEntry, RefAttachmentSummary } from "./types.js";
 export { formatRefEntryForAgent } from "./format-ref-entry.js";
 
-const STORAGE_DIR = getQQBotDataDir("data");
-const REF_INDEX_FILE = path.join(STORAGE_DIR, "ref-index.jsonl");
 const MAX_ENTRIES = 50000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const COMPACT_THRESHOLD_RATIO = 2;
@@ -31,6 +29,10 @@ interface RefIndexLine {
 let cache: Map<string, RefIndexEntry & { _createdAt: number }> | null = null;
 let totalLinesOnDisk = 0;
 
+function getRefIndexFile(): string {
+  return path.join(getQQBotDataPath("data"), "ref-index.jsonl");
+}
+
 function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
   if (cache !== null) {
     return cache;
@@ -39,10 +41,11 @@ function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
   totalLinesOnDisk = 0;
 
   try {
-    if (!fs.existsSync(REF_INDEX_FILE)) {
+    const refIndexFile = getRefIndexFile();
+    if (!fs.existsSync(refIndexFile)) {
       return cache;
     }
-    const raw = fs.readFileSync(REF_INDEX_FILE, "utf-8");
+    const raw = fs.readFileSync(refIndexFile, "utf-8");
     const lines = raw.split("\n");
     const now = Date.now();
     let expired = 0;
@@ -79,15 +82,13 @@ function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
 }
 
 function ensureDir(): void {
-  if (!fs.existsSync(STORAGE_DIR)) {
-    fs.mkdirSync(STORAGE_DIR, { recursive: true });
-  }
+  getQQBotDataDir("data");
 }
 
 function appendLine(line: RefIndexLine): void {
   try {
     ensureDir();
-    fs.appendFileSync(REF_INDEX_FILE, JSON.stringify(line) + "\n", "utf-8");
+    fs.appendFileSync(getRefIndexFile(), JSON.stringify(line) + "\n", "utf-8");
     totalLinesOnDisk++;
   } catch (err) {
     debugError(`[ref-index-store] Failed to append: ${formatErrorMessage(err)}`);
@@ -107,7 +108,8 @@ function compactFile(): void {
   const before = totalLinesOnDisk;
   try {
     ensureDir();
-    const tmpPath = REF_INDEX_FILE + ".tmp";
+    const refIndexFile = getRefIndexFile();
+    const tmpPath = refIndexFile + ".tmp";
     const lines: string[] = [];
     for (const [key, entry] of cache) {
       lines.push(
@@ -126,7 +128,7 @@ function compactFile(): void {
       );
     }
     fs.writeFileSync(tmpPath, lines.join("\n") + "\n", "utf-8");
-    fs.renameSync(tmpPath, REF_INDEX_FILE);
+    fs.renameSync(tmpPath, refIndexFile);
     totalLinesOnDisk = cache.size;
     debugLog(`[ref-index-store] Compacted: ${before} lines → ${totalLinesOnDisk} lines`);
   } catch (err) {
@@ -213,5 +215,10 @@ export function getRefIndexStats(): {
   filePath: string;
 } {
   const store = loadFromFile();
-  return { size: store.size, maxEntries: MAX_ENTRIES, totalLinesOnDisk, filePath: REF_INDEX_FILE };
+  return {
+    size: store.size,
+    maxEntries: MAX_ENTRIES,
+    totalLinesOnDisk,
+    filePath: getRefIndexFile(),
+  };
 }

@@ -83,9 +83,30 @@ import type { QaProviderModeInput } from "./run-config.js";
 
 describe("qa cli runtime", () => {
   let stdoutWrite: ReturnType<typeof vi.spyOn>;
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
+  let suiteArtifactsDir: string;
+  let suiteReportPath: string;
+  let suiteSummaryPath: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    suiteArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-runtime-"));
+    suiteReportPath = path.join(suiteArtifactsDir, "qa-suite-report.md");
+    suiteSummaryPath = path.join(suiteArtifactsDir, "qa-suite-summary.json");
+    await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 1,
+          failed: 0,
+        },
+        scenarios: [],
+      }),
+      "utf8",
+    );
     stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     runQaSuiteFromRuntime.mockReset();
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
@@ -101,8 +122,8 @@ describe("qa cli runtime", () => {
     );
     runQaSuiteFromRuntime.mockResolvedValue({
       watchUrl: "http://127.0.0.1:43124",
-      reportPath: "/tmp/report.md",
-      summaryPath: "/tmp/summary.json",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
       scenarios: [],
     });
     runQaCharacterEval.mockResolvedValue({
@@ -153,9 +174,11 @@ describe("qa cli runtime", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     stdoutWrite.mockRestore();
+    stderrWrite.mockRestore();
     vi.clearAllMocks();
+    await fs.rm(suiteArtifactsDir, { recursive: true, force: true });
   });
 
   it("resolves suite repo-root-relative paths before dispatching", async () => {
@@ -307,10 +330,22 @@ describe("qa cli runtime", () => {
   it("sets a failing exit code when host suite scenarios fail", async () => {
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 1,
+        },
+        scenarios: [{ name: "channel chat baseline", status: "fail" }],
+      }),
+      "utf8",
+    );
     runQaSuiteFromRuntime.mockResolvedValueOnce({
       watchUrl: "http://127.0.0.1:43124",
-      reportPath: "/tmp/report.md",
-      summaryPath: "/tmp/summary.json",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
       scenarios: [
         {
           name: "channel chat baseline",
@@ -333,10 +368,22 @@ describe("qa cli runtime", () => {
   it("keeps host suite exit code clear when --allow-failures is set", async () => {
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 1,
+        },
+        scenarios: [{ name: "channel chat baseline", status: "fail" }],
+      }),
+      "utf8",
+    );
     runQaSuiteFromRuntime.mockResolvedValueOnce({
       watchUrl: "http://127.0.0.1:43124",
-      reportPath: "/tmp/report.md",
-      summaryPath: "/tmp/summary.json",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
       scenarios: [
         {
           name: "channel chat baseline",
@@ -355,6 +402,203 @@ describe("qa cli runtime", () => {
     } finally {
       process.exitCode = priorExitCode;
     }
+  });
+
+  it("retries host suite runs once for retryable infra failures", async () => {
+    runQaSuiteFromRuntime
+      .mockRejectedValueOnce(new Error("agent.wait timeout while waiting for transport ready"))
+      .mockResolvedValueOnce({
+        watchUrl: "http://127.0.0.1:43124",
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [],
+      });
+
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(2);
+    expect(stderrWrite).toHaveBeenCalledWith(
+      expect.stringContaining("[qa-suite] infra retry 1/1: agent.wait timeout"),
+    );
+  });
+
+  it("retries host suite runs once for qa-channel readiness timeouts", async () => {
+    runQaSuiteFromRuntime
+      .mockRejectedValueOnce(
+        new Error(
+          "timed out after 180000ms waiting for qa-channel ready; last status: no qa-channel accounts reported",
+        ),
+      )
+      .mockResolvedValueOnce({
+        watchUrl: "http://127.0.0.1:43124",
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [],
+      });
+
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(2);
+    expect(stderrWrite).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "[qa-suite] infra retry 1/1: timed out after 180000ms waiting for qa-channel ready",
+      ),
+    );
+  });
+
+  it("does not retry host suite runs for generic timeout wording", async () => {
+    runQaSuiteFromRuntime.mockRejectedValueOnce(
+      new Error("approval-turn timed out waiting for post-approval read"),
+    );
+
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      }),
+    ).rejects.toThrow("approval-turn timed out waiting for post-approval read");
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry host suite runs for semantic failures", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 1,
+        },
+        scenarios: [{ name: "channel chat baseline", status: "fail" }],
+      }),
+      "utf8",
+    );
+    runQaSuiteFromRuntime.mockResolvedValueOnce({
+      watchUrl: "http://127.0.0.1:43124",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      scenarios: [
+        {
+          name: "channel chat baseline",
+          status: "fail",
+          steps: [],
+        },
+      ],
+    });
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      });
+      expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(1);
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("runs a host-only parity preflight against the sentinel scenario", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "anthropic/claude-opus-4-6",
+      preflight: true,
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: expect.stringMatching(
+        /^\/tmp\/openclaw-repo\/\.artifacts\/qa-e2e\/preflight\/suite-/,
+      ),
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "anthropic/claude-opus-4-6",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      concurrency: 1,
+    });
+    expect(stdoutWrite).toHaveBeenCalledWith(
+      expect.stringContaining("QA parity preflight summary:"),
+    );
+  });
+
+  it("throws when parity preflight finds a failing sentinel scenario", async () => {
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 1,
+        },
+        scenarios: [{ name: "approval turn tool followthrough", status: "fail" }],
+      }),
+      "utf8",
+    );
+    runQaSuiteFromRuntime.mockResolvedValueOnce({
+      watchUrl: "http://127.0.0.1:43124",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      scenarios: [{ name: "approval turn tool followthrough", status: "fail", steps: [] }],
+    });
+
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        preflight: true,
+      }),
+    ).rejects.toThrow("QA parity preflight failed with 1 failing scenario.");
+  });
+
+  it("keeps parity preflight exit code clear when --allow-failures is set", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 1,
+        },
+        scenarios: [{ name: "approval turn tool followthrough", status: "fail" }],
+      }),
+      "utf8",
+    );
+    runQaSuiteFromRuntime.mockResolvedValueOnce({
+      watchUrl: "http://127.0.0.1:43124",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      scenarios: [{ name: "approval turn tool followthrough", status: "fail", steps: [] }],
+    });
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        preflight: true,
+        allowFailures: true,
+      });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("rejects preflight on the multipass runner", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runner: "multipass",
+        preflight: true,
+      }),
+    ).rejects.toThrow("--preflight requires --runner host.");
   });
 
   it("passes host suite CLI auth mode through", async () => {

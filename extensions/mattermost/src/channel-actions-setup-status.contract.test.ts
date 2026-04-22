@@ -24,7 +24,7 @@ describe("mattermost actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: ["send", "react"],
-        expectedCapabilities: ["buttons"],
+        expectedCapabilities: ["presentation"],
       },
       {
         name: "reactions can be disabled while send stays available",
@@ -39,7 +39,7 @@ describe("mattermost actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: ["send"],
-        expectedCapabilities: ["buttons"],
+        expectedCapabilities: ["presentation"],
       },
       {
         name: "missing bot credentials disables the actions surface",

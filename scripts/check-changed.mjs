@@ -10,7 +10,7 @@ import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
-export function createChangedCheckPlan(result) {
+export function createChangedCheckPlan(result, options = {}) {
   const commands = [];
   const add = (name, args) => {
     if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
@@ -33,6 +33,28 @@ export function createChangedCheckPlan(result) {
 
   const lanes = result.lanes;
   const runAll = lanes.all;
+
+  if (lanes.releaseMetadata) {
+    add("release metadata guard", [
+      "release-metadata:check",
+      "--",
+      ...(options.staged
+        ? ["--staged"]
+        : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
+    ]);
+    add("iOS version sync", ["ios:version:check"]);
+    add("config schema baseline", ["config:schema:check"]);
+    add("config docs baseline", ["config:docs:check"]);
+    add("root dependency ownership", ["deps:root-ownership:check"]);
+    return {
+      commands,
+      testTargets: [],
+      runChangedTestsBroad: false,
+      runFullTests: false,
+      runExtensionTests: false,
+      summary: "release metadata",
+    };
+  }
 
   if (runAll) {
     add("typecheck all", ["tsgo:all"]);
@@ -99,7 +121,7 @@ export function createChangedCheckPlan(result) {
 }
 
 export async function runChangedCheck(result, options = {}) {
-  const plan = createChangedCheckPlan(result);
+  const plan = createChangedCheckPlan(result, options);
   printPlan(result, plan, options);
 
   if (options.dryRun) {

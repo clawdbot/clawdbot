@@ -24,3 +24,7 @@ export function collectAllowedToolNames(params: {
   }
   return names;
 }
+
+export function toSessionToolAllowlist(allowedToolNames: Iterable<string>): string[] {
+  return [...new Set(allowedToolNames)].toSorted((a, b) => a.localeCompare(b));
+}

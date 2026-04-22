@@ -218,6 +218,16 @@ export function updateConfigFormValue(
   mutateConfigForm(state, (draft) => setPathValue(draft, path, value));
 }
 
+export function resetConfigPendingChanges(state: ConfigState) {
+  state.configForm = cloneConfigObject(
+    state.configFormOriginal ?? state.configSnapshot?.config ?? {},
+  );
+  state.configRaw =
+    state.configRawOriginal ??
+    serializeConfigForm(state.configFormOriginal ?? state.configSnapshot?.config ?? {});
+  state.configFormDirty = false;
+}
+
 export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
 }

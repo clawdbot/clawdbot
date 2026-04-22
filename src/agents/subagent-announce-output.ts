@@ -63,6 +63,10 @@ export type SubagentRunOutcome = {
   elapsedMs?: number;
 };
 
+function isFailedOutcome(outcome?: SubagentRunOutcome): boolean {
+  return outcome?.status === "error";
+}
+
 function readFiniteNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -253,6 +257,9 @@ function selectSubagentOutputText(
   snapshot: SubagentOutputSnapshot,
   outcome?: SubagentRunOutcome,
 ): string | undefined {
+  if (isFailedOutcome(outcome)) {
+    return undefined;
+  }
   if (snapshot.latestSilentText) {
     return snapshot.latestSilentText;
   }
@@ -270,6 +277,9 @@ export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
 ): Promise<string | undefined> {
+  if (isFailedOutcome(outcome)) {
+    return undefined;
+  }
   const history = await subagentAnnounceOutputDeps.callGateway({
     method: "chat.history",
     params: { sessionKey, limit: 100 },
@@ -347,14 +357,18 @@ export function applySubagentWaitOutcome(params: {
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
-  options?: { waitForReply?: boolean },
+  options?: { waitForReply?: boolean; outcome?: SubagentRunOutcome },
 ): Promise<string | undefined> {
+  if (isFailedOutcome(options?.outcome)) {
+    return undefined;
+  }
   return await captureSubagentCompletionReplyUsing({
     sessionKey,
     waitForReply: options?.waitForReply,
     maxWaitMs: isFastTestMode() ? 50 : 1_500,
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
-    readSubagentOutput: async (nextSessionKey) => await readSubagentOutput(nextSessionKey),
+    readSubagentOutput: async (nextSessionKey) =>
+      await readSubagentOutput(nextSessionKey, options?.outcome),
   });
 }
 

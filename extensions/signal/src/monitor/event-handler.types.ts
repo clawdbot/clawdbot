@@ -105,6 +105,7 @@ export type SignalEventHandlerDeps = {
     maxBytes: number;
   }) => Promise<{ path: string; contentType?: string } | null>;
   deliverReplies: (params: {
+    cfg: OpenClawConfig;
     replies: ReplyPayload[];
     target: string;
     baseUrl: string;

@@ -884,6 +884,12 @@ Per-account override:
 
 Related docs: [Exec approvals](/tools/exec-approvals)
 
+## Slash commands
+
+Matrix slash commands (for example `/new`, `/reset`, `/model`) work directly in DMs. In rooms, OpenClaw also recognizes slash commands that are prefixed with the bot's own Matrix mention, so `@bot:server /new` triggers the command path without needing a custom mention regex. This keeps the bot responsive to room-style `@mention /command` posts that Element and similar clients emit when a user tab-completes the bot before typing the command.
+
+Authorization rules still apply: command senders must satisfy DM or room allowlist/owner policies just like plain messages.
+
 ## Multi-account
 
 ```json5

@@ -33,6 +33,7 @@ describe("config view", () => {
     onSearchChange: vi.fn(),
     onSectionChange: vi.fn(),
     onReload: vi.fn(),
+    onReset: vi.fn(),
     onSave: vi.fn(),
     onApply: vi.fn(),
     onUpdate: vi.fn(),
@@ -49,11 +50,13 @@ describe("config view", () => {
   });
 
   function findActionButtons(container: HTMLElement): {
+    clearButton?: HTMLButtonElement;
     saveButton?: HTMLButtonElement;
     applyButton?: HTMLButtonElement;
   } {
     const buttons = Array.from(container.querySelectorAll("button"));
     return {
+      clearButton: buttons.find((btn) => btn.textContent?.trim() === "Clear pending updates"),
       saveButton: buttons.find((btn) => btn.textContent?.trim() === "Save"),
       applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
     };
@@ -129,22 +132,31 @@ describe("config view", () => {
       raw: "{\n}\n",
       originalRaw: "{\n}\n",
     });
-    ({ saveButton, applyButton } = findActionButtons(container));
+    let clearButton: HTMLButtonElement | undefined;
+    ({ clearButton, saveButton, applyButton } = findActionButtons(container));
+    expect(clearButton).not.toBeUndefined();
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
+    expect(clearButton?.disabled).toBe(true);
     expect(saveButton?.disabled).toBe(true);
     expect(applyButton?.disabled).toBe(true);
 
+    const onReset = vi.fn();
     renderCase({
       formMode: "raw",
       raw: '{\n  gateway: { mode: "local" }\n}\n',
       originalRaw: "{\n}\n",
+      onReset,
     });
-    ({ saveButton, applyButton } = findActionButtons(container));
+    ({ clearButton, saveButton, applyButton } = findActionButtons(container));
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
+    expect(clearButton?.disabled).toBe(false);
     expect(saveButton?.disabled).toBe(false);
     expect(applyButton?.disabled).toBe(false);
+
+    clearButton?.click();
+    expect(onReset).toHaveBeenCalledTimes(1);
   });
 
   it("switches mode via the sidebar toggle", () => {

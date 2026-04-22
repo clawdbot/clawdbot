@@ -1,19 +1,17 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import { normalizeInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  normalizeInteractiveReply,
+  normalizeMessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
-import { parseSlackBlocksInput } from "./blocks-input.js";
-import { buildSlackInteractiveBlocks } from "./blocks-render.js";
+import { buildSlackInteractiveBlocks, buildSlackPresentationBlocks } from "./blocks-render.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
   cfg: ChannelMessageActionContext["cfg"],
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
-
-function readSlackBlocksParam(actionParams: Record<string, unknown>) {
-  return parseSlackBlocksInput(actionParams.blocks) as Record<string, unknown>[] | undefined;
-}
 
 /** Translate generic channel action requests into Slack-specific tool invocations and payload shapes. */
 export async function handleSlackMessageAction(params: {
@@ -40,9 +38,13 @@ export async function handleSlackMessageAction(params: {
       allowEmpty: true,
     });
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
+    const presentation = normalizeMessagePresentation(actionParams.presentation);
     const interactive = normalizeInteractiveReply(actionParams.interactive);
     const interactiveBlocks = interactive ? buildSlackInteractiveBlocks(interactive) : undefined;
-    const blocks = readSlackBlocksParam(actionParams) ?? interactiveBlocks;
+    const presentationBlocks = presentation
+      ? buildSlackPresentationBlocks(presentation)
+      : undefined;
+    const blocks = presentationBlocks?.length ? presentationBlocks : interactiveBlocks;
     if (!content && !mediaUrl && !blocks) {
       throw new Error("Slack send requires message, blocks, or media.");
     }
@@ -123,7 +125,8 @@ export async function handleSlackMessageAction(params: {
       required: true,
     });
     const content = readStringParam(actionParams, "message", { allowEmpty: true });
-    const blocks = readSlackBlocksParam(actionParams);
+    const presentation = normalizeMessagePresentation(actionParams.presentation);
+    const blocks = presentation ? buildSlackPresentationBlocks(presentation) : undefined;
     if (!content && !blocks) {
       throw new Error("Slack edit requires message or blocks.");
     }

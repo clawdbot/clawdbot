@@ -105,14 +105,23 @@ describe("runAgentHarnessAttemptWithFallback", () => {
     expect(piRunAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the PI harness in auto mode when the selected plugin harness fails", async () => {
+  it("falls back to the PI harness in auto mode when no plugin harness matches", async () => {
     process.env.OPENCLAW_AGENT_RUNTIME = "auto";
-    registerFailingCodexHarness();
 
     const result = await runAgentHarnessAttemptWithFallback(createAttemptParams());
 
     expect(result.sessionIdUsed).toBe("pi");
     expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces an auto-selected plugin harness failure instead of replaying through PI", async () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
+    registerFailingCodexHarness();
+
+    await expect(runAgentHarnessAttemptWithFallback(createAttemptParams())).rejects.toThrow(
+      "codex startup failed",
+    );
+    expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
   it("surfaces a forced plugin harness failure instead of replaying through PI", async () => {
@@ -125,26 +134,15 @@ describe("runAgentHarnessAttemptWithFallback", () => {
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("disables PI retry fallback when auto-selected harness fails and fallback is none", async () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
-    registerFailingCodexHarness();
-
-    await expect(
-      runAgentHarnessAttemptWithFallback(
-        createAttemptParams({ agents: { defaults: { embeddedHarness: { fallback: "none" } } } }),
-      ),
-    ).rejects.toThrow("codex startup failed");
-    expect(piRunAttempt).not.toHaveBeenCalled();
-  });
-
   it("honors env fallback override over config fallback", async () => {
     process.env.OPENCLAW_AGENT_RUNTIME = "auto";
     process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
-    registerFailingCodexHarness();
 
-    await expect(runAgentHarnessAttemptWithFallback(createAttemptParams())).rejects.toThrow(
-      "codex startup failed",
-    );
+    await expect(
+      runAgentHarnessAttemptWithFallback(
+        createAttemptParams({ agents: { defaults: { embeddedHarness: { fallback: "pi" } } } }),
+      ),
+    ).rejects.toThrow("PI fallback is disabled");
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 });

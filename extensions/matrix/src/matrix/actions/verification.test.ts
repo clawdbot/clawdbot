@@ -16,6 +16,16 @@ vi.mock("../../runtime.js", () => ({
   }),
 }));
 
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfigMock()),
+  };
+});
+
 vi.mock("./client.js", () => ({
   withResolvedActionClient: (...args: unknown[]) => withResolvedActionClientMock(...args),
   withStartedActionClient: (...args: unknown[]) => withStartedActionClientMock(...args),
@@ -61,7 +71,9 @@ describe("matrix verification actions", () => {
       return await run({ crypto: null });
     });
 
-    await expect(listMatrixVerifications({ accountId: "ops" })).rejects.toThrow(
+    await expect(
+      listMatrixVerifications({ cfg: loadConfigMock(), accountId: "ops" }),
+    ).rejects.toThrow(
       "Matrix encryption is not available (enable channels.matrix.accounts.ops.encryption=true)",
     );
   });
@@ -83,7 +95,7 @@ describe("matrix verification actions", () => {
       return await run({ crypto: null });
     });
 
-    await expect(listMatrixVerifications()).rejects.toThrow(
+    await expect(listMatrixVerifications({ cfg: loadConfigMock() })).rejects.toThrow(
       "Matrix encryption is not available (enable channels.matrix.accounts.ops.encryption=true)",
     );
   });

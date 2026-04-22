@@ -196,6 +196,10 @@
     "target": "Doctor"
   },
   {
+    "source": "Config",
+    "target": "配置"
+  },
+  {
     "source": "Memory Wiki",
     "target": "Memory Wiki"
   },

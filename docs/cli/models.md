@@ -43,6 +43,9 @@ Probe rows can come from auth profiles, env credentials, or `models.json`.
 Notes:
 
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
+- `models list --all` includes bundled provider-owned static catalog rows even
+  when you have not authenticated with that provider yet. Those rows still show
+  as unavailable until matching auth is configured.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw resolves the input as an alias first, then
   as a unique configured-provider match for that exact model id, and only then

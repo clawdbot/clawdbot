@@ -19,10 +19,14 @@ class FakeEmitter {
       listener(...args);
     }
   }
+
+  listenerCount(event: string) {
+    return this.listeners.get(event)?.size ?? 0;
+  }
 }
 
 describe("slack socket reconnect helpers", () => {
-  it("seeds event liveness when socket mode connects", () => {
+  it("marks socket mode healthy without seeding event liveness on connect", () => {
     const setStatus = vi.fn();
 
     __testing.publishSlackConnectedStatus(setStatus);
@@ -32,13 +36,16 @@ describe("slack socket reconnect helpers", () => {
       expect.objectContaining({
         connected: true,
         lastConnectedAt: expect.any(Number),
-        lastEventAt: expect.any(Number),
+        healthState: "healthy",
         lastError: null,
       }),
     );
+    expect(setStatus).not.toHaveBeenCalledWith(
+      expect.objectContaining({ lastEventAt: expect.any(Number) }),
+    );
   });
 
-  it("clears connected state when socket mode disconnects", () => {
+  it("marks socket mode disconnected when an error closes the socket", () => {
     const setStatus = vi.fn();
     const err = new Error("dns down");
 
@@ -47,6 +54,7 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(setStatus).toHaveBeenCalledWith({
       connected: false,
+      healthState: "disconnected",
       lastDisconnect: {
         at: expect.any(Number),
         error: "dns down",
@@ -55,7 +63,7 @@ describe("slack socket reconnect helpers", () => {
     });
   });
 
-  it("clears connected state without error when socket mode disconnects cleanly", () => {
+  it("marks socket mode disconnected without error when the socket closes cleanly", () => {
     const setStatus = vi.fn();
 
     __testing.publishSlackDisconnectedStatus(setStatus);
@@ -63,6 +71,7 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(setStatus).toHaveBeenCalledWith({
       connected: false,
+      healthState: "disconnected",
       lastDisconnect: {
         at: expect.any(Number),
       },
@@ -89,6 +98,49 @@ describe("slack socket reconnect helpers", () => {
     client.emit("error", err);
 
     await expect(waiter).resolves.toEqual({ event: "error", error: err });
+  });
+
+  it("installs the disconnect waiter before socket start completes", async () => {
+    const client = new FakeEmitter();
+    const app = {
+      receiver: { client },
+      start: vi.fn().mockImplementation(async () => {
+        client.emit("disconnected");
+      }),
+    };
+    const onStarted = vi.fn();
+
+    await expect(
+      __testing.startSlackSocketAndWaitForDisconnect({
+        app: app as never,
+        onStarted,
+      }),
+    ).resolves.toEqual({ event: "disconnect" });
+
+    expect(app.start).toHaveBeenCalledTimes(1);
+    expect(onStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the disconnect waiter when onStarted throws", async () => {
+    const client = new FakeEmitter();
+    const app = {
+      receiver: { client },
+      start: vi.fn().mockResolvedValue(undefined),
+    };
+    const err = new Error("status sink failed");
+
+    await expect(
+      __testing.startSlackSocketAndWaitForDisconnect({
+        app: app as never,
+        onStarted: () => {
+          throw err;
+        },
+      }),
+    ).rejects.toThrow("status sink failed");
+
+    expect(client.listenerCount("disconnected")).toBe(0);
+    expect(client.listenerCount("unable_to_socket_mode_start")).toBe(0);
+    expect(client.listenerCount("error")).toBe(0);
   });
 
   it("preserves error payload from unable_to_socket_mode_start event", async () => {

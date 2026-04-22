@@ -47,8 +47,10 @@ export async function formatConfigChannelsStatusLines(
       return buildChannelAccountLine(provider, account, bits);
     });
 
-  const plugins = listReadOnlyChannelPluginsForConfig(cfg);
   const sourceConfig = opts?.sourceConfig ?? cfg;
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    activationSourceConfig: sourceConfig,
+  });
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(cfg);
     if (!accountIds.length) {

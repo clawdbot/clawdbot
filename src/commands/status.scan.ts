@@ -25,8 +25,11 @@ export async function scanStatus(
       _runtime,
       {
         commandName: "status --json",
-        resolveHasConfiguredChannels: (cfg) =>
-          hasConfiguredChannelsForReadOnlyScope({ config: cfg }),
+        resolveHasConfiguredChannels: (cfg, sourceConfig) =>
+          hasConfiguredChannelsForReadOnlyScope({
+            config: cfg,
+            activationSourceConfig: sourceConfig,
+          }),
         resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
           await resolveStatusMemoryStatusSnapshot({
             cfg,

@@ -244,6 +244,30 @@ describe("discordPlugin outbound", () => {
     }
   });
 
+  it("forwards heartbeat typing through the run config and attached target", async () => {
+    const sendTypingDiscord = vi.fn(async () => ({ ok: true, channelId: "thread-123" }));
+    const sendTypingSpy = vi
+      .spyOn(sendModule, "sendTypingDiscord")
+      .mockImplementation(sendTypingDiscord);
+    try {
+      const cfg = createCfg();
+
+      await discordPlugin.heartbeat!.sendTyping!({
+        cfg,
+        to: "channel:123",
+        accountId: "work",
+        threadId: "thread-123",
+      });
+
+      expect(sendTypingDiscord).toHaveBeenCalledWith("thread-123", {
+        cfg,
+        accountId: "work",
+      });
+    } finally {
+      sendTypingSpy.mockRestore();
+    }
+  });
+
   it("uses direct Discord probe helpers for status probes", async () => {
     const runtimeProbeDiscord = vi.fn(async () => {
       throw new Error("runtime Discord probe should not be used");

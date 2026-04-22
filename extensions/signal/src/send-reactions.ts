@@ -2,14 +2,14 @@
  * Signal reactions via signal-cli JSON-RPC API
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalReactionOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   baseUrl?: string;
   account?: string;
   accountId?: string;
@@ -30,15 +30,6 @@ type SignalReactionErrorMessages = {
   missingEmoji: string;
   missingTargetAuthor: string;
 };
-
-let signalConfigRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/config-runtime")>
-  | undefined;
-
-async function loadSignalConfigRuntime() {
-  signalConfigRuntimePromise ??= import("openclaw/plugin-sdk/config-runtime");
-  return await signalConfigRuntimePromise;
-}
 
 function normalizeSignalId(raw: string): string {
   const trimmed = raw.trim();
@@ -86,7 +77,7 @@ async function sendReactionSignalCore(params: {
   opts: SignalReactionOpts;
   errors: SignalReactionErrorMessages;
 }): Promise<SignalReactionResult> {
-  const cfg = params.opts.cfg ?? (await loadSignalConfigRuntime()).loadConfig();
+  const cfg = requireRuntimeConfig(params.opts.cfg, "Signal reactions");
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: params.opts.accountId,
@@ -153,7 +144,7 @@ export async function sendReactionSignal(
   recipient: string,
   targetTimestamp: number,
   emoji: string,
-  opts: SignalReactionOpts = {},
+  opts: SignalReactionOpts,
 ): Promise<SignalReactionResult> {
   return await sendReactionSignalCore({
     recipient,
@@ -181,7 +172,7 @@ export async function removeReactionSignal(
   recipient: string,
   targetTimestamp: number,
   emoji: string,
-  opts: SignalReactionOpts = {},
+  opts: SignalReactionOpts,
 ): Promise<SignalReactionResult> {
   return await sendReactionSignalCore({
     recipient,

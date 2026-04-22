@@ -895,15 +895,20 @@ describe("createReplyReferencePlanner", () => {
       replyToMode: "first",
       startId: "parent",
     });
+    expect(firstPlanner.peek()).toBe("parent");
+    expect(firstPlanner.hasReplied()).toBe(false);
     expect(firstPlanner.use()).toBe("parent");
     expect(firstPlanner.hasReplied()).toBe(true);
     firstPlanner.markSent();
+    expect(firstPlanner.peek()).toBeUndefined();
     expect(firstPlanner.use()).toBeUndefined();
 
     const allPlanner = createReplyReferencePlanner({
       replyToMode: "all",
       startId: "parent",
     });
+    expect(allPlanner.peek()).toBe("parent");
+    expect(allPlanner.hasReplied()).toBe(false);
     expect(allPlanner.use()).toBe("parent");
     expect(allPlanner.use()).toBe("parent");
 
@@ -919,8 +924,26 @@ describe("createReplyReferencePlanner", () => {
       replyToMode: "batched",
       startId: "parent",
     });
+    expect(batchedPlanner.peek()).toBe("parent");
     expect(batchedPlanner.use()).toBe("parent");
+    expect(batchedPlanner.peek()).toBeUndefined();
     expect(batchedPlanner.use()).toBeUndefined();
+  });
+
+  it("lets transient previews inspect first references without consuming them", () => {
+    const planner = createReplyReferencePlanner({
+      replyToMode: "first",
+      startId: "parent",
+    });
+
+    expect(planner.peek()).toBe("parent");
+    expect(planner.peek()).toBe("parent");
+    expect(planner.hasReplied()).toBe(false);
+
+    planner.markSent();
+
+    expect(planner.peek()).toBeUndefined();
+    expect(planner.use()).toBeUndefined();
   });
 
   it("honors allowReference=false", () => {

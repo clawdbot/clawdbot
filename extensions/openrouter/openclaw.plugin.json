@@ -23,6 +23,14 @@
   "contracts": {
     "mediaUnderstandingProviders": ["openrouter"]
   },
+  "mediaUnderstandingProviderMetadata": {
+    "openrouter": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "auto"
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

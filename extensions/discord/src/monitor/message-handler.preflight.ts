@@ -11,7 +11,7 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
-import { isDangerousNameMatchingEnabled, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import {
@@ -536,6 +536,7 @@ export async function preflightDiscordMessage(
                 code,
               }),
               {
+                cfg: params.cfg,
                 token: params.token,
                 rest: params.client.rest,
                 accountId: params.accountId,
@@ -602,15 +603,14 @@ export async function preflightDiscordMessage(
     earlyThreadParentType = parentInfo.type;
   }
 
-  // Use the active runtime snapshot for bindings lookup; routing inputs are
-  // still payload-derived, but this path should not reparse config from disk.
+  // Routing inputs are payload-derived, but config must come from the boundary
+  // snapshot already threaded into the monitor path.
   const memberRoleIds = Array.isArray(params.data.rawMember?.roles)
     ? params.data.rawMember.roles
     : [];
-  const freshCfg = loadConfig();
   const conversationRuntime = await loadConversationRuntime();
   const route = resolveDiscordConversationRoute({
-    cfg: freshCfg,
+    cfg: params.cfg,
     accountId: params.accountId,
     guildId: params.data.guild_id ?? undefined,
     memberRoleIds,
@@ -639,7 +639,7 @@ export async function preflightDiscordMessage(
   const configuredRoute =
     threadBinding == null
       ? conversationRuntime.resolveConfiguredBindingRoute({
-          cfg: freshCfg,
+          cfg: params.cfg,
           route,
           conversation: {
             channel: "discord",
@@ -1047,7 +1047,7 @@ export async function preflightDiscordMessage(
   }
   if (configuredBinding) {
     const ensured = await conversationRuntime.ensureConfiguredBindingRouteReady({
-      cfg: freshCfg,
+      cfg: params.cfg,
       bindingResolution: configuredBinding,
     });
     if (!ensured.ok) {

@@ -842,7 +842,7 @@ describe("discord component interactions", () => {
       "user:123456789",
       "msg-1",
       { text: expect.any(String) },
-      { accountId: "default" },
+      expect.objectContaining({ accountId: "default" }),
     );
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });

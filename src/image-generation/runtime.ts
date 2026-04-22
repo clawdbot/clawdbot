@@ -59,6 +59,9 @@ export async function generateImage(
         error,
       });
       lastError = new Error(error);
+      log.warn(
+        `image-generation candidate failed: ${candidate.provider}/${candidate.model}: ${error}`,
+      );
       continue;
     }
 
@@ -112,7 +115,11 @@ export async function generateImage(
         status: described?.status,
         code: described?.code,
       });
-      log.debug(`image-generation candidate failed: ${candidate.provider}/${candidate.model}`);
+      log.warn(
+        `image-generation candidate failed: ${candidate.provider}/${candidate.model}: ${
+          described?.message ?? formatErrorMessage(err)
+        }`,
+      );
     }
   }
 

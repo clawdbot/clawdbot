@@ -1,14 +1,12 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { getFileExtension, normalizeMimeType } from "./mime.js";
 
-export const TELEGRAM_VOICE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus", ".mp3", ".m4a"]);
+export const VOICE_MESSAGE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus", ".mp3", ".m4a"]);
 
 /**
  * MIME types compatible with voice messages.
- * Telegram sendVoice supports OGG/Opus, MP3, and M4A.
- * https://core.telegram.org/bots/api#sendvoice
  */
-export const TELEGRAM_VOICE_MIME_TYPES = new Set([
+export const VOICE_MESSAGE_MIME_TYPES = new Set([
   "audio/ogg",
   "audio/opus",
   "audio/mpeg",
@@ -18,12 +16,12 @@ export const TELEGRAM_VOICE_MIME_TYPES = new Set([
   "audio/m4a",
 ]);
 
-export function isTelegramVoiceCompatibleAudio(opts: {
+export function isVoiceMessageCompatibleAudio(opts: {
   contentType?: string | null;
   fileName?: string | null;
 }): boolean {
   const mime = normalizeMimeType(opts.contentType);
-  if (mime && TELEGRAM_VOICE_MIME_TYPES.has(mime)) {
+  if (mime && VOICE_MESSAGE_MIME_TYPES.has(mime)) {
     return true;
   }
   const fileName = normalizeOptionalString(opts.fileName);
@@ -34,16 +32,12 @@ export function isTelegramVoiceCompatibleAudio(opts: {
   if (!ext) {
     return false;
   }
-  return TELEGRAM_VOICE_AUDIO_EXTENSIONS.has(ext);
+  return VOICE_MESSAGE_AUDIO_EXTENSIONS.has(ext);
 }
 
-/**
- * Backward-compatible alias used across plugin/runtime call sites.
- * Keeps existing behavior while making Telegram-specific policy explicit.
- */
 export function isVoiceCompatibleAudio(opts: {
   contentType?: string | null;
   fileName?: string | null;
 }): boolean {
-  return isTelegramVoiceCompatibleAudio(opts);
+  return isVoiceMessageCompatibleAudio(opts);
 }

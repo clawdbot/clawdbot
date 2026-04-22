@@ -1,5 +1,5 @@
 import { Routes } from "discord-api-types/v10";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildReactionIdentifier,
   createDiscordClient,
@@ -17,7 +17,12 @@ function createDiscordReactionRuntimeClient(opts: DiscordReactionRuntimeContext)
 }
 
 function resolveDiscordReactionClient(opts: DiscordReactOpts) {
-  const cfg = opts.cfg ?? loadConfig();
+  if (!opts.cfg) {
+    throw new Error(
+      "Discord reactions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const cfg = requireRuntimeConfig(opts.cfg, "Discord reactions");
   return createDiscordClient(opts, cfg);
 }
 

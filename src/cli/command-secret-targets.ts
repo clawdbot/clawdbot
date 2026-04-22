@@ -30,16 +30,6 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "messages.tts.providers.*.apiKey",
   "skills.entries.*.apiKey",
   "tools.web.search.apiKey",
-  "plugins.entries.brave.config.webSearch.apiKey",
-  "plugins.entries.google.config.webSearch.apiKey",
-  "plugins.entries.exa.config.webSearch.apiKey",
-  "plugins.entries.xai.config.webSearch.apiKey",
-  "plugins.entries.moonshot.config.webSearch.apiKey",
-  "plugins.entries.perplexity.config.webSearch.apiKey",
-  "plugins.entries.firecrawl.config.webSearch.apiKey",
-  "plugins.entries.firecrawl.config.webFetch.apiKey",
-  "plugins.entries.tavily.config.webSearch.apiKey",
-  "plugins.entries.minimax.config.webSearch.apiKey",
 ] as const;
 const STATIC_STATUS_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
@@ -67,11 +57,32 @@ type CommandSecretTargets = {
 };
 
 let cachedCommandSecretTargets: CommandSecretTargets | undefined;
+let cachedAgentRuntimeBaseTargetIds: string[] | undefined;
 let cachedChannelSecretTargetIds: string[] | undefined;
 
 function getChannelSecretTargetIds(): string[] {
   cachedChannelSecretTargetIds ??= idsByPrefix(["channels."]);
   return cachedChannelSecretTargetIds;
+}
+
+function isPluginWebCredentialTargetId(id: string): boolean {
+  const segments = id.split(".");
+  if (segments[0] !== "plugins" || segments[1] !== "entries" || segments[3] !== "config") {
+    return false;
+  }
+  const configPath = segments.slice(4).join(".");
+  return configPath === "webSearch.apiKey" || configPath === "webFetch.apiKey";
+}
+
+function getAgentRuntimeBaseTargetIds(): string[] {
+  cachedAgentRuntimeBaseTargetIds ??= [
+    ...STATIC_AGENT_RUNTIME_BASE_TARGET_IDS,
+    ...listSecretTargetRegistryEntries()
+      .map((entry) => entry.id)
+      .filter(isPluginWebCredentialTargetId)
+      .toSorted(),
+  ];
+  return cachedAgentRuntimeBaseTargetIds;
 }
 
 function isScopedChannelSecretTargetEntry(params: {
@@ -120,7 +131,7 @@ function buildCommandSecretTargets(): CommandSecretTargets {
   const channelTargetIds = getChannelSecretTargetIds();
   return {
     channels: channelTargetIds,
-    agentRuntime: [...STATIC_AGENT_RUNTIME_BASE_TARGET_IDS, ...channelTargetIds],
+    agentRuntime: [...getAgentRuntimeBaseTargetIds(), ...channelTargetIds],
     status: [...STATIC_STATUS_TARGET_IDS, ...channelTargetIds],
     securityAudit: [...STATIC_SECURITY_AUDIT_TARGET_IDS, ...channelTargetIds],
   };
@@ -213,7 +224,7 @@ export function getAgentRuntimeCommandSecretTargetIds(params?: {
   includeChannelTargets?: boolean;
 }): Set<string> {
   if (params?.includeChannelTargets !== true) {
-    return toTargetIdSet(STATIC_AGENT_RUNTIME_BASE_TARGET_IDS);
+    return toTargetIdSet(getAgentRuntimeBaseTargetIds());
   }
   return toTargetIdSet(getCommandSecretTargets().agentRuntime);
 }

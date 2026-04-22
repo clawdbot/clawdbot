@@ -1,7 +1,6 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -14,7 +13,10 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
-import { resolveConfiguredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
+import {
+  hasConfiguredChannelsForReadOnlyScope,
+  resolveConfiguredChannelPluginIds,
+} from "../plugins/channel-plugin-ids.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
@@ -1009,7 +1011,12 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const shouldAuditChannelSecurity =
     context.includeChannelSecurity &&
     (context.plugins !== undefined ||
-      hasPotentialConfiguredChannels(cfg, env) ||
+      hasConfiguredChannelsForReadOnlyScope({
+        config: cfg,
+        activationSourceConfig: context.sourceConfig,
+        workspaceDir: context.workspaceDir,
+        env,
+      }) ||
       resolveConfiguredChannelPluginIds({
         config: cfg,
         activationSourceConfig: context.sourceConfig,

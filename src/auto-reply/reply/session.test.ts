@@ -30,6 +30,9 @@ const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
   nextSessionId: 0,
 }));
+const channelSummaryMocks = vi.hoisted(() => ({
+  buildChannelSummary: vi.fn(async () => [] as string[]),
+}));
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
@@ -49,6 +52,10 @@ vi.mock("./session-fork.js", () => ({
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => null,
+}));
+
+vi.mock("../../infra/channel-summary.js", () => ({
+  buildChannelSummary: channelSummaryMocks.buildChannelSummary,
 }));
 
 // Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
@@ -240,6 +247,7 @@ function registerCurrentConversationBindingAdapterForTest(params: {
 }
 
 beforeEach(() => {
+  channelSummaryMocks.buildChannelSummary.mockReset().mockResolvedValue([]);
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   sessionForkMocks.nextSessionId = 0;
   sessionForkMocks.forkSessionFromParent
@@ -2414,36 +2422,9 @@ describe("drainFormattedSystemEvents", () => {
   });
 
   it("keeps channel summary lines prefixed as trusted system output on new main sessions", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "whatsapp",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "whatsapp", label: "WhatsApp" }),
-            config: {
-              listAccountIds: () => ["default"],
-              defaultAccountId: () => "default",
-              inspectAccount: () => ({
-                accountId: "default",
-                enabled: true,
-                configured: true,
-                name: "line one\nline two",
-              }),
-              resolveAccount: () => ({
-                accountId: "default",
-                enabled: true,
-                configured: true,
-                name: "line one\nline two",
-              }),
-            },
-            status: {
-              buildChannelSummary: async () => ({ linked: true }),
-            },
-          },
-        },
-      ]),
-    );
+    channelSummaryMocks.buildChannelSummary.mockResolvedValue([
+      "WhatsApp: linked\n  - default (line one\nline two)",
+    ]);
 
     const result = await drainFormattedSystemEvents({
       cfg: { channels: {} } as OpenClawConfig,

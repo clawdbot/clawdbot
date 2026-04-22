@@ -17,7 +17,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/text-runtime";
-import type { DiscordComponentMessageSpec } from "./components.js";
+import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 
@@ -113,7 +113,7 @@ function resolveDiscordWebhookIdentity(params: {
 }
 
 async function maybeSendDiscordWebhookText(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   text: string;
   threadId?: string | number | null;
   accountId?: string | null;
@@ -160,6 +160,31 @@ export const discordOutbound: ChannelOutboundAdapter = {
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: true,
+  },
+  renderPresentation: async ({ payload, presentation }) => {
+    const componentSpec = (await loadDiscordSharedInteractive()).buildDiscordPresentationComponents(
+      presentation,
+    );
+    if (!componentSpec) {
+      return null;
+    }
+    return {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        discord: {
+          ...(payload.channelData?.discord as Record<string, unknown> | undefined),
+          presentationComponents: componentSpec,
+        },
+      },
+    };
+  },
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
   sendPayload: async (ctx) => {
     const payload = normalizeDiscordApprovalPayload({
@@ -167,10 +192,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
       text: ctx.payload.text ?? "",
     });
     const discordData = payload.channelData?.discord as
-      | { components?: DiscordComponentMessageSpec }
+      | { components?: unknown; presentationComponents?: DiscordComponentMessageSpec }
       | undefined;
     const rawComponentSpec =
-      discordData?.components ??
+      discordData?.presentationComponents ??
+      readDiscordComponentSpec(discordData?.components) ??
       (payload.interactive
         ? (await loadDiscordSharedInteractive()).buildDiscordInteractiveComponents(
             payload.interactive,

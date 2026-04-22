@@ -44,7 +44,10 @@ import {
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import {
+  resolveDreamingBlockedReason,
+  resolveShortTermPromotionDreamingConfig,
+} from "./dreaming.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import {
   applyShortTermPromotions,
@@ -858,6 +861,10 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Workspace")} ${info(workspacePath)}`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
+    const dreamingBlockedReason = resolveDreamingBlockedReason(cfg);
+    if (dreamingBlockedReason) {
+      lines.push(`${label("Dreaming status")} ${warn(`blocked - ${dreamingBlockedReason}`)}`);
+    }
     if (embeddingProbe) {
       const state = embeddingProbe.ok ? "ready" : "unavailable";
       const stateColor = embeddingProbe.ok ? theme.success : theme.warn;

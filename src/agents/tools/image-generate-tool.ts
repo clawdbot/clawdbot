@@ -75,7 +75,7 @@ const ImageGenerateToolSchema = Type.Object({
     }),
   ),
   model: Type.Optional(
-    Type.String({ description: "Optional provider/model override, e.g. openai/gpt-image-1." }),
+    Type.String({ description: "Optional provider/model override, e.g. openai/gpt-image-2." }),
   ),
   filename: Type.Optional(
     Type.String({
@@ -86,7 +86,7 @@ const ImageGenerateToolSchema = Type.Object({
   size: Type.Optional(
     Type.String({
       description:
-        "Optional size hint like 1024x1024, 1536x1024, 1024x1536, 1024x1792, or 1792x1024.",
+        "Optional size hint like 1024x1024, 1536x1024, 1024x1536, 2048x2048, or 3840x2160.",
     }),
   ),
   aspectRatio: Type.Optional(

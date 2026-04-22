@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
+import {
+  loadBundledPluginPublicSurfaceModule,
+  loadBundledPluginPublicSurfaceModuleSync,
+} from "../plugin-sdk/facade-loader.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
   findBundledPluginMetadataById,
@@ -108,12 +111,25 @@ type BundledPluginPublicSurfaceLoader = <T extends object>(params: {
   artifactBasename: string;
 }) => T;
 
+type AsyncBundledPluginPublicSurfaceLoader = <T extends object>(params: {
+  pluginId: string;
+  artifactBasename: string;
+}) => Promise<T>;
+
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
 type BundledPluginPublicArtifactLoader = <T extends object>(pluginId: string) => T;
 
 export const loadBundledPluginPublicSurfaceSync: BundledPluginPublicSurfaceLoader = (params) => {
   const metadata = findBundledPluginMetadata(params.pluginId);
   return loadBundledPluginPublicSurfaceModuleSync({
+    dirName: metadata.dirName,
+    artifactBasename: normalizeBundledPluginArtifactSubpath(params.artifactBasename),
+  });
+};
+
+export const loadBundledPluginPublicSurface: AsyncBundledPluginPublicSurfaceLoader = (params) => {
+  const metadata = findBundledPluginMetadata(params.pluginId);
+  return loadBundledPluginPublicSurfaceModule({
     dirName: metadata.dirName,
     artifactBasename: normalizeBundledPluginArtifactSubpath(params.artifactBasename),
   });
