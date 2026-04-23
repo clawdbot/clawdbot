@@ -21,12 +21,12 @@ vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   );
   return {
     ...actual,
-    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) => (
-      (fallbackState.loadCalls += 1),
-      dirName === fallbackState.activeDirName && fallbackState.resolveSessionConversation
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) => {
+      fallbackState.loadCalls += 1;
+      return dirName === fallbackState.activeDirName && fallbackState.resolveSessionConversation
         ? { resolveSessionConversation: fallbackState.resolveSessionConversation }
-        : null
-    ),
+        : null;
+    },
   };
 });
 

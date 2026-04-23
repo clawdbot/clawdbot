@@ -3,6 +3,7 @@ summary: "Linux support + companion app status"
 read_when:
   - Looking for Linux companion app status
   - Planning platform coverage or contributions
+  - Debugging Linux OOM kills or exit 137 on a VPS or container
 title: "Linux App"
 ---
 
@@ -98,3 +99,39 @@ Enable it:
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
+
+## Memory pressure and OOM kills
+
+On Linux, the kernel chooses an OOM victim when a host, VM, or container cgroup
+runs out of memory. The Gateway can be a poor victim because it owns long-lived
+sessions and channel connections. OpenClaw therefore biases transient child
+processes to be killed before the Gateway when possible.
+
+For eligible Linux child spawns, OpenClaw starts the child through a short
+`/bin/sh` wrapper that raises the child's own `oom_score_adj` to `1000`, then
+`exec`s the real command. This is an unprivileged operation because the child is
+only increasing its own OOM kill likelihood.
+
+Covered child process surfaces include:
+
+- supervisor-managed command children,
+- PTY shell children,
+- MCP stdio server children,
+- OpenClaw-launched browser/Chrome processes.
+
+The wrapper is Linux-only and is skipped when `/bin/sh` is unavailable. It is
+also skipped if the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ=0`, `false`,
+`no`, or `off`.
+
+To verify a child process:
+
+```bash
+cat /proc/<child-pid>/oom_score_adj
+```
+
+Expected value for covered children is `1000`. The Gateway process should keep
+its normal score, usually `0`.
+
+This does not replace normal memory tuning. If a VPS or container repeatedly
+kills children, increase the memory limit, reduce concurrency, or add stronger
+resource controls such as systemd `MemoryMax=` or container-level memory limits.

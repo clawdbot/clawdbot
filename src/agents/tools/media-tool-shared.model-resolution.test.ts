@@ -27,4 +27,21 @@ describe("resolveModelFromRegistry", () => {
       }),
     ).toThrow("Unknown model: ollama/qwen3.5:397b-cloud");
   });
+
+  it("falls back to provider-prefixed custom model IDs", () => {
+    const foundModel = { provider: "kimchi", id: "kimchi/claude-opus-4-6" };
+    const find = vi.fn().mockReturnValueOnce(null).mockReturnValueOnce(foundModel);
+
+    const result = resolveModelFromRegistry({
+      modelRegistry: { find },
+      provider: "kimchi",
+      modelId: "claude-opus-4-6",
+    });
+
+    expect(find.mock.calls).toEqual([
+      ["kimchi", "claude-opus-4-6"],
+      ["kimchi", "kimchi/claude-opus-4-6"],
+    ]);
+    expect(result).toBe(foundModel);
+  });
 });

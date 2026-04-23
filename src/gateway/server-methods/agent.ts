@@ -351,6 +351,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       idempotencyKey: string;
       timeout?: number;
       bestEffortDeliver?: boolean;
+      cleanupBundleMcpOnRunEnd?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
     };
@@ -688,6 +689,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
         space: resolvedGroupSpace ?? entry?.space,
         cliSessionIds: entry?.cliSessionIds,
+        cliSessionBindings: entry?.cliSessionBindings,
         claudeCliSessionId: entry?.claudeCliSessionId,
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
@@ -945,6 +947,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         messageChannel: originMessageChannel,
         runId,
         lane: request.lane,
+        cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd === true,
         extraSystemPrompt: request.extraSystemPrompt,
         bootstrapContextMode: request.bootstrapContextMode,
         bootstrapContextRunKind: request.bootstrapContextRunKind,

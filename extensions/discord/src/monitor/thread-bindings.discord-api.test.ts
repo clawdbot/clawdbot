@@ -70,6 +70,35 @@ describe("resolveChannelIdForBinding", () => {
     expect(restGet).not.toHaveBeenCalled();
   });
 
+  it("normalizes prefixed explicit channelId without resolving route", async () => {
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "thread-1",
+      channelId: "channel:123456789012345678",
+    });
+
+    expect(resolved).toBe("123456789012345678");
+    expect(createDiscordRestClient).not.toHaveBeenCalled();
+    expect(restGet).not.toHaveBeenCalled();
+  });
+
+  it("strips channel prefix before resolving route", async () => {
+    restGet.mockResolvedValueOnce({
+      id: "123456789012345678",
+      type: ChannelType.GuildText,
+    });
+
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "channel:123456789012345678",
+    });
+
+    expect(resolved).toBe("123456789012345678");
+    const route = JSON.stringify(restGet.mock.calls[0]?.[0] ?? null);
+    expect(route).toContain("123456789012345678");
+    expect(route).not.toContain("channel:");
+  });
+
   it("returns parent channel for thread channels", async () => {
     restGet.mockResolvedValueOnce({
       id: "thread-1",

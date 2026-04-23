@@ -1,1 +1,1 @@
-export { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+export { createReplyMediaContext, createReplyMediaPathNormalizer } from "./reply-media-paths.js";

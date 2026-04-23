@@ -1,4 +1,9 @@
-import { resolveDiscordChannelNameSafe } from "./channel-access.js";
+import {
+  resolveDiscordChannelIdSafe,
+  resolveDiscordChannelInfoSafe,
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentSafe,
+} from "./channel-access.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 
 type DiscordInboundJobRuntimeField =
@@ -102,16 +107,18 @@ function normalizeDiscordThreadChannel(
   if (!threadChannel) {
     return null;
   }
+  const channelInfo = resolveDiscordChannelInfoSafe(threadChannel);
+  const parent = resolveDiscordChannelParentSafe(threadChannel);
   return {
     id: threadChannel.id,
-    name: threadChannel.name,
-    parentId: threadChannel.parentId,
-    parent: threadChannel.parent
+    name: channelInfo.name,
+    parentId: channelInfo.parentId,
+    parent: parent
       ? {
-          id: threadChannel.parent.id,
-          name: resolveDiscordChannelNameSafe(threadChannel.parent),
+          id: resolveDiscordChannelIdSafe(parent),
+          name: resolveDiscordChannelNameSafe(parent),
         }
       : undefined,
-    ownerId: threadChannel.ownerId,
+    ownerId: channelInfo.ownerId,
   };
 }

@@ -160,6 +160,7 @@ export function createCronPromptExecutor(params: {
           sessionKey: params.agentSessionKey,
           agentId: params.agentId,
           trigger: "cron",
+          cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           allowGatewaySubagentBinding: true,
           senderIsOwner: false,
           messageChannel: params.messageChannel,

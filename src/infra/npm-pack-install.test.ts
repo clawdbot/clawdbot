@@ -163,7 +163,7 @@ describe("installFromNpmSpecArchive", () => {
     expect(installFromArchive).not.toHaveBeenCalled();
   });
 
-  it("warns and proceeds on drift when no callback is configured", async () => {
+  it("warns and aborts on drift when no callback is configured", async () => {
     mockPackedSuccess({ integrity: "sha512-new" });
     const warn = vi.fn();
     const installFromArchive = vi.fn(async () => ({ ok: true as const, id: "plugin-1" }));
@@ -174,14 +174,14 @@ describe("installFromNpmSpecArchive", () => {
       installFromArchive,
     });
 
-    const okResult = expectWrappedOkResult(result, { ok: true, id: "plugin-1" });
-    expect(okResult.integrityDrift).toEqual({
-      expectedIntegrity: "sha512-old",
-      actualIntegrity: "sha512-new",
+    expect(result).toEqual({
+      ok: false,
+      error: "aborted: npm package integrity drift detected for @openclaw/test@1.0.0",
     });
     expect(warn).toHaveBeenCalledWith(
       "Integrity drift detected for @openclaw/test@1.0.0: expected sha512-old, got sha512-new",
     );
+    expect(installFromArchive).not.toHaveBeenCalled();
   });
 
   it("returns installer failures to callers for domain-specific handling", async () => {

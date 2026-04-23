@@ -132,7 +132,11 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
-import { collectAllowedToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
+import {
+  collectAllowedToolNames,
+  collectRegisteredToolNames,
+  toSessionToolAllowlist,
+} from "./tool-name-allowlist.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -408,7 +412,8 @@ export async function compactEmbeddedPiSessionDirect(
   }
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+  const sandboxSessionKey =
+    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -843,10 +848,9 @@ export async function compactEmbeddedPiSessionDirect(
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
-      // Pi treats `tools` as a name allowlist. Compaction uses the same custom
-      // tool path as normal turns, so pass names here to keep those tools active
-      // across compaction retries.
-      const sessionToolAllowlist = toSessionToolAllowlist(allowedToolNames);
+      // Pi treats `tools` as a name allowlist during session creation. Pass the
+      // exact OpenClaw-managed registrations so custom tools survive startup.
+      const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
       const providerStreamFn = resolveCompactionProviderStream({
         effectiveModel,
@@ -892,6 +896,7 @@ export async function compactEmbeddedPiSessionDirect(
           });
           session = createdSession.session;
           applySystemPromptOverrideToSession(session, buildSystemPromptOverride(thinkLevel)());
+          session.setActiveToolsByName(sessionToolAllowlist);
           // Compaction builds the same embedded system prompt, so it must flow
           // through the same transport/payload shaping stack as normal turns.
           prepareCompactionSessionAgent({

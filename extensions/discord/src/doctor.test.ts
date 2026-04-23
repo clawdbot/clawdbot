@@ -115,6 +115,58 @@ describe("discord doctor", () => {
     expect(mainTts?.edge).toBeUndefined();
   });
 
+  it("moves legacy guild channel allow toggles into enabled", () => {
+    const normalize = discordDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            guilds: {
+              "100": {
+                channels: {
+                  general: {
+                    allow: false,
+                  },
+                },
+              },
+            },
+            accounts: {
+              work: {
+                guilds: {
+                  "200": {
+                    channels: {
+                      help: {
+                        allow: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.changes).toEqual([
+      "Moved channels.discord.guilds.100.channels.general.allow → channels.discord.guilds.100.channels.general.enabled.",
+      "Moved channels.discord.accounts.work.guilds.200.channels.help.allow → channels.discord.accounts.work.guilds.200.channels.help.enabled.",
+    ]);
+    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
+      enabled: false,
+    });
+    expect(
+      result.config.channels?.discord?.accounts?.work?.guilds?.["200"]?.channels?.help,
+    ).toEqual({
+      enabled: true,
+    });
+  });
+
   it("finds numeric id entries across discord scopes", () => {
     const cfg = {
       channels: {

@@ -163,7 +163,7 @@ function assertSafeUploadResultUrl(rawUrl: string, label: string): string {
 }
 
 function prefixEndpoint(endpoint: string): string {
-  return endpoint.match(/https?:\/\//) ? endpoint : `https://${endpoint}`;
+  return /https?:\/\//.test(endpoint) ? endpoint : `https://${endpoint}`;
 }
 
 function sanitizeFileName(fileName: string): string {

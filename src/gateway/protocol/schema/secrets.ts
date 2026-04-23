@@ -1,4 +1,4 @@
-import { Type, type Static } from "@sinclair/typebox";
+import { Type, type Static } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 export const SecretsReloadParamsSchema = Type.Object({}, { additionalProperties: false });

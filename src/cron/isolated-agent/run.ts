@@ -1,10 +1,12 @@
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
 import type {
   CronDeliveryTrace,
@@ -118,6 +120,29 @@ function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+async function retireRolledCronSessionMcpRuntime(params: {
+  job: CronJob;
+  cronSession: MutableCronSession;
+}) {
+  if (params.job.sessionTarget === "isolated") {
+    return;
+  }
+  const previousSessionId = normalizeOptionalString(params.cronSession.previousSessionId);
+  const currentSessionId = normalizeOptionalString(params.cronSession.sessionEntry.sessionId);
+  if (!previousSessionId || previousSessionId === currentSessionId) {
+    return;
+  }
+  await retireSessionMcpRuntime({
+    sessionId: previousSessionId,
+    reason: "cron-session-rollover",
+    onError: (error, sessionId) => {
+      logWarn(
+        `[cron:${params.job.id}] Failed to dispose retired bundle MCP runtime for session ${sessionId}: ${String(error)}`,
+      );
+    },
+  });
 }
 
 export type { RunCronAgentTurnResult } from "./run.types.js";
@@ -618,6 +643,10 @@ async function prepareCronRunContext(params: {
   } catch (err) {
     logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
   }
+  await retireRolledCronSessionMcpRuntime({
+    job: input.job,
+    cronSession,
+  });
   const hasSessionAuthProfileOverride = Boolean(
     cronSession.sessionEntry.authProfileOverride?.trim(),
   );
@@ -839,6 +868,7 @@ async function finalizeCronRun(params: {
     job: prepared.input.job,
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
+    sessionId: prepared.runSessionId,
     runStartedAt: execution.runStartedAt,
     runEndedAt: execution.runEndedAt,
     timeoutMs: prepared.timeoutMs,

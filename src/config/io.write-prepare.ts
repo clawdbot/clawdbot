@@ -54,9 +54,88 @@ export function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown)
   const next: Record<string, unknown> = {};
   for (const [key, sourceValue] of Object.entries(source)) {
     if (!(key in runtime)) {
+      next[key] = cloneUnknown(sourceValue);
       continue;
     }
     next[key] = projectSourceOntoRuntimeShape(sourceValue, runtime[key]);
+  }
+  return next;
+}
+
+function hasOwnIncludeKey(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, "$include");
+}
+
+function collectIncludeOwnedPaths(value: unknown, path: string[] = []): string[][] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  if (hasOwnIncludeKey(value)) {
+    return [path];
+  }
+  return Object.entries(value).flatMap(([key, child]) =>
+    collectIncludeOwnedPaths(child, [...path, key]),
+  );
+}
+
+function patchTouchesPath(patch: unknown, path: string[]): boolean {
+  if (path.length === 0) {
+    return isRecord(patch) ? Object.keys(patch).length > 0 : true;
+  }
+  if (!isRecord(patch)) {
+    return true;
+  }
+  const [head, ...tail] = path;
+  if (!Object.prototype.hasOwnProperty.call(patch, head)) {
+    return false;
+  }
+  return patchTouchesPath(patch[head], tail);
+}
+
+function formatConfigPath(path: string[]): string {
+  return path.length > 0 ? path.join(".") : "<root>";
+}
+
+function getPathValue(value: unknown, path: string[]): unknown {
+  let current = value;
+  for (const segment of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function setPathValue(value: unknown, path: string[], nextValue: unknown): unknown {
+  if (path.length === 0) {
+    return cloneUnknown(nextValue);
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  const [head, ...tail] = path;
+  return {
+    ...value,
+    [head]: setPathValue(value[head], tail, nextValue),
+  };
+}
+
+function preserveUntouchedIncludes(params: {
+  patch: unknown;
+  rootAuthoredConfig: unknown;
+  persistedCandidate: unknown;
+}): unknown {
+  let next = params.persistedCandidate;
+  for (const includePath of collectIncludeOwnedPaths(params.rootAuthoredConfig)) {
+    if (patchTouchesPath(params.patch, includePath)) {
+      throw new Error(
+        `Config write would flatten $include-owned config at ${formatConfigPath(
+          includePath,
+        )}; edit that include file directly or remove the $include first.`,
+      );
+    }
+    next = setPathValue(next, includePath, getPathValue(params.rootAuthoredConfig, includePath));
   }
   return next;
 }
@@ -69,7 +148,11 @@ export function resolvePersistCandidateForWrite(params: {
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
-  const persisted = applyMergePatch(projectedSource, patch);
+  const persisted = preserveUntouchedIncludes({
+    patch,
+    rootAuthoredConfig: params.rootAuthoredConfig ?? params.sourceConfig,
+    persistedCandidate: applyMergePatch(projectedSource, patch),
+  });
   return preserveRootSchemaUri({
     rootAuthoredConfig: params.rootAuthoredConfig ?? params.sourceConfig,
     nextConfig: params.nextConfig,

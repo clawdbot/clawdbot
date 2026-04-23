@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import {
   cleanToolSchemaForGemini,
@@ -107,7 +107,7 @@ describe("normalizeToolParameterSchema", () => {
   });
 });
 
-function makeTool(parameters: unknown): AnyAgentTool {
+function makeTool(parameters: TSchema): AnyAgentTool {
   return {
     name: "test_tool",
     label: "Test Tool",

@@ -55,7 +55,7 @@ export function decodeMediaPath(raw: string, log?: EngineLogger): string {
     if (!isWinLocal && (hasOctal || hasNonASCII)) {
       log?.debug?.(`Decoding path with mixed encoding: ${mediaPath}`);
       const decoded = mediaPath.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) => {
-        return String.fromCharCode(parseInt(octal, 8));
+        return String.fromCharCode(Number.parseInt(octal, 8));
       });
       const bytes: number[] = [];
       for (let i = 0; i < decoded.length; i++) {

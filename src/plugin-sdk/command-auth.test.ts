@@ -38,6 +38,9 @@ describe("plugin-sdk/command-auth", () => {
 
     expect(buildHelpMessage(cfg)).toContain("/commands for full list");
     expect(buildCommandsMessage(cfg)).toContain("More: /tools for available capabilities");
+    expect(buildCommandsMessage(cfg)).toContain(
+      "/models - List model providers/models or add a model.",
+    );
     expect(buildCommandsMessagePaginated(cfg)).toMatchObject({
       currentPage: 1,
       totalPages: expect.any(Number),

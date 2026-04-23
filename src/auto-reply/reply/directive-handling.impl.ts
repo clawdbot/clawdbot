@@ -32,6 +32,7 @@ import {
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 export async function handleDirectiveOnly(
   params: HandleDirectiveOnlyParams,
@@ -73,7 +74,11 @@ export async function handleDirectiveOnly(
   const agentDir = resolveAgentDir(params.cfg, activeAgentId);
   const runtimeIsSandboxed = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: params.sessionKey,
+    sessionKey: resolveRuntimePolicySessionKey({
+      cfg: params.cfg,
+      ctx: params.ctx,
+      sessionKey: params.sessionKey,
+    }),
   }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
   const allowInternalExecPersistence = canPersistInternalExecDirective({

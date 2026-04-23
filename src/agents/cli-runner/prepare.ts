@@ -21,7 +21,7 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
-import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
+import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
@@ -107,7 +107,13 @@ export async function prepareCliRunContext(
     authCredential = authStore.profiles[effectiveAuthProfileId];
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
-  const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
+  // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.
+  // Per-message metadata (timestamps, message IDs) changes every turn and must not trigger session resets.
+  const extraSystemPromptHash =
+    params.extraSystemPromptStatic !== undefined
+      ? hashCliSessionText(params.extraSystemPromptStatic.trim() || undefined)
+      : hashCliSessionText(extraSystemPrompt);
+
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
@@ -188,15 +194,16 @@ export async function prepareCliRunContext(
     modelId,
     authProfileId: effectiveAuthProfileId,
   });
+  const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
+    authEpochMode: backendResolved.authEpochMode,
+    authProfileId: effectiveAuthProfileId,
+    authCredential,
+    preparedExecution,
+  });
   const authEpoch = await resolveCliAuthEpoch({
     provider: params.provider,
     authProfileId: effectiveAuthProfileId,
-    skipLocalCredential: shouldSkipLocalCliCredentialEpoch({
-      authEpochMode: backendResolved.authEpochMode,
-      authProfileId: effectiveAuthProfileId,
-      authCredential,
-      preparedExecution,
-    }),
+    skipLocalCredential: skipLocalCredentialEpoch,
   });
   const preparedBackendEnv =
     preparedExecution?.env && Object.keys(preparedExecution.env).length > 0
@@ -232,6 +239,7 @@ export async function prepareCliRunContext(
         binding: params.cliSessionBinding,
         authProfileId: effectiveAuthProfileId,
         authEpoch,
+        authEpochVersion: CLI_AUTH_EPOCH_VERSION,
         extraSystemPromptHash,
         mcpConfigHash: preparedBackendFinal.mcpConfigHash,
         mcpResumeHash: preparedBackendFinal.mcpResumeHash,
@@ -332,6 +340,7 @@ export async function prepareCliRunContext(
     bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
     heartbeatPrompt,
     authEpoch,
+    authEpochVersion: CLI_AUTH_EPOCH_VERSION,
     extraSystemPromptHash,
   };
 }

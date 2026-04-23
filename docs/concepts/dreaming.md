@@ -238,7 +238,7 @@ The managed dreaming cron rides the default agent's heartbeat. If heartbeat is n
 Two common causes:
 
 - Another agent declares an explicit `heartbeat:` block. When any entry in `agents.list` has its own `heartbeat` block, only those agents heartbeat — the defaults stop applying to everyone else, so the default agent can go silent. Move the heartbeat settings to `agents.defaults.heartbeat`, or add an explicit `heartbeat` block on the default agent. See [Scope and precedence](/gateway/heartbeat#scope-and-precedence).
-- `heartbeat.every` is `0`, empty, or unparseable. The cron has no interval to schedule against, so the heartbeat is effectively disabled. Set `every` to a positive duration such as `30m`. See [Defaults](/gateway/heartbeat#defaults).
+- `heartbeat.every` is `0`, empty, or unparsable. The cron has no interval to schedule against, so the heartbeat is effectively disabled. Set `every` to a positive duration such as `30m`. See [Defaults](/gateway/heartbeat#defaults).
 
 ## Related
 

@@ -132,7 +132,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "boolean",
             title: "Diagnostics Enabled",
             description:
-              "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
+              "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
           },
           flags: {
             type: "array",
@@ -2734,6 +2734,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           "azure-openai-responses",
                         ],
                       },
+                      baseUrl: {
+                        type: "string",
+                        minLength: 1,
+                      },
                       reasoning: {
                         type: "boolean",
                       },
@@ -3320,6 +3324,43 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               },
               systemPromptOverride: {
                 type: "string",
+              },
+              promptOverlays: {
+                type: "object",
+                properties: {
+                  gpt5: {
+                    type: "object",
+                    properties: {
+                      personality: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            const: "friendly",
+                          },
+                          {
+                            type: "string",
+                            const: "on",
+                          },
+                          {
+                            type: "string",
+                            const: "off",
+                          },
+                        ],
+                        title: "GPT-5 Personality Overlay",
+                        description:
+                          'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "GPT-5 Prompt Overlay",
+                    description:
+                      "Shared GPT-5-family prompt overlay applied to matching model ids across providers such as OpenAI, OpenRouter, OpenCode, Codex, and compatible gateways.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Prompt Overlays",
+                description:
+                  "Provider-independent prompt overlays applied by model family before provider-specific prompt hooks.",
               },
               skipBootstrap: {
                 type: "boolean",
@@ -4691,6 +4732,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Compaction Memory Flush",
                     description:
                       "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
+                  },
+                  truncateAfterCompaction: {
+                    type: "boolean",
+                    title: "Truncate After Compaction",
+                    description:
+                      "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
                   },
                   notifyUser: {
                     type: "boolean",
@@ -18781,6 +18828,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         default: {
           native: "auto",
           nativeSkills: "auto",
+          modelsWrite: true,
           restart: true,
           ownerDisplay: "raw",
         },
@@ -18821,6 +18869,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "Text Commands",
             description:
               "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
+          },
+          modelsWrite: {
+            default: true,
+            type: "boolean",
+            title: "Allow /models writes",
+            description:
+              "Allow model-management write commands such as `/models add` to register provider/model entries directly into config and make them available without restarting the gateway (default: true).",
           },
           bash: {
             type: "boolean",
@@ -18923,7 +18978,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
           },
         },
-        required: ["native", "nativeSkills", "restart", "ownerDisplay"],
+        required: ["native", "nativeSkills", "modelsWrite", "restart", "ownerDisplay"],
         additionalProperties: false,
         title: "Commands",
         description:
@@ -23230,7 +23285,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "diagnostics.enabled": {
       label: "Diagnostics Enabled",
-      help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
+      help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
       tags: ["observability"],
     },
     "diagnostics.flags": {
@@ -24861,6 +24916,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
       tags: ["advanced"],
     },
+    "agents.defaults.promptOverlays": {
+      label: "Prompt Overlays",
+      help: "Provider-independent prompt overlays applied by model family before provider-specific prompt hooks.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.promptOverlays.gpt5": {
+      label: "GPT-5 Prompt Overlay",
+      help: "Shared GPT-5-family prompt overlay applied to matching model ids across providers such as OpenAI, OpenRouter, OpenCode, Codex, and compatible gateways.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.promptOverlays.gpt5.personality": {
+      label: "GPT-5 Personality Overlay",
+      help: 'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
+      tags: ["advanced"],
+    },
     "agents.defaults.contextInjection": {
       label: "Context Injection",
       help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
@@ -26019,6 +26089,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "commands.text": {
       label: "Text Commands",
       help: "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
+      tags: ["advanced"],
+    },
+    "commands.modelsWrite": {
+      label: "Allow /models writes",
+      help: "Allow model-management write commands such as `/models add` to register provider/model entries directly into config and make them available without restarting the gateway (default: true).",
       tags: ["advanced"],
     },
     "commands.bash": {
@@ -27600,6 +27675,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "skills.entries.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
+    },
+    "models.providers.*.models[].baseUrl": {
+      tags: ["models", "url-secret"],
     },
     "agents.list[].memorySearch.remote.baseUrl": {
       tags: ["advanced", "url-secret"],

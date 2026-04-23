@@ -133,7 +133,7 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-extension"] },
+    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
     },
@@ -169,11 +169,11 @@ OpenClaw scans for plugins in this order (first match wins):
     `plugins.load.paths` — explicit file or directory paths.
   </Step>
 
-  <Step title="Workspace extensions">
+  <Step title="Workspace plugins">
     `\<workspace\>/.openclaw/<plugin-root>/*.ts` and `\<workspace\>/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
-  <Step title="Global extensions">
+  <Step title="Global plugins">
     `~/.openclaw/<plugin-root>/*.ts` and `~/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
@@ -234,8 +234,8 @@ openclaw plugins install <plugin> --marketplace <source>
 openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
 openclaw plugins install <spec> --pin      # record exact resolved npm spec
 openclaw plugins install <spec> --dangerously-force-unsafe-install
-openclaw plugins update <id>             # update one plugin
-openclaw plugins update <id> --dangerously-force-unsafe-install
+openclaw plugins update <id-or-npm-spec> # update one plugin
+openclaw plugins update <id-or-npm-spec> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
 openclaw plugins uninstall <id>          # remove config/install records
 openclaw plugins uninstall <id> --keep-files
@@ -250,9 +250,18 @@ Bundled plugins ship with OpenClaw. Many are enabled by default (for example
 bundled model providers, bundled speech providers, and the bundled browser
 plugin). Other bundled plugins still need `openclaw plugins enable <id>`.
 
-`--force` overwrites an existing installed plugin or hook pack in place.
-It is not supported with `--link`, which reuses the source path instead of
-copying over a managed install target.
+`--force` overwrites an existing installed plugin or hook pack in place. Use
+`openclaw plugins update <id-or-npm-spec>` for routine upgrades of tracked npm
+plugins. It is not supported with `--link`, which reuses the source path instead
+of copying over a managed install target.
+
+`openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
+an npm package spec with a dist-tag or exact version resolves the package name
+back to the tracked plugin record and records the new spec for future updates.
+Passing the package name without a version moves an exact pinned install back to
+the registry's default release line. If the installed npm plugin already matches
+the resolved version and recorded artifact identity, OpenClaw skips the update
+without downloading, reinstalling, or rewriting config.
 
 `--pin` is npm-only. It is not supported with `--marketplace`, because
 marketplace installs persist marketplace source metadata instead of an npm spec.

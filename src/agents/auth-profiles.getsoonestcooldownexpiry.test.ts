@@ -44,7 +44,7 @@ describe("getSoonestCooldownExpiry", () => {
         cooldownUntil: Infinity,
       },
       "openai:p3": {
-        disabledUntil: NaN,
+        disabledUntil: Number.NaN,
       },
       "openai:p4": {
         cooldownUntil: 1_700_000_005_000,

@@ -1,0 +1,186 @@
+name: Docs Agent
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] main-only docs repair after trusted CI; job gates repository, event, branch, actor, conclusion, and exact current main SHA before using write token
+    workflows:
+      - CI
+    types:
+      - completed
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-agent-main
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  update-docs:
+    if: >
+      github.repository == 'openclaw/openclaw' &&
+      github.actor != 'github-actions[bot]' &&
+      (github.event_name != 'workflow_run' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.actor.login != 'github-actions[bot]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Skip superseded workflow runs
+        id: superseded
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" != "workflow_run" ]; then
+            echo "run_agent=true" >> "$GITHUB_OUTPUT"
+            echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags origin main
+          remote_main="$(git rev-parse origin/main)"
+          if [ "$remote_main" != "$WORKFLOW_HEAD_SHA" ]; then
+            echo "CI run is superseded by ${remote_main}; skipping docs agent for ${WORKFLOW_HEAD_SHA}."
+            echo "run_agent=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "run_agent=true" >> "$GITHUB_OUTPUT"
+          echo "base_sha=${remote_main}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node environment
+        if: steps.superseded.outputs.run_agent == 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Ensure docs agent key exists
+        if: steps.superseded.outputs.run_agent == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "Missing OPENCLAW_DOCS_AGENT_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
+
+      - name: Run Codex docs agent
+        if: steps.superseded.outputs.run_agent == 'true'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_DOCS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/docs-agent.md
+          model: gpt-5.4
+          effort: medium
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--full-auto"]'
+
+      - name: Enforce existing-docs-only patch
+        if: steps.superseded.outputs.run_agent == 'true'
+        run: |
+          set -euo pipefail
+
+          untracked="$(git ls-files --others --exclude-standard)"
+          if [ -n "$untracked" ]; then
+            echo "Docs agent created untracked files; forbidden:"
+            printf '%s\n' "$untracked"
+            exit 1
+          fi
+
+          added_or_deleted="$(git diff --name-status --diff-filter=AD)"
+          if [ -n "$added_or_deleted" ]; then
+            echo "Docs agent added or deleted tracked files; forbidden:"
+            printf '%s\n' "$added_or_deleted"
+            exit 1
+          fi
+
+          bad_paths="$(
+            git diff --name-only | while IFS= read -r path; do
+              case "$path" in
+                docs/*|README.md|CHANGELOG.md) ;;
+                *) printf '%s\n' "$path" ;;
+              esac
+            done
+          )"
+          if [ -n "$bad_paths" ]; then
+            echo "Docs agent touched non-doc paths; forbidden:"
+            printf '%s\n' "$bad_paths"
+            exit 1
+          fi
+
+      - name: Restore Node 24 path
+        if: steps.superseded.outputs.run_agent == 'true'
+        run: |
+          set -euo pipefail
+          export PATH="${NODE_BIN}:${PATH}"
+          echo "${NODE_BIN}" >> "$GITHUB_PATH"
+          node -v
+          corepack enable
+          pnpm -v
+
+      - name: Check docs
+        if: steps.superseded.outputs.run_agent == 'true'
+        run: pnpm check:docs
+
+      - name: Commit docs updates
+        if: steps.superseded.outputs.run_agent == 'true'
+        env:
+          BASE_SHA: ${{ steps.superseded.outputs.base_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: main
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet; then
+            echo "No docs changes."
+            exit 0
+          fi
+
+          git fetch --no-tags origin "${TARGET_BRANCH}"
+          remote_main="$(git rev-parse "origin/${TARGET_BRANCH}")"
+          if [ "$remote_main" != "$BASE_SHA" ]; then
+            echo "main advanced from ${BASE_SHA} to ${remote_main}; skipping stale docs update."
+            exit 0
+          fi
+
+          git config user.name "openclaw-docs-agent[bot]"
+          git config user.email "openclaw-docs-agent[bot]@users.noreply.github.com"
+          git add docs README.md CHANGELOG.md
+          git commit --no-verify -m "docs: refresh documentation"
+
+          for attempt in 1 2 3 4 5; do
+            if git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:"${TARGET_BRANCH}"; then
+              exit 0
+            fi
+            git fetch --no-tags origin "${TARGET_BRANCH}"
+            remote_main="$(git rev-parse "origin/${TARGET_BRANCH}")"
+            if [ "$remote_main" != "$BASE_SHA" ]; then
+              echo "main advanced from ${BASE_SHA} to ${remote_main}; skipping stale docs update."
+              exit 0
+            fi
+            echo "Push attempt ${attempt} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to push docs updates after retries." >&2
+          exit 1

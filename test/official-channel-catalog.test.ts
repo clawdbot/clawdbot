@@ -68,8 +68,21 @@ describe("buildOfficialChannelCatalog", () => {
       },
     });
 
-    expect(buildOfficialChannelCatalog({ repoRoot })).toEqual({
-      entries: [
+    expect(buildOfficialChannelCatalog({ repoRoot }).entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "@wecom/wecom-openclaw-plugin",
+          openclaw: expect.objectContaining({
+            channel: expect.objectContaining({
+              id: "wecom",
+              label: "WeCom",
+            }),
+            install: {
+              npmSpec: "@wecom/wecom-openclaw-plugin",
+              defaultChoice: "npm",
+            },
+          }),
+        }),
         {
           name: "@openclaw/whatsapp",
           version: "2026.3.23",
@@ -89,8 +102,8 @@ describe("buildOfficialChannelCatalog", () => {
             },
           },
         },
-      ],
-    });
+      ]),
+    );
   });
 
   it("writes the official catalog under dist", () => {
@@ -118,8 +131,11 @@ describe("buildOfficialChannelCatalog", () => {
 
     const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
     expect(fs.existsSync(outputPath)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(outputPath, "utf8"))).toEqual({
-      entries: [
+    expect(JSON.parse(fs.readFileSync(outputPath, "utf8")).entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "@wecom/wecom-openclaw-plugin",
+        }),
         {
           name: "@openclaw/whatsapp",
           openclaw: {
@@ -135,7 +151,7 @@ describe("buildOfficialChannelCatalog", () => {
             },
           },
         },
-      ],
-    });
+      ]),
+    );
   });
 });

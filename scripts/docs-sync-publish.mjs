@@ -101,6 +101,13 @@ const GENERATED_LOCALES = [
     tmFile: "pl.tm.jsonl",
     navMode: "clone-en",
   },
+  {
+    language: "th",
+    dir: "th",
+    navFile: "th-navigation.json",
+    tmFile: "th.tm.jsonl",
+    navMode: "clone-en",
+  },
 ];
 
 function parseArgs(argv) {

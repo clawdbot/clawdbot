@@ -12,9 +12,9 @@ type WhatsAppSetupConfig = {
 };
 
 type WizardPromptHarness = {
-  text: { (...args: unknown[]): unknown };
-  select: { (...args: unknown[]): unknown };
-  note: { (...args: unknown[]): unknown };
+  text: (...args: unknown[]) => unknown;
+  select: (...args: unknown[]) => unknown;
+  note: (...args: unknown[]) => unknown;
 };
 
 type QueuedWizardPrompterFactory<T extends WizardPromptHarness> = (params: {

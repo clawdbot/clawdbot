@@ -170,7 +170,7 @@ const truncate = (value: string, width: number) => {
 
 const formatIsoMinute = (iso: string) => {
   const parsed = parseAbsoluteTimeMs(iso);
-  const d = new Date(parsed ?? NaN);
+  const d = new Date(parsed ?? Number.NaN);
   if (Number.isNaN(d.getTime())) {
     return "-";
   }

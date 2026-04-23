@@ -178,7 +178,7 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
     return lastSlash >= 0 ? filePath.slice(0, lastSlash) : ".";
   };
   const joinPath = (...parts: string[]): string => {
-    const separator = parts.find((part) => part.includes("\\")) ? "\\" : "/";
+    const separator = parts.some((part) => part.includes("\\")) ? "\\" : "/";
     return parts
       .map((part, index) =>
         index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, ""),

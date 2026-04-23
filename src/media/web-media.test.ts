@@ -431,4 +431,41 @@ describe("loadWebMedia", () => {
       code: "path-not-allowed",
     });
   });
+
+  it("hydrates inbound media store URIs before allowed-root checks", async () => {
+    const id = `signal-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const filePath = path.join(stateDir, "media", "inbound", id);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      const result = await loadWebMedia(`media://inbound/${id}`, {
+        maxBytes: 1024 * 1024,
+      });
+
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+      expect(result.fileName).toBe(id);
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
+  it("rejects unsupported media store URI locations", async () => {
+    await expect(loadWebMedia("media://outbound/tiny.png")).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it("rejects media store URI ids with encoded path separators", async () => {
+    await expect(loadWebMedia("media://inbound/nested%2Ftiny.png")).rejects.toMatchObject({
+      code: "invalid-path",
+    });
+  });
+
+  it("rejects media store URIs without an id", async () => {
+    await expect(loadWebMedia("media://inbound/")).rejects.toMatchObject({
+      code: "invalid-path",
+    });
+  });
 });

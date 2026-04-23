@@ -2,6 +2,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sleep } from "openclaw/plugin-sdk/text-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadWebMedia } from "../media.js";
+import { cacheInboundMessageMeta } from "../quoted-message.js";
 import type { WebInboundMsg } from "./types.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
@@ -35,7 +36,12 @@ function makeMsg(): WebInboundMsg {
   return {
     from: "+10000000000",
     to: "+20000000000",
+    accountId: "work",
+    chatId: "15551234567@s.whatsapp.net",
+    chatType: "group",
     id: "msg-1",
+    body: "latest batch body",
+    senderJid: "222@s.whatsapp.net",
     reply: vi.fn(async () => undefined),
     sendMedia: vi.fn(async () => undefined),
   } as unknown as WebInboundMsg;
@@ -120,6 +126,7 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenCalledTimes(1);
     expect(msg.reply).toHaveBeenCalledWith(
       "Intro line\nReasoning: appears in content but is not a prefix",
+      undefined,
     );
   });
 
@@ -136,9 +143,57 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(2);
-    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa");
-    expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa");
+    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa", undefined);
+    expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa", undefined);
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
+  });
+
+  it("keeps quote threading on every text chunk for a threaded reply", async () => {
+    const msg = makeMsg();
+    cacheInboundMessageMeta("work", "15551234567@s.whatsapp.net", "reply-1", {
+      participant: "111@s.whatsapp.net",
+      body: "quoted body",
+      fromMe: true,
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "aaaaaa", replyToId: "reply-1" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 3,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(2);
+    expect(msg.reply).toHaveBeenNthCalledWith(
+      1,
+      "aaa",
+      expect.objectContaining({
+        quoted: expect.objectContaining({
+          key: expect.objectContaining({
+            id: "reply-1",
+            fromMe: true,
+            participant: "111@s.whatsapp.net",
+          }),
+          message: { conversation: "quoted body" },
+        }),
+      }),
+    );
+    expect(msg.reply).toHaveBeenNthCalledWith(
+      2,
+      "aaa",
+      expect.objectContaining({
+        quoted: expect.objectContaining({
+          key: expect.objectContaining({
+            id: "reply-1",
+            fromMe: true,
+            participant: "111@s.whatsapp.net",
+          }),
+          message: { conversation: "quoted body" },
+        }),
+      }),
+    );
   });
 
   it.each(["connection closed", "operation timed out"])(
@@ -188,10 +243,65 @@ describe("deliverWebReply", () => {
         caption: "aaa",
         mimetype: "image/jpeg",
       }),
+      undefined,
     );
-    expect(msg.reply).toHaveBeenCalledWith("aaa");
+    expect(msg.reply).toHaveBeenCalledWith("aaa", undefined);
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (media)");
     expect(logVerbose).toHaveBeenCalled();
+  });
+
+  it("keeps quote threading on media and trailing text chunks for a threaded reply", async () => {
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+    cacheInboundMessageMeta("work", "15551234567@s.whatsapp.net", "reply-2", {
+      participant: "111@s.whatsapp.net",
+      body: "quoted media body",
+      fromMe: true,
+    });
+
+    await deliverWebReply({
+      replyResult: {
+        text: "captiontrail",
+        mediaUrl: "http://example.com/img.jpg",
+        replyToId: "reply-2",
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 7,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        image: expect.any(Buffer),
+        caption: "caption",
+        mimetype: "image/jpeg",
+      }),
+      expect.objectContaining({
+        quoted: expect.objectContaining({
+          key: expect.objectContaining({
+            id: "reply-2",
+            fromMe: true,
+            participant: "111@s.whatsapp.net",
+          }),
+          message: { conversation: "quoted media body" },
+        }),
+      }),
+    );
+    expect(msg.reply).toHaveBeenCalledWith(
+      "trail",
+      expect.objectContaining({
+        quoted: expect.objectContaining({
+          key: expect.objectContaining({
+            id: "reply-2",
+            fromMe: true,
+            participant: "111@s.whatsapp.net",
+          }),
+          message: { conversation: "quoted media body" },
+        }),
+      }),
+    );
   });
 
   it("retries media send on transient failure", async () => {
@@ -265,6 +375,7 @@ describe("deliverWebReply", () => {
         mimetype: "audio/ogg",
         caption: "cap",
       }),
+      undefined,
     );
   });
 
@@ -293,6 +404,7 @@ describe("deliverWebReply", () => {
         caption: "cap",
         mimetype: "video/mp4",
       }),
+      undefined,
     );
   });
 
@@ -323,6 +435,7 @@ describe("deliverWebReply", () => {
         caption: "cap",
         mimetype: "application/octet-stream",
       }),
+      undefined,
     );
   });
 });

@@ -240,7 +240,7 @@ function wrapStreamRepairMalformedToolCallArguments(
           if (!loggedRepairIndices.has(event.contentIndex) && repair.kind === "repaired") {
             loggedRepairIndices.add(event.contentIndex);
             log.warn(
-              `repairing Kimi tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
+              `repairing malformed tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
             );
           }
         } else {
@@ -294,8 +294,15 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
   };
 }
 
-export function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boolean {
-  return normalizeProviderId(provider ?? "") === "kimi";
+export function shouldRepairMalformedToolCallArguments(params: {
+  provider?: string;
+  modelApi?: string | null;
+}): boolean {
+  return (
+    (normalizeProviderId(params.provider ?? "") === "kimi" &&
+      params.modelApi === "anthropic-messages") ||
+    params.modelApi === "openai-completions"
+  );
 }
 
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {

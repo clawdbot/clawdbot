@@ -16,7 +16,7 @@ function listContractTests(rootDir = "src/channels/plugins/contracts"): string[]
 
 describe("scripts/lib/channel-contract-test-plan.mjs", () => {
   it("splits channel contracts into focused shards", () => {
-    const suffixes = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    const suffixes = ["a", "b", "c"];
 
     expect(
       createChannelContractTestShards().map((shard) => ({
@@ -51,7 +51,7 @@ describe("scripts/lib/channel-contract-test-plan.mjs", () => {
       const surfaceRegistryFiles = shard.includePatterns.filter((pattern) =>
         pattern.includes("/surfaces-only.registry-backed-shard-"),
       );
-      expect(surfaceRegistryFiles.length).toBeLessThanOrEqual(1);
+      expect(surfaceRegistryFiles.length).toBeLessThanOrEqual(3);
     }
   });
 });

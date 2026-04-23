@@ -19,9 +19,8 @@ const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 function isSensitivePath(path: string): boolean {
   if (path.endsWith("[]")) {
     return isSensitiveConfigPath(path.slice(0, -2));
-  } else {
-    return isSensitiveConfigPath(path);
   }
+  return isSensitiveConfigPath(path);
 }
 
 function isEnvVarPlaceholder(value: string): boolean {
@@ -146,9 +145,8 @@ function redactObject(obj: unknown, hints?: ConfigUiHints): unknown {
     return lookup.has("")
       ? redactObjectWithLookup(obj, lookup, "", [], hints)
       : redactObjectGuessing(obj, "", [], hints);
-  } else {
-    return redactObjectGuessing(obj, "", []);
   }
+  return redactObjectGuessing(obj, "", []);
 }
 
 /**

@@ -69,6 +69,19 @@ export const AgentDefaultsSchema = z
     silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
     repoRoot: z.string().optional(),
     systemPromptOverride: z.string().optional(),
+    promptOverlays: z
+      .object({
+        gpt5: z
+          .object({
+            personality: z
+              .union([z.literal("friendly"), z.literal("on"), z.literal("off")])
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     skipBootstrap: z.boolean().optional(),
     contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
@@ -195,6 +208,7 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        truncateAfterCompaction: z.boolean().optional(),
         notifyUser: z.boolean().optional(),
       })
       .strict()

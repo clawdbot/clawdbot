@@ -15,6 +15,10 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
+import {
+  resolveRuntimeConversationBindingRoute,
+  type RuntimeConversationBindingRouteResult,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import {
@@ -106,6 +110,7 @@ type SlackAuthorizationContext = {
 
 type SlackRoutingContext = {
   route: ReturnType<typeof resolveAgentRoute>;
+  runtimeBinding: RuntimeConversationBindingRouteResult["bindingRecord"];
   chatType: "direct" | "group" | "channel";
   replyToMode: ReturnType<typeof resolveSlackReplyToMode>;
   threadContext: ReturnType<typeof resolveSlackThreadContext>;
@@ -115,6 +120,15 @@ type SlackRoutingContext = {
   sessionKey: string;
   historyKey: string;
 };
+
+function resolveSlackBaseConversationId(params: {
+  message: SlackMessageEvent;
+  isDirectMessage: boolean;
+}): string {
+  return params.isDirectMessage
+    ? `user:${params.message.user ?? "unknown"}`
+    : params.message.channel;
+}
 
 async function resolveSlackConversationContext(params: {
   ctx: SlackMonitorContext;
@@ -272,7 +286,7 @@ function resolveSlackRoutingContext(params: {
   isRoomish: boolean;
 }): SlackRoutingContext {
   const { ctx, account, message, isDirectMessage, isGroupDm, isRoom, isRoomish } = params;
-  const route = resolveAgentRoute({
+  let route = resolveAgentRoute({
     cfg: ctx.cfg,
     channel: "slack",
     accountId: account.accountId,
@@ -302,17 +316,45 @@ function resolveSlackRoutingContext(params: {
   // isolated sessions per message (regression from #10686).
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
   const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey: route.sessionKey,
-    threadId: canonicalThreadId,
-    parentSessionKey: canonicalThreadId && ctx.threadInheritParent ? route.sessionKey : undefined,
-  });
+  const baseConversationId = resolveSlackBaseConversationId({ message, isDirectMessage });
+  const boundThreadRoute = canonicalThreadId
+    ? resolveRuntimeConversationBindingRoute({
+        route,
+        conversation: {
+          channel: "slack",
+          accountId: account.accountId,
+          conversationId: canonicalThreadId,
+          parentConversationId: baseConversationId,
+        },
+      })
+    : null;
+  const runtimeRoute =
+    boundThreadRoute?.boundSessionKey || boundThreadRoute?.bindingRecord
+      ? boundThreadRoute
+      : resolveRuntimeConversationBindingRoute({
+          route,
+          conversation: {
+            channel: "slack",
+            accountId: account.accountId,
+            conversationId: baseConversationId,
+          },
+        });
+  route = runtimeRoute.route;
+  const threadKeys = runtimeRoute.boundSessionKey
+    ? { sessionKey: route.sessionKey, parentSessionKey: undefined }
+    : resolveThreadSessionKeys({
+        baseSessionKey: route.sessionKey,
+        threadId: canonicalThreadId,
+        parentSessionKey:
+          canonicalThreadId && ctx.threadInheritParent ? route.sessionKey : undefined,
+      });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
   return {
     route,
+    runtimeBinding: runtimeRoute.bindingRecord,
     chatType,
     replyToMode,
     threadContext,
@@ -364,6 +406,7 @@ export async function prepareSlackMessage(params: {
   });
   const {
     route,
+    runtimeBinding,
     replyToMode,
     threadContext,
     threadTs,
@@ -372,6 +415,11 @@ export async function prepareSlackMessage(params: {
     sessionKey,
     historyKey,
   } = routing;
+  if (runtimeBinding && shouldLogVerbose()) {
+    logVerbose(
+      `slack: routed via bound conversation ${runtimeBinding.conversation.conversationId} -> ${runtimeBinding.targetSessionKey}`,
+    );
+  }
 
   const mentionRegexes = resolveCachedMentionRegexes(ctx, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");

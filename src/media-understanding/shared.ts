@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -21,6 +22,41 @@ const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
+
+export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
+  const trimmed = fileName?.trim();
+  const baseName = trimmed ? path.basename(trimmed) : "audio";
+  const lowerMime = mime?.trim().toLowerCase();
+
+  if (/\.aac$/i.test(baseName)) {
+    return `${baseName.slice(0, -4) || "audio"}.m4a`;
+  }
+  if (!path.extname(baseName) && lowerMime === "audio/aac") {
+    return `${baseName || "audio"}.m4a`;
+  }
+  return baseName;
+}
+
+export function buildAudioTranscriptionFormData(params: {
+  buffer: Buffer;
+  fileName?: string;
+  mime?: string;
+  fields?: Record<string, string | number | boolean | undefined>;
+}): FormData {
+  const form = new FormData();
+  const bytes = new Uint8Array(params.buffer);
+  const blob = new Blob([bytes], {
+    type: params.mime ?? "application/octet-stream",
+  });
+  form.append("file", blob, resolveAudioTranscriptionUploadFileName(params.fileName, params.mime));
+  for (const [name, value] of Object.entries(params.fields ?? {})) {
+    const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value);
+    if (text) {
+      form.append(name, text);
+    }
+  }
+  return form;
+}
 
 export type ProviderOperationDeadline = {
   deadlineAtMs?: number;

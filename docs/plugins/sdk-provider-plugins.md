@@ -599,12 +599,34 @@ API key auth, and dynamic model resolution.
         id: "acme-ai",
         label: "Acme Realtime Transcription",
         isConfigured: () => true,
-        createSession: (req) => ({
-          connect: async () => {},
-          sendAudio: () => {},
-          close: () => {},
-          isConnected: () => true,
-        }),
+        createSession: (req) => {
+          const apiKey = String(req.providerConfig.apiKey ?? "");
+          return createRealtimeTranscriptionWebSocketSession({
+            providerId: "acme-ai",
+            callbacks: req,
+            url: "wss://api.example.com/v1/realtime-transcription",
+            headers: { Authorization: `Bearer ${apiKey}` },
+            onMessage: (event, transport) => {
+              if (event.type === "session.created") {
+                transport.sendJson({ type: "session.update" });
+                transport.markReady();
+                return;
+              }
+              if (event.type === "transcript.final") {
+                req.onTranscript?.(event.text);
+              }
+            },
+            sendAudio: (audio, transport) => {
+              transport.sendJson({
+                type: "audio.append",
+                audio: audio.toString("base64"),
+              });
+            },
+            onClose: (transport) => {
+              transport.sendJson({ type: "audio.end" });
+            },
+          });
+        },
       });
 
       api.registerRealtimeVoiceProvider({
@@ -693,6 +715,17 @@ API key auth, and dynamic model resolution.
     `generate`, `imageToVideo`, and `videoToVideo`. Flat aggregate fields such
     as `maxInputImages`, `maxInputVideos`, and `maxDurationSeconds` are not
     enough to advertise transform-mode support or disabled modes cleanly.
+
+    Prefer the shared WebSocket helper for streaming STT providers. It keeps
+    proxy capture, reconnect backoff, close flushing, ready handshakes, audio
+    queueing, and close-event diagnostics consistent across providers while
+    leaving provider code responsible for only the upstream event mapping.
+
+    Batch STT providers that POST multipart audio should use
+    `buildAudioTranscriptionFormData(...)` from
+    `openclaw/plugin-sdk/provider-http` together with the provider HTTP request
+    helpers. The form helper normalizes upload filenames, including AAC uploads
+    that need an M4A-style filename for compatible transcription APIs.
 
     Music-generation providers should follow the same pattern:
     `generate` for prompt-only generation and `edit` for reference-image-based

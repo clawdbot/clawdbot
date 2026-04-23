@@ -21,6 +21,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     webFetchProviders: [],
     webSearchProviders: [],
     embeddedExtensionFactories: [],
+    codexAppServerExtensionFactories: [],
     memoryEmbeddingProviders: [],
     agentHarnesses: [],
     gatewayHandlers: {},

@@ -96,6 +96,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "uk", fileName: "uk.ts", exportName: "uk", languageKey: "uk" },
   { locale: "id", fileName: "id.ts", exportName: "id", languageKey: "id" },
   { locale: "pl", fileName: "pl.ts", exportName: "pl", languageKey: "pl" },
+  { locale: "th", fileName: "th.ts", exportName: "th", languageKey: "th" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
@@ -186,6 +187,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Indonesian";
     case "pl":
       return "Polish";
+    case "th":
+      return "Thai";
     case "de":
       return "German";
     case "es":

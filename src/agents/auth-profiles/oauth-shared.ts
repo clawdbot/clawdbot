@@ -59,16 +59,18 @@ export function hasUsableOAuthCredential(
   return hasUsableStoredOAuthCredential(credential, { now });
 }
 
-function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
+export function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }
 
-function normalizeAuthEmailToken(value: string | undefined): string | undefined {
+export function normalizeAuthEmailToken(value: string | undefined): string | undefined {
   return normalizeAuthIdentityToken(value)?.toLowerCase();
 }
 
-function hasOAuthIdentity(credential: Pick<OAuthCredential, "accountId" | "email">): boolean {
+export function hasOAuthIdentity(
+  credential: Pick<OAuthCredential, "accountId" | "email">,
+): boolean {
   return (
     normalizeAuthIdentityToken(credential.accountId) !== undefined ||
     normalizeAuthEmailToken(credential.email) !== undefined

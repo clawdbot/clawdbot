@@ -2528,6 +2528,39 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(secondPayload.metadata?.openclaw_turn_attempt).toBe("2");
   });
 
+  it("does not attach native OpenAI session headers or metadata for custom responses endpoints", async () => {
+    const sessionId = "sess-custom-openai-endpoint";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+    const customEndpointModel = {
+      ...modelStub,
+      baseUrl: "http://127.0.0.1:4100/v1",
+    };
+    const stream = streamFn(
+      customEndpointModel as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "websocket" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-custom-endpoint", "custom endpoint"),
+    });
+
+    for await (const _ of await resolveStream(stream)) {
+      // consume
+    }
+
+    expect((manager.options as { headers?: Record<string, string> } | undefined)?.headers).toBe(
+      undefined,
+    );
+    const payload = manager.sentEvents[0] as { metadata?: Record<string, string> };
+    expect(payload.metadata?.openclaw_session_id).toBeUndefined();
+    expect(payload.metadata?.openclaw_transport).toBeUndefined();
+    releaseWsSession(sessionId);
+  });
+
   it("keeps websocket degraded for the session until the cool-down expires", async () => {
     openAIWsStreamTesting.setWsDegradeCooldownMsForTest(50);
     MockManager.globalConnectShouldFail = true;

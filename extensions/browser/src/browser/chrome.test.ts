@@ -377,7 +377,7 @@ describe("browser chrome helpers", () => {
     try {
       const addr = server.address() as AddressInfo;
       await expect(
-        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 50, {
+        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000, {
           dangerouslyAllowPrivateNetwork: false,
           allowedHostnames: ["127.0.0.1"],
         }),

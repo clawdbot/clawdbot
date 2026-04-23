@@ -7,6 +7,7 @@ import {
 import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
+  retireSessionMcpRuntimeMock,
   resolveFastModeStateMock,
   resolveCronSessionMock,
   runEmbeddedPiAgentMock,
@@ -36,19 +37,25 @@ function mockSuccessfulModelFallback() {
 async function runFastModeCase(params: {
   configFastMode: boolean;
   expectedFastMode: boolean;
+  expectedCleanupBundleMcpOnRunEnd?: boolean;
+  expectedRetiredSessionId?: string;
   message: string;
+  previousSessionId?: string;
+  sessionId?: string;
   sessionFastMode?: boolean;
+  sessionTarget?: string;
 }) {
   const baseSession = makeCronSession();
   resolveCronSessionMock.mockReturnValue(
-    params.sessionFastMode === undefined
-      ? baseSession
-      : makeCronSession({
-          sessionEntry: {
-            ...baseSession.sessionEntry,
-            fastMode: params.sessionFastMode,
-          },
-        }),
+    makeCronSession({
+      ...baseSession,
+      ...(params.previousSessionId ? { previousSessionId: params.previousSessionId } : {}),
+      sessionEntry: {
+        ...baseSession.sessionEntry,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        ...(params.sessionFastMode === undefined ? {} : { fastMode: params.sessionFastMode }),
+      },
+    }),
   );
   mockSuccessfulModelFallback();
   resolveFastModeStateMock.mockImplementation(({ cfg, sessionEntry }) => {
@@ -77,6 +84,7 @@ async function runFastModeCase(params: {
         },
       },
       job: makeIsolatedAgentTurnJob({
+        sessionTarget: params.sessionTarget ?? "isolated",
         payload: {
           kind: "agentTurn",
           message: params.message,
@@ -92,8 +100,19 @@ async function runFastModeCase(params: {
     provider: "openai",
     model: EXPECTED_OPENAI_MODEL,
     fastMode: params.expectedFastMode,
+    cleanupBundleMcpOnRunEnd: params.expectedCleanupBundleMcpOnRunEnd ?? true,
     allowGatewaySubagentBinding: true,
   });
+  if (params.expectedRetiredSessionId) {
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: params.expectedRetiredSessionId,
+        reason: "cron-session-rollover",
+      }),
+    );
+    return;
+  }
+  expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
 }
 
 describe("runCronIsolatedAgentTurn — fast mode", () => {
@@ -122,6 +141,29 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
       expectedFastMode: true,
       message: "test fast mode session override",
       sessionFastMode: true,
+    });
+  });
+
+  it("preserves bundled MCP runtime state for persistent cron session targets", async () => {
+    await runFastModeCase({
+      configFastMode: true,
+      expectedFastMode: true,
+      expectedCleanupBundleMcpOnRunEnd: false,
+      message: "test persistent cron session",
+      sessionTarget: "session:agent:main:main:thread:9999",
+    });
+  });
+
+  it("retires the previous bundled MCP runtime when a persistent cron session rolls over", async () => {
+    await runFastModeCase({
+      configFastMode: true,
+      expectedFastMode: true,
+      expectedCleanupBundleMcpOnRunEnd: false,
+      expectedRetiredSessionId: "stale-session-id",
+      message: "test persistent cron session rollover",
+      previousSessionId: "stale-session-id",
+      sessionId: "rotated-session-id",
+      sessionTarget: "session:agent:main:main:thread:9999",
     });
   });
 });

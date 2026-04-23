@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { __testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import "./test-helpers/fast-core-tools.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
@@ -48,6 +49,7 @@ function expectConfigMutationCall(params: {
 
 describe("gateway tool", () => {
   beforeEach(() => {
+    restartTesting.resetSigusr1State();
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();
     callGatewayToolMock.mockImplementation(async (method: string) => {
@@ -95,8 +97,9 @@ describe("gateway tool", () => {
   });
 
   it("schedules SIGUSR1 restart", async () => {
-    vi.useFakeTimers();
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const sigusr1Handler = vi.fn();
+    process.on("SIGUSR1", sigusr1Handler);
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
 
     try {
@@ -116,6 +119,14 @@ describe("gateway tool", () => {
             delayMs: 0,
           });
 
+          expect(kill).not.toHaveBeenCalled();
+          expect(sigusr1Handler).not.toHaveBeenCalled();
+          await vi.waitFor(() => expect(sigusr1Handler).toHaveBeenCalledTimes(1), {
+            interval: 1,
+            timeout: 1_000,
+          });
+          expect(kill).not.toHaveBeenCalled();
+
           const sentinelPath = path.join(stateDir, "restart-sentinel.json");
           const raw = await fs.readFile(sentinelPath, "utf-8");
           const parsed = JSON.parse(raw) as {
@@ -125,15 +136,12 @@ describe("gateway tool", () => {
           expect(parsed.payload?.doctorHint).toBe(
             "Run: openclaw --profile isolated doctor --non-interactive",
           );
-
-          expect(kill).not.toHaveBeenCalled();
-          await vi.runAllTimersAsync();
-          expect(kill).toHaveBeenCalledWith(process.pid, "SIGUSR1");
         },
       );
     } finally {
+      process.removeListener("SIGUSR1", sigusr1Handler);
       kill.mockRestore();
-      vi.useRealTimers();
+      restartTesting.resetSigusr1State();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });

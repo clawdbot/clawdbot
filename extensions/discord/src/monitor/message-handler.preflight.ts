@@ -32,7 +32,7 @@ import {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
 } from "./allow-list.js";
-import { resolveDiscordChannelNameSafe } from "./channel-access.js";
+import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import {
@@ -629,13 +629,16 @@ export async function preflightDiscordMessage(
       }) ?? `user:${author.id}`)
     : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
-  threadBinding =
-    conversationRuntime.getSessionBindingService().resolveByConversation({
+  const runtimeRoute = conversationRuntime.resolveRuntimeConversationBindingRoute({
+    route,
+    conversation: {
       channel: "discord",
       accountId: params.accountId,
       conversationId: bindingConversationId,
       parentConversationId: earlyThreadParentId,
-    }) ?? undefined;
+    },
+  });
+  threadBinding = runtimeRoute.bindingRecord ?? undefined;
   const configuredRoute =
     threadBinding == null
       ? conversationRuntime.resolveConfiguredBindingRoute({
@@ -666,13 +669,15 @@ export async function preflightDiscordMessage(
   }
   const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
     ? ""
-    : threadBinding?.targetSessionKey?.trim();
-  const effectiveRoute = resolveDiscordEffectiveRoute({
-    route,
-    boundSessionKey,
-    configuredRoute,
-    matchedBy: "binding.channel",
-  });
+    : (runtimeRoute.boundSessionKey ?? threadBinding?.targetSessionKey?.trim());
+  const effectiveRoute = runtimeRoute.boundSessionKey
+    ? runtimeRoute.route
+    : resolveDiscordEffectiveRoute({
+        route,
+        boundSessionKey,
+        configuredRoute,
+        matchedBy: "binding.channel",
+      });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
   const bypassMentionRequirement = isBoundThreadSession;
@@ -849,7 +854,9 @@ export async function preflightDiscordMessage(
         } satisfies HistoryEntry)
       : undefined;
 
-  const threadOwnerId = threadChannel ? (threadChannel.ownerId ?? channelInfo?.ownerId) : undefined;
+  const threadOwnerId = threadChannel
+    ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
+    : undefined;
   const shouldRequireMentionByConfig = resolveDiscordShouldRequireMention({
     isGuildMessage,
     isThread: Boolean(threadChannel),

@@ -59,6 +59,41 @@ describe("onboard auth provider config merges", () => {
     expect(next.agents?.defaults?.models).toEqual(agentModels);
   });
 
+  it("preserves existing agent model entries when adding provider models", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": { alias: "GPT" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "https://old.example.com/v1",
+            models: [makeModel("model-a")],
+          },
+        },
+      },
+    };
+
+    const next = applyProviderConfigWithDefaultModels(cfg, {
+      agentModels,
+      providerId: "custom",
+      api: "openai-completions",
+      baseUrl: "https://new.example.com/v1",
+      defaultModels: [makeModel("model-b")],
+      defaultModelId: "model-b",
+    });
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.4": { alias: "GPT" },
+      ...agentModels,
+    });
+  });
+
   it("merges model catalogs without duplicating existing model ids", () => {
     const cfg: OpenClawConfig = {
       models: {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setPluginToolMeta } from "../../plugins/tools.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 
@@ -116,5 +117,31 @@ describe("applyFinalEffectiveToolPolicy", () => {
     });
 
     expect(warnings.some((w) => w.includes("totally-made-up-tool"))).toBe(true);
+  });
+
+  it("keeps bundle MCP tools in the coding profile via plugin metadata", () => {
+    const mcpTool = makeTool("bundleProbe__bundle_probe");
+    setPluginToolMeta(mcpTool, { pluginId: "bundle-mcp", optional: false });
+
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [mcpTool],
+      config: { tools: { profile: "coding" } },
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+  });
+
+  it("lets explicit deny entries override the profile bundle MCP allowlist", () => {
+    const mcpTool = makeTool("bundleProbe__bundle_probe");
+    setPluginToolMeta(mcpTool, { pluginId: "bundle-mcp", optional: false });
+
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [mcpTool],
+      config: { tools: { profile: "coding", deny: ["bundle-mcp"] } },
+      warn: () => {},
+    });
+
+    expect(filtered).toEqual([]);
   });
 });

@@ -111,6 +111,58 @@ Options:
 
 - `--days <days>`: number of days to include (default `30`).
 
+### `gateway stability`
+
+Fetch the recent diagnostic stability recorder from a running Gateway.
+
+```bash
+openclaw gateway stability
+openclaw gateway stability --type payload.large
+openclaw gateway stability --bundle latest
+openclaw gateway stability --bundle latest --export
+openclaw gateway stability --json
+```
+
+Options:
+
+- `--limit <limit>`: maximum number of recent events to include (default `25`, max `1000`).
+- `--type <type>`: filter by diagnostic event type, such as `payload.large` or `diagnostic.memory.pressure`.
+- `--since-seq <seq>`: include only events after a diagnostic sequence number.
+- `--bundle [path]`: read a persisted stability bundle instead of calling the running Gateway. Use `--bundle latest` (or just `--bundle`) for the newest bundle under the state directory, or pass a bundle JSON path directly.
+- `--export`: write a shareable support diagnostics zip instead of printing stability details.
+- `--output <path>`: output path for `--export`.
+
+Notes:
+
+- Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and redacted session summaries. They do not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, secret values, hostnames, or raw session ids. Set `diagnostics.enabled: false` to disable the recorder entirely.
+- On fatal Gateway exits, shutdown timeouts, and restart startup failures, OpenClaw writes the same diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json` when the recorder has events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` also apply to bundle output.
+
+### `gateway diagnostics export`
+
+Write a local diagnostics zip that is designed to attach to bug reports.
+
+```bash
+openclaw gateway diagnostics export
+openclaw gateway diagnostics export --output openclaw-diagnostics.zip
+openclaw gateway diagnostics export --json
+```
+
+Options:
+
+- `--output <path>`: output zip path. Defaults to a support export under the state directory.
+- `--log-lines <count>`: maximum sanitized log lines to include (default `5000`).
+- `--log-bytes <bytes>`: maximum log bytes to inspect (default `1000000`).
+- `--url <url>`: Gateway WebSocket URL for the health snapshot.
+- `--token <token>`: Gateway token for the health snapshot.
+- `--password <password>`: Gateway password for the health snapshot.
+- `--timeout <ms>`: status/health snapshot timeout (default `3000`).
+- `--no-stability-bundle`: skip persisted stability bundle lookup.
+- `--json`: print the written path, size, and manifest as JSON.
+
+The export contains a manifest, a Markdown summary, config shape, sanitized config details, sanitized log summaries, sanitized Gateway status/health snapshots, and the newest stability bundle when one exists.
+
+It is meant to be shared. It keeps operational details that help debugging, such as safe OpenClaw log fields, subsystem names, status codes, durations, configured modes, ports, plugin ids, provider ids, non-secret feature settings, and redacted operational log messages. It omits or redacts chat text, webhook bodies, tool outputs, credentials, cookies, account/message identifiers, prompt/instruction text, hostnames, and secret values. When a LogTape-style message looks like user/chat/tool payload text, the export keeps only that a message was omitted plus its byte count.
+
 ### `gateway status`
 
 `gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional probe of connectivity/auth capability.

@@ -38,7 +38,11 @@ import {
   sendVoiceMessageDiscord,
   unpinMessageDiscord,
 } from "../send.js";
-import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
+import {
+  resolveDiscordTargetChannelId,
+  type DiscordSendComponents,
+  type DiscordSendEmbeds,
+} from "../send.shared.js";
 import { resolveDiscordChannelId } from "../targets.js";
 
 export const discordMessagingActionRuntime = {
@@ -56,6 +60,7 @@ export const discordMessagingActionRuntime = {
   readMessagesDiscord,
   removeOwnReactionsDiscord,
   removeReactionDiscord,
+  resolveDiscordReactionTargetChannelId,
   resolveDiscordChannelId,
   searchMessagesDiscord,
   sendDiscordComponentMessage,
@@ -65,6 +70,23 @@ export const discordMessagingActionRuntime = {
   sendVoiceMessageDiscord,
   unpinMessageDiscord,
 };
+
+export async function resolveDiscordReactionTargetChannelId(params: {
+  target: string;
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): Promise<string> {
+  try {
+    return resolveDiscordChannelId(params.target);
+  } catch {
+    return (
+      await resolveDiscordTargetChannelId(params.target, {
+        cfg: params.cfg,
+        accountId: params.accountId,
+      })
+    ).channelId;
+  }
+}
 
 function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, unknown> {
   return Boolean(
@@ -114,6 +136,15 @@ export async function handleDiscordMessagingAction(
   }
   const cfgOptions = { cfg };
   const resolvedReactionAccountId = accountId ?? resolveDefaultDiscordAccountId(cfg);
+  const resolveReactionChannelId = async () => {
+    const target =
+      readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true });
+    return await discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId({
+      target,
+      cfg,
+      accountId: resolvedReactionAccountId,
+    });
+  };
   const reactionRuntimeOptions = resolvedReactionAccountId
     ? createDiscordRuntimeAccountContext({
         cfg,
@@ -138,7 +169,7 @@ export async function handleDiscordMessagingAction(
       if (!isActionEnabled("reactions")) {
         throw new Error("Discord reactions are disabled.");
       }
-      const channelId = resolveChannelId();
+      const channelId = await resolveReactionChannelId();
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
@@ -174,7 +205,7 @@ export async function handleDiscordMessagingAction(
       if (!isActionEnabled("reactions")) {
         throw new Error("Discord reactions are disabled.");
       }
-      const channelId = resolveChannelId();
+      const channelId = await resolveReactionChannelId();
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });

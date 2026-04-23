@@ -2,17 +2,54 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-IMAGE_NAME="${OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE:-openclaw-bundled-channel-deps-e2e}"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-bundled-channel-deps-e2e" OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE)"
 UPDATE_BASELINE_VERSION="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION:-2026.4.20}"
+DOCKER_TARGET="${OPENCLAW_BUNDLED_CHANNEL_DOCKER_TARGET:-e2e-runner}"
+HOST_BUILD="${OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD:-1}"
+PACKAGE_TGZ="${OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ:-}"
 RUN_CHANNEL_SCENARIOS="${OPENCLAW_BUNDLED_CHANNEL_SCENARIOS:-1}"
 RUN_UPDATE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO:-1}"
 RUN_ROOT_OWNED_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO:-1}"
 RUN_SETUP_ENTRY_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO:-1}"
+RUN_LOAD_FAILURE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO:-1}"
 
-echo "Building Docker image..."
-run_logged bundled-channel-deps-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" bundled-channel-deps "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
+
+prepare_package_tgz() {
+  if [ -n "$PACKAGE_TGZ" ]; then
+    if [ ! -f "$PACKAGE_TGZ" ]; then
+      echo "OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ does not exist: $PACKAGE_TGZ" >&2
+      exit 1
+    fi
+    PACKAGE_TGZ="$(cd "$(dirname "$PACKAGE_TGZ")" && pwd)/$(basename "$PACKAGE_TGZ")"
+    return 0
+  fi
+
+  if [ "$HOST_BUILD" != "0" ]; then
+    echo "Building host package artifacts..."
+    run_logged bundled-channel-deps-host-build pnpm build
+  else
+    echo "Skipping host build (OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0)"
+  fi
+
+  echo "Writing package inventory and packing once..."
+  run_logged bundled-channel-deps-inventory node --import tsx --input-type=module -e 'const { writePackageDistInventory } = await import("./src/infra/package-dist-inventory.ts"); await writePackageDistInventory(process.cwd());'
+  local pack_dir
+  pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bundled-channel-pack.XXXXXX")"
+  run_logged bundled-channel-deps-pack npm pack --ignore-scripts --pack-destination "$pack_dir"
+  PACKAGE_TGZ="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
+  if [ -z "$PACKAGE_TGZ" ]; then
+    echo "missing packed OpenClaw tarball" >&2
+    exit 1
+  fi
+  PACKAGE_TGZ="$(cd "$(dirname "$PACKAGE_TGZ")" && pwd)/$(basename "$PACKAGE_TGZ")"
+}
+
+prepare_package_tgz
+DOCKER_PACKAGE_TGZ="/tmp/openclaw-current.tgz"
+PACKAGE_DOCKER_ARGS=(-v "$PACKAGE_TGZ:$DOCKER_PACKAGE_TGZ:ro" -e "OPENCLAW_CURRENT_PACKAGE_TGZ=$DOCKER_PACKAGE_TGZ")
 
 run_channel_scenario() {
   local channel="$1"
@@ -25,6 +62,7 @@ run_channel_scenario() {
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_CHANNEL_UNDER_TEST="$channel" \
     -e OPENCLAW_DEP_SENTINEL="$dep_sentinel" \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -48,15 +86,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Packing and installing current OpenClaw build..."
-pack_dir="$(mktemp -d "/tmp/openclaw-pack.XXXXXX")"
-npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-pack.log 2>&1
-package_tgz="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
-if [ -z "$package_tgz" ]; then
-  cat /tmp/openclaw-pack.log
-  echo "missing packed OpenClaw tarball" >&2
-  exit 1
-fi
+echo "Installing mounted OpenClaw package..."
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
 
 command -v openclaw >/dev/null
@@ -64,20 +95,12 @@ package_root="$(npm root -g)/openclaw"
 test -d "$package_root/dist/extensions/telegram"
 test -d "$package_root/dist/extensions/discord"
 test -d "$package_root/dist/extensions/slack"
+test -d "$package_root/dist/extensions/feishu"
+test -d "$package_root/dist/extensions/memory-lancedb"
 
-if [ -d "$package_root/dist/extensions/telegram/node_modules" ]; then
-  echo "telegram runtime deps should not be preinstalled in package" >&2
-  find "$package_root/dist/extensions/telegram/node_modules" -maxdepth 2 -type f | head -20 >&2 || true
-  exit 1
-fi
-if [ -d "$package_root/dist/extensions/discord/node_modules" ]; then
-  echo "discord runtime deps should not be preinstalled in package" >&2
-  find "$package_root/dist/extensions/discord/node_modules" -maxdepth 2 -type f | head -20 >&2 || true
-  exit 1
-fi
-if [ -d "$package_root/dist/extensions/slack/node_modules" ]; then
-  echo "slack runtime deps should not be preinstalled in package" >&2
-  find "$package_root/dist/extensions/slack/node_modules" -maxdepth 2 -type f | head -20 >&2 || true
+if [ -d "$package_root/dist/extensions/$CHANNEL/node_modules" ]; then
+  echo "$CHANNEL runtime deps should not be preinstalled in package" >&2
+  find "$package_root/dist/extensions/$CHANNEL/node_modules" -maxdepth 2 -type f | head -20 >&2 || true
   exit 1
 fi
 
@@ -156,6 +179,44 @@ if (mode === "slack") {
     },
   };
 }
+if (mode === "feishu") {
+  config.channels = {
+    ...(config.channels || {}),
+    feishu: {
+      ...(config.channels?.feishu || {}),
+      enabled: true,
+    },
+  };
+}
+if (mode === "memory-lancedb") {
+  config.plugins = {
+    ...(config.plugins || {}),
+    enabled: true,
+    allow: [...new Set([...(config.plugins?.allow || []), "memory-lancedb"])],
+    slots: {
+      ...(config.plugins?.slots || {}),
+      memory: "memory-lancedb",
+    },
+    entries: {
+      ...(config.plugins?.entries || {}),
+      "memory-lancedb": {
+        ...(config.plugins?.entries?.["memory-lancedb"] || {}),
+        enabled: true,
+        config: {
+          ...(config.plugins?.entries?.["memory-lancedb"]?.config || {}),
+          embedding: {
+            ...(config.plugins?.entries?.["memory-lancedb"]?.config?.embedding || {}),
+            apiKey: process.env.OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath: "~/.openclaw/memory/lancedb-e2e",
+          autoCapture: false,
+          autoRecall: false,
+        },
+      },
+    },
+  };
+}
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -206,6 +267,10 @@ wait_for_gateway_health() {
 
 assert_channel_status() {
   local channel="$1"
+  if [ "$channel" = "memory-lancedb" ]; then
+    echo "memory-lancedb plugin activation verified by dependency sentinel"
+    return 0
+  fi
   local out="/tmp/openclaw-channel-status-$channel.json"
   openclaw gateway call channels.status \
     --url "ws://127.0.0.1:$PORT" \
@@ -239,10 +304,17 @@ NODE
 assert_installed_once() {
   local log_file="$1"
   local channel="$2"
+  local dep_path="$3"
   local count
   count="$(grep -c "\\[plugins\\] $channel installed bundled runtime deps:" "$log_file" || true)"
+  if [ "$count" -eq 1 ]; then
+    return 0
+  fi
+  if [ "$count" -eq 0 ] && [ -f "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
+    return 0
+  fi
   if [ "$count" -ne 1 ]; then
-    echo "expected exactly one runtime deps install for $channel, got $count" >&2
+    echo "expected exactly one runtime deps install log or installed sentinel for $channel, got $count log lines" >&2
     cat "$log_file" >&2
     exit 1
   fi
@@ -268,17 +340,27 @@ assert_dep_sentinel() {
   fi
 }
 
+assert_no_dep_sentinel() {
+  local channel="$1"
+  local dep_path="$2"
+  if [ -f "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
+    echo "dependency sentinel should be absent before activation for $channel: $dep_path" >&2
+    exit 1
+  fi
+}
+
 echo "Starting baseline gateway with OpenAI configured..."
 write_config baseline
 start_gateway "/tmp/openclaw-$CHANNEL-baseline.log"
 wait_for_gateway_health
 stop_gateway
+assert_no_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
 
 echo "Enabling $CHANNEL by config edit, then restarting gateway..."
 write_config "$CHANNEL"
 start_gateway "/tmp/openclaw-$CHANNEL-first.log"
 wait_for_gateway_health
-assert_installed_once "/tmp/openclaw-$CHANNEL-first.log" "$CHANNEL"
+assert_installed_once "/tmp/openclaw-$CHANNEL-first.log" "$CHANNEL" "$DEP_SENTINEL"
 assert_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
 assert_channel_status "$CHANNEL"
 stop_gateway
@@ -309,6 +391,7 @@ run_root_owned_global_scenario() {
   echo "Running bundled channel root-owned global install Docker E2E..."
   if ! docker run --rm --user root \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -335,15 +418,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Packing and installing current OpenClaw build into root-owned global npm..."
-pack_dir="$(mktemp -d "/tmp/openclaw-root-owned-pack.XXXXXX")"
-npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-root-owned-pack.log 2>&1
-package_tgz="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
-if [ -z "$package_tgz" ]; then
-  cat /tmp/openclaw-root-owned-pack.log
-  echo "missing packed OpenClaw tarball" >&2
-  exit 1
-fi
+echo "Installing mounted OpenClaw package into root-owned global npm..."
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-root-owned-install.log 2>&1
 
 root="$(package_root)"
@@ -498,6 +574,7 @@ run_setup_entry_scenario() {
   echo "Running bundled channel setup-entry runtime deps Docker E2E..."
   if ! docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -506,6 +583,7 @@ export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_PLUGIN_STAGE_DIR="$HOME/.openclaw/plugin-runtime-deps"
+mkdir -p "$OPENCLAW_PLUGIN_STAGE_DIR"
 
 CHANNEL="feishu"
 DEP_SENTINEL="@larksuiteoapi/node-sdk"
@@ -514,15 +592,8 @@ package_root() {
   printf "%s/openclaw" "$(npm root -g)"
 }
 
-echo "Packing and installing current OpenClaw build..."
-pack_dir="$(mktemp -d "/tmp/openclaw-setup-entry-pack.XXXXXX")"
-npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-setup-entry-pack.log 2>&1
-package_tgz="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
-if [ -z "$package_tgz" ]; then
-  cat /tmp/openclaw-setup-entry-pack.log
-  echo "missing packed OpenClaw tarball" >&2
-  exit 1
-fi
+echo "Installing mounted OpenClaw package..."
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-setup-entry-install.log 2>&1
 
 root="$(package_root)"
@@ -537,7 +608,7 @@ if [ -f "$root/node_modules/$DEP_SENTINEL/package.json" ]; then
   exit 1
 fi
 
-echo "Loading real Feishu bundled setup entry from installed package..."
+echo "Probing real Feishu bundled setup entry before channel configuration..."
 (
   cd "$root"
   node --input-type=module - <<'NODE'
@@ -556,34 +627,62 @@ if (!bundledPath) {
   throw new Error("missing packaged bundled channel loader artifact");
 }
 const bundled = await import(pathToFileURL(bundledPath));
-let plugin = null;
-for (const value of Object.values(bundled)) {
-  if (typeof value !== "function" || value.length !== 1) {
-    continue;
-  }
-  try {
-    const candidate = value("feishu");
-    if (candidate?.id === "feishu" && candidate?.setupWizard) {
-      plugin = candidate;
-      break;
-    }
-  } catch {
-    // Ignore unrelated one-argument helper exports from the bundled chunk.
-  }
+const setupPluginLoader = Object.values(bundled).find(
+  (value) => typeof value === "function" && value.name === "getBundledChannelSetupPlugin",
+);
+if (!setupPluginLoader) {
+  throw new Error("missing packaged getBundledChannelSetupPlugin export");
 }
-if (!plugin) {
-  throw new Error("missing Feishu setup plugin");
-}
-console.log("Feishu setup plugin loaded");
+const plugin = setupPluginLoader("feishu");
+console.log(plugin ? "Feishu setup plugin loaded pre-config" : "Feishu setup plugin deferred pre-config");
 NODE
 )
 
 if [ -e "$root/dist/extensions/$CHANNEL/node_modules/$DEP_SENTINEL/package.json" ]; then
-  echo "expected setup-entry deps to be installed externally, not into bundled plugin tree" >&2
+  echo "setup-entry discovery installed deps into bundled plugin tree before channel configuration" >&2
+  exit 1
+fi
+if find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/$DEP_SENTINEL/package.json" -type f | grep -q .; then
+  echo "setup-entry discovery installed external staged deps before channel configuration" >&2
+  find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
+  exit 1
+fi
+
+echo "Configuring Feishu; doctor should now install bundled runtime deps externally..."
+node - <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+const config = fs.existsSync(configPath)
+  ? JSON.parse(fs.readFileSync(configPath, "utf8"))
+  : {};
+
+config.plugins = {
+  ...(config.plugins || {}),
+  enabled: true,
+};
+config.channels = {
+  ...(config.channels || {}),
+  feishu: {
+    ...(config.channels?.feishu || {}),
+    enabled: true,
+  },
+};
+
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+NODE
+
+openclaw doctor --non-interactive >/tmp/openclaw-setup-entry-doctor.log 2>&1
+
+if [ -e "$root/dist/extensions/$CHANNEL/node_modules/$DEP_SENTINEL/package.json" ]; then
+  echo "expected configured Feishu deps to be installed externally, not into bundled plugin tree" >&2
   exit 1
 fi
 if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/$DEP_SENTINEL/package.json" -type f | grep -q .; then
-  echo "missing external staged setup-entry dependency sentinel for $DEP_SENTINEL" >&2
+  echo "missing external staged dependency sentinel for configured $CHANNEL: $DEP_SENTINEL" >&2
+  cat /tmp/openclaw-setup-entry-doctor.log >&2
   find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
   exit 1
 fi
@@ -608,6 +707,7 @@ run_update_scenario() {
   if ! docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -618,7 +718,6 @@ export OPENAI_API_KEY="sk-openclaw-bundled-channel-update-e2e"
 export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_UPDATE_PACKAGE_SPEC=""
 
-BASELINE_VERSION="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION:?missing baseline version}"
 TOKEN="bundled-channel-update-token"
 PORT="18790"
 
@@ -626,20 +725,7 @@ package_root() {
   printf "%s/openclaw" "$(npm root -g)"
 }
 
-pack_current_candidate() {
-  local pack_dir
-  pack_dir="$(mktemp -d "/tmp/openclaw-update-pack.XXXXXX")"
-  node --import tsx --input-type=module -e 'const { writePackageDistInventory } = await import("./src/infra/package-dist-inventory.ts"); await writePackageDistInventory(process.cwd());' >/tmp/openclaw-update-inventory.log 2>&1
-  npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-update-pack.log 2>&1
-  find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit
-}
-
-package_tgz="$(pack_current_candidate)"
-if [ -z "$package_tgz" ]; then
-  cat /tmp/openclaw-update-pack.log
-  echo "missing packed OpenClaw candidate tarball" >&2
-  exit 1
-fi
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 update_target="file:$package_tgz"
 candidate_version="$(node - <<'NODE' "$package_tgz"
 const { execFileSync } = require("node:child_process");
@@ -714,7 +800,40 @@ config.channels = {
     botToken: "xoxb-bundled-channel-update-token",
     appToken: "xapp-bundled-channel-update-token",
   },
+  feishu: {
+    ...(config.channels?.feishu || {}),
+    enabled: mode === "feishu",
+  },
 };
+if (mode === "memory-lancedb") {
+  config.plugins = {
+    ...(config.plugins || {}),
+    enabled: true,
+    allow: [...new Set([...(config.plugins?.allow || []), "memory-lancedb"])],
+    slots: {
+      ...(config.plugins?.slots || {}),
+      memory: "memory-lancedb",
+    },
+    entries: {
+      ...(config.plugins?.entries || {}),
+      "memory-lancedb": {
+        ...(config.plugins?.entries?.["memory-lancedb"] || {}),
+        enabled: true,
+        config: {
+          ...(config.plugins?.entries?.["memory-lancedb"]?.config || {}),
+          embedding: {
+            ...(config.plugins?.entries?.["memory-lancedb"]?.config?.embedding || {}),
+            apiKey: process.env.OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath: "~/.openclaw/memory/lancedb-update-e2e",
+          autoCapture: false,
+          autoRecall: false,
+        },
+      },
+    },
+  };
+}
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -836,11 +955,12 @@ run_update_and_capture() {
   fi
 }
 
-echo "Installing known-bad baseline $BASELINE_VERSION..."
-npm install -g "openclaw@$BASELINE_VERSION" --omit=optional --no-fund --no-audit >/tmp/openclaw-update-baseline-install.log 2>&1
+echo "Installing current candidate as update baseline..."
+npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-update-baseline-install.log 2>&1
 command -v openclaw >/dev/null
 baseline_root="$(package_root)"
 test -d "$baseline_root/dist/extensions/telegram"
+test -d "$baseline_root/dist/extensions/feishu"
 
 echo "Replicating configured Telegram missing-runtime state..."
 write_config telegram
@@ -849,16 +969,14 @@ set +e
 openclaw doctor --non-interactive >/tmp/openclaw-baseline-doctor.log 2>&1
 baseline_doctor_status=$?
 set -e
-if [ "$baseline_doctor_status" -eq 0 ] || ! grep -Eq "grammy|ERR_MODULE_NOT_FOUND|Cannot find module" /tmp/openclaw-baseline-doctor.log; then
-  echo "expected baseline doctor to fail on missing Telegram runtime deps" >&2
-  cat /tmp/openclaw-baseline-doctor.log >&2
-  exit 1
-fi
+echo "baseline doctor exited with $baseline_doctor_status"
+remove_runtime_dep telegram grammy
+assert_no_dep_available telegram grammy
 
 echo "Updating from baseline to current candidate; candidate doctor must repair Telegram deps..."
 run_update_and_capture telegram /tmp/openclaw-update-telegram.json
 cat /tmp/openclaw-update-telegram.json
-assert_update_ok /tmp/openclaw-update-telegram.json "$BASELINE_VERSION"
+assert_update_ok /tmp/openclaw-update-telegram.json "$candidate_version"
 assert_dep_available telegram grammy
 
 echo "Mutating installed package: remove Telegram deps, then update-mode doctor repairs them..."
@@ -889,7 +1007,180 @@ cat /tmp/openclaw-update-slack.json
 assert_update_ok /tmp/openclaw-update-slack.json "$candidate_version"
 assert_dep_available slack @slack/web-api
 
+echo "Mutating config to Feishu and rerunning same-version update path..."
+write_config feishu
+remove_runtime_dep feishu @larksuiteoapi/node-sdk
+assert_no_dep_available feishu @larksuiteoapi/node-sdk
+run_update_and_capture feishu /tmp/openclaw-update-feishu.json
+cat /tmp/openclaw-update-feishu.json
+assert_update_ok /tmp/openclaw-update-feishu.json "$candidate_version"
+assert_dep_available feishu @larksuiteoapi/node-sdk
+
+echo "Mutating config to memory-lancedb and rerunning same-version update path..."
+write_config memory-lancedb
+remove_runtime_dep memory-lancedb @lancedb/lancedb
+assert_no_dep_available memory-lancedb @lancedb/lancedb
+run_update_and_capture memory-lancedb /tmp/openclaw-update-memory-lancedb.json
+cat /tmp/openclaw-update-memory-lancedb.json
+assert_update_ok /tmp/openclaw-update-memory-lancedb.json "$candidate_version"
+assert_dep_available memory-lancedb @lancedb/lancedb
+
 echo "bundled channel runtime deps Docker update E2E passed"
+EOF
+  then
+    cat "$run_log"
+    rm -f "$run_log"
+    exit 1
+  fi
+
+  cat "$run_log"
+  rm -f "$run_log"
+}
+
+run_load_failure_scenario() {
+  local run_log
+  run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-load-failure.XXXXXX")"
+
+  echo "Running bundled channel load-failure isolation Docker E2E..."
+  if ! docker run --rm \
+    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
+    -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
+set -euo pipefail
+
+export HOME="$(mktemp -d "/tmp/openclaw-bundled-channel-load-failure.XXXXXX")"
+export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+export OPENCLAW_NO_ONBOARD=1
+
+package_root() {
+  printf "%s/openclaw" "$(npm root -g)"
+}
+
+echo "Installing mounted OpenClaw package..."
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-load-failure-install.log 2>&1
+
+root="$(package_root)"
+plugin_dir="$root/dist/extensions/load-failure-alpha"
+mkdir -p "$plugin_dir"
+cat >"$plugin_dir/package.json" <<'JSON'
+{
+  "name": "@openclaw/load-failure-alpha",
+  "version": "2026.4.21",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "setupEntry": "./setup-entry.js"
+  }
+}
+JSON
+cat >"$plugin_dir/openclaw.plugin.json" <<'JSON'
+{
+  "id": "load-failure-alpha",
+  "channels": ["load-failure-alpha"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+JSON
+cat >"$plugin_dir/index.js" <<'JS'
+export default {
+  kind: "bundled-channel-entry",
+  id: "load-failure-alpha",
+  name: "Load Failure Alpha",
+  description: "Load Failure Alpha",
+  register() {},
+  loadChannelSecrets() {
+    globalThis.__loadFailureSecrets = (globalThis.__loadFailureSecrets ?? 0) + 1;
+    throw new Error("synthetic channel secrets failure");
+  },
+  loadChannelPlugin() {
+    globalThis.__loadFailurePlugin = (globalThis.__loadFailurePlugin ?? 0) + 1;
+    throw new Error("synthetic channel plugin failure");
+  }
+};
+JS
+cat >"$plugin_dir/setup-entry.js" <<'JS'
+export default {
+  kind: "bundled-channel-setup-entry",
+  loadSetupSecrets() {
+    globalThis.__loadFailureSetupSecrets = (globalThis.__loadFailureSetupSecrets ?? 0) + 1;
+    throw new Error("synthetic setup secrets failure");
+  },
+  loadSetupPlugin() {
+    globalThis.__loadFailureSetup = (globalThis.__loadFailureSetup ?? 0) + 1;
+    throw new Error("synthetic setup plugin failure");
+  }
+};
+JS
+
+echo "Loading synthetic failing bundled channel through packaged loader..."
+(
+  cd "$root"
+  OPENCLAW_BUNDLED_PLUGINS_DIR="$root/dist/extensions" node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const root = process.cwd();
+const distDir = path.join(root, "dist");
+const bundledPath = fs
+  .readdirSync(distDir)
+  .filter((entry) => /^bundled-[A-Za-z0-9_-]+\.js$/.test(entry))
+  .map((entry) => path.join(distDir, entry))
+  .find((entry) => fs.readFileSync(entry, "utf8").includes("src/channels/plugins/bundled.ts"));
+if (!bundledPath) {
+  throw new Error("missing packaged bundled channel loader artifact");
+}
+const bundled = await import(pathToFileURL(bundledPath));
+const oneArgExports = Object.entries(bundled).filter(
+  ([, value]) => typeof value === "function" && value.length === 1,
+);
+if (oneArgExports.length === 0) {
+  throw new Error(`missing one-argument bundled loader exports; exports=${Object.keys(bundled).join(",")}`);
+}
+
+const id = "load-failure-alpha";
+for (let i = 0; i < 2; i += 1) {
+  for (const [name, fn] of oneArgExports) {
+    try {
+      fn(id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("synthetic")) {
+        throw new Error(`bundled export ${name} leaked synthetic load failure: ${message}`);
+      }
+    }
+  }
+}
+
+const counts = {
+  plugin: globalThis.__loadFailurePlugin,
+  setup: globalThis.__loadFailureSetup,
+  secrets: globalThis.__loadFailureSecrets,
+  setupSecrets: globalThis.__loadFailureSetupSecrets,
+};
+for (const [key, value] of Object.entries({
+  plugin: counts.plugin,
+  setup: counts.setup,
+  setupSecrets: counts.setupSecrets,
+})) {
+  if (value !== 1) {
+    throw new Error(`expected ${key} failure to be cached after one load, got ${value}`);
+  }
+}
+if (counts.secrets !== undefined && counts.secrets !== 1) {
+  throw new Error(`expected secrets failure to be cached after one load when exercised, got ${counts.secrets}`);
+}
+console.log("synthetic bundled channel load failures were isolated and cached");
+NODE
+)
+
+echo "bundled channel load-failure isolation Docker E2E passed"
 EOF
   then
     cat "$run_log"
@@ -905,6 +1196,8 @@ if [ "$RUN_CHANNEL_SCENARIOS" != "0" ]; then
   run_channel_scenario telegram grammy
   run_channel_scenario discord discord-api-types
   run_channel_scenario slack @slack/web-api
+  run_channel_scenario feishu @larksuiteoapi/node-sdk
+  run_channel_scenario memory-lancedb @lancedb/lancedb
 fi
 if [ "$RUN_UPDATE_SCENARIO" != "0" ]; then
   run_update_scenario
@@ -914,4 +1207,7 @@ if [ "$RUN_ROOT_OWNED_SCENARIO" != "0" ]; then
 fi
 if [ "$RUN_SETUP_ENTRY_SCENARIO" != "0" ]; then
   run_setup_entry_scenario
+fi
+if [ "$RUN_LOAD_FAILURE_SCENARIO" != "0" ]; then
+  run_load_failure_scenario
 fi

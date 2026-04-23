@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { listAgentHarnessIds } from "../agents/harness/registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { getContextEngineFactory, listContextEngineIds } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
@@ -822,6 +826,7 @@ function expectEscapingEntryRejected(params: {
 }
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetPluginLoaderTestStateForTest();
 });
 
@@ -1046,6 +1051,193 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("disabled");
   });
 
+  it("does not repair disabled selected setup-only channel runtime deps", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "feishu",
+      dir: path.join(bundledDir, "feishu"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "feishu", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/feishu",
+          version: "1.0.0",
+          dependencies: {
+            "feishu-runtime": "1.0.0",
+          },
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "feishu",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["feishu"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "setup-entry.cjs"),
+      `
+module.exports = {
+  plugin: {
+    id: "feishu",
+    meta: {
+      id: "feishu",
+      label: "Feishu",
+      selectionLabel: "Feishu",
+      docsPath: "/channels/feishu",
+      blurb: "setup only",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({ accountId: "default" }),
+    },
+  },
+};
+`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          entries: {
+            feishu: { enabled: false },
+          },
+        },
+      },
+      includeSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["feishu"],
+      bundledRuntimeDepsInstaller: () => {
+        throw new Error("disabled setup-only deps should not install");
+      },
+    });
+
+    expect(registry.channelSetups[0]?.plugin.meta.label).toBe("Feishu");
+    expect(registry.plugins.find((entry) => entry.id === "feishu")?.status).toBe("disabled");
+  });
+
+  it("repairs enabled selected setup-only channel runtime deps before loading setup entry", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "feishu",
+      dir: path.join(bundledDir, "feishu"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "feishu", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/feishu",
+          version: "1.0.0",
+          dependencies: {
+            "feishu-runtime": "1.0.0",
+          },
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "feishu",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["feishu"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "setup-entry.cjs"),
+      `
+const runtime = require("feishu-runtime");
+module.exports = {
+  plugin: {
+    id: "feishu",
+    meta: {
+      id: "feishu",
+      label: runtime.label,
+      selectionLabel: runtime.label,
+      docsPath: "/channels/feishu",
+      blurb: "setup only",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({ accountId: "default" }),
+    },
+  },
+};
+`,
+      "utf-8",
+    );
+    const installedSpecs: string[] = [];
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          entries: {
+            feishu: { enabled: true },
+          },
+        },
+      },
+      includeSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["feishu"],
+      bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
+        installedSpecs.push(...missingSpecs);
+        const depRoot = path.join(installRoot, "node_modules", "feishu-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({ name: "feishu-runtime", version: "1.0.0", main: "index.cjs" }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.cjs"),
+          "module.exports = { label: 'Feishu Runtime Ready' };\n",
+          "utf-8",
+        );
+      },
+    });
+
+    expect(installedSpecs).toEqual(["feishu-runtime@1.0.0"]);
+    expect(registry.channelSetups[0]?.plugin.meta.label).toBe("Feishu Runtime Ready");
+    expect(registry.plugins.find((entry) => entry.id === "feishu")?.status).toBe("loaded");
+  });
+
   it("repairs default-enabled bundled plugin runtime deps", () => {
     const bundledDir = makeTempDir();
     const plugin = writePlugin({
@@ -1260,6 +1452,111 @@ module.exports = {
     });
 
     expect(registry.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
+  });
+
+  it("loads dist-runtime wrappers from an external stage dir", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    const bundledDir = path.join(packageRoot, "dist-runtime", "extensions");
+    const pluginRoot = path.join(bundledDir, "acpx");
+    const canonicalPluginRoot = path.join(packageRoot, "dist", "extensions", "acpx");
+    const canonicalEntryImport = path.posix.join(
+      "..",
+      "..",
+      "..",
+      "dist",
+      "extensions",
+      "acpx",
+      "index.js",
+    );
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(canonicalPluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.js"),
+      [
+        `export * from ${JSON.stringify(canonicalEntryImport)};`,
+        `import defaultModule from ${JSON.stringify(canonicalEntryImport)};`,
+        `export default defaultModule;`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(canonicalPluginRoot, "index.js"),
+      [
+        `import runtimeDep from "external-runtime";`,
+        `export default {`,
+        `  id: "acpx",`,
+        `  register(api) {`,
+        `    api.registerCommand({ name: "external-runtime", handler: () => runtimeDep.marker });`,
+        `  },`,
+        `};`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageDir;
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/acpx",
+          version: "1.0.0",
+          type: "module",
+          dependencies: {
+            "external-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "acpx",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot }) => {
+        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({
+            name: "external-runtime",
+            version: "1.0.0",
+            type: "module",
+            exports: "./index.js",
+          }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.js"),
+          "export default { marker: 'dist-runtime-ok' };\n",
+          "utf-8",
+        );
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "acpx")?.status).toBe("loaded");
   });
 
   it("loads source-checkout bundled runtime deps without mirroring the repo tree", () => {
@@ -3433,6 +3730,31 @@ module.exports = { id: "throws-after-import", register() {} };`,
             'plugin id mismatch (config uses "manifest-id", export uses "export-id")',
       ),
     ).toBe(true);
+  });
+
+  it("can include plugin export shape when register is missing", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "missing-register-shape",
+      filename: "missing-register-shape.cjs",
+      body: `module.exports = { default: { default: { id: "missing-register-shape" } } };`,
+    });
+
+    const registry = withEnv({ OPENCLAW_PLUGIN_LOAD_DEBUG: "1" }, () =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["missing-register-shape"],
+        },
+      }),
+    );
+
+    const loaded = registry.plugins.find((entry) => entry.id === "missing-register-shape");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("plugin export missing register/activate");
+    expect(loaded?.error).toContain("module shape:");
+    expect(loaded?.error).toContain("export:object keys=default");
+    expect(loaded?.error).toContain("export.default:object keys=default");
   });
 
   it("handles single-plugin channel, context engine, and cli validation", () => {
@@ -5625,6 +5947,65 @@ module.exports = {
         ...loadedScenario,
         expectedSource,
       });
+    });
+  });
+
+  it("uses the source runtime snapshot allowlist for plugin trust checks", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const globalDir = path.join(stateDir, "extensions", "trusted-plugin");
+      mkdirSafe(globalDir);
+      writePlugin({
+        id: "trusted-plugin",
+        body: simplePluginBody("trusted-plugin"),
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+      const untrustedDir = path.join(stateDir, "extensions", "untrusted-plugin");
+      mkdirSafe(untrustedDir);
+      writePlugin({
+        id: "untrusted-plugin",
+        body: simplePluginBody("untrusted-plugin"),
+        dir: untrustedDir,
+        filename: "index.cjs",
+      });
+      const runtimeConfig = {
+        plugins: {
+          enabled: true,
+          allow: ["runtime-added-plugin"],
+        },
+      } satisfies PluginLoadConfig;
+      const sourceConfig = {
+        plugins: {
+          enabled: true,
+          allow: ["trusted-plugin"],
+        },
+      } satisfies PluginLoadConfig;
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+      const warnings: string[] = [];
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        logger: createWarningLogger(warnings),
+        config: runtimeConfig,
+      });
+
+      expect(registry.plugins.find((entry) => entry.id === "trusted-plugin")?.status).toBe(
+        "loaded",
+      );
+      expect(registry.plugins.find((entry) => entry.id === "untrusted-plugin")).toMatchObject({
+        status: "disabled",
+        error: "not in allowlist",
+      });
+      expect(warnings.some((message) => message.includes("plugins.allow is empty"))).toBe(false);
+      expect(
+        warnings.some(
+          (message) =>
+            message.includes("trusted-plugin") &&
+            message.includes("loaded without install/load-path provenance"),
+        ),
+      ).toBe(false);
     });
   });
 

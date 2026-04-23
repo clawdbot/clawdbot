@@ -16,6 +16,7 @@ export class FailoverError extends Error {
   readonly profileId?: string;
   readonly status?: number;
   readonly code?: string;
+  readonly rawError?: string;
 
   constructor(
     message: string,
@@ -26,6 +27,7 @@ export class FailoverError extends Error {
       profileId?: string;
       status?: number;
       code?: string;
+      rawError?: string;
       cause?: unknown;
     },
   ) {
@@ -37,6 +39,7 @@ export class FailoverError extends Error {
     this.profileId = params.profileId;
     this.status = params.status;
     this.code = params.code;
+    this.rawError = params.rawError;
   }
 }
 
@@ -275,6 +278,7 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
 
 export function describeFailoverError(err: unknown): {
   message: string;
+  rawError?: string;
   reason?: FailoverReason;
   status?: number;
   code?: string;
@@ -282,6 +286,7 @@ export function describeFailoverError(err: unknown): {
   if (isFailoverError(err)) {
     return {
       message: err.message,
+      rawError: err.rawError,
       reason: err.reason,
       status: err.status,
       code: err.code,
@@ -325,6 +330,7 @@ export function coerceToFailoverError(
     profileId: context?.profileId,
     status,
     code,
+    rawError: message,
     cause: err instanceof Error ? err : undefined,
   });
 }

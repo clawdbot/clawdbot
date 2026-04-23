@@ -13,6 +13,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { logLargePayload } from "../../logging/diagnostic-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -248,7 +249,9 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
 }
 
 function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
-  return payloads.some((payload) => payload.sensitiveMedia === true && isMediaBearingPayload(payload));
+  return payloads.some(
+    (payload) => payload.sensitiveMedia === true && isMediaBearingPayload(payload),
+  );
 }
 
 function resolveChatSendOriginatingRoute(params: {
@@ -697,6 +700,17 @@ function sanitizeChatHistoryContentBlock(
     entry.omitted = true;
     entry.bytes = bytes;
     changed = true;
+  }
+  if (type === "audio" && entry.source && typeof entry.source === "object") {
+    const source = { ...(entry.source as Record<string, unknown>) };
+    if (source.type === "base64" && typeof source.data === "string") {
+      const bytes = Buffer.byteLength(source.data, "utf8");
+      delete source.data;
+      source.omitted = true;
+      source.bytes = bytes;
+      entry.source = source;
+      changed = true;
+    }
   }
   return { block: changed ? entry : block, changed };
 }
@@ -1656,6 +1670,14 @@ export const chatHandlers: GatewayRequestHandlers = {
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
+      logLargePayload({
+        surface: "gateway.chat.history",
+        action: "truncated",
+        bytes: jsonUtf8Bytes(normalized),
+        limitBytes: maxHistoryBytes,
+        count: placeholderCount,
+        reason: "chat_history_budget",
+      });
       context.logGateway.debug(
         `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
       );

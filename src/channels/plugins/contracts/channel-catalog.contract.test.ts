@@ -36,3 +36,9 @@ describeOfficialFallbackChannelCatalogContract({
   externalNpmSpec: "@vendor/whatsapp-fork",
   externalLabel: "WhatsApp Fork",
 });
+
+describeChannelCatalogEntryContract({
+  channelId: "wecom",
+  npmSpec: "@wecom/wecom-openclaw-plugin",
+  alias: "wework",
+});

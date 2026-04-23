@@ -309,7 +309,7 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    expectConvertedRoles(contents, ["user", "model", "model"]);
+    expectConvertedRoles(contents, ["user", "model", "model", "user"]);
     const toolCallPart = contents[2].parts?.find(
       (part) => typeof part === "object" && part !== null && "functionCall" in part,
     );

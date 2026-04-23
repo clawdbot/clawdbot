@@ -4,6 +4,7 @@ import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
+  "run",
   "status",
   "probe",
   "health",
@@ -73,9 +74,12 @@ export async function ensureConfigReady(params: {
   const snapshot = preflightSnapshot ?? (await getConfigSnapshot());
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
+  const isBareGatewayForegroundRun =
+    commandName === "gateway" && (subcommandName === undefined || subcommandName.trim() === "");
   const allowInvalid = commandName
     ? params.allowInvalid === true ||
       ALLOWED_INVALID_COMMANDS.has(commandName) ||
+      isBareGatewayForegroundRun ||
       (commandName === "gateway" &&
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))

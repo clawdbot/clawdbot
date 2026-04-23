@@ -467,6 +467,55 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+  it("falls back from implicit default-account direct policy keys to persisted direct sessions", async () => {
+    resetSessionStore({
+      "agent:main:telegram:direct:1053274893": {
+        sessionId: "s-direct",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
+
+    const result = await tool.execute("call-default-direct", {});
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:telegram:direct:1053274893");
+  });
+
+  it("falls back from implicit default-account direct policy keys to main sessions", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
+
+    const result = await tool.execute("call-default-direct-main", {});
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+  });
+
+  it("keeps explicit default-account direct session lookups strict", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
+
+    await expect(
+      tool.execute("call-default-direct-explicit", {
+        sessionKey: "agent:main:telegram:default:direct:1053274893",
+      }),
+    ).rejects.toThrow("Unknown sessionKey: agent:main:telegram:default:direct:1053274893");
+  });
+
   it("prefers a literal current session key in session_status", async () => {
     resetSessionStore({
       main: {

@@ -190,6 +190,8 @@ Before configuring OpenClaw, you need to create an Azure Bot resource.
 2. Click **Microsoft Teams** → Configure → Save
 3. Accept the Terms of Service
 
+<a id="federated-authentication-certificate--managed-identity"></a>
+
 ## Federated Authentication (Certificate + Managed Identity)
 
 > Added in 2026.3.24

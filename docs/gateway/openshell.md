@@ -280,6 +280,12 @@ Recreate after changing any of these:
 openclaw sandbox recreate --all
 ```
 
+## Security hardening
+
+OpenShell pins the workspace root fd and rechecks sandbox identity before each
+read, so symlink swaps or a remounted workspace cannot redirect reads out of
+the intended remote workspace.
+
 ## Current limitations
 
 - Sandbox browser is not supported on the OpenShell backend.

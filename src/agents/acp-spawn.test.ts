@@ -718,6 +718,30 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
+  it("passes model override into ACP session initialization", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        model: "openai-codex/gpt-5.4",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: expect.stringMatching(/^agent:codex:acp:/),
+        agent: "codex",
+        runtimeOptions: {
+          model: "openai-codex/gpt-5.4",
+        },
+      }),
+    );
+  });
+
   it("inherits subagent envelope fields onto ACP children", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,

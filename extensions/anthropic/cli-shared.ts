@@ -135,9 +135,15 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
 }
 
 export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+  const output = config.output ?? "jsonl";
+  const input = config.input ?? "stdin";
   return {
     ...config,
     args: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args)),
     resumeArgs: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.resumeArgs)),
+    output,
+    liveSession:
+      config.liveSession ?? (output === "jsonl" && input === "stdin" ? "claude-stdio" : undefined),
+    input,
   };
 }

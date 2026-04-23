@@ -1,6 +1,8 @@
+import path from "node:path";
 import { providerOpenAiExtensionTestRoots } from "./vitest.extension-provider-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { repoRoot } from "./vitest.shared.config.ts";
 
 export function loadIncludePatternsFromEnv(
   env: Record<string, string | undefined> = process.env,
@@ -11,7 +13,7 @@ export function loadIncludePatternsFromEnv(
 export function createExtensionProviderOpenAiVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
-  return createScopedVitestConfig(
+  const config = createScopedVitestConfig(
     loadIncludePatternsFromEnv(env) ??
       providerOpenAiExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
     {
@@ -22,6 +24,19 @@ export function createExtensionProviderOpenAiVitestConfig(
       setupFiles: ["test/setup.extensions.ts"],
     },
   );
+  return {
+    ...config,
+    resolve: {
+      ...config.resolve,
+      alias: [
+        ...(Array.isArray(config.resolve?.alias) ? config.resolve.alias : []),
+        {
+          find: /^ws$/u,
+          replacement: path.join(repoRoot, "node_modules", "ws", "wrapper.mjs"),
+        },
+      ],
+    },
+  };
 }
 
 export default createExtensionProviderOpenAiVitestConfig();

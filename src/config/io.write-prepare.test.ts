@@ -38,6 +38,111 @@ describe("config io write prepare", () => {
     expect(persisted).not.toHaveProperty("sessions.persistence");
   });
 
+  it("preserves authored source-only nested fields during partial writes", () => {
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        plugins: {
+          entries: {},
+        },
+      },
+      sourceConfig: {
+        plugins: {
+          entries: {},
+          installs: {
+            "openclaw-web-search": {
+              source: "npm",
+              spec: "@ollama/openclaw-web-search",
+              installPath: "/tmp/openclaw-web-search",
+              resolvedName: "@ollama/openclaw-web-search",
+              resolvedVersion: "0.2.2",
+            },
+          },
+        },
+      },
+      nextConfig: {
+        plugins: {
+          entries: {},
+          installs: {
+            "openclaw-web-search": {
+              source: "npm",
+              spec: "@ollama/openclaw-web-search@0.2.2",
+              installPath: "/tmp/openclaw-web-search",
+              resolvedName: "@ollama/openclaw-web-search",
+              resolvedVersion: "0.2.2",
+            },
+          },
+        },
+      },
+    }) as {
+      plugins?: {
+        installs?: Record<string, Record<string, unknown>>;
+      };
+    };
+
+    expect(persisted.plugins?.installs?.["openclaw-web-search"]).toEqual({
+      source: "npm",
+      spec: "@ollama/openclaw-web-search@0.2.2",
+      installPath: "/tmp/openclaw-web-search",
+      resolvedName: "@ollama/openclaw-web-search",
+      resolvedVersion: "0.2.2",
+    });
+  });
+
+  it("preserves untouched include-owned subtrees during unrelated writes", () => {
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        agents: {
+          defaults: { model: "openai/gpt-5.4" },
+        },
+        gateway: { mode: "local" },
+      },
+      sourceConfig: {
+        agents: {
+          defaults: { model: "openai/gpt-5.4" },
+        },
+        gateway: { mode: "local" },
+      },
+      rootAuthoredConfig: {
+        agents: { $include: "./config/agents.json" },
+        gateway: { mode: "local" },
+      },
+      nextConfig: {
+        agents: {
+          defaults: { model: "openai/gpt-5.4" },
+        },
+        gateway: { mode: "local", port: 18789 },
+      },
+    }) as Record<string, unknown>;
+
+    expect(persisted.agents).toEqual({ $include: "./config/agents.json" });
+    expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+  });
+
+  it("rejects writes that would flatten include-owned subtrees", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {
+          agents: {
+            defaults: { model: "openai/gpt-5.4" },
+          },
+        },
+        sourceConfig: {
+          agents: {
+            defaults: { model: "openai/gpt-5.4" },
+          },
+        },
+        rootAuthoredConfig: {
+          agents: { $include: "./config/agents.json" },
+        },
+        nextConfig: {
+          agents: {
+            defaults: { model: "anthropic/sonnet-4.5" },
+          },
+        },
+      }),
+    ).toThrow("Config write would flatten $include-owned config at agents");
+  });
+
   it('formats actionable guidance for dmPolicy="open" without wildcard allowFrom', () => {
     const message = formatConfigValidationFailure(
       "channels.telegram.allowFrom",
@@ -434,26 +539,25 @@ describe("config io write prepare", () => {
     expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
   });
 
-  it("does not preserve include-only $schema into the root persisted candidate", () => {
+  it("rejects writes that would flatten a root include", () => {
     const sourceConfig = {
       $schema: "https://openclaw.ai/config-from-include.json",
       gateway: { mode: "local" },
     };
 
-    const persisted = resolvePersistCandidateForWrite({
-      runtimeConfig: sourceConfig,
-      sourceConfig,
-      rootAuthoredConfig: {
-        $include: "./extra.json5",
-        gateway: { mode: "local" },
-      },
-      nextConfig: {
-        gateway: { mode: "local", port: 18789 },
-      },
-    }) as Record<string, unknown>;
-
-    expect(persisted).not.toHaveProperty("$schema");
-    expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: sourceConfig,
+        sourceConfig,
+        rootAuthoredConfig: {
+          $include: "./extra.json5",
+          gateway: { mode: "local" },
+        },
+        nextConfig: {
+          gateway: { mode: "local", port: 18789 },
+        },
+      }),
+    ).toThrow("Config write would flatten $include-owned config at <root>");
   });
 
   it("does not restore root $schema when the next config explicitly clears it", () => {

@@ -481,12 +481,15 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
 }
 
 const MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES = 512;
+const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
+const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefined]);
 
 // Memoize loader alias/config by effective resolution context so repeated
 // loader setup avoids rebuilding the same filesystem-derived map and cache key.
 // Include cwd/env inputs because the fallback root and private QA alias
 // surfaces depend on them.
 const aliasMapCache = new Map<string, Record<string, string>>();
+const normalizedJitiAliasMapCache = new Map<string, Record<string, string>>();
 const pluginLoaderJitiConfigCache = new Map<
   string,
   {
@@ -508,6 +511,54 @@ function setBoundedCacheValue<T>(cache: Map<string, T>, key: string, value: T) {
     }
     cache.delete(oldestKey);
   }
+}
+
+function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
+  return Boolean((aliasMap as Record<symbol, unknown>)[JITI_NORMALIZED_ALIAS_SYMBOL]);
+}
+
+function createJitiAliasContentCacheKey(aliasMap: Record<string, string>) {
+  return JSON.stringify(
+    Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function normalizePluginLoaderAliasMapForJiti(
+  aliasMap: Record<string, string>,
+): Record<string, string> {
+  if (hasJitiNormalizedAliasMarker(aliasMap)) {
+    return aliasMap;
+  }
+  const cacheKey = createJitiAliasContentCacheKey(aliasMap);
+  const cached = normalizedJitiAliasMapCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const normalizedAliasMap = Object.fromEntries(
+    Object.entries(aliasMap).toSorted(
+      ([left], [right]) => right.split("/").length - left.split("/").length,
+    ),
+  );
+  for (const aliasKey in normalizedAliasMap) {
+    for (const candidateKey in normalizedAliasMap) {
+      if (
+        candidateKey === aliasKey ||
+        aliasKey.startsWith(candidateKey) ||
+        !normalizedAliasMap[aliasKey]?.startsWith(candidateKey) ||
+        !JITI_ALIAS_ROOT_SENTINELS.has(normalizedAliasMap[aliasKey]?.[candidateKey.length])
+      ) {
+        continue;
+      }
+      normalizedAliasMap[aliasKey] =
+        normalizedAliasMap[candidateKey] + normalizedAliasMap[aliasKey].slice(candidateKey.length);
+    }
+  }
+  Object.defineProperty(normalizedAliasMap, JITI_NORMALIZED_ALIAS_SYMBOL, {
+    value: true,
+    enumerable: false,
+  });
+  setBoundedCacheValue(normalizedJitiAliasMapCache, cacheKey, normalizedAliasMap);
+  return normalizedAliasMap;
 }
 
 function buildPluginLoaderAliasMapCacheKey(params: {
@@ -626,15 +677,17 @@ export function resolvePluginRuntimeModulePath(
 }
 
 export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
+  const hasAliases = Object.keys(aliasMap).length > 0;
+  const jitiAliasMap = hasAliases ? normalizePluginLoaderAliasMapForJiti(aliasMap) : aliasMap;
   return {
     interopDefault: true,
     // Prefer Node's native sync ESM loader for built dist/*.js modules so
     // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
     tryNative: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-    ...(Object.keys(aliasMap).length > 0
+    ...(hasAliases
       ? {
-          alias: aliasMap,
+          alias: jitiAliasMap,
         }
       : {}),
   };

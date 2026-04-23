@@ -136,6 +136,9 @@ func discoverLocalePrefixes(docsRoot string) (map[string]struct{}, error) {
 		if !localeDirRe.MatchString(name) {
 			continue
 		}
+		if _, err := os.Stat(filepath.Join(docsRoot, name, ".i18n", "README.md")); err != nil {
+			continue
+		}
 		locales[name] = struct{}{}
 	}
 	return locales, nil

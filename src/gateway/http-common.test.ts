@@ -1,6 +1,11 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
   readJsonBodyOrError,
@@ -26,6 +31,7 @@ vi.mock("./hooks.js", () => ({
 
 beforeEach(() => {
   readJsonBodyMock.mockReset();
+  resetDiagnosticEventsForTest();
 });
 
 describe("setDefaultSecurityHeaders", () => {
@@ -210,13 +216,27 @@ describe("readJsonBodyOrError", () => {
 
   it("responds with 413 when the body is too large", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "payload too large" });
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
     const { res, end } = makeMockHttpResponse();
-    const result = await readJsonBodyOrError(makeRequest(), res, 1024);
+    const req = { headers: { "content-length": "2048" } } as IncomingMessage;
+    const result = await readJsonBodyOrError(req, res, 1024);
+    stop();
     expect(result).toBeUndefined();
     expect(res.statusCode).toBe(413);
     expect(end).toHaveBeenCalledWith(
       JSON.stringify({
         error: { message: "Payload too large", type: "invalid_request_error" },
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "payload.large",
+        surface: "gateway.http.json",
+        action: "rejected",
+        bytes: 2048,
+        limitBytes: 1024,
+        reason: "json_body_limit",
       }),
     );
   });

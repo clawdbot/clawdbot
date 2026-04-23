@@ -4,6 +4,8 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginActivationSource } from "./config-state.js";
 import type {
   PluginBundleFormat,
@@ -153,6 +155,14 @@ export type PluginEmbeddedExtensionFactoryRegistration = {
   source: string;
   rootDir?: string;
 };
+export type PluginCodexAppServerExtensionFactoryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  rawFactory: CodexAppServerExtensionFactory;
+  factory: CodexAppServerExtensionFactory;
+  source: string;
+  rootDir?: string;
+};
 export type PluginAgentHarnessRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -266,7 +276,7 @@ export type PluginRecord = {
   hookCount: number;
   configSchema: boolean;
   configUiHints?: Record<string, PluginConfigUiHint>;
-  configJsonSchema?: Record<string, unknown>;
+  configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
   memorySlotSelected?: boolean;
 };
@@ -291,6 +301,7 @@ export type PluginRegistry = {
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   embeddedExtensionFactories: PluginEmbeddedExtensionFactoryRegistration[];
+  codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;

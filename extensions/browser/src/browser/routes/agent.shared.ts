@@ -76,7 +76,7 @@ export async function requirePwAi(
     501,
     [
       `Playwright is not available in this gateway build; '${feature}' is unsupported.`,
-      "Install the full Playwright package (not playwright-core) and restart the gateway, or reinstall with browser support.",
+      "Repair the bundled browser plugin runtime dependencies so playwright-core is installed, then restart the gateway. In Docker, also install Chromium with the bundled playwright-core CLI.",
       "Docs: /tools/browser#playwright-requirement",
     ].join("\n"),
   );

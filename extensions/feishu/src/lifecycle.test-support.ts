@@ -45,7 +45,7 @@ type FeishuLifecycleTestMocks = {
   monitorWebhookMock: AsyncUnknownMock;
   createFeishuThreadBindingManagerMock: UnknownMock;
   createFeishuReplyDispatcherMock: CreateFeishuReplyDispatcherMock;
-  resolveBoundConversationMock: Mock<() => BoundConversation | null>;
+  resolveBoundConversationMock: Mock<(ref?: unknown) => BoundConversation | null>;
   touchBindingMock: UnknownMock;
   resolveAgentRouteMock: UnknownMock;
   resolveConfiguredBindingRouteMock: UnknownMock;
@@ -66,7 +66,7 @@ const feishuLifecycleTestMocks = vi.hoisted(
     monitorWebhookMock: vi.fn(async () => {}),
     createFeishuThreadBindingManagerMock: vi.fn(() => ({ stop: vi.fn() })),
     createFeishuReplyDispatcherMock: vi.fn(),
-    resolveBoundConversationMock: vi.fn<() => BoundConversation | null>(() => null),
+    resolveBoundConversationMock: vi.fn<(ref?: unknown) => BoundConversation | null>(() => null),
     touchBindingMock: vi.fn(),
     resolveAgentRouteMock: vi.fn(),
     resolveConfiguredBindingRouteMock: vi.fn(),
@@ -83,6 +83,27 @@ const feishuLifecycleTestMocks = vi.hoisted(
 
 export function getFeishuLifecycleTestMocks(): FeishuLifecycleTestMocks {
   return feishuLifecycleTestMocks;
+}
+
+export function resetFeishuLifecycleTestMocks(): void {
+  for (const mock of Object.values(feishuLifecycleTestMocks)) {
+    mock.mockReset();
+  }
+  feishuLifecycleTestMocks.monitorWebSocketMock.mockResolvedValue(undefined);
+  feishuLifecycleTestMocks.monitorWebhookMock.mockResolvedValue(undefined);
+  feishuLifecycleTestMocks.createFeishuThreadBindingManagerMock.mockReturnValue({ stop: vi.fn() });
+  feishuLifecycleTestMocks.resolveBoundConversationMock.mockReturnValue(null);
+  feishuLifecycleTestMocks.finalizeInboundContextMock.mockImplementation((ctx) => ctx);
+  feishuLifecycleTestMocks.getMessageFeishuMock.mockResolvedValue(null);
+  feishuLifecycleTestMocks.listFeishuThreadMessagesMock.mockResolvedValue([]);
+  feishuLifecycleTestMocks.sendMessageFeishuMock.mockResolvedValue({
+    messageId: "om_sent",
+    chatId: "chat_default",
+  });
+  feishuLifecycleTestMocks.sendCardFeishuMock.mockResolvedValue({
+    messageId: "om_card",
+    chatId: "chat_default",
+  });
 }
 
 const {
@@ -155,6 +176,36 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
       resolveConfiguredBindingRouteMock.getMockImplementation()
         ? resolveConfiguredBindingRouteMock(params)
         : actual.resolveConfiguredBindingRoute(params),
+    resolveRuntimeConversationBindingRoute: (
+      params: Parameters<typeof actual.resolveRuntimeConversationBindingRoute>[0],
+    ) => {
+      const conversation =
+        "conversation" in params
+          ? params.conversation
+          : {
+              channel: params.channel,
+              accountId: params.accountId,
+              conversationId: params.conversationId,
+              parentConversationId: params.parentConversationId,
+            };
+      const bindingRecord = resolveBoundConversationMock(conversation);
+      const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
+      if (!bindingRecord || !boundSessionKey) {
+        return { bindingRecord: null, route: params.route };
+      }
+      touchBindingMock(bindingRecord.bindingId);
+      return {
+        bindingRecord,
+        boundSessionKey,
+        boundAgentId: params.route.agentId,
+        route: {
+          ...params.route,
+          sessionKey: boundSessionKey,
+          lastRoutePolicy: boundSessionKey === params.route.mainSessionKey ? "main" : "session",
+          matchedBy: "binding.channel",
+        },
+      };
+    },
     ensureConfiguredBindingRouteReady: (
       params: Parameters<typeof actual.ensureConfiguredBindingRouteReady>[0],
     ) =>

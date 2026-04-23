@@ -1,28 +1,37 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  OPENAI_API_KEY_LABEL,
+  OPENAI_CODEX_DEVICE_PAIRING_HINT,
+  OPENAI_CODEX_DEVICE_PAIRING_LABEL,
+  OPENAI_CODEX_LOGIN_HINT,
+  OPENAI_CODEX_LOGIN_LABEL,
+  OPENAI_WIZARD_GROUP,
+} from "./auth-choice-copy.js";
 
 const noopAuth = async () => ({ profiles: [] });
-const OPENAI_WIZARD_GROUP = {
-  groupId: "openai",
-  groupLabel: "OpenAI",
-  groupHint: "API key + Codex auth",
-} as const;
 
 export function createOpenAICodexProvider(): ProviderPlugin {
   return {
     id: "openai-codex",
     label: "OpenAI Codex",
     docsPath: "/providers/models",
+    oauthProfileIdRepairs: [
+      {
+        legacyProfileId: "openai-codex:default",
+        promptLabel: "OpenAI Codex",
+      },
+    ],
     auth: [
       {
         id: "oauth",
         kind: "oauth",
-        label: "OpenAI Codex Browser Login",
-        hint: "Sign in with OpenAI in your browser",
+        label: OPENAI_CODEX_LOGIN_LABEL,
+        hint: OPENAI_CODEX_LOGIN_HINT,
         run: noopAuth,
         wizard: {
           choiceId: "openai-codex",
-          choiceLabel: "OpenAI Codex Browser Login",
-          choiceHint: "Sign in with OpenAI in your browser",
+          choiceLabel: OPENAI_CODEX_LOGIN_LABEL,
+          choiceHint: OPENAI_CODEX_LOGIN_HINT,
           assistantPriority: -30,
           ...OPENAI_WIZARD_GROUP,
         },
@@ -30,28 +39,14 @@ export function createOpenAICodexProvider(): ProviderPlugin {
       {
         id: "device-code",
         kind: "device_code",
-        label: "OpenAI Codex Device Pairing",
-        hint: "Pair in browser with a device code",
+        label: OPENAI_CODEX_DEVICE_PAIRING_LABEL,
+        hint: OPENAI_CODEX_DEVICE_PAIRING_HINT,
         run: noopAuth,
         wizard: {
           choiceId: "openai-codex-device-code",
-          choiceLabel: "OpenAI Codex Device Pairing",
-          choiceHint: "Pair in browser with a device code",
+          choiceLabel: OPENAI_CODEX_DEVICE_PAIRING_LABEL,
+          choiceHint: OPENAI_CODEX_DEVICE_PAIRING_HINT,
           assistantPriority: -10,
-          ...OPENAI_WIZARD_GROUP,
-        },
-      },
-      {
-        id: "import-codex-cli",
-        kind: "oauth",
-        label: "Import Existing Codex Login",
-        hint: "Import an existing ~/.codex login",
-        run: noopAuth,
-        wizard: {
-          choiceId: "openai-codex-import",
-          choiceLabel: "Import Existing Codex Login",
-          choiceHint: "Import an existing ~/.codex login",
-          assistantPriority: -20,
           ...OPENAI_WIZARD_GROUP,
         },
       },
@@ -70,12 +65,12 @@ export function createOpenAIProvider(): ProviderPlugin {
       {
         id: "api-key",
         kind: "api_key",
-        label: "OpenAI API Key",
+        label: OPENAI_API_KEY_LABEL,
         hint: "Use your OpenAI API key directly",
         run: noopAuth,
         wizard: {
           choiceId: "openai-api-key",
-          choiceLabel: "OpenAI API Key",
+          choiceLabel: OPENAI_API_KEY_LABEL,
           assistantPriority: -40,
           ...OPENAI_WIZARD_GROUP,
         },

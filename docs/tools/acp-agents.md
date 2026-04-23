@@ -361,6 +361,7 @@ Interface details:
 - `resumeSessionId` (optional): resume an existing ACP session instead of creating a new one. The agent replays its conversation history via `session/load`. Requires `runtime: "acp"`.
 - `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
   - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
+- `model` (optional): explicit model override for the ACP child session. Honored for `runtime: "acp"` so the child uses the requested model instead of silently falling back to the target agent default.
 
 ## Delivery model
 
@@ -812,6 +813,23 @@ Security and trust notes:
 
 Custom `mcpServers` still work as before. The built-in plugin-tools bridge is an
 additional opt-in convenience, not a replacement for generic MCP server config.
+
+### OpenClaw tools MCP bridge
+
+By default, ACPX sessions also do **not** expose built-in OpenClaw tools through
+MCP. Enable the separate core-tools bridge when an ACP agent needs selected
+built-in tools such as `cron`:
+
+```bash
+openclaw config set plugins.entries.acpx.config.openClawToolsMcpBridge true
+```
+
+What this does:
+
+- Injects a built-in MCP server named `openclaw-tools` into ACPX session
+  bootstrap.
+- Exposes selected built-in OpenClaw tools. The initial server exposes `cron`.
+- Keeps core-tool exposure explicit and default-off.
 
 ### Runtime timeout configuration
 

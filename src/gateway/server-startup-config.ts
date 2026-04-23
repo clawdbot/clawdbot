@@ -8,6 +8,7 @@ import {
   isNixMode,
   readConfigFileSnapshot,
   recoverConfigFromLastKnownGood,
+  recoverConfigFromJsonRootSuffix,
   writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
@@ -87,6 +88,13 @@ export async function loadGatewayStartupConfigSnapshot(params: {
             configPath: configSnapshot.path,
           });
         }
+      }
+      if (!recovered && (await recoverConfigFromJsonRootSuffix(configSnapshot))) {
+        wroteConfig = true;
+        params.log.warn(
+          `gateway: invalid config was repaired by stripping a non-JSON prefix: ${configSnapshot.path}`,
+        );
+        configSnapshot = await readConfigFileSnapshot();
       }
     }
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });

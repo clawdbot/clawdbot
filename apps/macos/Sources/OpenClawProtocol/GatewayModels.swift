@@ -464,6 +464,7 @@ public struct SendParams: Codable, Sendable {
     public let channel: String?
     public let accountid: String?
     public let agentid: String?
+    public let replytoid: String?
     public let threadid: String?
     public let sessionkey: String?
     public let idempotencykey: String
@@ -477,6 +478,7 @@ public struct SendParams: Codable, Sendable {
         channel: String?,
         accountid: String?,
         agentid: String?,
+        replytoid: String?,
         threadid: String?,
         sessionkey: String?,
         idempotencykey: String)
@@ -489,6 +491,7 @@ public struct SendParams: Codable, Sendable {
         self.channel = channel
         self.accountid = accountid
         self.agentid = agentid
+        self.replytoid = replytoid
         self.threadid = threadid
         self.sessionkey = sessionkey
         self.idempotencykey = idempotencykey
@@ -503,6 +506,7 @@ public struct SendParams: Codable, Sendable {
         case channel
         case accountid = "accountId"
         case agentid = "agentId"
+        case replytoid = "replyToId"
         case threadid = "threadId"
         case sessionkey = "sessionKey"
         case idempotencykey = "idempotencyKey"
@@ -590,6 +594,7 @@ public struct AgentParams: Codable, Sendable {
     public let timeout: Int?
     public let besteffortdeliver: Bool?
     public let lane: String?
+    public let cleanupbundlemcponrunend: Bool?
     public let extrasystemprompt: String?
     public let bootstrapcontextmode: AnyCodable?
     public let bootstrapcontextrunkind: AnyCodable?
@@ -621,6 +626,7 @@ public struct AgentParams: Codable, Sendable {
         timeout: Int?,
         besteffortdeliver: Bool?,
         lane: String?,
+        cleanupbundlemcponrunend: Bool?,
         extrasystemprompt: String?,
         bootstrapcontextmode: AnyCodable?,
         bootstrapcontextrunkind: AnyCodable?,
@@ -651,6 +657,7 @@ public struct AgentParams: Codable, Sendable {
         self.timeout = timeout
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
+        self.cleanupbundlemcponrunend = cleanupbundlemcponrunend
         self.extrasystemprompt = extrasystemprompt
         self.bootstrapcontextmode = bootstrapcontextmode
         self.bootstrapcontextrunkind = bootstrapcontextrunkind
@@ -683,6 +690,7 @@ public struct AgentParams: Codable, Sendable {
         case timeout
         case besteffortdeliver = "bestEffortDeliver"
         case lane
+        case cleanupbundlemcponrunend = "cleanupBundleMcpOnRunEnd"
         case extrasystemprompt = "extraSystemPrompt"
         case bootstrapcontextmode = "bootstrapContextMode"
         case bootstrapcontextrunkind = "bootstrapContextRunKind"

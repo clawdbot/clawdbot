@@ -48,6 +48,9 @@ describe("isSensitiveUrlQueryParamName", () => {
   it("matches the auth-oriented query params used by MCP SSE config redaction", () => {
     expect(isSensitiveUrlQueryParamName("token")).toBe(true);
     expect(isSensitiveUrlQueryParamName("refresh_token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("access-token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("hook-token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("passwd")).toBe(true);
     expect(isSensitiveUrlQueryParamName("signature")).toBe(true);
     expect(isSensitiveUrlQueryParamName("safe")).toBe(false);
   });

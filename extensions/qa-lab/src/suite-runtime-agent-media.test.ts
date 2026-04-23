@@ -4,12 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchJsonMock = vi.hoisted(() => vi.fn());
 const patchConfigMock = vi.hoisted(() => vi.fn(async () => undefined));
+const readConfigSnapshotMock = vi.hoisted(() =>
+  vi.fn(async () => ({ hash: "hash", config: { plugins: { allow: [] as string[] } } })),
+);
 const waitForGatewayHealthyMock = vi.hoisted(() => vi.fn(async () => undefined));
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("./suite-runtime-gateway.js", () => ({
   fetchJson: fetchJsonMock,
   patchConfig: patchConfigMock,
+  readConfigSnapshot: readConfigSnapshotMock,
   waitForGatewayHealthy: waitForGatewayHealthyMock,
   waitForTransportReady: waitForTransportReadyMock,
 }));
@@ -29,6 +33,8 @@ describe("qa suite runtime agent media helpers", () => {
   beforeEach(() => {
     fetchJsonMock.mockReset();
     patchConfigMock.mockClear();
+    readConfigSnapshotMock.mockReset();
+    readConfigSnapshotMock.mockResolvedValue({ hash: "hash", config: { plugins: { allow: [] } } });
     waitForGatewayHealthyMock.mockClear();
     waitForTransportReadyMock.mockClear();
   });
@@ -101,5 +107,27 @@ describe("qa suite runtime agent media helpers", () => {
     );
     expect(waitForGatewayHealthyMock).toHaveBeenCalled();
     expect(waitForTransportReadyMock).toHaveBeenCalledWith(expect.anything(), 60_000);
+  });
+  it("preserves plugins already allowed by the gateway when configuring media", async () => {
+    readConfigSnapshotMock.mockResolvedValue({
+      hash: "hash",
+      config: { plugins: { allow: ["openai", "anthropic", "qa-channel"] } },
+    });
+
+    await ensureImageGenerationConfigured({
+      providerMode: "mock-openai",
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+      transport: { requiredPluginIds: ["qa-channel"] },
+    } as never);
+
+    expect(patchConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        patch: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["acpx", "memory-core", "openai", "anthropic", "qa-channel"],
+          }),
+        }),
+      }),
+    );
   });
 });

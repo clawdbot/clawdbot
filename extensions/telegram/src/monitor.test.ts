@@ -787,16 +787,25 @@ describe("monitorTelegramProvider (grammY)", () => {
     await expectOffsetConfirmationSkipped(Number.MAX_SAFE_INTEGER);
   });
 
-  it("resets webhookCleared latch on 409 conflict so deleteWebhook re-runs", async () => {
+  it("resets webhookCleared latch on 409 conflict so deleteWebhook re-runs, and rebuilds transport for a fresh TCP socket (#69787)", async () => {
     const abort = new AbortController();
     api.deleteWebhook.mockReset();
     api.deleteWebhook.mockResolvedValue(true);
-    const telegramTransport = {
+    const telegramTransport1 = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
       close: vi.fn(async () => undefined),
     };
-    resolveTelegramTransportSpy.mockReturnValueOnce(telegramTransport);
+    const telegramTransport2 = {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
+    };
+    // First call is the initial cycle; second call is the post-409 rebuild
+    // that forces a fresh TCP connection (see #69787 polling-session fix).
+    resolveTelegramTransportSpy
+      .mockReturnValueOnce(telegramTransport1)
+      .mockReturnValueOnce(telegramTransport2);
 
     const conflictError = Object.assign(
       new Error("Conflict: terminated by other getUpdates request"),
@@ -829,9 +838,14 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
     expect(pollingCycle).toBe(2);
     expect(runSpy).toHaveBeenCalledTimes(2);
-    expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(1);
-    expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport);
-    expect(createTelegramBotCalls[1]?.telegramTransport).toBe(telegramTransport);
+    // Transport is rebuilt on 409 conflict — the second cycle gets a fresh
+    // transport so Telegram sees a new TCP socket instead of reusing the
+    // keep-alive connection it already terminated.
+    expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(2);
+    expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport1);
+    expect(createTelegramBotCalls[1]?.telegramTransport).toBe(telegramTransport2);
+    expect(telegramTransport1.close).toHaveBeenCalledTimes(1);
+    expect(telegramTransport2.close).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to configured webhookSecret when not passed explicitly", async () => {

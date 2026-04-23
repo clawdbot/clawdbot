@@ -4,6 +4,7 @@ import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.
 import {
   fetchJson,
   patchConfig,
+  readConfigSnapshot,
   waitForGatewayHealthy,
   waitForTransportReady,
 } from "./suite-runtime-gateway.js";
@@ -11,6 +12,19 @@ import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 function extractMediaPathFromText(text: string | undefined): string | undefined {
   return /MEDIA:([^\n]+)/.exec(text ?? "")?.[1]?.trim();
+}
+
+function readPluginAllow(config: Record<string, unknown>) {
+  const plugins = config.plugins;
+  if (typeof plugins !== "object" || plugins === null || Array.isArray(plugins)) {
+    return [];
+  }
+  const allow = (plugins as { allow?: unknown }).allow;
+  return Array.isArray(allow)
+    ? allow.filter(
+        (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
+      )
+    : [];
 }
 
 async function resolveGeneratedImagePath(params: {
@@ -71,12 +85,14 @@ async function resolveGeneratedImagePath(params: {
 }
 
 async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
+  const snapshot = await readConfigSnapshot(env);
   await patchConfig({
     env,
     patch: buildQaImageGenerationConfigPatch({
       providerMode: env.providerMode,
       providerBaseUrl: env.mock ? `${env.mock.baseUrl}/v1` : undefined,
       requiredPluginIds: env.transport.requiredPluginIds,
+      existingPluginIds: readPluginAllow(snapshot.config),
     }),
   });
   await waitForGatewayHealthy(env);

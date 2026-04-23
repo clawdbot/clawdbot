@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@sinclair/typebox", () => ({
+vi.mock("typebox", () => ({
   Type: {
     Object: (schema: unknown) => schema,
     String: (schema?: unknown) => schema,

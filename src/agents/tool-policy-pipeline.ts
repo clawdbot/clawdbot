@@ -128,7 +128,9 @@ export function applyToolPolicyPipeline(params: {
         const warnableGatedCoreEntries = step.suppressUnavailableCoreToolWarning
           ? []
           : gatedCoreEntries.filter((entry) => !unavailableCoreWarningAllowlist.has(entry));
-        const otherEntries = resolved.unknownAllowlist.filter((entry) => !isKnownCoreToolId(entry));
+        const otherEntries = resolved.unknownAllowlist.filter(
+          (entry) => !isKnownCoreToolId(entry) && !unavailableCoreWarningAllowlist.has(entry),
+        );
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
         if (
           shouldWarnAboutUnknownAllowlist({

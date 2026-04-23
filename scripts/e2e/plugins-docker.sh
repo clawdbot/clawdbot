@@ -2,11 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-IMAGE_NAME="openclaw-plugins-e2e"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugins-e2e" OPENCLAW_PLUGINS_E2E_IMAGE)"
 
-echo "Building Docker image..."
-run_logged plugins-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" plugins
 
 DOCKER_ENV_ARGS=(-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0)
 if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY:-}" != "undefined" && "${OPENAI_API_KEY:-}" != "null" ]]; then

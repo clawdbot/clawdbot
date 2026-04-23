@@ -13,6 +13,8 @@ export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
   type ConfiguredBindingRouteResult,
+  resolveRuntimeConversationBindingRoute,
+  type RuntimeConversationBindingRouteResult,
 } from "../channels/plugins/binding-routing.js";
 export {
   primeConfiguredBindingRegistry,

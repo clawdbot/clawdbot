@@ -59,7 +59,13 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-channel"]);
-    expect(cfg.plugins?.entries?.acpx).toEqual({ enabled: false });
+    expect(cfg.plugins?.entries?.acpx).toEqual({
+      enabled: true,
+      config: {
+        pluginToolsMcpBridge: true,
+        openClawToolsMcpBridge: true,
+      },
+    });
     expect(cfg.plugins?.entries?.["memory-core"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.["qa-channel"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.openai).toBeUndefined();

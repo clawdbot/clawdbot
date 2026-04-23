@@ -8,6 +8,7 @@ export type SessionResetPolicy = {
   mode: SessionResetMode;
   atHour: number;
   idleMinutes?: number;
+  configured?: boolean;
 };
 
 export type SessionFreshness = {
@@ -45,6 +46,7 @@ export function resolveSessionResetPolicy(params: {
         : undefined));
   const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
   const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
+  const configured = Boolean(baseReset || typeReset || legacyIdleMinutes != null);
   const mode =
     typeReset?.mode ??
     baseReset?.mode ??
@@ -64,7 +66,7 @@ export function resolveSessionResetPolicy(params: {
     idleMinutes = DEFAULT_IDLE_MINUTES;
   }
 
-  return { mode, atHour, idleMinutes };
+  return { mode, atHour, idleMinutes, configured };
 }
 
 export function evaluateSessionFreshness(params: {

@@ -28,6 +28,42 @@ function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegra
 }
 
 describe("createTelegramPluginBase config duplicate token guard", () => {
+  it("wires the top-level models menu adapter into the production plugin", () => {
+    const channelData = telegramPluginBase.commands?.buildModelsMenuChannelData?.({
+      providers: [
+        { id: "anthropic", count: 2 },
+        { id: "openai", count: 3 },
+      ],
+    });
+
+    expect(channelData).toEqual({
+      telegram: {
+        buttons: [
+          [{ text: "Add model", callback_data: "/models add" }],
+          [
+            { text: "anthropic (2)", callback_data: "mdl_list_anthropic_1" },
+            { text: "openai (3)", callback_data: "mdl_list_openai_1" },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("wires the guided add-provider adapter into the production plugin", () => {
+    const channelData = telegramPluginBase.commands?.buildModelsAddProviderChannelData?.({
+      providers: [{ id: "ollama" }, { id: "lmstudio" }],
+    });
+
+    expect(channelData).toEqual({
+      telegram: {
+        buttons: [
+          [{ text: "ollama", callback_data: "/models add ollama" }],
+          [{ text: "lmstudio", callback_data: "/models add lmstudio" }],
+        ],
+      },
+    });
+  });
+
   it("marks secondary account as not configured when token is shared", async () => {
     const cfg = createCfg();
     const alertsAccount = resolveAccount(cfg, "alerts");

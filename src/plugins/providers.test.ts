@@ -10,6 +10,8 @@ type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
   typeof import("./manifest-registry.js").loadPluginManifestRegistry;
+type ResolveManifestContractPluginIds =
+  typeof import("./manifest-registry.js").resolveManifestContractPluginIds;
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
@@ -17,12 +19,31 @@ const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
+const resolveManifestContractPluginIdsMock = vi.fn<ResolveManifestContractPluginIds>((params) => {
+  const onlyPluginIds =
+    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
+  return loadPluginManifestRegistryMock({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })
+    .plugins.filter(
+      (plugin) =>
+        (!params.origin || plugin.origin === params.origin) &&
+        (!onlyPluginIds || onlyPluginIds.has(plugin.id)) &&
+        (plugin.contracts?.[params.contract] ?? []).length > 0,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+});
 const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
 let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").resolveActivatableProviderOwnerPluginIds;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
+let resolveExternalAuthProfileCompatFallbackPluginIds: typeof import("./providers.js").resolveExternalAuthProfileCompatFallbackPluginIds;
+let resolveExternalAuthProfileProviderPluginIds: typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
 let resolveDiscoveredProviderPluginIds: typeof import("./providers.js").resolveDiscoveredProviderPluginIds;
 let resolveDiscoverableProviderOwnerPluginIds: typeof import("./providers.js").resolveDiscoverableProviderOwnerPluginIds;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
@@ -37,6 +58,7 @@ function createManifestProviderPlugin(params: {
   modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
   activation?: PluginManifestRecord["activation"];
   setup?: PluginManifestRecord["setup"];
+  contracts?: PluginManifestRecord["contracts"];
 }): PluginManifestRecord {
   return {
     id: params.id,
@@ -47,6 +69,7 @@ function createManifestProviderPlugin(params: {
     modelSupport: params.modelSupport,
     activation: params.activation,
     setup: params.setup,
+    contracts: params.contracts,
     skills: [],
     hooks: [],
     origin: params.origin ?? "bundled",
@@ -285,12 +308,16 @@ describe("resolvePluginProviders", () => {
     vi.doMock("./manifest-registry.js", () => ({
       loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
+      resolveManifestContractPluginIds: (...args: Parameters<ResolveManifestContractPluginIds>) =>
+        resolveManifestContractPluginIdsMock(...args),
     }));
     ({
       resolveActivatableProviderOwnerPluginIds,
       resolveOwningPluginIdsForProvider,
       resolveOwningPluginIdsForModelRef,
       resolveEnabledProviderPluginIds,
+      resolveExternalAuthProfileCompatFallbackPluginIds,
+      resolveExternalAuthProfileProviderPluginIds,
       resolveDiscoveredProviderPluginIds,
       resolveDiscoverableProviderOwnerPluginIds,
     } = await import("./providers.js"));
@@ -321,6 +348,7 @@ describe("resolvePluginProviders", () => {
     resolveRuntimePluginRegistryMock.mockReturnValue(registry);
     loadOpenClawPluginsMock.mockReturnValue(registry);
     loadPluginManifestRegistryMock.mockReset();
+    resolveManifestContractPluginIdsMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(
       (params): PluginAutoEnableResult => ({
@@ -385,6 +413,61 @@ describe("resolvePluginProviders", () => {
       "kilocode",
       "moonshot",
     ]);
+  });
+
+  it("resolves external auth hook plugin ids from manifest contracts without runtime loading", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "external-auth-owner",
+        providerIds: ["demo"],
+        contracts: { externalAuthProviders: ["demo"] },
+      }),
+      createManifestProviderPlugin({
+        id: "regular-provider",
+        providerIds: ["regular"],
+      }),
+    ]);
+
+    expect(
+      resolveExternalAuthProfileProviderPluginIds({
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toEqual(["external-auth-owner"]);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses declared external auth plugin ids for compat fallback filtering", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "declared-auth-owner",
+        providerIds: ["declared"],
+        origin: "workspace",
+        contracts: { externalAuthProviders: ["declared"] },
+      }),
+      createManifestProviderPlugin({
+        id: "legacy-auth-owner",
+        providerIds: ["legacy"],
+        origin: "workspace",
+      }),
+    ]);
+    const declaredPluginIds = new Set(["declared-auth-owner"]);
+
+    expect(
+      resolveExternalAuthProfileCompatFallbackPluginIds({
+        config: {
+          plugins: {
+            entries: {
+              "declared-auth-owner": { enabled: true },
+              "legacy-auth-owner": { enabled: true },
+            },
+          },
+        },
+        env: {} as NodeJS.ProcessEnv,
+        declaredPluginIds,
+      }),
+    ).toEqual(["legacy-auth-owner"]);
+    expect(resolveManifestContractPluginIdsMock).not.toHaveBeenCalled();
   });
 
   it("treats explicit empty provider scopes as scoped-empty in provider helpers", () => {

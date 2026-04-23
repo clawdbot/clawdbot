@@ -3,6 +3,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
@@ -12,6 +17,7 @@ import {
 import type { RequestFrame } from "./protocol/index.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
@@ -83,7 +89,7 @@ describe("GatewayClient", () => {
   it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
     await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/favicon.svg", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -96,7 +102,7 @@ describe("GatewayClient", () => {
   it("returns 404 for missing static assets with query strings", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/favicon.svg?v=1", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -109,7 +115,7 @@ describe("GatewayClient", () => {
   it("still serves SPA fallback for extensionless paths", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/chat", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -122,7 +128,7 @@ describe("GatewayClient", () => {
   it("HEAD returns 404 for missing static assets consistent with GET", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/favicon.svg", method: "HEAD" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -136,7 +142,7 @@ describe("GatewayClient", () => {
     await withControlUiRoot({}, async (tmp) => {
       for (const route of ["/webchat/user/jane.doe", "/webchat/v2.0", "/settings/v1.2"]) {
         const { res } = makeControlUiResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: route, method: "GET" } as IncomingMessage,
           res,
           { root: { kind: "resolved", path: tmp } },
@@ -150,7 +156,7 @@ describe("GatewayClient", () => {
   it("serves SPA fallback for .html paths that do not exist on disk", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/foo.html", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -470,6 +476,42 @@ describe("gateway broadcaster", () => {
       ["chat", 1],
       ["heartbeat", 2],
     ]);
+  });
+
+  it("records a payload diagnostic when the outbound websocket buffer exceeds the limit", () => {
+    resetDiagnosticEventsForTest();
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    try {
+      const slowReadSocket = makeRecordingSocket();
+      slowReadSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+      const clients = new Set<GatewayWsClient>([
+        makeGatewayWsClient("c-slow-read", slowReadSocket, {
+          role: "operator",
+          scopes: ["operator.read"],
+        } as GatewayWsClient["connect"]),
+      ]);
+
+      const { broadcast } = createGatewayBroadcaster({ clients });
+
+      broadcast("chat", { sessionKey: "agent:main:main", message: "secret" }, { dropIfSlow: true });
+      broadcast("heartbeat", { ts: 1 });
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "payload.large",
+          surface: "gateway.ws.outbound_buffer",
+          action: "rejected",
+          bytes: MAX_BUFFERED_BYTES + 1,
+          limitBytes: MAX_BUFFERED_BYTES,
+          reason: "ws_send_buffer_drop",
+        }),
+      );
+      expect(events.filter((event) => event.type === "payload.large")).toHaveLength(1);
+    } finally {
+      stop();
+      resetDiagnosticEventsForTest();
+    }
   });
 });
 

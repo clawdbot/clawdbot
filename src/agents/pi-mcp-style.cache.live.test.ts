@@ -1,5 +1,5 @@
 import type { AssistantMessage, Tool } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
   buildAssistantHistoryTurn,

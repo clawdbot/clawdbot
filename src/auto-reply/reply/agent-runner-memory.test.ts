@@ -8,9 +8,14 @@ import {
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
-import { runMemoryFlushIfNeeded, setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.js";
+import {
+  runMemoryFlushIfNeeded,
+  runPreflightCompactionIfNeeded,
+  setAgentRunnerMemoryTestDeps,
+} from "./agent-runner-memory.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 
+const compactEmbeddedPiSessionMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runEmbeddedPiAgentMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
@@ -43,6 +48,11 @@ describe("runMemoryFlushIfNeeded", () => {
       model,
       attempts: [],
     }));
+    compactEmbeddedPiSessionMock.mockReset().mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 42 },
+    });
     runEmbeddedPiAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
     refreshQueuedFollowupSessionMock.mockReset();
     incrementCompactionCountMock.mockReset().mockImplementation(async (params) => {
@@ -67,6 +77,7 @@ describe("runMemoryFlushIfNeeded", () => {
       return nextEntry.compactionCount;
     });
     setAgentRunnerMemoryTestDeps({
+      compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
       runWithModelFallback: runWithModelFallbackMock as never,
       runEmbeddedPiAgent: runEmbeddedPiAgentMock as never,
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
@@ -182,6 +193,98 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(entry).toBe(sessionEntry);
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("uses runtime policy session key when checking memory-flush sandbox writability", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    const entry = await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "non-main",
+              scope: "agent",
+              workspaceAccess: "ro",
+            },
+            compaction: {
+              memoryFlush: {},
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+      }),
+      sessionCtx: { Provider: "telegram" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("passes runtime policy session key to preflight compaction sandbox resolution", async () => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        sandboxSessionKey: "agent:main:telegram:default:direct:12345",
+      }),
+    );
   });
 
   it("uses configured prompts and stored bootstrap warning signatures", async () => {

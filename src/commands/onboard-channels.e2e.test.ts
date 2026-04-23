@@ -505,6 +505,7 @@ describe("setupChannels", () => {
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
       cfg,
       installed: true,
+      status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
     vi.mocked(reloadChannelSetupPluginRegistry).mockClear();

@@ -281,17 +281,22 @@ async function saveSessionStoreUnlocked(
         diskBudget,
       });
     } else {
+      const preserveSessionKeys = opts?.activeSessionKey
+        ? new Set([opts.activeSessionKey])
+        : undefined;
       // Prune stale entries and cap total count before serializing.
       const removedSessionFiles = new Map<string, string | undefined>();
       const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         onPruned: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
+        preserveKeys: preserveSessionKeys,
       });
       const capped = capEntryCount(store, maintenance.maxEntries, {
         onCapped: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
+        preserveKeys: preserveSessionKeys,
       });
       const archivedDirs = new Set<string>();
       const referencedSessionIds = new Set(
@@ -726,7 +731,6 @@ export async function updateLastRoute(params: {
     const store = loadSessionStore(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
-    const now = Date.now();
     const explicitContext = normalizeDeliveryContext(params.deliveryContext);
     const inlineContext = normalizeDeliveryContext({
       channel,
@@ -772,14 +776,15 @@ export async function updateLastRoute(params: {
         })
       : null;
     const basePatch: Partial<SessionEntry> = {
-      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,
       lastAccountId: normalized.lastAccountId,
       lastThreadId: normalized.lastThreadId,
     };
-    const next = mergeSessionEntry(
+    // Route updates must not refresh activity timestamps; idle/daily reset
+    // evaluation relies on updatedAt from actual session turns (#49515).
+    const next = mergeSessionEntryPreserveActivity(
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );

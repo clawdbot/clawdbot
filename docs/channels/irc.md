@@ -9,7 +9,7 @@ read_when:
 # IRC
 
 Use IRC when you want OpenClaw in classic channels (`#room`) and direct messages.
-IRC ships as an extension plugin, but it is configured in the main config under `channels.irc`.
+IRC ships as a bundled plugin, but it is configured in the main config under `channels.irc`.
 
 ## Quick start
 
@@ -236,6 +236,8 @@ Default account supports:
 - `IRC_CHANNELS` (comma-separated)
 - `IRC_NICKSERV_PASSWORD`
 - `IRC_NICKSERV_REGISTER_EMAIL`
+
+`IRC_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
 
 ## Troubleshooting
 

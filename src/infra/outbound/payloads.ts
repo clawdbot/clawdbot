@@ -21,6 +21,7 @@ import {
   resolveSilentReplyRewriteText,
   type SilentReplyConversationType,
 } from "../../shared/silent-reply-policy.js";
+import { resolvePendingSpawnedChildren } from "./pending-spawn-query.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -56,6 +57,14 @@ type OutboundPayloadPlanContext = {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
+  /**
+   * When true, bare silent payloads are dropped instead of being rewritten to
+   * visible fallback text. Set by callers that know the parent session has at
+   * least one pending spawned child whose completion will deliver the real
+   * reply. If omitted, the outbound plan consults the registered runtime query
+   * (see `pending-spawn-query.ts`).
+   */
+  hasPendingSpawnedChildren?: boolean;
 };
 
 export type OutboundPayloadMirror = {
@@ -178,6 +187,8 @@ export function createOutboundPayloadPlan(
     surface: context.surface,
     conversationType: context.conversationType,
   });
+  const hasPendingSpawnedChildren =
+    context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
   const prepared: PreparedOutboundPayloadPlanEntry[] = [];
   for (const payload of payloads) {
     const entry = createOutboundPayloadPlanEntry(payload);
@@ -208,7 +219,11 @@ export function createOutboundPayloadPlan(
       });
       continue;
     }
-    if (hasVisibleNonSilentContent || resolvedSilentReplySettings.policy === "allow") {
+    if (
+      hasVisibleNonSilentContent ||
+      resolvedSilentReplySettings.policy === "allow" ||
+      hasPendingSpawnedChildren
+    ) {
       continue;
     }
     if (!resolvedSilentReplySettings.rewrite) {

@@ -52,7 +52,7 @@ export const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
     ctx.callbackQuery?.message;
   const chatId = msg?.chat?.id;
   const messageId = msg?.message_id;
-  if (typeof chatId !== "undefined" && typeof messageId === "number") {
+  if (chatId !== undefined && typeof messageId === "number") {
     return `message:${chatId}:${messageId}`;
   }
   return undefined;

@@ -2,6 +2,7 @@
 summary: "Use Mistral models and Voxtral transcription with OpenClaw"
 read_when:
   - You want to use Mistral models in OpenClaw
+  - You want Voxtral realtime transcription for Voice Call
   - You need Mistral API key onboarding and model refs
 title: "Mistral"
 ---
@@ -65,7 +66,8 @@ OpenClaw currently ships this bundled Mistral catalog:
 
 ## Audio transcription (Voxtral)
 
-Use Voxtral for audio transcription through the media understanding pipeline.
+Use Voxtral for batch audio transcription through the media understanding
+pipeline.
 
 ```json5
 {
@@ -83,6 +85,48 @@ Use Voxtral for audio transcription through the media understanding pipeline.
 <Tip>
 The media transcription path uses `/v1/audio/transcriptions`. The default audio model for Mistral is `voxtral-mini-latest`.
 </Tip>
+
+## Voice Call streaming STT
+
+The bundled `mistral` plugin registers Voxtral Realtime as a Voice Call
+streaming STT provider.
+
+| Setting      | Config path                                                            | Default                                 |
+| ------------ | ---------------------------------------------------------------------- | --------------------------------------- |
+| API key      | `plugins.entries.voice-call.config.streaming.providers.mistral.apiKey` | Falls back to `MISTRAL_API_KEY`         |
+| Model        | `...mistral.model`                                                     | `voxtral-mini-transcribe-realtime-2602` |
+| Encoding     | `...mistral.encoding`                                                  | `pcm_mulaw`                             |
+| Sample rate  | `...mistral.sampleRate`                                                | `8000`                                  |
+| Target delay | `...mistral.targetStreamingDelayMs`                                    | `800`                                   |
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          streaming: {
+            enabled: true,
+            provider: "mistral",
+            providers: {
+              mistral: {
+                apiKey: "${MISTRAL_API_KEY}",
+                targetStreamingDelayMs: 800,
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+<Note>
+OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call
+can forward Twilio media frames directly. Use `encoding: "pcm_s16le"` and a
+matching `sampleRate` only if your upstream stream is already raw PCM.
+</Note>
 
 ## Advanced configuration
 
@@ -128,7 +172,7 @@ The media transcription path uses `/v1/audio/transcriptions`. The default audio 
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
   </Card>
-  <Card title="Media understanding" href="/tools/media-understanding" icon="microphone">
+  <Card title="Media understanding" href="/nodes/media-understanding" icon="microphone">
     Audio transcription setup and provider selection.
   </Card>
 </CardGroup>

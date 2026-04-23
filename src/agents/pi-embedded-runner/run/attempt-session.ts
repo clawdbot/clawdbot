@@ -1,3 +1,5 @@
+import type { CreateAgentSessionOptions } from "@mariozechner/pi-coding-agent";
+
 export type EmbeddedAgentSessionOptions = {
   cwd: string;
   agentDir: string;
@@ -5,8 +7,8 @@ export type EmbeddedAgentSessionOptions = {
   modelRegistry: unknown;
   model: unknown;
   thinkingLevel: unknown;
-  tools: readonly string[];
-  customTools: readonly unknown[];
+  tools: NonNullable<CreateAgentSessionOptions["tools"]>;
+  customTools: NonNullable<CreateAgentSessionOptions["customTools"]>;
   sessionManager: unknown;
   settingsManager: unknown;
   resourceLoader: unknown;

@@ -91,7 +91,7 @@ describe("format-duration", () => {
       { input: 1000, expected: "1s" },
       { input: 1500, expected: "1.5s" },
       { input: 1234, expected: "1.23s" },
-      { input: NaN, expected: "unknown" },
+      { input: Number.NaN, expected: "unknown" },
       { input: Infinity, expected: "unknown" },
     ])("formats precise duration for %j", ({ input, expected }) => {
       expect(formatDurationPrecise(input)).toBe(expected);
@@ -105,7 +105,7 @@ describe("format-duration", () => {
       { input: 1000, options: { decimals: 0 }, expected: "1s" },
       { input: 2000, options: { unit: "seconds" as const }, expected: "2 seconds" },
       { input: -1500, options: { decimals: 1 }, expected: "0s" },
-      { input: NaN, options: undefined, expected: "unknown" },
+      { input: Number.NaN, options: undefined, expected: "unknown" },
       { input: Infinity, options: undefined, expected: "unknown" },
     ])("formats seconds duration for %j", ({ input, options, expected }) => {
       expect(formatDurationSeconds(input, options)).toBe(expected);

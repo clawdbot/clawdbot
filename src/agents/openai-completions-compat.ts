@@ -30,6 +30,27 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
   return provider !== undefined && ids.includes(provider);
 }
 
+const KNOWN_LOCAL_STREAMING_USAGE_PROVIDERS = new Set([
+  "jan",
+  "llama-cpp",
+  "llama.cpp",
+  "llamacpp",
+  "lm-studio",
+  "lmstudio",
+  "localai",
+  "sglang",
+  "tabby",
+  "tabbyapi",
+  "text-generation-webui",
+  "vllm",
+]);
+
+function isKnownLocalStreamingUsageProvider(...ids: Array<string | undefined>): boolean {
+  return ids.some(
+    (id) => id !== undefined && KNOWN_LOCAL_STREAMING_USAGE_PROVIDERS.has(id.toLowerCase()),
+  );
+}
+
 export function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
 ): OpenAICompletionsCompatDefaults {
@@ -67,6 +88,10 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
+  const supportsKnownLocalStreamingUsage = isKnownLocalStreamingUsageProvider(
+    provider,
+    knownProviderFamily,
+  );
   return {
     supportsStore:
       !isNonStandard && knownProviderFamily !== "mistral" && !usesExplicitProxyLikeEndpoint,
@@ -77,7 +102,8 @@ export function resolveOpenAICompletionsCompatDefaults(
       endpointClass !== "xai-native" &&
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
-      !isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat),
+      supportsKnownLocalStreamingUsage ||
+      (!isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat: isZai ? "zai" : isOpenRouterLike ? "openrouter" : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],

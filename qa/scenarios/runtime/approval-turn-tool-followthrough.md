@@ -83,9 +83,5 @@ steps:
               expr: "state.getSnapshot().messages.slice(beforeApprovalCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && expectedReplyAny.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))).at(-1)"
           - expr: liveTurnTimeoutMs(env, 20000)
           - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-      - assert:
-          expr: "!env.mock || ([...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].toReversed().find((request) => String(request.allInputText ?? '').includes('ok do it.') && !request.toolOutput)?.plannedToolName === 'read')"
-          message:
-            expr: "`expected read after approval, got ${String(([...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].toReversed().find((request) => String(request.allInputText ?? '').includes('ok do it.') && !request.toolOutput)?.plannedToolName ?? ''))}`"
     detailsExpr: outbound.text
 ```

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   pushMessageMock,
@@ -93,8 +93,11 @@ const LINE_TEST_CFG = {
 };
 
 describe("LINE send helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    sendModule = await import("./send.js");
+  });
+
+  beforeEach(() => {
     pushMessageMock.mockReset();
     replyMessageMock.mockReset();
     showLoadingAnimationMock.mockReset();
@@ -125,7 +128,6 @@ describe("LINE send helpers", () => {
     pushMessageMock.mockResolvedValue({});
     replyMessageMock.mockResolvedValue({});
     showLoadingAnimationMock.mockResolvedValue({});
-    sendModule = await import("./send.js");
   });
 
   afterEach(() => {

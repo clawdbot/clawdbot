@@ -1,5 +1,10 @@
-import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
+import type {
+  AnyMessageContent,
+  MiscMessageGenerationOptions,
+  WAPresence,
+} from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { buildQuotedMessageOptions } from "../quoted-message.js";
 import { toWhatsappJid } from "../text-runtime.js";
 import type { ActiveWebSendOptions } from "./types.js";
 
@@ -19,7 +24,11 @@ function resolveOutboundMessageId(result: unknown): string {
 
 export function createWebSendApi(params: {
   sock: {
-    sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
+    sendMessage: (
+      jid: string,
+      content: AnyMessageContent,
+      options?: MiscMessageGenerationOptions,
+    ) => Promise<unknown>;
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
   defaultAccountId: string;
@@ -66,7 +75,16 @@ export function createWebSendApi(params: {
       } else {
         payload = { text };
       }
-      const result = await params.sock.sendMessage(jid, payload);
+      const quotedOpts = buildQuotedMessageOptions({
+        messageId: sendOptions?.quotedMessageKey?.id,
+        remoteJid: sendOptions?.quotedMessageKey?.remoteJid,
+        fromMe: sendOptions?.quotedMessageKey?.fromMe,
+        participant: sendOptions?.quotedMessageKey?.participant,
+        messageText: sendOptions?.quotedMessageKey?.messageText,
+      });
+      const result = quotedOpts
+        ? await params.sock.sendMessage(jid, payload, quotedOpts)
+        : await params.sock.sendMessage(jid, payload);
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
       const messageId = resolveOutboundMessageId(result);

@@ -16,7 +16,7 @@ orchestrate sub-agents.
 
 | Tool               | What it does                                                                |
 | ------------------ | --------------------------------------------------------------------------- |
-| `sessions_list`    | List sessions with optional filters (kind, recency)                         |
+| `sessions_list`    | List sessions with optional filters (kind, label, agent, recency, preview)  |
 | `sessions_history` | Read the transcript of a specific session                                   |
 | `sessions_send`    | Send a message to another session and optionally wait                       |
 | `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
@@ -26,9 +26,14 @@ orchestrate sub-agents.
 
 ## Listing and reading sessions
 
-`sessions_list` returns sessions with their key, kind, channel, model, token
-counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
-`node`) or recency (`activeMinutes`).
+`sessions_list` returns sessions with their key, agentId, kind, channel, model,
+token counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
+`node`), exact `label`, exact `agentId`, search text, or recency
+(`activeMinutes`). When you need mailbox-style triage, it can also ask for a
+visibility-scoped derived title, a last-message preview snippet, or bounded
+recent messages on each row. Derived titles and previews are produced only for
+sessions the caller can already see under the configured session tool
+visibility policy, so unrelated sessions stay hidden.
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.

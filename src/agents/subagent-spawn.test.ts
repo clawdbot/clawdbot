@@ -161,6 +161,15 @@ describe("spawnSubagentDirect seam flow", () => {
       operations.indexOf("gateway:sessions.patch"),
     );
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(operations.indexOf("store:update"));
+    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: childSessionKey,
+          cleanupBundleMcpOnRunEnd: true,
+        }),
+      }),
+    );
   });
 
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {

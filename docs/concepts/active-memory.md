@@ -20,10 +20,11 @@ have made the reply feel natural has already passed.
 Active memory gives the system one bounded chance to surface relevant memory
 before the main reply is generated.
 
-## Paste This Into Your Agent
+## Quick start
 
-Paste this into your agent if you want it to enable Active Memory with a
-self-contained, safe-default setup:
+Paste this into `openclaw.json` for a safe-default setup — plugin on, scoped to
+the `main` agent, direct-message sessions only, inherits the session model
+when available:
 
 ```json5
 {
@@ -49,12 +50,7 @@ self-contained, safe-default setup:
 }
 ```
 
-This turns the plugin on for the `main` agent, keeps it limited to direct-message
-style sessions by default, lets it inherit the current session model first, and
-uses the configured fallback model only if no explicit or inherited model is
-available.
-
-After that, restart the gateway:
+Then restart the gateway:
 
 ```bash
 openclaw gateway
@@ -67,54 +63,15 @@ To inspect it live in a conversation:
 /trace on
 ```
 
-## Turn active memory on
-
-The safest setup is:
-
-1. enable the plugin
-2. target one conversational agent
-3. keep logging on only while tuning
-
-Start with this in `openclaw.json`:
-
-```json5
-{
-  plugins: {
-    entries: {
-      "active-memory": {
-        enabled: true,
-        config: {
-          agents: ["main"],
-          allowedChatTypes: ["direct"],
-          modelFallback: "google/gemini-3-flash",
-          queryMode: "recent",
-          promptStyle: "balanced",
-          timeoutMs: 15000,
-          maxSummaryChars: 220,
-          persistTranscripts: false,
-          logging: true,
-        },
-      },
-    },
-  },
-}
-```
-
-Then restart the gateway:
-
-```bash
-openclaw gateway
-```
-
-What this means:
+What the key fields do:
 
 - `plugins.entries.active-memory.enabled: true` turns the plugin on
 - `config.agents: ["main"]` opts only the `main` agent into active memory
-- `config.allowedChatTypes: ["direct"]` keeps active memory on for direct-message style sessions only by default
-- if `config.model` is unset, active memory inherits the current session model first
-- `config.modelFallback` optionally provides your own fallback provider/model for recall
-- `config.promptStyle: "balanced"` uses the default general-purpose prompt style for `recent` mode
-- active memory still runs only on eligible interactive persistent chat sessions
+- `config.allowedChatTypes: ["direct"]` scopes it to direct-message sessions (opt in groups/channels explicitly)
+- `config.model` (optional) pins a dedicated recall model; unset inherits the current session model
+- `config.modelFallback` is used only when no explicit or inherited model resolves
+- `config.promptStyle: "balanced"` is the default for `recent` mode
+- Active memory still runs only for eligible interactive persistent chat sessions
 
 ## Speed recommendations
 
@@ -123,83 +80,45 @@ the same model you already use for normal replies. That is the safest default
 because it follows your existing provider, auth, and model preferences.
 
 If you want Active Memory to feel faster, use a dedicated inference model
-instead of borrowing the main chat model.
+instead of borrowing the main chat model. Recall quality matters, but latency
+matters more than for the main answer path, and Active Memory's tool surface
+is narrow (it only calls `memory_search` and `memory_get`).
 
-Example fast-provider setup:
+Good fast-model options:
 
-```json5
-models: {
-  providers: {
-    cerebras: {
-      baseUrl: "https://api.cerebras.ai/v1",
-      apiKey: "${CEREBRAS_API_KEY}",
-      api: "openai-completions",
-      models: [{ id: "gpt-oss-120b", name: "GPT OSS 120B (Cerebras)" }],
-    },
-  },
-},
-plugins: {
-  entries: {
-    "active-memory": {
-      enabled: true,
-      config: {
-        model: "cerebras/gpt-oss-120b",
-      },
-    },
-  },
-}
-```
-
-Fast-model options worth considering:
-
-- `cerebras/gpt-oss-120b` for a fast dedicated recall model with a narrow tool surface
+- `cerebras/gpt-oss-120b` for a dedicated low-latency recall model
+- `google/gemini-3-flash` as a low-latency fallback without changing your primary chat model
 - your normal session model, by leaving `config.model` unset
-- a low-latency fallback model such as `google/gemini-3-flash` when you want a separate recall model without changing your primary chat model
-
-Why Cerebras is a strong speed-oriented option for Active Memory:
-
-- the Active Memory tool surface is narrow: it only calls `memory_search` and `memory_get`
-- recall quality matters, but latency matters more than for the main answer path
-- a dedicated fast provider avoids tying memory recall latency to your primary chat provider
-
-If you do not want a separate speed-optimized model, leave `config.model` unset
-and let Active Memory inherit the current session model.
 
 ### Cerebras setup
 
-Add a provider entry like this:
+Add a Cerebras provider and point Active Memory at it:
 
 ```json5
-models: {
-  providers: {
-    cerebras: {
-      baseUrl: "https://api.cerebras.ai/v1",
-      apiKey: "${CEREBRAS_API_KEY}",
-      api: "openai-completions",
-      models: [{ id: "gpt-oss-120b", name: "GPT OSS 120B (Cerebras)" }],
+{
+  models: {
+    providers: {
+      cerebras: {
+        baseUrl: "https://api.cerebras.ai/v1",
+        apiKey: "${CEREBRAS_API_KEY}",
+        api: "openai-completions",
+        models: [{ id: "gpt-oss-120b", name: "GPT OSS 120B (Cerebras)" }],
+      },
     },
   },
-}
-```
-
-Then point Active Memory at it:
-
-```json5
-plugins: {
-  entries: {
-    "active-memory": {
-      enabled: true,
-      config: {
-        model: "cerebras/gpt-oss-120b",
+  plugins: {
+    entries: {
+      "active-memory": {
+        enabled: true,
+        config: { model: "cerebras/gpt-oss-120b" },
       },
     },
   },
 }
 ```
 
-Caveat:
-
-- make sure the Cerebras API key actually has model access for the model you choose, because `/v1/models` visibility alone does not guarantee `chat/completions` access
+Make sure the Cerebras API key actually has `chat/completions` access for the
+chosen model — `/v1/models` visibility alone does not guarantee it.
 
 ## How to see it
 
@@ -396,7 +315,70 @@ If the connection is weak, it should return `NONE`.
 
 ## Query modes
 
-`config.queryMode` controls how much conversation the blocking memory sub-agent sees.
+`config.queryMode` controls how much conversation the blocking memory sub-agent
+sees. Pick the smallest mode that still answers follow-up questions well;
+timeout budgets should grow with context size (`message` < `recent` < `full`).
+
+<Tabs>
+  <Tab title="message">
+    Only the latest user message is sent.
+
+    ```text
+    Latest user message only
+    ```
+
+    Use this when:
+
+    - you want the fastest behavior
+    - you want the strongest bias toward stable preference recall
+    - follow-up turns do not need conversational context
+
+    Start around `3000` to `5000` ms for `config.timeoutMs`.
+
+  </Tab>
+
+  <Tab title="recent">
+    The latest user message plus a small recent conversational tail is sent.
+
+    ```text
+    Recent conversation tail:
+    user: ...
+    assistant: ...
+    user: ...
+
+    Latest user message:
+    ...
+    ```
+
+    Use this when:
+
+    - you want a better balance of speed and conversational grounding
+    - follow-up questions often depend on the last few turns
+
+    Start around `15000` ms for `config.timeoutMs`.
+
+  </Tab>
+
+  <Tab title="full">
+    The full conversation is sent to the blocking memory sub-agent.
+
+    ```text
+    Full conversation context:
+    user: ...
+    assistant: ...
+    user: ...
+    ...
+    ```
+
+    Use this when:
+
+    - the strongest recall quality matters more than latency
+    - the conversation contains important setup far back in the thread
+
+    Start around `15000` ms or higher depending on thread size.
+
+  </Tab>
+</Tabs>
 
 ## Prompt styles
 
@@ -489,75 +471,6 @@ promptOverride: "You are a memory search agent. Return NONE or one compact user 
 Prompt customization is not recommended unless you are deliberately testing a
 different recall contract. The default prompt is tuned to return either `NONE`
 or compact user-fact context for the main model.
-
-### `message`
-
-Only the latest user message is sent.
-
-```text
-Latest user message only
-```
-
-Use this when:
-
-- you want the fastest behavior
-- you want the strongest bias toward stable preference recall
-- follow-up turns do not need conversational context
-
-Recommended timeout:
-
-- start around `3000` to `5000` ms
-
-### `recent`
-
-The latest user message plus a small recent conversational tail is sent.
-
-```text
-Recent conversation tail:
-user: ...
-assistant: ...
-user: ...
-
-Latest user message:
-...
-```
-
-Use this when:
-
-- you want a better balance of speed and conversational grounding
-- follow-up questions often depend on the last few turns
-
-Recommended timeout:
-
-- start around `15000` ms
-
-### `full`
-
-The full conversation is sent to the blocking memory sub-agent.
-
-```text
-Full conversation context:
-user: ...
-assistant: ...
-user: ...
-...
-```
-
-Use this when:
-
-- the strongest recall quality matters more than latency
-- the conversation contains important setup far back in the thread
-
-Recommended timeout:
-
-- increase it substantially compared with `message` or `recent`
-- start around `15000` ms or higher depending on thread size
-
-In general, timeout should increase with context size:
-
-```text
-message < recent < full
-```
 
 ## Transcript persistence
 
@@ -702,181 +615,38 @@ If active memory is too slow:
 
 ## Common issues
 
-### Embedding provider changed unexpectedly
+Active Memory rides on the normal `memory_search` pipeline under
+`agents.defaults.memorySearch`, so most recall surprises are embedding-provider
+problems, not Active Memory bugs.
 
-Active Memory uses the normal `memory_search` pipeline under
-`agents.defaults.memorySearch`. That means embedding-provider setup is only a
-requirement when your `memorySearch` setup requires embeddings for the behavior
-you want.
+<AccordionGroup>
+  <Accordion title="Embedding provider switched or stopped working">
+    If `memorySearch.provider` is unset, OpenClaw auto-detects the first
+    available embedding provider. A new API key, quota exhaustion, or a
+    rate-limited hosted provider can change which provider resolves between
+    runs. If no provider resolves, `memory_search` may degrade to lexical-only
+    retrieval; runtime failures after a provider is already selected do not
+    fall back automatically.
 
-In practice:
+    Pin the provider (and an optional fallback) explicitly to make selection
+    deterministic. See [Memory Search](/concepts/memory-search) for the full
+    list of providers and pinning examples.
 
-- explicit provider setup is **required** if you want a provider that is not
-  auto-detected, such as `ollama`
-- explicit provider setup is **required** if auto-detection does not resolve
-  any usable embedding provider for your environment
-- explicit provider setup is **highly recommended** if you want deterministic
-  provider selection instead of "first available wins"
-- explicit provider setup is usually **not required** if auto-detection already
-  resolves the provider you want and that provider is stable in your deployment
+  </Accordion>
 
-If `memorySearch.provider` is unset, OpenClaw auto-detects the first available
-embedding provider.
-
-That can be confusing in real deployments:
-
-- a newly available API key can change which provider memory search uses
-- one command or diagnostics surface may make the selected provider look
-  different from the path you are actually hitting during live memory sync or
-  search bootstrap
-- hosted providers can fail with quota or rate-limit errors that only show up
-  once Active Memory starts issuing recall searches before each reply
-
-Active Memory can still run without embeddings when `memory_search` can operate
-in degraded lexical-only mode, which typically happens when no embedding
-provider can be resolved.
-
-Do not assume the same fallback on provider runtime failures such as quota
-exhaustion, rate limits, network/provider errors, or missing local/remote
-models after a provider has already been selected.
-
-In practice:
-
-- if no embedding provider can be resolved, `memory_search` may degrade to
-  lexical-only retrieval
-- if an embedding provider is resolved and then fails at runtime, OpenClaw does
-  not currently guarantee a lexical fallback for that request
-- if you need deterministic provider selection, pin
-  `agents.defaults.memorySearch.provider`
-- if you need provider failover on runtime errors, configure
-  `agents.defaults.memorySearch.fallback` explicitly
-
-If you depend on embedding-backed recall, multimodal indexing, or a specific
-local/remote provider, pin the provider explicitly instead of relying on
-auto-detection.
-
-Common pinning examples:
-
-OpenAI:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai",
-        model: "text-embedding-3-small",
-      },
-    },
-  },
-}
-```
-
-Gemini:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "gemini",
-        model: "gemini-embedding-001",
-      },
-    },
-  },
-}
-```
-
-Ollama:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "ollama",
-        model: "nomic-embed-text",
-      },
-    },
-  },
-}
-```
-
-If you expect provider failover on runtime errors such as quota exhaustion,
-pinning a provider alone is not enough. Configure an explicit fallback too:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai",
-        fallback: "gemini",
-      },
-    },
-  },
-}
-```
-
-### Debugging provider issues
-
-If Active Memory is slow, empty, or appears to switch providers unexpectedly:
-
-- watch the gateway logs while reproducing the problem; look for lines such as
-  `active-memory: ... start|done`, `memory sync failed (search-bootstrap)`, or
-  provider-specific embedding errors
-- turn on `/trace on` to surface the plugin-owned Active Memory debug summary in
-  the session
-- turn on `/verbose on` if you also want the normal `🧩 Active Memory: ...`
-  status line after each reply
-- run `openclaw memory status --deep` to inspect the current memory-search
-  backend and index health
-- check `agents.defaults.memorySearch.provider` and related auth/config to make
-  sure the provider you expect is actually the one that can resolve at runtime
-- if you use `ollama`, verify the configured embedding model is installed, for
-  example `ollama list`
-
-Example debugging loop:
-
-```text
-1. Start the gateway and watch its logs
-2. In the chat session, run /trace on
-3. Send one message that should trigger Active Memory
-4. Compare the chat-visible debug line with the gateway log lines
-5. If provider choice is ambiguous, pin agents.defaults.memorySearch.provider explicitly
-```
-
-Example:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "ollama",
-        model: "nomic-embed-text",
-      },
-    },
-  },
-}
-```
-
-Or, if you want Gemini embeddings:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "gemini",
-      },
-    },
-  },
-}
-```
-
-After changing the provider, restart the gateway and run a fresh test with
-`/trace on` so the Active Memory debug line reflects the new embedding path.
+  <Accordion title="Recall feels slow, empty, or inconsistent">
+    - Turn on `/trace on` to surface the plugin-owned Active Memory debug
+      summary in the session.
+    - Turn on `/verbose on` to also see the `🧩 Active Memory: ...` status line
+      after each reply.
+    - Watch gateway logs for `active-memory: ... start|done`,
+      `memory sync failed (search-bootstrap)`, or provider embedding errors.
+    - Run `openclaw memory status --deep` to inspect the memory-search backend
+      and index health.
+    - If you use `ollama`, confirm the embedding model is installed
+      (`ollama list`).
+  </Accordion>
+</AccordionGroup>
 
 ## Related pages
 

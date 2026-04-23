@@ -281,6 +281,39 @@ describe("cacheRetention default behavior", () => {
       ),
     ).toBe("none");
   });
+
+  it("passes through explicit cacheRetention for opaque Bedrock app inference profile ARNs", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "amazon-bedrock",
+        "openai-completions",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459da",
+      ),
+    ).toBe("long");
+  });
+
+  it("passes through explicit 'none' for opaque Bedrock app inference profile ARNs", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "amazon-bedrock",
+        "openai-completions",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459da",
+      ),
+    ).toBe("none");
+  });
+
+  it("does not default cacheRetention for opaque Bedrock app inference profile ARNs", () => {
+    expect(
+      resolveCacheRetention(
+        undefined,
+        "amazon-bedrock",
+        "openai-completions",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459da",
+      ),
+    ).toBeUndefined();
+  });
 });
 
 describe("anthropic-family cache semantics", () => {

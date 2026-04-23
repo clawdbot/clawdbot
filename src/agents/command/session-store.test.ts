@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import type { EmbeddedPiRunResult } from "../pi-embedded.js";
-import { updateSessionStoreAfterAgentRun } from "./session-store.js";
+import { clearCliSessionInStore, updateSessionStoreAfterAgentRun } from "./session-store.js";
 import { resolveSession } from "./session.js";
 
 vi.mock("../model-selection.js", () => ({
@@ -512,6 +512,86 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       const persisted = loadSessionStore(storePath);
       expect(persisted[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
+    });
+  });
+});
+
+describe("clearCliSessionInStore", () => {
+  it("persists cleared Claude CLI bindings through session-store merge", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-clear-claude-cli";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-session-1",
+            authEpoch: "epoch-1",
+          },
+          "codex-cli": {
+            sessionId: "codex-session-1",
+          },
+        },
+        cliSessionIds: {
+          "claude-cli": "claude-session-1",
+          "codex-cli": "codex-session-1",
+        },
+        claudeCliSessionId: "claude-session-1",
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+      const cleared = await clearCliSessionInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+      });
+
+      expect(cleared?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(cleared?.cliSessionBindings?.["codex-cli"]).toEqual({
+        sessionId: "codex-session-1",
+      });
+      expect(cleared?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(cleared?.cliSessionIds?.["codex-cli"]).toBe("codex-session-1");
+      expect(cleared?.claudeCliSessionId).toBeUndefined();
+      expect(sessionStore[sessionKey]).toEqual(cleared);
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.cliSessionBindings?.["codex-cli"]).toEqual({
+        sessionId: "codex-session-1",
+      });
+      expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.cliSessionIds?.["codex-cli"]).toBe("codex-session-1");
+      expect(persisted?.claudeCliSessionId).toBeUndefined();
+    });
+  });
+
+  it("leaves the caller snapshot intact when the session entry is missing", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const existingKey = "agent:main:explicit:existing";
+      const sessionStore: Record<string, SessionEntry> = {
+        [existingKey]: {
+          sessionId: "openclaw-session-1",
+          updatedAt: 1,
+          claudeCliSessionId: "claude-session-1",
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+      const cleared = await clearCliSessionInStore({
+        provider: "claude-cli",
+        sessionKey: "agent:main:explicit:missing",
+        sessionStore,
+        storePath,
+      });
+
+      expect(cleared).toBeUndefined();
+      expect(sessionStore[existingKey]?.claudeCliSessionId).toBe("claude-session-1");
+      expect(
+        loadSessionStore(storePath, { skipCache: true })[existingKey]?.claudeCliSessionId,
+      ).toBe("claude-session-1");
     });
   });
 });

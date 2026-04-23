@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import {
   createEmbeddedLobsterRunner,

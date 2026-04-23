@@ -223,6 +223,64 @@ describe("gateway server agent", () => {
     });
   });
 
+  test("agent preserves CLI session binding metadata when refreshing session state", async () => {
+    await useTempSessionStorePath();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-cli",
+          updatedAt: Date.now(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-6",
+          cliSessionIds: {
+            "claude-cli": "cli-session-123",
+          },
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: "cli-session-123",
+              authProfileId: "anthropic:work",
+              mcpConfigHash: "mcp-config-hash",
+              mcpResumeHash: "mcp-resume-hash",
+            },
+          },
+          claudeCliSessionId: "cli-session-123",
+        },
+      },
+    });
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      idempotencyKey: "idem-agent-cli-binding",
+    });
+    expect(res.ok).toBe(true);
+
+    const sessionStorePath = testState.sessionStorePath;
+    if (!sessionStorePath) {
+      throw new Error("expected session store path");
+    }
+    const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
+      string,
+      {
+        cliSessionBindings?: Record<string, unknown>;
+        cliSessionIds?: Record<string, string>;
+        claudeCliSessionId?: string;
+      }
+    >;
+    expect(stored["agent:main:main"]?.cliSessionBindings).toEqual({
+      "claude-cli": {
+        sessionId: "cli-session-123",
+        authProfileId: "anthropic:work",
+        mcpConfigHash: "mcp-config-hash",
+        mcpResumeHash: "mcp-resume-hash",
+      },
+    });
+    expect(stored["agent:main:main"]?.cliSessionIds).toEqual({
+      "claude-cli": "cli-session-123",
+    });
+    expect(stored["agent:main:main"]?.claudeCliSessionId).toBe("cli-session-123");
+  });
+
   test("agent accepts built-in channel alias (imsg)", async () => {
     const registry = createRegistry([
       {

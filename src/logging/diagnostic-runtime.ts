@@ -1,4 +1,7 @@
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  emitDiagnosticEvent,
+} from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 const diag = createSubsystemLogger("diagnostic");
@@ -19,6 +22,9 @@ export function resetDiagnosticActivityForTest(): void {
 }
 
 export function logLaneEnqueue(lane: string, queueSize: number): void {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
   diag.debug(`lane enqueue: lane=${lane} queueSize=${queueSize}`);
   emitDiagnosticEvent({
     type: "queue.lane.enqueue",
@@ -29,6 +35,9 @@ export function logLaneEnqueue(lane: string, queueSize: number): void {
 }
 
 export function logLaneDequeue(lane: string, waitMs: number, queueSize: number): void {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
   diag.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`);
   emitDiagnosticEvent({
     type: "queue.lane.dequeue",

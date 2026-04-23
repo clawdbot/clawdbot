@@ -874,6 +874,9 @@ export class GatewayClient {
       if (!this.lastTick) {
         return;
       }
+      if (this.pending.size > 0) {
+        return;
+      }
       const gap = Date.now() - this.lastTick;
       if (gap > this.tickIntervalMs * 2) {
         this.ws?.close(4000, "tick timeout");

@@ -181,7 +181,7 @@ export function formatUserTime(
     if (!map.weekday || !map.year || !map.month || !map.day || !map.hour || !map.minute) {
       return undefined;
     }
-    const dayNum = parseInt(map.day, 10);
+    const dayNum = Number.parseInt(map.day, 10);
     const suffix = ordinalSuffix(dayNum);
     const timePart = use24Hour
       ? `${map.hour}:${map.minute}`

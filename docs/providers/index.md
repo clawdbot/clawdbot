@@ -28,6 +28,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 - [Alibaba Model Studio](/providers/alibaba)
 - [Amazon Bedrock](/providers/bedrock)
+- [Amazon Bedrock Mantle](/providers/bedrock-mantle)
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Arcee AI (Trinity models)](/providers/arcee)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
@@ -35,6 +36,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [ComfyUI](/providers/comfy)
 - [DeepSeek](/providers/deepseek)
+- [ElevenLabs](/providers/elevenlabs)
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)
 - [GitHub Copilot](/providers/github-copilot)
@@ -62,6 +64,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [SGLang (local models)](/providers/sglang)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
+- [Tencent Cloud (TokenHub)](/providers/tencent)
 - [Together AI](/providers/together)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
@@ -82,6 +85,10 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 ## Transcription providers
 
 - [Deepgram (audio transcription)](/providers/deepgram)
+- [ElevenLabs](/providers/elevenlabs#speech-to-text)
+- [Mistral](/providers/mistral#audio-transcription-voxtral)
+- [OpenAI](/providers/openai#speech-to-text)
+- [xAI](/providers/xai#speech-to-text)
 
 ## Community tools
 

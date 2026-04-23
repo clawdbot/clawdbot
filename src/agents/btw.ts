@@ -33,6 +33,7 @@ import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
 import { streamWithPayloadPatch } from "./pi-embedded-runner/stream-payload-utils.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
+import { registerProviderStreamForModel } from "./provider-stream.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
 
@@ -397,12 +398,12 @@ export async function runBtwSideQuestion(
     apiKeyInfo.mode === "aws-sdk" && !apiKeyInfo.apiKey
       ? undefined
       : requireApiKey(apiKeyInfo, model.provider);
+  const sessionAgentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+  });
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   if (apiKey) {
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
     const preparedAuth = await prepareProviderRuntimeAuth({
       provider: model.provider,
       config: params.cfg,
@@ -432,6 +433,18 @@ export async function runBtwSideQuestion(
     }
   }
 
+  // Use the provider's own stream fn so providers like Ollama (which build
+  // `/api/chat` or `/v1/chat/completions` paths based on api mode) construct
+  // URLs correctly. Without this, streamSimple hits the provider's baseUrl
+  // directly and 404s on endpoints like Ollama Cloud (#68336).
+  const providerStreamFn = registerProviderStreamForModel({
+    model: runtimeModel,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    workspaceDir,
+    env: process.env,
+  });
+
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking
       ? new EmbeddedBlockChunker(params.blockReplyChunking)
@@ -459,7 +472,7 @@ export async function runBtwSideQuestion(
   };
 
   const stream = await streamWithPayloadPatch(
-    streamSimple,
+    providerStreamFn ?? streamSimple,
     runtimeModel,
     {
       systemPrompt: buildBtwSystemPrompt(),

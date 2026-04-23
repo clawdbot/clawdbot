@@ -1,29 +1,5 @@
 import type { Command } from "commander";
-import {
-  modelsAliasesAddCommand,
-  modelsAliasesListCommand,
-  modelsAliasesRemoveCommand,
-  modelsAuthAddCommand,
-  modelsAuthLoginCommand,
-  modelsAuthOrderClearCommand,
-  modelsAuthOrderGetCommand,
-  modelsAuthOrderSetCommand,
-  modelsAuthPasteTokenCommand,
-  modelsAuthSetupTokenCommand,
-  modelsFallbacksAddCommand,
-  modelsFallbacksClearCommand,
-  modelsFallbacksListCommand,
-  modelsFallbacksRemoveCommand,
-  modelsImageFallbacksAddCommand,
-  modelsImageFallbacksClearCommand,
-  modelsImageFallbacksListCommand,
-  modelsImageFallbacksRemoveCommand,
-  modelsListCommand,
-  modelsScanCommand,
-  modelsSetCommand,
-  modelsSetImageCommand,
-  modelsStatusCommand,
-} from "../commands/models.js";
+import { modelsListCommand, modelsStatusCommand } from "../commands/models/list.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -54,7 +30,7 @@ export function registerModelsCli(program: Command) {
     .description("List models (configured by default)")
     .option("--all", "Show full model catalog", false)
     .option("--local", "Filter to local models", false)
-    .option("--provider <name>", "Filter by provider")
+    .option("--provider <id>", "Filter by provider id")
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain line output", false)
     .action(async (opts) => {
@@ -119,6 +95,7 @@ export function registerModelsCli(program: Command) {
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
       await runModelsCommand(async () => {
+        const { modelsSetCommand } = await import("../commands/models/set.js");
         await modelsSetCommand(model, defaultRuntime);
       });
     });
@@ -129,6 +106,7 @@ export function registerModelsCli(program: Command) {
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
       await runModelsCommand(async () => {
+        const { modelsSetImageCommand } = await import("../commands/models/set-image.js");
         await modelsSetImageCommand(model, defaultRuntime);
       });
     });
@@ -142,6 +120,7 @@ export function registerModelsCli(program: Command) {
     .option("--plain", "Plain output", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const { modelsAliasesListCommand } = await import("../commands/models/aliases.js");
         await modelsAliasesListCommand(opts, defaultRuntime);
       });
     });
@@ -153,6 +132,7 @@ export function registerModelsCli(program: Command) {
     .argument("<model>", "Model id or alias")
     .action(async (alias: string, model: string) => {
       await runModelsCommand(async () => {
+        const { modelsAliasesAddCommand } = await import("../commands/models/aliases.js");
         await modelsAliasesAddCommand(alias, model, defaultRuntime);
       });
     });
@@ -163,6 +143,7 @@ export function registerModelsCli(program: Command) {
     .argument("<alias>", "Alias name")
     .action(async (alias: string) => {
       await runModelsCommand(async () => {
+        const { modelsAliasesRemoveCommand } = await import("../commands/models/aliases.js");
         await modelsAliasesRemoveCommand(alias, defaultRuntime);
       });
     });
@@ -176,6 +157,7 @@ export function registerModelsCli(program: Command) {
     .option("--plain", "Plain output", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const { modelsFallbacksListCommand } = await import("../commands/models/fallbacks.js");
         await modelsFallbacksListCommand(opts, defaultRuntime);
       });
     });
@@ -186,6 +168,7 @@ export function registerModelsCli(program: Command) {
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
       await runModelsCommand(async () => {
+        const { modelsFallbacksAddCommand } = await import("../commands/models/fallbacks.js");
         await modelsFallbacksAddCommand(model, defaultRuntime);
       });
     });
@@ -196,6 +179,7 @@ export function registerModelsCli(program: Command) {
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
       await runModelsCommand(async () => {
+        const { modelsFallbacksRemoveCommand } = await import("../commands/models/fallbacks.js");
         await modelsFallbacksRemoveCommand(model, defaultRuntime);
       });
     });
@@ -205,6 +189,7 @@ export function registerModelsCli(program: Command) {
     .description("Clear all fallback models")
     .action(async () => {
       await runModelsCommand(async () => {
+        const { modelsFallbacksClearCommand } = await import("../commands/models/fallbacks.js");
         await modelsFallbacksClearCommand(defaultRuntime);
       });
     });
@@ -220,6 +205,8 @@ export function registerModelsCli(program: Command) {
     .option("--plain", "Plain output", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const { modelsImageFallbacksListCommand } =
+          await import("../commands/models/image-fallbacks.js");
         await modelsImageFallbacksListCommand(opts, defaultRuntime);
       });
     });
@@ -230,6 +217,8 @@ export function registerModelsCli(program: Command) {
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
       await runModelsCommand(async () => {
+        const { modelsImageFallbacksAddCommand } =
+          await import("../commands/models/image-fallbacks.js");
         await modelsImageFallbacksAddCommand(model, defaultRuntime);
       });
     });
@@ -240,6 +229,8 @@ export function registerModelsCli(program: Command) {
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
       await runModelsCommand(async () => {
+        const { modelsImageFallbacksRemoveCommand } =
+          await import("../commands/models/image-fallbacks.js");
         await modelsImageFallbacksRemoveCommand(model, defaultRuntime);
       });
     });
@@ -249,6 +240,8 @@ export function registerModelsCli(program: Command) {
     .description("Clear all image fallback models")
     .action(async () => {
       await runModelsCommand(async () => {
+        const { modelsImageFallbacksClearCommand } =
+          await import("../commands/models/image-fallbacks.js");
         await modelsImageFallbacksClearCommand(defaultRuntime);
       });
     });
@@ -270,6 +263,7 @@ export function registerModelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const { modelsScanCommand } = await import("../commands/models/scan.js");
         await modelsScanCommand(opts, defaultRuntime);
       });
     });
@@ -298,6 +292,7 @@ export function registerModelsCli(program: Command) {
     .description("Interactive auth helper (provider auth or paste token)")
     .action(async () => {
       await runModelsCommand(async () => {
+        const { modelsAuthAddCommand } = await import("../commands/models/auth.js");
         await modelsAuthAddCommand({}, defaultRuntime);
       });
     });
@@ -310,6 +305,7 @@ export function registerModelsCli(program: Command) {
     .option("--set-default", "Apply the provider's default model recommendation", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand(
           {
             provider: opts.provider as string | undefined,
@@ -328,6 +324,7 @@ export function registerModelsCli(program: Command) {
     .option("--yes", "Skip confirmation", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const { modelsAuthSetupTokenCommand } = await import("../commands/models/auth.js");
         await modelsAuthSetupTokenCommand(
           {
             provider: opts.provider as string | undefined,
@@ -349,6 +346,7 @@ export function registerModelsCli(program: Command) {
     )
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const { modelsAuthPasteTokenCommand } = await import("../commands/models/auth.js");
         await modelsAuthPasteTokenCommand(
           {
             provider: opts.provider as string | undefined,
@@ -366,6 +364,7 @@ export function registerModelsCli(program: Command) {
     .option("--yes", "Overwrite existing profile without prompting", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand(
           {
             provider: "github-copilot",
@@ -389,6 +388,7 @@ export function registerModelsCli(program: Command) {
       const agent =
         resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
       await runModelsCommand(async () => {
+        const { modelsAuthOrderGetCommand } = await import("../commands/models/auth-order.js");
         await modelsAuthOrderGetCommand(
           {
             provider: opts.provider as string,
@@ -410,6 +410,7 @@ export function registerModelsCli(program: Command) {
       const agent =
         resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
       await runModelsCommand(async () => {
+        const { modelsAuthOrderSetCommand } = await import("../commands/models/auth-order.js");
         await modelsAuthOrderSetCommand(
           {
             provider: opts.provider as string,
@@ -430,6 +431,7 @@ export function registerModelsCli(program: Command) {
       const agent =
         resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
       await runModelsCommand(async () => {
+        const { modelsAuthOrderClearCommand } = await import("../commands/models/auth-order.js");
         await modelsAuthOrderClearCommand(
           {
             provider: opts.provider as string,

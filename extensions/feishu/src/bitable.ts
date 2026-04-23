@@ -1,6 +1,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { Type } from "@sinclair/typebox";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuToolClient } from "./tool-account.js";
@@ -565,7 +565,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     name: string;
     label: string;
     description: string;
-    parameters: unknown;
+    parameters: TSchema;
     execute: (args: { params: TParams; defaultAccountId?: string }) => Promise<unknown>;
   }) => {
     api.registerTool(

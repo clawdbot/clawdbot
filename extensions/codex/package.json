@@ -4,7 +4,7 @@
   "description": "OpenClaw Codex harness and model provider plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "0.68.1",
+    "@mariozechner/pi-coding-agent": "0.69.0",
     "ws": "^8.20.0",
     "zod": "^4.3.6"
   },

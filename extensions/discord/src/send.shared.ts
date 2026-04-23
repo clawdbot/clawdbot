@@ -9,7 +9,7 @@ import {
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -22,7 +22,8 @@ import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { chunkDiscordTextWithMode } from "./chunk.js";
-import { createDiscordClient, resolveDiscordRest } from "./client.js";
+import { createDiscordClient, resolveDiscordRest, type DiscordClientOpts } from "./client.js";
+import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
 
@@ -191,6 +192,18 @@ async function resolveChannelId(
     throw new Error("Failed to create Discord DM channel");
   }
   return { channelId: dmChannel.id, dm: true };
+}
+
+async function resolveDiscordTargetChannelId(
+  raw: string,
+  opts: DiscordClientOpts & { cfg: OpenClawConfig },
+): Promise<{ channelId: string; dm?: boolean }> {
+  const cfg = requireRuntimeConfig(opts.cfg, "Discord target channel resolution");
+  const recipient = await parseAndResolveRecipient(raw, opts.accountId, cfg, {
+    defaultKind: "channel",
+  });
+  const { rest, request } = createDiscordClient(opts, cfg);
+  return await resolveChannelId(rest, recipient, request);
 }
 
 export async function resolveDiscordChannelType(
@@ -455,6 +468,7 @@ export {
   normalizeReactionEmoji,
   normalizeStickerIds,
   resolveChannelId,
+  resolveDiscordTargetChannelId,
   resolveDiscordRest,
   sendDiscordMedia,
   sendDiscordText,

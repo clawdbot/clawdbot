@@ -120,6 +120,72 @@ describe("qa mock openai server", () => {
     expect(body).toContain('"name":"read"');
   });
 
+  it("turns a short approval into a kickoff-task read", async () => {
+    const server = await startMockServer();
+
+    const preActionResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        model: "gpt-5.4",
+        input: [
+          makeUserInput(
+            "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
+          ),
+        ],
+      }),
+    });
+    expect(preActionResponse.status).toBe(200);
+    expect(await preActionResponse.json()).toMatchObject({
+      output: [
+        {
+          type: "message",
+          content: [
+            {
+              text: expect.stringContaining("Protocol note: acknowledged."),
+            },
+          ],
+        },
+      ],
+    });
+
+    const approvalResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.4",
+        input: [
+          makeUserInput(
+            "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
+          ),
+          makeUserInput(
+            "ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.",
+          ),
+        ],
+      }),
+    });
+    expect(approvalResponse.status).toBe(200);
+    const approvalBody = await approvalResponse.text();
+    expect(approvalBody).toContain('"name":"read"');
+    expect(approvalBody).toContain('"arguments":"{\\"path\\":\\"QA_KICKOFF_TASK.md\\"}"');
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    expect(await debugResponse.json()).toMatchObject({
+      model: "gpt-5.4",
+      prompt:
+        "ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.",
+      allInputText: expect.stringContaining("ok do it."),
+      plannedToolName: "read",
+    });
+  });
+
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
     const server = await startMockServer();
 

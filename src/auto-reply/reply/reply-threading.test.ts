@@ -101,6 +101,39 @@ describe("resolveReplyToMode", () => {
       ),
     ).toBe("first");
   });
+
+  it("uses registered channel threading adapters for runtime reply-mode resolution", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: {
+            id: "whatsapp",
+            meta: {
+              id: "whatsapp",
+              label: "WhatsApp",
+              selectionLabel: "WhatsApp",
+              docsPath: "/channels/whatsapp",
+              blurb: "test stub.",
+            },
+            capabilities: { chatTypes: ["direct", "group"] },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+            },
+            threading: {
+              resolveReplyToMode: ({ accountId }: { accountId?: string | null }) =>
+                accountId === "work" ? "first" : "all",
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(resolveReplyToMode({} as OpenClawConfig, "whatsapp", "work", "group")).toBe("first");
+    expect(resolveReplyToMode({} as OpenClawConfig, "whatsapp", "default", "group")).toBe("all");
+  });
 });
 
 describe("resolveConfiguredReplyToMode", () => {

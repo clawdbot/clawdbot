@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
 const require = createRequire(import.meta.url);
@@ -14,7 +15,7 @@ type AjvLike = {
           validate: (value: string) => boolean;
         },
   ) => AjvLike;
-  compile: (schema: Record<string, unknown>) => ValidateFunction;
+  compile: (schema: JsonSchemaObject) => ValidateFunction;
 };
 const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
 
@@ -48,7 +49,7 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
 
 type CachedValidator = {
   validate: ValidateFunction;
-  schema: Record<string, unknown>;
+  schema: JsonSchemaObject;
 };
 
 const schemaCache = new Map<string, CachedValidator>();
@@ -158,7 +159,7 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
 }
 
 export function validateJsonSchemaValue(params: {
-  schema: Record<string, unknown>;
+  schema: JsonSchemaObject;
   cacheKey: string;
   value: unknown;
   applyDefaults?: boolean;

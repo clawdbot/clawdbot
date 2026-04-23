@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/e2e/lib/parallels-macos-common.sh"
+source "$ROOT_DIR/scripts/e2e/lib/parallels-package-common.sh"
 
 VM_NAME="macOS Tahoe"
 SNAPSHOT_HINT="macOS 26.3.1 latest"
@@ -47,7 +48,7 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 TIMEOUT_INSTALL_SITE_S=420
 TIMEOUT_INSTALL_TGZ_S=420
 TIMEOUT_INSTALL_REGISTRY_S=420
-TIMEOUT_UPDATE_DEV_S="${OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S:-600}"
+TIMEOUT_UPDATE_DEV_S="${OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S:-1200}"
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=180
@@ -57,6 +58,7 @@ TIMEOUT_DASHBOARD_S=180
 TIMEOUT_SNAPSHOT_S=360
 TIMEOUT_CURRENT_USER_PRLCTL_S=45
 TIMEOUT_DISCORD_S=180
+PHASE_STALE_WARN_S=60
 
 FRESH_MAIN_VERSION="skip"
 LATEST_INSTALLED_VERSION="skip"
@@ -794,6 +796,31 @@ guest_current_user_tail_file() {
   guest_current_user_exec /usr/bin/tail -n "$lines" "$file_path"
 }
 
+guest_current_user_kill_process_tree() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  guest_current_user_sh "$(cat <<EOF
+kill_tree() {
+  local target="\$1" child
+  for child in \$(/usr/bin/pgrep -P "\$target" 2>/dev/null || true); do
+    kill_tree "\$child"
+  done
+  /bin/kill -TERM "\$target" 2>/dev/null || true
+}
+kill_tree $(shell_quote "$pid")
+/bin/sleep 2
+kill_tree_force() {
+  local target="\$1" child
+  for child in \$(/usr/bin/pgrep -P "\$target" 2>/dev/null || true); do
+    kill_tree_force "\$child"
+  done
+  /bin/kill -KILL "\$target" 2>/dev/null || true
+}
+kill_tree_force $(shell_quote "$pid")
+EOF
+)" >/dev/null 2>&1 || true
+}
+
 latest_guest_npm_debug_log_path() {
   local guest_home="$1"
   guest_current_user_sh "$(cat <<EOF
@@ -878,11 +905,12 @@ run_logged_guest_current_user_sh() {
   local timeout_s="$4"
   local runner_path="$5"
   local deadline rc done_rc runner_body write_runner_cmd
-  local guest_home guest_log_state_path latest_npm_log_path latest_npm_log_state_path npm_state_path
+  local guest_home guest_log_state_path latest_npm_log_path latest_npm_log_state_path npm_state_path runner_pid_path runner_pid
   rc=""
   done_rc=""
   latest_npm_log_path=""
-  guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path"
+  runner_pid_path="$done_path.pid"
+  guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path" "$runner_pid_path"
   runner_body="$(cat <<EOF
 status=0
 (
@@ -904,7 +932,7 @@ EOF
   write_runner_cmd+="$runner_body"$'\n'
   write_runner_cmd+="__OPENCLAW_RUNNER__"$'\n'
   write_runner_cmd+="/bin/chmod +x $(shell_quote "$runner_path")"$'\n'
-  write_runner_cmd+="(/bin/bash $(shell_quote "$runner_path") > $(shell_quote "$log_path") 2>&1 < /dev/null &) >/dev/null 2>&1"
+  write_runner_cmd+="(/bin/bash $(shell_quote "$runner_path") > $(shell_quote "$log_path") 2>&1 < /dev/null & printf '%s\n' \"\$!\" > $(shell_quote "$runner_pid_path")) >/dev/null 2>&1"
   guest_current_user_sh "$write_runner_cmd"
   guest_home="$(resolve_guest_current_user_home)"
   guest_log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-guest-log-state.XXXXXX")"
@@ -934,7 +962,7 @@ print(matches[-1])
 PY
     )" || rc=""
     if [[ "$rc" =~ ^-?[0-9]+$ ]]; then
-      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
       stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
       if [[ -n "$latest_npm_log_path" ]]; then
         stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
@@ -955,7 +983,7 @@ PY
     done_rc="$(guest_current_user_exec /bin/cat "$done_path" 2>/dev/null | tr -d '\r\n' || true)"
     if [[ "$done_rc" =~ ^-?[0-9]+$ ]]; then
       rc="$done_rc"
-      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
       stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
       if [[ -n "$latest_npm_log_path" ]]; then
         stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
@@ -966,7 +994,7 @@ PY
     fi
     rc="$(guest_runner_rc_from_log "$log_path" 2>/dev/null || true)"
     if [[ "$rc" =~ ^-?[0-9]+$ ]]; then
-      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
       stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
       if [[ -n "$latest_npm_log_path" ]]; then
         stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
@@ -977,6 +1005,12 @@ PY
     fi
     sleep 2
   done
+  runner_pid="$(guest_current_user_exec /bin/cat "$runner_pid_path" 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ "$runner_pid" =~ ^[0-9]+$ ]]; then
+    warn "terminating timed-out guest runner pid $runner_pid"
+    guest_current_user_kill_process_tree "$runner_pid"
+  fi
+  guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
   rm -f "$guest_log_state_path" "$latest_npm_log_state_path" "$npm_state_path"
   warn "guest script timed out after ${timeout_s}s"
   guest_current_user_tail_file "$log_path" 120 >&2 || true
@@ -1135,7 +1169,7 @@ extract_package_build_commit_from_tgz() {
 }
 
 pack_main_tgz() {
-  local short_head pkg packed_commit
+  local short_head pkg packed_commit rc
   if target_package_installs_directly; then
     say "Use direct guest install for target package spec: $TARGET_PACKAGE_SPEC"
     TARGET_EXPECT_VERSION="$(npm view "$TARGET_PACKAGE_SPEC" version --userconfig "$(mktemp)")"
@@ -1155,14 +1189,22 @@ pack_main_tgz() {
     return
   fi
   say "Pack current main tgz"
-  ensure_current_build
-  write_package_dist_inventory
-  stage_pack_runtime_deps
-  short_head="$(git rev-parse --short HEAD)"
-  pkg="$(
-    npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
-      | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
-  )"
+  acquire_build_lock
+  set +e
+  {
+    OPENCLAW_PARALLELS_BUILD_LOCK_HELD=1 ensure_current_build &&
+      write_package_dist_inventory &&
+      stage_pack_runtime_deps &&
+      short_head="$(git rev-parse --short HEAD)" &&
+      pkg="$(
+        npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
+          | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+      )"
+  }
+  rc=$?
+  set -e
+  release_build_lock
+  [[ $rc -eq 0 ]] || return "$rc"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
   packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
@@ -1182,16 +1224,7 @@ verify_target_version() {
 }
 
 current_build_commit() {
-  python3 - <<'PY'
-import json
-import pathlib
-
-path = pathlib.Path("dist/build-info.json")
-if not path.exists():
-    print("")
-else:
-    print(json.loads(path.read_text()).get("commit", ""))
-PY
+  parallels_package_current_build_commit
 }
 
 current_control_ui_ready() {
@@ -1199,49 +1232,59 @@ current_control_ui_ready() {
 }
 
 acquire_build_lock() {
-  local owner_pid=""
-  while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
-    if [[ -f "$BUILD_LOCK_DIR/pid" ]]; then
-      owner_pid="$(cat "$BUILD_LOCK_DIR/pid" 2>/dev/null || true)"
-      if [[ -n "$owner_pid" ]] && ! kill -0 "$owner_pid" >/dev/null 2>&1; then
-        warn "Removing stale Parallels build lock"
-        rm -rf "$BUILD_LOCK_DIR"
-        continue
-      fi
-    fi
-    sleep 1
-  done
-  printf '%s\n' "$$" >"$BUILD_LOCK_DIR/pid"
+  parallels_package_acquire_build_lock "$BUILD_LOCK_DIR"
 }
 
 release_build_lock() {
-  if [[ -d "$BUILD_LOCK_DIR" ]]; then
-    rm -rf "$BUILD_LOCK_DIR"
-  fi
+  parallels_package_release_build_lock "$BUILD_LOCK_DIR"
 }
 
 ensure_current_build() {
-  local head build_commit
-  acquire_build_lock
+  local head build_commit rc lock_owned
+  lock_owned=0
+  if [[ "${OPENCLAW_PARALLELS_BUILD_LOCK_HELD:-0}" != "1" ]]; then
+    acquire_build_lock
+    lock_owned=1
+  fi
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
   if [[ "$build_commit" == "$head" ]] && current_control_ui_ready; then
-    release_build_lock
+    if [[ "$lock_owned" -eq 1 ]]; then
+      release_build_lock
+    fi
     return
   fi
   say "Build dist for current head"
+  set +e
   pnpm build
-  say "Build Control UI for current head"
-  pnpm ui:build
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    parallels_package_assert_no_generated_drift
+    rc=$?
+  fi
+  if [[ $rc -eq 0 ]]; then
+    say "Build Control UI for current head"
+    pnpm ui:build
+    rc=$?
+  fi
   build_commit="$(current_build_commit)"
-  release_build_lock
-  [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
-  current_control_ui_ready || die "dist/control-ui/index.html missing after ui build"
+  set -e
+  if [[ "$lock_owned" -eq 1 ]]; then
+    release_build_lock
+  fi
+  [[ $rc -eq 0 ]] || return "$rc"
+  if [[ "$build_commit" != "$head" ]]; then
+    warn "dist/build-info.json still does not match HEAD after build"
+    return 1
+  fi
+  if ! current_control_ui_ready; then
+    warn "dist/control-ui/index.html missing after ui build"
+    return 1
+  fi
 }
 
 write_package_dist_inventory() {
-  node --import tsx --input-type=module --eval \
-    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
+  parallels_package_write_dist_inventory
 }
 
 stage_pack_runtime_deps() {
@@ -1518,7 +1561,7 @@ print(
             os.environ["DISCORD_GUILD_ID"]: {
                 "channels": {
                     os.environ["DISCORD_CHANNEL_ID"]: {
-                        "allow": True,
+                        "enabled": True,
                         "requireMention": False,
                     }
                 }
@@ -1574,14 +1617,23 @@ PY
 
 wait_for_discord_host_visibility() {
   local nonce="$1"
+  local message_id="${2:-}"
   local response
   local deadline=$((SECONDS + TIMEOUT_DISCORD_S))
   while (( SECONDS < deadline )); do
     set +e
+    if [[ -n "$message_id" ]]; then
+      response="$(discord_api_request GET "/channels/$DISCORD_CHANNEL_ID/messages/$message_id")"
+      local direct_rc=$?
+      if [[ $direct_rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
+        set -e
+        return 0
+      fi
+    fi
     response="$(discord_api_request GET "/channels/$DISCORD_CHANNEL_ID/messages?limit=20")"
     local rc=$?
     set -e
-    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && printf '%s' "$response" | json_contains_string "$nonce"; then
+    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
       return 0
     fi
     sleep 2
@@ -1644,7 +1696,7 @@ wait_for_guest_discord_readback() {
     if [[ -n "$response" ]]; then
       printf '%s' "$response" >"$last_response_path"
     fi
-    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && printf '%s' "$response" | json_contains_string "$nonce"; then
+    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
       return 0
     fi
     sleep 3
@@ -1654,7 +1706,7 @@ wait_for_guest_discord_readback() {
 
 run_discord_roundtrip_smoke() {
   local phase="$1"
-  local nonce outbound_nonce inbound_nonce outbound_message outbound_log sent_id_file host_id_file
+  local nonce outbound_nonce inbound_nonce outbound_message outbound_log sent_id_file host_id_file sent_message_id
   nonce="$(date +%s)-$RANDOM"
   outbound_nonce="$phase-out-$nonce"
   inbound_nonce="$phase-in-$nonce"
@@ -1663,6 +1715,7 @@ run_discord_roundtrip_smoke() {
   sent_id_file="$RUN_DIR/$phase.discord-sent-message-id"
   host_id_file="$RUN_DIR/$phase.discord-host-message-id"
 
+  printf 'discord: guest-send\n'
   guest_current_user_exec \
     "$GUEST_OPENCLAW_BIN" \
     message send \
@@ -1672,9 +1725,13 @@ run_discord_roundtrip_smoke() {
     --silent \
     --json >"$outbound_log"
 
-  discord_message_id_from_send_log "$outbound_log" >"$sent_id_file"
-  wait_for_discord_host_visibility "$outbound_nonce"
+  sent_message_id="$(discord_message_id_from_send_log "$outbound_log")"
+  printf '%s\n' "$sent_message_id" >"$sent_id_file"
+  printf 'discord: host-visibility %s\n' "$sent_message_id"
+  wait_for_discord_host_visibility "$outbound_nonce" "$sent_message_id"
+  printf 'discord: host-reply\n'
   post_host_discord_message "$inbound_nonce" "$host_id_file"
+  printf 'discord: guest-readback\n'
   wait_for_guest_discord_readback "$inbound_nonce"
 }
 
@@ -1721,10 +1778,11 @@ phase_run() {
   local timeout_s="$2"
   shift 2
 
-  local log_path pid start rc timed_out
+  local log_path pid start rc timed_out next_warn summary
   log_path="$(phase_log_path "$phase_id")"
   say "$phase_id"
   start=$SECONDS
+  next_warn=$((start + PHASE_STALE_WARN_S))
   timed_out=0
 
   (
@@ -1733,6 +1791,12 @@ phase_run() {
   pid=$!
 
   while child_job_running "$pid"; do
+    if (( SECONDS >= next_warn )); then
+      summary="$(parallels_log_progress_extract python3 "$log_path")"
+      [[ -n "$summary" ]] || summary="waiting for first log line"
+      warn "$phase_id still running after $((SECONDS - start))s: $summary"
+      next_warn=$((SECONDS + PHASE_STALE_WARN_S))
+    fi
     if (( SECONDS - start >= timeout_s )); then
       timed_out=1
       kill "$pid" >/dev/null 2>&1 || true

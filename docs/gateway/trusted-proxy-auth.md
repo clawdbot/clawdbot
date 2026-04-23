@@ -82,6 +82,7 @@ Important runtime rule:
 - Same-host loopback reverse proxies do **not** satisfy trusted-proxy auth.
 - For same-host loopback proxy setups, use token/password auth instead, or route through a non-loopback trusted proxy address that OpenClaw can verify.
 - Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
+- **Forwarded-header evidence overrides loopback locality.** If a request arrives on loopback but carries `X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` headers pointing at a non-local origin, that evidence disqualifies the loopback locality claim. The request is treated as remote for pairing, trusted-proxy auth, and Control UI device-identity gating. This prevents a same-host loopback proxy from laundering forwarded-header identity into trusted-proxy auth.
 
 ### Configuration Reference
 

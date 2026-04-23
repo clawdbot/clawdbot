@@ -70,14 +70,14 @@ fields are required. The canonical publish snippets live in
 
 ### `openclaw` fields
 
-| Field        | Type       | Description                                                                                            |
-| ------------ | ---------- | ------------------------------------------------------------------------------------------------------ |
-| `extensions` | `string[]` | Entry point files (relative to package root)                                                           |
-| `setupEntry` | `string`   | Lightweight setup-only entry (optional)                                                                |
-| `channel`    | `object`   | Channel catalog metadata for setup, picker, quickstart, and status surfaces                            |
-| `providers`  | `string[]` | Provider ids registered by this plugin                                                                 |
-| `install`    | `object`   | Install hints: `npmSpec`, `localPath`, `defaultChoice`, `minHostVersion`, `allowInvalidConfigRecovery` |
-| `startup`    | `object`   | Startup behavior flags                                                                                 |
+| Field        | Type       | Description                                                                                                                 |
+| ------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `extensions` | `string[]` | Entry point files (relative to package root)                                                                                |
+| `setupEntry` | `string`   | Lightweight setup-only entry (optional)                                                                                     |
+| `channel`    | `object`   | Channel catalog metadata for setup, picker, quickstart, and status surfaces                                                 |
+| `providers`  | `string[]` | Provider ids registered by this plugin                                                                                      |
+| `install`    | `object`   | Install hints: `npmSpec`, `localPath`, `defaultChoice`, `minHostVersion`, `expectedIntegrity`, `allowInvalidConfigRecovery` |
+| `startup`    | `object`   | Startup behavior flags                                                                                                      |
 
 ### `openclaw.channel`
 
@@ -155,10 +155,36 @@ Example:
 | `localPath`                  | `string`             | Local development or bundled install path.                                       |
 | `defaultChoice`              | `"npm"` \| `"local"` | Preferred install source when both are available.                                |
 | `minHostVersion`             | `string`             | Minimum supported OpenClaw version in the form `>=x.y.z`.                        |
+| `expectedIntegrity`          | `string`             | Expected npm dist integrity string, usually `sha512-...`, for pinned installs.   |
 | `allowInvalidConfigRecovery` | `boolean`            | Lets bundled-plugin reinstall flows recover from specific stale-config failures. |
+
+Interactive onboarding also uses `openclaw.install` for install-on-demand
+surfaces. If your plugin exposes provider auth choices or channel setup/catalog
+metadata before runtime loads, onboarding can show that choice, prompt for npm
+vs local install, install or enable the plugin, then continue the selected
+flow. Npm onboarding choices require trusted catalog metadata with a registry
+`npmSpec`; exact versions and `expectedIntegrity` are optional pins. If
+`expectedIntegrity` is present, install/update flows enforce it. Keep the "what
+to show" metadata in `openclaw.plugin.json` and the "how to install it"
+metadata in `package.json`.
 
 If `minHostVersion` is set, install and manifest-registry loading both enforce
 it. Older hosts skip the plugin; invalid version strings are rejected.
+
+For pinned npm installs, keep the exact version in `npmSpec` and add the
+expected artifact integrity:
+
+```json
+{
+  "openclaw": {
+    "install": {
+      "npmSpec": "@wecom/wecom-openclaw-plugin@1.2.3",
+      "expectedIntegrity": "sha512-REPLACE_WITH_NPM_DIST_INTEGRITY",
+      "defaultChoice": "npm"
+    }
+  }
+}
+```
 
 `allowInvalidConfigRecovery` is not a general bypass for broken configs. It is
 for narrow bundled-plugin recovery only, so reinstall/setup can repair known

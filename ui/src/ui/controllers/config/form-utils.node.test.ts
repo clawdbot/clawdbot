@@ -139,7 +139,7 @@ describe("prototype pollution prevention", () => {
     const obj: Record<string, unknown> = {};
     setPathValue(obj, ["__proto__", "polluted"], true);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-    expect(obj.__proto__).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
   });
 
   it("setPathValue rejects constructor in path", () => {

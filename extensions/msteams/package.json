@@ -7,10 +7,10 @@
     "@azure/identity": "^4.13.1",
     "@microsoft/teams.api": "2.0.8",
     "@microsoft/teams.apps": "2.0.8",
-    "@sinclair/typebox": "0.34.49",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
-    "jwks-rsa": "^4.0.1"
+    "jwks-rsa": "^4.0.1",
+    "typebox": "1.1.28"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
@@ -40,7 +40,13 @@
       "aliases": [
         "teams"
       ],
-      "order": 60
+      "order": 60,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "hybrid",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": true
+      }
     },
     "install": {
       "npmSpec": "@openclaw/msteams",

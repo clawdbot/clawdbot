@@ -4,7 +4,10 @@ import JSON5 from "json5";
 import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { configMayNeedPluginAutoEnable } from "../config/plugin-auto-enable.shared.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
@@ -66,6 +69,10 @@ function readFacadeBoundaryConfigSafely(): {
   cacheKey?: string;
 } {
   try {
+    const sourceSnapshot = getRuntimeConfigSourceSnapshot();
+    if (sourceSnapshot) {
+      return { rawConfig: sourceSnapshot };
+    }
     const runtimeSnapshot = getRuntimeConfigSnapshot();
     if (runtimeSnapshot) {
       return { rawConfig: runtimeSnapshot };

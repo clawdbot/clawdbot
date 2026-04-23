@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import {
   normalizeBundledPluginStringList,
   trimBundledPluginString,
@@ -26,7 +27,7 @@ const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
 const PUBLIC_CONFIG_SURFACE_BASENAMES = ["channel-config-api", "runtime-api", "api"] as const;
 
 type ChannelConfigSurface = {
-  schema: Record<string, unknown>;
+  schema: JsonSchemaObject;
   uiHints?: Record<string, PluginConfigUiHint>;
   runtime?: ChannelConfigRuntimeSchema;
 };

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { registerPendingSpawnedChildrenQuery } from "../infra/outbound/pending-spawn-query.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { importRuntimeModule } from "../shared/runtime-import.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
@@ -155,7 +156,7 @@ let sweepInProgress = false;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 // Use var to avoid TDZ when init runs across circular imports during bootstrap.
-var restoreAttempted = false;
+let restoreAttempted = false;
 const ORPHAN_RECOVERY_DEBOUNCE_MS = 1_000;
 let lastOrphanRecoveryScheduleAt = 0;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
@@ -924,3 +925,20 @@ export function getLatestSubagentRunByChildSessionKey(
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }
+
+// Let the shared outbound plan treat bare silent replies as dropped (instead
+// of rewriting them to visible fallback text) when the parent session has at
+// least one pending spawned child whose completion will deliver the real
+// reply. Uses the pending-descendant count so runs that have ended but whose
+// announce/cleanup is still in flight continue to suppress rewriting; without
+// this the window between `completeSubagentRun` setting `endedAt` and
+// `startSubagentAnnounceCleanupFlow` finishing could briefly re-enable
+// fallback chatter. Runtime-enforced, so it does not rely on agent prompt
+// compliance.
+registerPendingSpawnedChildrenQuery((sessionKey) => {
+  const key = sessionKey?.trim();
+  if (!key) {
+    return false;
+  }
+  return countPendingDescendantRuns(key) > 0;
+});

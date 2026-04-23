@@ -34,7 +34,7 @@ export async function startGatewayDiscovery(params: {
     ? await resolveTailnetDnsHint({ enabled: tailscaleEnabled })
     : undefined;
   const sshPortEnv = mdnsMinimal ? undefined : process.env.OPENCLAW_SSH_PORT?.trim();
-  const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
+  const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : Number.NaN;
   const sshPort = Number.isFinite(sshPortParsed) && sshPortParsed > 0 ? sshPortParsed : undefined;
   const cliPath = mdnsMinimal ? undefined : resolveBonjourCliPath();
 

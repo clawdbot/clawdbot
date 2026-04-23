@@ -122,6 +122,7 @@ describe("update.run sentinel deliveryContext", () => {
       to: "webchat:user-123",
       accountId: "default",
     });
+    expect(capturedPayload!.continuation).toBeUndefined();
   });
 
   it("omits deliveryContext when no sessionKey is provided", async () => {
@@ -132,6 +133,7 @@ describe("update.run sentinel deliveryContext", () => {
     expect(capturedPayload).toBeDefined();
     expect(capturedPayload!.deliveryContext).toBeUndefined();
     expect(capturedPayload!.threadId).toBeUndefined();
+    expect(capturedPayload!.continuation).toBeUndefined();
   });
 
   it("includes threadId in sentinel payload for threaded sessions", async () => {
@@ -146,6 +148,7 @@ describe("update.run sentinel deliveryContext", () => {
       accountId: "workspace-1",
     });
     expect(capturedPayload!.threadId).toBe("1234567890.123456");
+    expect(capturedPayload!.continuation).toBeUndefined();
   });
 });
 
@@ -194,5 +197,6 @@ describe("update.run restart scheduling", () => {
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(payload?.ok).toBe(false);
     expect(payload?.restart).toBeNull();
+    expect(capturedPayload?.continuation).toBeUndefined();
   });
 });

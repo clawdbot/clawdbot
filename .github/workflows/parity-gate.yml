@@ -13,6 +13,7 @@ on:
       - "src/gateway/**"
       - "src/media/**"
       - ".github/workflows/parity-gate.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -71,13 +72,9 @@ jobs:
       - name: Build private QA runtime
         run: pnpm build
 
-      - name: Run parity preflight
-        run: |
-          pnpm openclaw qa suite \
-            --provider-mode mock-openai \
-            --model openai/gpt-5.4 \
-            --alt-model anthropic/claude-opus-4-6 \
-            --preflight
+      # The approval-turn sentinel still runs inside the full parity pack below.
+      # Keep the exact mock read-plan contract in deterministic unit tests instead
+      # of paying for a separate full-runtime preflight that has been flaky in CI.
       - name: Run GPT-5.4 lane
         run: |
           pnpm openclaw qa suite \

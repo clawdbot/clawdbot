@@ -9,6 +9,7 @@ import {
   createBundledRuntimeDepsInstallEnv,
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
+  isWritableDirectory,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDepsNpmRunner,
   type BundledRuntimeDepsInstallParams,
@@ -145,6 +146,21 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
 });
 
 describe("installBundledRuntimeDeps", () => {
+  it("uses a real write probe for runtime dependency roots", () => {
+    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    const mkdirSpy = vi.spyOn(fs, "mkdtempSync").mockImplementation(() => {
+      const error = new Error("read-only file system") as NodeJS.ErrnoException;
+      error.code = "EROFS";
+      throw error;
+    });
+
+    expect(isWritableDirectory("/usr/lib/node_modules/openclaw")).toBe(false);
+    expect(accessSpy).not.toHaveBeenCalled();
+    expect(mkdirSpy).toHaveBeenCalledWith(
+      path.join("/usr/lib/node_modules/openclaw", ".openclaw-write-probe-"),
+    );
+  });
+
   it("uses the npm cmd shim on Windows", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(fs, "existsSync").mockImplementation(
@@ -243,6 +259,63 @@ describe("installBundledRuntimeDeps", () => {
         cwd: installExecutionRoot,
       }),
     );
+  });
+
+  it("does not fail an isolated runtime deps install when temp cleanup races", () => {
+    const installRoot = makeTempDir();
+    const installExecutionRoot = makeTempDir();
+    const realRmSync = fs.rmSync.bind(fs);
+    let blockedCleanup = false;
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (
+        !blockedCleanup &&
+        path.basename(String(target)).startsWith(".openclaw-runtime-deps-copy-")
+      ) {
+        blockedCleanup = true;
+        const error = new Error("Directory not empty") as NodeJS.ErrnoException;
+        error.code = "ENOTEMPTY";
+        throw error;
+      }
+      return realRmSync(target, options);
+    });
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const cwd = String(options?.cwd ?? "");
+      fs.mkdirSync(path.join(cwd, "node_modules", "tokenjuice"), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, "node_modules", "tokenjuice", "package.json"),
+        JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
+      );
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    expect(() =>
+      installBundledRuntimeDeps({
+        installRoot,
+        installExecutionRoot,
+        missingSpecs: ["tokenjuice@0.6.1"],
+        env: {},
+      }),
+    ).not.toThrow();
+
+    expect(blockedCleanup).toBe(true);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(installRoot, "node_modules", "tokenjuice", "package.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({
+      name: "tokenjuice",
+      version: "0.6.1",
+    });
   });
 
   it("rejects invalid install specs before spawning npm", () => {
@@ -559,14 +632,21 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ]);
     expect(installRoot).toContain(stageDir);
     expect(installRoot).not.toBe(pluginRoot);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-deps.json"), "utf8")),
+    ).toEqual({ specs: ["tokenjuice@0.6.1"] });
   });
 
-  it("keeps source-checkout bundled runtime deps in the plugin root by default", () => {
+  it("keeps source-checkout bundled runtime deps in the plugin root without manifest churn", () => {
     const packageRoot = makeTempDir();
     fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
     fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
     const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
     fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, ".openclaw-runtime-deps.json"),
+      JSON.stringify({ specs: ["stale@9.9.9"] }),
+    );
     fs.writeFileSync(
       path.join(pluginRoot, "package.json"),
       JSON.stringify({
@@ -601,6 +681,87 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     ]);
     expect(resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} })).toBe(pluginRoot);
+    expect(fs.existsSync(path.join(pluginRoot, ".openclaw-runtime-deps.json"))).toBe(false);
+  });
+
+  it("removes stale source-checkout manifests even when runtime deps are present", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
+    fs.mkdirSync(path.join(pluginRoot, "node_modules", "tokenjuice"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          tokenjuice: "0.6.1",
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "node_modules", "tokenjuice", "package.json"),
+      JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, ".openclaw-runtime-deps.json"),
+      JSON.stringify({ specs: ["stale@9.9.9"] }),
+    );
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: () => {
+        throw new Error("present source-checkout runtime deps should not reinstall");
+      },
+      pluginId: "tokenjuice",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
+    expect(fs.existsSync(path.join(pluginRoot, ".openclaw-runtime-deps.json"))).toBe(false);
+  });
+
+  it("treats Docker build source trees without .git as source checkouts", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages:\n  - .\n");
+    const pluginRoot = path.join(packageRoot, "extensions", "acpx");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          acpx: "0.5.3",
+        },
+        devDependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+        },
+      }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "acpx",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["acpx@0.5.3"],
+      retainSpecs: ["acpx@0.5.3"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: pluginRoot,
+        installExecutionRoot: expect.stringContaining(
+          path.join(".local", "bundled-plugin-runtime-deps"),
+        ),
+        missingSpecs: ["acpx@0.5.3"],
+        installSpecs: ["acpx@0.5.3"],
+      },
+    ]);
   });
 
   it("does not trust package-root runtime deps for source-checkout bundled plugins", () => {

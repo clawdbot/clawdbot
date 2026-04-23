@@ -17,9 +17,7 @@ type FeishuContactUserGetResponse = Awaited<
   ReturnType<ReturnType<typeof createFeishuClient>["contact"]["user"]["get"]>
 >;
 
-type FeishuLogger = {
-  (...args: unknown[]): void;
-};
+type FeishuLogger = (...args: unknown[]) => void;
 
 const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
 const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {

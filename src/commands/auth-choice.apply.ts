@@ -42,6 +42,25 @@ async function normalizeTokenProviderChoice(params: {
   });
 }
 
+async function formatDeprecatedProviderChoiceError(
+  authChoice: AuthChoice | undefined,
+  params: Pick<ApplyAuthChoiceParams, "config" | "env">,
+): Promise<string | undefined> {
+  if (typeof authChoice !== "string") {
+    return undefined;
+  }
+  const { resolveManifestDeprecatedProviderAuthChoice } =
+    await import("../plugins/provider-auth-choices.js");
+  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, {
+    config: params.config,
+    env: params.env,
+  });
+  if (!deprecatedChoice) {
+    return undefined;
+  }
+  return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead.`;
+}
+
 export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {
@@ -61,6 +80,17 @@ export async function applyAuthChoice(
   const result = await applyAuthChoiceLoadedPluginProvider(normalizedParams);
   if (result) {
     return result;
+  }
+
+  const deprecatedProviderChoiceError = await formatDeprecatedProviderChoiceError(
+    normalizedParams.authChoice,
+    {
+      config: normalizedParams.config,
+      env: normalizedParams.env,
+    },
+  );
+  if (deprecatedProviderChoiceError) {
+    throw new Error(deprecatedProviderChoiceError);
   }
 
   if (normalizedParams.authChoice === "token" || normalizedParams.authChoice === "setup-token") {

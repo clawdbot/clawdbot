@@ -61,15 +61,18 @@ You will need to create a new application with a bot, add the bot to your server
     - `bot`
     - `applications.commands`
 
-    A **Bot Permissions** section will appear below. Enable:
+    A **Bot Permissions** section will appear below. Enable at least:
 
-    - View Channels
-    - Send Messages
-    - Read Message History
-    - Embed Links
-    - Attach Files
-    - Add Reactions (optional)
+    **General Permissions**
+      - View Channels
+    **Text Permissions**
+      - Send Messages
+      - Read Message History
+      - Embed Links
+      - Attach Files
+      - Add Reactions (optional)
 
+    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
     Copy the generated URL at the bottom, paste it into your browser, select your server, and click **Continue** to connect. You should now see your bot in the Discord server.
 
   </Step>
@@ -304,7 +307,7 @@ By default, components are single use. Set `components.reusable=true` to allow b
 
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). When configured, unmatched users receive an ephemeral denial.
 
-The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. The picker reply is ephemeral and only the invoking user can use it.
+The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. Unless `commands.modelsWrite=false`, `/models add` also supports adding a new provider/model entry from chat, and newly added models show up without restarting the gateway. The picker reply is ephemeral and only the invoking user can use it.
 
 File attachments:
 
@@ -520,13 +523,16 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 
     Typical baseline permissions:
 
-    - View Channels
-    - Send Messages
-    - Read Message History
-    - Embed Links
-    - Attach Files
-    - Add Reactions (optional)
+    **General Permissions**
+      - View Channels
+    **Text Permissions**
+      - Send Messages
+      - Read Message History
+      - Embed Links
+      - Attach Files
+      - Add Reactions (optional)
 
+    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
     Avoid `Administrator` unless explicitly needed.
 
   </Accordion>
@@ -585,30 +591,9 @@ Default slash command settings:
   </Accordion>
 
   <Accordion title="Live stream preview">
-    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives.
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. `channels.discord.streaming` takes `off` (default) | `partial` | `block` | `progress`. `progress` maps to `partial` on Discord; `streamMode` is a legacy alias and is auto-migrated.
 
-    - `channels.discord.streaming` controls preview streaming (`off` | `partial` | `block` | `progress`, default: `off`).
-    - Default stays `off` because Discord preview edits can hit rate limits quickly, especially when multiple bots or gateways share the same account or guild traffic.
-    - `progress` is accepted for cross-channel consistency and maps to `partial` on Discord.
-    - `channels.discord.streamMode` is a legacy alias and is auto-migrated.
-    - `partial` edits a single preview message as tokens arrive.
-    - `block` emits draft-sized chunks (use `draftChunk` to tune size and breakpoints).
-    - Media, error, and explicit-reply finals cancel pending preview edits without flushing a temporary draft before normal delivery.
-    - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same draft preview message (default: `true`). Set `false` to keep separate tool/progress messages.
-
-    Example:
-
-```json5
-{
-  channels: {
-    discord: {
-      streaming: "partial",
-    },
-  },
-}
-```
-
-    `block` mode chunking defaults (clamped to `channels.discord.textChunkLimit`):
+    Default stays `off` because Discord preview edits hit rate limits quickly when multiple bots or gateways share an account.
 
 ```json5
 {
@@ -625,10 +610,12 @@ Default slash command settings:
 }
 ```
 
-    Preview streaming is text-only; media replies fall back to normal delivery.
+    - `partial` edits a single preview message as tokens arrive.
+    - `block` emits draft-sized chunks (use `draftChunk` to tune size and breakpoints, clamped to `textChunkLimit`).
+    - Media, error, and explicit-reply finals cancel pending preview edits.
+    - `streaming.preview.toolProgress` (default `true`) controls whether tool/progress updates reuse the preview message.
 
-    Note: preview streaming is separate from block streaming. When block streaming is explicitly
-    enabled for Discord, OpenClaw skips the preview stream to avoid double streaming.
+    Preview streaming is text-only; media replies fall back to normal delivery. When `block` streaming is explicitly enabled, OpenClaw skips the preview stream to avoid double-streaming.
 
   </Accordion>
 
@@ -646,13 +633,12 @@ Default slash command settings:
 
     Thread behavior:
 
-    - Discord threads are routed as channel sessions
-    - parent thread metadata can be used for parent-session linkage
-    - thread config inherits parent channel config unless a thread-specific entry exists
+    - Discord threads route as channel sessions and inherit parent channel config unless overridden.
+    - `channels.discord.thread.inheritParent` (default `false`) opts new auto-threads into seeding from the parent transcript. Per-account overrides live under `channels.discord.accounts.<id>.thread.inheritParent`.
+    - Message-tool reactions can resolve `user:<id>` DM targets.
+    - `guilds.<guild>.channels.<channel>.requireMention: false` is preserved during reply-stage activation fallback.
 
-    Channel topics are injected as **untrusted** context (not as system prompt).
-    Reply and quoted-message context currently stays as received.
-    Discord allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
+    Channel topics are injected as **untrusted** context. Allowlists gate who can trigger the agent, not a full supplemental-context redaction boundary.
 
   </Accordion>
 
@@ -760,13 +746,9 @@ Default slash command settings:
 
     Notes:
 
-    - `/acp spawn codex --bind here` binds the current Discord channel or thread in place and keeps future messages routed to the same ACP session.
-    - That can still mean "start a fresh Codex ACP session", but it does not create a new Discord thread by itself. The existing channel stays the chat surface.
-    - Codex may still run in its own `cwd` or backend workspace on disk. That workspace is runtime state, not a Discord thread.
-    - Thread messages can inherit the parent channel ACP binding.
-    - In a bound channel or thread, `/new` and `/reset` reset the same ACP session in place.
-    - Temporary thread bindings still work and can override target resolution while active.
-    - `spawnAcpSessions` is only required when OpenClaw needs to create/bind a child thread via `--thread auto|here`. It is not required for `/acp spawn ... --bind here` in the current channel.
+    - `/acp spawn codex --bind here` binds the current channel or thread in place and keeps future messages on the same ACP session. Thread messages inherit the parent channel binding.
+    - In a bound channel or thread, `/new` and `/reset` reset the same ACP session in place. Temporary thread bindings can override target resolution while active.
+    - `spawnAcpSessions` is only required when OpenClaw needs to create/bind a child thread via `--thread auto|here`.
 
     See [ACP Agents](/tools/acp-agents) for binding behavior details.
 
@@ -971,25 +953,9 @@ Default slash command settings:
     should only include a manual `/approve` command when the tool result says
     chat approvals are unavailable or manual approval is the only path.
 
-    Gateway auth for this handler uses the same shared credential resolution contract as other Gateway clients:
+    Gateway auth and approval resolution follow the shared Gateway client contract (`plugin:` IDs resolve through `plugin.approval.resolve`; other IDs through `exec.approval.resolve`). Approvals expire after 30 minutes by default.
 
-    - env-first local auth (`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD` then `gateway.auth.*`)
-    - in local mode, `gateway.remote.*` can be used as fallback only when `gateway.auth.*` is unset; configured-but-unresolved local SecretRefs fail closed
-    - remote-mode support via `gateway.remote.*` when applicable
-    - URL overrides are override-safe: CLI overrides do not reuse implicit credentials, and env overrides use env credentials only
-
-    Approval resolution behavior:
-
-    - IDs prefixed with `plugin:` resolve through `plugin.approval.resolve`.
-    - Other IDs resolve through `exec.approval.resolve`.
-    - Discord does not do an extra exec-to-plugin fallback hop here; the id
-      prefix decides which gateway method it calls.
-
-    Exec approvals expire after 30 minutes by default. If approvals fail with
-    unknown approval IDs, verify approver resolution, feature enablement, and
-    that the delivered approval id kind matches the pending request.
-
-    Related docs: [Exec approvals](/tools/exec-approvals)
+    See [Exec approvals](/tools/exec-approvals).
 
   </Accordion>
 </AccordionGroup>
@@ -1042,9 +1008,11 @@ Example:
 }
 ```
 
-## Voice channels
+## Voice
 
-OpenClaw can join Discord voice channels for realtime, continuous conversations. This is separate from voice message attachments.
+Discord has two distinct voice surfaces: realtime **voice channels** (continuous conversations) and **voice message attachments** (the waveform preview format). The gateway supports both.
+
+### Voice channels
 
 Requirements:
 
@@ -1052,7 +1020,7 @@ Requirements:
 - Configure `channels.discord.voice`.
 - The bot needs Connect + Speak permissions in the target voice channel.
 
-Use the Discord-only native command `/vc join|leave|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands.
+Use `/vc join|leave|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands.
 
 Auto-join example:
 
@@ -1090,17 +1058,13 @@ Notes:
 - OpenClaw also watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.
 - If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)`, this may be the upstream `@discordjs/voice` receive bug tracked in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419).
 
-## Voice messages
+### Voice messages
 
-Discord voice messages show a waveform preview and require OGG/Opus audio plus metadata. OpenClaw generates the waveform automatically, but it needs `ffmpeg` and `ffprobe` available on the gateway host to inspect and convert audio files.
-
-Requirements and constraints:
+Discord voice messages show a waveform preview and require OGG/Opus audio. OpenClaw generates the waveform automatically, but needs `ffmpeg` and `ffprobe` on the gateway host to inspect and convert.
 
 - Provide a **local file path** (URLs are rejected).
-- Omit text content (Discord does not allow text + voice message in the same payload).
-- Any audio format is accepted; OpenClaw converts to OGG/Opus when needed.
-
-Example:
+- Omit text content (Discord rejects text + voice message in the same payload).
+- Any audio format is accepted; OpenClaw converts to OGG/Opus as needed.
 
 ```bash
 message(action="send", channel="discord", target="channel:123", path="/path/to/audio.mp3", asVoice=true)

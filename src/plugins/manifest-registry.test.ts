@@ -580,6 +580,28 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("preserves external auth provider contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acme-ai",
+      providers: ["acme-ai"],
+      contracts: {
+        externalAuthProviders: ["acme-ai"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acme-ai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      externalAuthProviders: ["acme-ai"],
+    });
+  });
+
   it("preserves channel env metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

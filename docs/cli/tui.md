@@ -25,6 +25,7 @@ Notes:
 - When launched from inside a configured agent workspace directory, TUI auto-selects that agent for the session key default (unless `--session` is explicitly `agent:<id>:...`).
 - Local mode uses the embedded agent runtime directly. Most local tools work, but Gateway-only features are unavailable.
 - Local mode adds `/auth [provider]` inside the TUI command surface.
+- Plugin approval gates still apply in local mode. Tools that require approval prompt for a decision in the terminal; nothing is silently auto-approved because the Gateway is not involved.
 
 ## Examples
 

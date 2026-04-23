@@ -18,13 +18,12 @@ const {
 } = vi.hoisted(() => ({
   bodyLocator: {
     waitFor: vi.fn(async () => undefined),
-    innerText: vi.fn(async () => "hello from body"),
+    textContent: vi.fn(async () => "hello from body"),
   },
   browserClose: vi.fn(async () => undefined),
   contextClose: vi.fn(async () => undefined),
   contextNewPage: vi.fn(),
   goto: vi.fn(async () => undefined),
-  innerText: vi.fn(async () => "hello from body"),
   launch: vi.fn(),
   locatorFill: vi.fn(async () => undefined),
   locatorPress: vi.fn(async () => undefined),

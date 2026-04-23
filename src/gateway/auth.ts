@@ -117,6 +117,20 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
   });
 }
 
+export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
+  if (!req) {
+    return false;
+  }
+
+  return Boolean(
+    req.headers?.forwarded ||
+    req.headers?.["x-forwarded-for"] ||
+    req.headers?.["x-forwarded-proto"] ||
+    req.headers?.["x-real-ip"] ||
+    req.headers?.["x-forwarded-host"],
+  );
+}
+
 export function isLocalDirectRequest(
   req?: IncomingMessage,
   _trustedProxies?: string[],
@@ -125,16 +139,7 @@ export function isLocalDirectRequest(
   if (!req) {
     return false;
   }
-
-  const hasForwarded = Boolean(
-    req.headers?.forwarded ||
-    req.headers?.["x-forwarded-for"] ||
-    req.headers?.["x-forwarded-proto"] ||
-    req.headers?.["x-real-ip"] ||
-    req.headers?.["x-forwarded-host"],
-  );
-
-  if (!hasForwarded) {
+  if (!hasForwardedRequestHeaders(req)) {
     return isLoopbackAddress(req.socket?.remoteAddress);
   }
   return false;

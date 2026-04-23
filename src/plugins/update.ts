@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { NpmSpecResolution } from "../infra/install-source-utils.js";
+import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
   expectedIntegrityForUpdate,
   readInstalledPackageVersion,
@@ -103,6 +105,36 @@ type InstallIntegrityDrift = {
     version?: string;
   };
 };
+
+function stringFieldMatches(recorded: string | undefined, resolved: string | undefined): boolean {
+  return !recorded || (resolved !== undefined && recorded === resolved);
+}
+
+function shouldSkipUnchangedNpmInstall(params: {
+  currentVersion?: string;
+  record: {
+    integrity?: string;
+    shasum?: string;
+    resolvedName?: string;
+    resolvedSpec?: string;
+    resolvedVersion?: string;
+  };
+  metadata: NpmSpecResolution;
+}): boolean {
+  if (!params.currentVersion || !params.metadata.version) {
+    return false;
+  }
+  if (params.currentVersion !== params.metadata.version) {
+    return false;
+  }
+  return (
+    stringFieldMatches(params.record.integrity, params.metadata.integrity) &&
+    stringFieldMatches(params.record.shasum, params.metadata.shasum) &&
+    stringFieldMatches(params.record.resolvedName, params.metadata.name) &&
+    stringFieldMatches(params.record.resolvedSpec, params.metadata.resolvedSpec) &&
+    stringFieldMatches(params.record.resolvedVersion, params.metadata.version)
+  );
+}
 
 function pathsEqual(
   left: string | undefined,
@@ -248,7 +280,7 @@ function createPluginUpdateIntegrityDriftHandler(params: {
     params.logger.warn?.(
       `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
     );
-    return true;
+    return false;
   };
 }
 
@@ -347,6 +379,32 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
+
+    if (!params.dryRun && record.source === "npm" && currentVersion) {
+      const metadataResult = await resolveNpmSpecMetadata({ spec: effectiveSpec! });
+      if (metadataResult.ok) {
+        if (
+          shouldSkipUnchangedNpmInstall({
+            currentVersion,
+            record,
+            metadata: metadataResult.metadata,
+          })
+        ) {
+          outcomes.push({
+            pluginId,
+            status: "unchanged",
+            currentVersion,
+            nextVersion: metadataResult.metadata.version,
+            message: `${pluginId} is up to date (${currentVersion}).`,
+          });
+          continue;
+        }
+      } else {
+        logger.warn?.(
+          `Could not check ${pluginId} before update; falling back to installer path: ${metadataResult.error}`,
+        );
+      }
+    }
 
     if (params.dryRun) {
       let probe:

@@ -14,6 +14,7 @@ import {
   resolveEmbeddedAgentStreamFnMock,
   resolveMemorySearchConfigMock,
   resolveModelMock,
+  resolveSandboxContextMock,
   resolveSessionAgentIdMock,
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
@@ -207,6 +208,22 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       config: undefined,
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
+    });
+  });
+
+  it("uses sandboxSessionKey only for compaction sandbox resolution", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      sandboxSessionKey: "agent:main:telegram:default:direct:12345",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolveSandboxContextMock).toHaveBeenCalledWith({
+      config: undefined,
+      sessionKey: "agent:main:telegram:default:direct:12345",
+      workspaceDir: "/tmp/workspace",
     });
   });
 

@@ -932,6 +932,92 @@ export function parseConfigJson5(
   }
 }
 
+function findJsonRootSuffix(
+  raw: string,
+  json5: { parse: (value: string) => unknown } = JSON5,
+): { raw: string; parsed: unknown } | null {
+  if (/^\s*(?:\{|\[)/.test(raw)) {
+    return null;
+  }
+  let offset = 0;
+  while (offset < raw.length) {
+    const nextNewline = raw.indexOf("\n", offset);
+    const lineEnd = nextNewline === -1 ? raw.length : nextNewline + 1;
+    const line = raw.slice(offset, lineEnd);
+    if (/^\s*(?:\{|\[)/.test(line)) {
+      const candidate = raw.slice(offset);
+      const parsed = parseConfigJson5(candidate, json5);
+      return parsed.ok ? { raw: candidate, parsed: parsed.parsed } : null;
+    }
+    offset = lineEnd;
+  }
+  return null;
+}
+
+async function persistPrefixedConfigRecovery(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+  originalRaw: string;
+  recoveredRaw: string;
+}): Promise<void> {
+  const observedAt = new Date().toISOString();
+  const clobberedPath = await persistClobberedConfigSnapshot({
+    deps: params.deps,
+    configPath: params.configPath,
+    raw: params.originalRaw,
+    observedAt,
+  });
+  await params.deps.fs.promises.writeFile(params.configPath, params.recoveredRaw, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
+  params.deps.logger.warn(
+    `Config auto-stripped non-JSON prefix: ${params.configPath}` +
+      (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
+  );
+}
+
+async function recoverConfigFromJsonRootSuffixWithDeps(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+  snapshot: ConfigFileSnapshot;
+}): Promise<boolean> {
+  if (!params.snapshot.exists || params.snapshot.valid || typeof params.snapshot.raw !== "string") {
+    return false;
+  }
+  const suffixRecovery = findJsonRootSuffix(params.snapshot.raw, params.deps.json5);
+  if (!suffixRecovery) {
+    return false;
+  }
+
+  let resolved: unknown;
+  try {
+    resolved = resolveConfigIncludesForRead(suffixRecovery.parsed, params.configPath, params.deps);
+  } catch {
+    return false;
+  }
+  const readResolution = resolveConfigForRead(resolved, params.deps.env);
+  const legacyResolution = resolveLegacyConfigForRead(
+    readResolution.resolvedConfigRaw,
+    suffixRecovery.parsed,
+  );
+  const validated = validateConfigObjectWithPlugins(legacyResolution.effectiveConfigRaw, {
+    env: params.deps.env,
+  });
+  if (!validated.ok) {
+    return false;
+  }
+
+  await persistPrefixedConfigRecovery({
+    deps: params.deps,
+    configPath: params.configPath,
+    originalRaw: params.snapshot.raw,
+    recoveredRaw: suffixRecovery.raw,
+  });
+  return true;
+}
+
 type ConfigReadResolution = {
   resolvedConfigRaw: unknown;
   envSnapshotForRestore: Record<string, string | undefined>;
@@ -1198,7 +1284,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
               `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
           )
           .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
+        deps.logger.warn(`Config warnings:\n${details}`);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
       const cfg = materializeRuntimeConfig(validated.config, "load");
@@ -1257,9 +1343,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       });
     }
 
+    let fallbackRaw: string | null = null;
+    let fallbackParsed: unknown = {};
+    let fallbackSourceConfig: OpenClawConfig = {};
+    let fallbackHash = hashConfigRaw(null);
+
     try {
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const rawHash = hashConfigRaw(raw);
+      fallbackRaw = raw;
+      fallbackHash = rawHash;
       const parsedRes = parseConfigJson5(raw, deps.json5);
       if (!parsedRes.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
@@ -1278,6 +1371,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           }),
         });
       }
+      fallbackParsed = parsedRes.parsed;
+      fallbackSourceConfig = coerceConfig(parsedRes.parsed);
 
       // Resolve $include directives
       const recovered = await maybeRecoverSuspiciousConfigRead({
@@ -1289,6 +1384,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const effectiveRaw = recovered.raw;
       const effectiveParsed = recovered.parsed;
       const hash = hashConfigRaw(effectiveRaw);
+      fallbackRaw = effectiveRaw;
+      fallbackParsed = effectiveParsed;
+      fallbackSourceConfig = coerceConfig(effectiveParsed);
+      fallbackHash = hash;
 
       let resolved: unknown;
       try {
@@ -1329,6 +1428,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
       const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
+      fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
@@ -1392,12 +1492,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         snapshot: createConfigFileSnapshot({
           path: configPath,
           exists: true,
-          raw: null,
-          parsed: {},
-          sourceConfig: {},
+          raw: fallbackRaw,
+          parsed: fallbackParsed,
+          sourceConfig: fallbackSourceConfig,
           valid: false,
-          runtimeConfig: {},
-          hash: hashConfigRaw(null),
+          runtimeConfig: fallbackSourceConfig,
+          hash: fallbackHash,
           issues: [{ path: "", message }],
           warnings: [],
           legacyIssues: [],
@@ -1429,6 +1529,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       deps,
       snapshot: params.snapshot,
       reason: params.reason,
+    });
+  }
+
+  async function recoverConfigFromJsonRootSuffix(snapshot: ConfigFileSnapshot): Promise<boolean> {
+    return await recoverConfigFromJsonRootSuffixWithDeps({
+      deps,
+      configPath,
+      snapshot,
     });
   }
 
@@ -1495,7 +1603,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   async function writeConfigFile(
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
-  ): Promise<{ persistedHash: string }> {
+  ): Promise<{ persistedHash: string; persistedConfig: OpenClawConfig }> {
     clearConfigCache();
     let persistCandidate: unknown = cfg;
     const snapshot = options.baseSnapshot ?? (await readConfigFileSnapshotInternal()).snapshot;
@@ -1749,7 +1857,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             undefined,
             await deps.fs.promises.stat(configPath).catch(() => null),
           );
-          return { persistedHash: nextHash };
+          return { persistedHash: nextHash, persistedConfig: stampedOutputConfig };
         }
         await deps.fs.promises.unlink(tmp).catch(() => {
           // best-effort
@@ -1763,7 +1871,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
-      return { persistedHash: nextHash };
+      return { persistedHash: nextHash, persistedConfig: stampedOutputConfig };
     } catch (err) {
       await appendWriteAudit("failed", err);
       throw err;
@@ -1779,6 +1887,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     readConfigFileSnapshotForWrite,
     promoteConfigSnapshotToLastKnownGood,
     recoverConfigFromLastKnownGood,
+    recoverConfigFromJsonRootSuffix,
     writeConfigFile,
   };
 }
@@ -1892,6 +2001,12 @@ export async function recoverConfigFromLastKnownGood(params: {
   return await createConfigIO().recoverConfigFromLastKnownGood(params);
 }
 
+export async function recoverConfigFromJsonRootSuffix(
+  snapshot: ConfigFileSnapshot,
+): Promise<boolean> {
+  return await createConfigIO().recoverConfigFromJsonRootSuffix(snapshot);
+}
+
 export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
   return await readConfigFileSnapshot();
 }
@@ -1935,6 +2050,7 @@ export async function writeConfigFile(
   ) {
     return;
   }
+  const committedSourceConfig = writeResult.persistedConfig ?? nextCfg;
   const notifyCommittedWrite = () => {
     const currentRuntimeConfig = getRuntimeConfigSnapshotState();
     if (!currentRuntimeConfig) {
@@ -1942,7 +2058,7 @@ export async function writeConfigFile(
     }
     notifyRuntimeConfigWriteListeners({
       configPath: io.configPath,
-      sourceConfig: nextCfg,
+      sourceConfig: committedSourceConfig,
       runtimeConfig: currentRuntimeConfig,
       persistedHash: writeResult.persistedHash,
       writtenAtMs: Date.now(),
@@ -1951,7 +2067,7 @@ export async function writeConfigFile(
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
   await finalizeRuntimeSnapshotWrite({
-    nextSourceConfig: nextCfg,
+    nextSourceConfig: committedSourceConfig,
     hadRuntimeSnapshot,
     hadBothSnapshots,
     loadFreshConfig: () => io.loadConfig(),

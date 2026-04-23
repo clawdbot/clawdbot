@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
-import { __testing, materializeBundleMcpToolsForRun } from "./pi-bundle-mcp-tools.js";
+import {
+  __testing,
+  getOrCreateSessionMcpRuntime,
+  materializeBundleMcpToolsForRun,
+  retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForSessionKey,
+} from "./pi-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 
 vi.mock("./embedded-pi-mcp.js", () => ({
@@ -297,5 +303,42 @@ describe("session MCP runtime", () => {
     expect(result.error).toBeInstanceOf(Error);
     expect((result.error as Error).message).toMatch(/disposed/);
     expect(manager.listSessionIds()).not.toContain("session-d");
+  });
+
+  it("retires global session runtimes and ignores missing ids", async () => {
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "session-retire",
+      sessionKey: "agent:test:session-retire",
+      workspaceDir: "/workspace",
+    });
+    expect(__testing.getCachedSessionIds()).toContain("session-retire");
+
+    await expect(
+      retireSessionMcpRuntime({ sessionId: " session-retire ", reason: "test" }),
+    ).resolves.toBe(true);
+    expect(__testing.getCachedSessionIds()).not.toContain("session-retire");
+
+    await expect(retireSessionMcpRuntime({ sessionId: " ", reason: "test" })).resolves.toBe(false);
+  });
+
+  it("retires global session runtimes by session key", async () => {
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "session-retire-key",
+      sessionKey: "agent:test:session-retire-key",
+      workspaceDir: "/workspace",
+    });
+    expect(__testing.getCachedSessionIds()).toContain("session-retire-key");
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({
+        sessionKey: " agent:test:session-retire-key ",
+        reason: "test",
+      }),
+    ).resolves.toBe(true);
+    expect(__testing.getCachedSessionIds()).not.toContain("session-retire-key");
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({ sessionKey: "agent:test:missing", reason: "test" }),
+    ).resolves.toBe(false);
   });
 });

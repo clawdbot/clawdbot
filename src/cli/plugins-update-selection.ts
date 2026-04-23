@@ -18,11 +18,14 @@ export function resolvePluginUpdateSelection(params: {
     return { pluginIds: [] };
   }
 
-  const parsedSpec = parseRegistryNpmSpec(params.rawId);
-  if (!parsedSpec || parsedSpec.selectorKind === "none") {
+  if (params.rawId in params.installs) {
     return { pluginIds: [params.rawId] };
   }
 
+  const parsedSpec = parseRegistryNpmSpec(params.rawId);
+  if (!parsedSpec) {
+    return { pluginIds: [params.rawId] };
+  }
   const matches = Object.entries(params.installs).filter(([, install]) => {
     return extractInstalledNpmPackageName(install) === parsedSpec.name;
   });
@@ -33,6 +36,14 @@ export function resolvePluginUpdateSelection(params: {
   const [pluginId] = matches[0];
   if (!pluginId) {
     return { pluginIds: [params.rawId] };
+  }
+  if (parsedSpec.selectorKind === "none") {
+    return {
+      pluginIds: [pluginId],
+      specOverrides: {
+        [pluginId]: parsedSpec.raw,
+      },
+    };
   }
   return {
     pluginIds: [pluginId],

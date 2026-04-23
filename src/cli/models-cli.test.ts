@@ -36,6 +36,47 @@ vi.mock("../commands/models.js", () => ({
   modelsSetCommand: mocks.noopAsync,
   modelsSetImageCommand: mocks.noopAsync,
 }));
+vi.mock("../commands/models/list.js", () => ({
+  modelsListCommand: mocks.noopAsync,
+  modelsStatusCommand: mocks.modelsStatusCommand,
+}));
+vi.mock("../commands/models/auth.js", () => ({
+  modelsAuthAddCommand: mocks.noopAsync,
+  modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
+  modelsAuthPasteTokenCommand: mocks.noopAsync,
+  modelsAuthSetupTokenCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/auth-order.js", () => ({
+  modelsAuthOrderClearCommand: mocks.noopAsync,
+  modelsAuthOrderGetCommand: mocks.noopAsync,
+  modelsAuthOrderSetCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/aliases.js", () => ({
+  modelsAliasesAddCommand: mocks.noopAsync,
+  modelsAliasesListCommand: mocks.noopAsync,
+  modelsAliasesRemoveCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/fallbacks.js", () => ({
+  modelsFallbacksAddCommand: mocks.noopAsync,
+  modelsFallbacksClearCommand: mocks.noopAsync,
+  modelsFallbacksListCommand: mocks.noopAsync,
+  modelsFallbacksRemoveCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/image-fallbacks.js", () => ({
+  modelsImageFallbacksAddCommand: mocks.noopAsync,
+  modelsImageFallbacksClearCommand: mocks.noopAsync,
+  modelsImageFallbacksListCommand: mocks.noopAsync,
+  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/scan.js", () => ({
+  modelsScanCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/set.js", () => ({
+  modelsSetCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/set-image.js", () => ({
+  modelsSetImageCommand: mocks.noopAsync,
+}));
 
 describe("models cli", () => {
   beforeEach(() => {

@@ -249,7 +249,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         profileId,
         access: "secondary-stale",
         refresh: "secondary-refresh",
-        expires: NaN,
+        expires: Number.NaN,
       }),
     );
 

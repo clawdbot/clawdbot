@@ -39,7 +39,82 @@ function resolveOutboundThreadId(
 }
 
 export function createOutboundThreadingMock() {
+  const resolveOutboundReplyToId = vi.fn(
+    (
+      actionParams: Record<string, unknown>,
+      context: {
+        channel: string;
+        toolContext?: {
+          currentChannelId?: string;
+          currentChannelProvider?: string;
+          currentMessageId?: string | number;
+          replyToMode?: "off" | "first" | "all" | "batched";
+          hasRepliedRef?: { value: boolean };
+        };
+      },
+    ) => {
+      const explicitReplyTo =
+        typeof actionParams.replyTo === "string" ? actionParams.replyTo.trim() : "";
+      if (explicitReplyTo) {
+        if (context.toolContext?.replyToMode === "first" && context.toolContext.hasRepliedRef) {
+          context.toolContext.hasRepliedRef.value = true;
+        }
+        return explicitReplyTo;
+      }
+
+      const currentChannelId = context.toolContext?.currentChannelId?.trim();
+      const currentChannelProvider = context.toolContext?.currentChannelProvider?.trim();
+      if (
+        !currentChannelId ||
+        (currentChannelProvider && currentChannelProvider !== context.channel)
+      ) {
+        return undefined;
+      }
+
+      const explicitTarget =
+        typeof actionParams.target === "string"
+          ? actionParams.target
+          : typeof actionParams.to === "string"
+            ? actionParams.to
+            : typeof actionParams.channelId === "string"
+              ? actionParams.channelId
+              : undefined;
+      if (explicitTarget && explicitTarget.trim() !== currentChannelId) {
+        return undefined;
+      }
+
+      const currentMessageId = context.toolContext?.currentMessageId;
+      if (currentMessageId == null) {
+        return undefined;
+      }
+
+      const replyToMode = context.toolContext?.replyToMode ?? "off";
+      if (replyToMode === "off" || replyToMode === "batched") {
+        return undefined;
+      }
+
+      if (replyToMode === "first") {
+        const hasRepliedRef = context.toolContext?.hasRepliedRef;
+        if (hasRepliedRef?.value) {
+          return undefined;
+        }
+        if (hasRepliedRef) {
+          hasRepliedRef.value = true;
+        }
+      }
+
+      const resolvedReplyToId =
+        typeof currentMessageId === "number" ? String(currentMessageId) : currentMessageId.trim();
+      if (!resolvedReplyToId) {
+        return undefined;
+      }
+      actionParams.replyTo = resolvedReplyToId;
+      return resolvedReplyToId;
+    },
+  );
+
   return {
+    resolveAndApplyOutboundReplyToId: resolveOutboundReplyToId,
     resolveAndApplyOutboundThreadId: vi.fn(resolveOutboundThreadId),
     prepareOutboundMirrorRoute: vi.fn(
       async ({

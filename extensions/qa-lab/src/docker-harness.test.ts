@@ -76,7 +76,8 @@ describe("qa docker harness", () => {
 
     const config = await readFile(path.join(outputDir, "state", "openclaw.json"), "utf8");
     expect(config).toContain('"allowInsecureAuth": true');
-    expect(config).toContain('"enabled": false');
+    expect(config).toContain('"pluginToolsMcpBridge": true');
+    expect(config).toContain('"openClawToolsMcpBridge": true');
     expect(config).toContain("/app/dist/control-ui");
     expect(config).toContain("C-3PO QA");
     expect(config).toContain('"/tmp/openclaw/workspace"');

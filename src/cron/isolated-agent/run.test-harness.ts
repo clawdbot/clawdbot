@@ -69,6 +69,7 @@ export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
+export const retireSessionMcpRuntimeMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -194,6 +195,10 @@ vi.mock("./run-subagent-registry.runtime.js", () => ({
 
 vi.mock("../../agents/cli-runner.runtime.js", () => ({
   setCliSessionId: vi.fn(),
+}));
+
+vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
 vi.mock("../../config/sessions/store.runtime.js", () => ({
@@ -433,6 +438,8 @@ function resetRunSessionMocks(): void {
   updateSessionStoreMock.mockResolvedValue(undefined);
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
+  retireSessionMcpRuntimeMock.mockReset();
+  retireSessionMcpRuntimeMock.mockResolvedValue(true);
 }
 
 export function resetRunCronIsolatedAgentTurnHarness(): void {

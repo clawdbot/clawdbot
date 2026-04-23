@@ -53,17 +53,25 @@ import {
   tabFromPath,
   type Tab,
 } from "./navigation.ts";
-import { saveSettings, type UiSettings } from "./storage.ts";
+import {
+  saveLocalUserIdentity,
+  saveSettings,
+  type LocalUserIdentity,
+  type UiSettings,
+} from "./storage.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type { AgentsListResult, AttentionItem } from "./types.ts";
+import { normalizeLocalUserIdentity } from "./user-identity.ts";
 import { resetChatViewState } from "./views/chat.ts";
 
 export { setLastActiveSessionKey } from "./app-last-active-session.ts";
 
 type SettingsHost = {
   settings: UiSettings;
+  userName?: string | null;
+  userAvatar?: string | null;
   password?: string;
   theme: ThemeName;
   themeMode: ThemeMode;
@@ -91,6 +99,11 @@ type SettingsHost = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+};
+
+type LocalUserIdentityHost = {
+  userName?: string | null;
+  userAvatar?: string | null;
 };
 
 type SettingsAppHost = SettingsHost &
@@ -135,6 +148,20 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
   }
   applyBorderRadius(next.borderRadius);
   host.applySessionKey = host.settings.lastActiveSessionKey;
+}
+
+export function applyLocalUserIdentity(
+  host: LocalUserIdentityHost,
+  next: Partial<LocalUserIdentity>,
+) {
+  const normalized = normalizeLocalUserIdentity({
+    name: host.userName,
+    avatar: host.userAvatar,
+    ...next,
+  });
+  host.userName = normalized.name;
+  host.userAvatar = normalized.avatar;
+  saveLocalUserIdentity(normalized);
 }
 
 function applySessionSelection(host: SettingsHost, session: string) {
@@ -295,6 +322,10 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
       return;
     case "cron":
       void loadCron(host);
+      return;
+    case "overview":
+    case "tools":
+    case undefined:
       return;
   }
 }

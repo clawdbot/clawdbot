@@ -267,6 +267,8 @@ function scoreClaimMatch(params: {
     case "unknown":
       score -= 4;
       break;
+    case undefined:
+      break;
   }
   score += isClaimContestedStatus(params.status) ? -6 : 4;
   return score;

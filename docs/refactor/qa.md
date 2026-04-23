@@ -1,3 +1,11 @@
+---
+summary: "QA refactor plan for scenario catalog and harness consolidation"
+read_when:
+  - Refactoring QA scenario definitions or qa-lab harness code
+  - Moving QA behavior between markdown scenarios and TypeScript harness logic
+title: "QA Refactor"
+---
+
 # QA Refactor
 
 Status: foundational migration landed.

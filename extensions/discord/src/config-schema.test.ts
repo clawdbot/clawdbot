@@ -222,6 +222,30 @@ describe("discord config schema", () => {
     expect(res.success).toBe(true);
   });
 
+  it("accepts thread.inheritParent at top-level and account scope", () => {
+    const cases = [
+      {
+        thread: {
+          inheritParent: true,
+        },
+      },
+      {
+        accounts: {
+          work: {
+            thread: {
+              inheritParent: true,
+            },
+          },
+        },
+      },
+    ] as const;
+
+    for (const config of cases) {
+      const res = DiscordConfigSchema.safeParse(config);
+      expect(res.success).toBe(true);
+    }
+  });
+
   it("rejects unknown fields under agentComponents", () => {
     const res = DiscordConfigSchema.safeParse({
       agentComponents: {

@@ -129,6 +129,7 @@ export function createPluginLoadResult(
     webFetchProviders: [],
     webSearchProviders: [],
     embeddedExtensionFactories: [],
+    codexAppServerExtensionFactories: [],
     memoryEmbeddingProviders: [],
     textTransforms: [],
     agentHarnesses: [],

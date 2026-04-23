@@ -144,7 +144,7 @@ function normalizeTieredPricing(raw: RawPricingTier[] | undefined): PricingTier[
     if (!Array.isArray(range) || range.length < 1) {
       continue;
     }
-    const start = typeof range[0] === "number" ? range[0] : NaN;
+    const start = typeof range[0] === "number" ? range[0] : Number.NaN;
     if (!Number.isFinite(start)) {
       continue;
     }

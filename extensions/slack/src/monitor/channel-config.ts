@@ -33,7 +33,7 @@ export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
 
 function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
-    if (typeof value !== "undefined") {
+    if (value !== undefined) {
       return value;
     }
   }

@@ -23,6 +23,10 @@ export function isCommandFlagEnabled(
   return getOwnCommandFlagValue(config, key) === true;
 }
 
+export function isModelsWriteEnabled(config?: { commands?: unknown }): boolean {
+  return getOwnCommandFlagValue(config, "modelsWrite") !== false;
+}
+
 export function isRestartEnabled(config?: { commands?: unknown }): boolean {
   return getOwnCommandFlagValue(config, "restart") !== false;
 }

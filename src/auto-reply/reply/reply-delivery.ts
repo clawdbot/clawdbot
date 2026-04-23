@@ -2,7 +2,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { logVerbose } from "../../globals.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { BlockReplyContext, ReplyPayload } from "../types.js";
+import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
@@ -77,6 +77,7 @@ async function sendDirectBlockReply(params: {
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   currentMessageId?: string;
+  replyThreading?: ReplyThreadingPolicy;
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
@@ -91,6 +92,13 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
 
+    const implicitCurrentMessageAllowed =
+      payload.replyToCurrent === true
+        ? true
+        : payload.replyToCurrent === false
+          ? false
+          : params.replyThreading?.implicitCurrentMessage !== "deny";
+
     const taggedPayload = applyReplyTagsToPayload(
       {
         ...payload,
@@ -98,7 +106,7 @@ export function createBlockReplyDeliveryHandler(params: {
         mediaUrl: payload.mediaUrl ?? payload.mediaUrls?.[0],
         replyToId:
           payload.replyToId ??
-          (payload.replyToCurrent === false ? undefined : params.currentMessageId),
+          (implicitCurrentMessageAllowed ? params.currentMessageId : undefined),
       },
       params.currentMessageId,
     );

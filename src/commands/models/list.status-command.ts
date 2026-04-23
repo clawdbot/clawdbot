@@ -11,7 +11,7 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
@@ -21,7 +21,6 @@ import {
   normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
-  resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createConfigIO } from "../../config/config.js";
@@ -30,6 +29,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
@@ -54,6 +54,8 @@ let providerUsageRuntimePromise: Promise<ProviderUsageRuntime> | undefined;
 let progressRuntimePromise: Promise<ProgressRuntime> | undefined;
 let terminalTableRuntimePromise: Promise<TerminalTableRuntime> | undefined;
 let listProbeRuntimePromise: Promise<ListProbeRuntime> | undefined;
+
+const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
 function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
   providerUsageRuntimePromise ??= import("../../infra/provider-usage.js");
@@ -102,13 +104,30 @@ export async function modelsStatusCommand(
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
     : undefined;
-  const resolved = agentId
-    ? resolveDefaultModelForAgent({ cfg, agentId })
-    : resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
+  const resolvedConfig =
+    agentModelPrimary && agentModelPrimary.length > 0
+      ? {
+          ...cfg,
+          agents: {
+            ...cfg.agents,
+            defaults: {
+              ...cfg.agents?.defaults,
+              model: {
+                ...(typeof cfg.agents?.defaults?.model === "object"
+                  ? cfg.agents.defaults.model
+                  : {}),
+                primary: agentModelPrimary,
+              },
+            },
+          },
+        }
+      : cfg;
+  const resolved = resolveConfiguredModelRef({
+    cfg: resolvedConfig,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
+  });
 
   const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const rawModel = agentModelPrimary ?? rawDefaultsModel;
@@ -146,13 +165,13 @@ export async function modelsStatusCommand(
   const providersFromModels = new Set<string>();
   const providersInUse = new Set<string>();
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     if (parsed?.provider) {
       providersFromModels.add(normalizeProviderId(parsed.provider));
     }
   }
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     if (parsed?.provider) {
       providersInUse.add(normalizeProviderId(parsed.provider));
     }
@@ -166,6 +185,15 @@ export async function modelsStatusCommand(
       providersFromEnv.add(provider);
     }
   }
+  const syntheticAuthByProvider = new Map(
+    resolveRuntimeSyntheticAuthProviderRefs().map((provider) => [
+      normalizeProviderId(provider),
+      {
+        value: "plugin-owned",
+        source: "plugin synthetic auth",
+      },
+    ]),
+  );
 
   const providers = Array.from(
     new Set([
@@ -184,14 +212,27 @@ export async function modelsStatusCommand(
     shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
 
   const providerAuth = providers
-    .map((provider) => resolveProviderAuthOverview({ provider, cfg, store, modelsPath }))
+    .map((provider) =>
+      resolveProviderAuthOverview({
+        provider,
+        cfg,
+        store,
+        modelsPath,
+        syntheticAuth: syntheticAuthByProvider.get(provider),
+      }),
+    )
     .filter((entry) => {
-      const hasAny = entry.profiles.count > 0 || Boolean(entry.env) || Boolean(entry.modelsJson);
+      const hasAny =
+        entry.profiles.count > 0 ||
+        Boolean(entry.env) ||
+        Boolean(entry.modelsJson) ||
+        Boolean(entry.syntheticAuth);
       return hasAny;
     });
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
   const missingProvidersInUse = Array.from(providersInUse)
     .filter((provider) => !providerAuthMap.has(provider))
+    .filter((provider) => !syntheticAuthByProvider.has(provider))
     .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 
@@ -218,7 +259,11 @@ export async function modelsStatusCommand(
     throw new Error("--probe-max-tokens must be > 0.");
   }
 
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: DEFAULT_PROVIDER });
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
+  });
   const rawCandidates = [
     rawModel || resolvedLabel,
     ...fallbacks,
@@ -233,6 +278,7 @@ export async function modelsStatusCommand(
           raw: raw ?? "",
           defaultProvider: DEFAULT_PROVIDER,
           aliasIndex,
+          ...DISPLAY_MODEL_PARSE_OPTIONS,
         })?.ref,
     )
     .filter((ref): ref is { provider: string; model: string } => Boolean(ref));
@@ -527,6 +573,14 @@ export async function modelsStatusCommand(
         formatKeyValue(
           "models.json",
           `${entry.modelsJson.value}${separator}${formatKeyValue("source", entry.modelsJson.source)}`,
+        ),
+      );
+    }
+    if (entry.syntheticAuth) {
+      bits.push(
+        formatKeyValue(
+          "synthetic",
+          `${entry.syntheticAuth.value}${separator}${formatKeyValue("source", entry.syntheticAuth.source)}`,
         ),
       );
     }

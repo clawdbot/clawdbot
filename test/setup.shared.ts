@@ -1,9 +1,17 @@
 import { vi } from "vitest";
 
+declare global {
+  // Optional per-test delegate for the shared OAuth mock.
+  var __OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__: ((...args: unknown[]) => unknown) | undefined;
+}
+
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: () => undefined,
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),
+  refreshOpenAICodexToken: vi.fn((...args: unknown[]) =>
+    globalThis.__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__?.(...args),
+  ),
 }));
 
 vi.mock("@mariozechner/clipboard", () => ({

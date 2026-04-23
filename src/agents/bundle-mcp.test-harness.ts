@@ -17,6 +17,7 @@ export async function writeFakeClaudeCli(filePath: string): Promise<void> {
     `#!/usr/bin/env node
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import readline from "node:readline/promises";
 import { Client } from ${JSON.stringify(SDK_CLIENT_INDEX_PATH)};
 import { StdioClientTransport } from ${JSON.stringify(SDK_CLIENT_STDIO_PATH)};
 
@@ -37,6 +38,17 @@ function readArg(name) {
 const mcpConfigPath = readArg("--mcp-config");
 if (!mcpConfigPath) {
   throw new Error("missing --mcp-config");
+}
+
+const input = readline.createInterface({ input: process.stdin });
+try {
+  for await (const line of input) {
+    if (line.trim()) {
+      break;
+    }
+  }
+} finally {
+  input.close();
 }
 
 const raw = JSON.parse(await fs.readFile(mcpConfigPath, "utf-8"));
@@ -75,8 +87,9 @@ const text = Array.isArray(result.content)
 
 process.stdout.write(
   JSON.stringify({
+    type: "result",
     session_id: readArg("--session-id") ?? randomUUID(),
-    message: "BUNDLE MCP OK " + text,
+    result: "BUNDLE MCP OK " + text,
   }) + "\\n",
 );
 `,

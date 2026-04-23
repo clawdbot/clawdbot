@@ -32,7 +32,17 @@
       "docsLabel": "nostr",
       "blurb": "Decentralized protocol; encrypted DMs via NIP-04.",
       "order": 55,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "cliAddOptions": [
+        {
+          "flags": "--private-key <key>",
+          "description": "Nostr private key (nsec... or hex)"
+        },
+        {
+          "flags": "--relay-urls <list>",
+          "description": "Nostr relay URLs (comma-separated)"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/nostr",

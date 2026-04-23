@@ -1,6 +1,13 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../../../src/plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "../../../../src/plugins/registry.js";
+import { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { JsonValue } from "./protocol.js";
 
@@ -58,6 +65,11 @@ async function handleMessageToolCall(
   });
 }
 
+afterEach(() => {
+  resetGlobalHookRunner();
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
+
 describe("createCodexDynamicToolBridge", () => {
   it.each([
     { toolName: "tts", mediaUrl: "/tmp/reply.opus", audioAsVoice: true },
@@ -82,6 +94,40 @@ describe("createCodexDynamicToolBridge", () => {
       expect(bridge.telemetry.toolAudioAsVoice).toBe(audioAsVoice === true);
     },
   );
+
+  it("preserves audio-as-voice metadata from tts results", async () => {
+    const toolResult = {
+      content: [{ type: "text", text: "(spoken) hello" }],
+      details: {
+        media: {
+          mediaUrl: "/tmp/reply.opus",
+          audioAsVoice: true,
+        },
+      },
+    } satisfies AgentToolResult<unknown>;
+    const tool = createTool({
+      execute: vi.fn(async () => toolResult),
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      tool: "tts",
+      arguments: { text: "hello" },
+    });
+
+    expect(result).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "(spoken) hello" }],
+    });
+    expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
+  });
 
   it("records messaging tool side effects while returning concise text to app-server", async () => {
     const toolResult = {
@@ -150,6 +196,84 @@ describe("createCodexDynamicToolBridge", () => {
       messagingToolSentTexts: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+    });
+  });
+
+  it("applies codex app-server tool_result extensions from the active plugin registry", async () => {
+    const registry = createEmptyPluginRegistry();
+    const factory = async (codex: {
+      on: (
+        event: "tool_result",
+        handler: (event: any) => Promise<{ result: AgentToolResult<unknown> }>,
+      ) => void;
+    }) => {
+      codex.on("tool_result", async (event) => ({
+        result: {
+          ...event.result,
+          content: [{ type: "text", text: `${event.toolName} compacted` }],
+        },
+      }));
+    };
+    registry.codexAppServerExtensionFactories.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawFactory: factory,
+      factory,
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const bridge = createBridgeWithToolResult("exec", {
+      content: [{ type: "text", text: "raw output" }],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      tool: "exec",
+      arguments: { command: "git status" },
+    });
+
+    expect(result).toEqual(expectInputText("exec compacted"));
+  });
+
+  it("fires after_tool_call for successful codex tool executions", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+
+    const bridge = createBridgeWithToolResult("exec", {
+      content: [{ type: "text", text: "done" }],
+      details: {},
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    await vi.waitFor(() => {
+      expect(afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "exec",
+          toolCallId: "call-1",
+          params: { command: "pwd" },
+          result: expect.objectContaining({
+            content: [{ type: "text", text: "done" }],
+            details: {},
+          }),
+        }),
+        expect.objectContaining({
+          toolName: "exec",
+          toolCallId: "call-1",
+        }),
+      );
     });
   });
 });

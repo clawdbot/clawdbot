@@ -14,6 +14,7 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "../../../../test/helpers/plugins/plugin-registry.js";
+import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import {
   createMockCommandInteraction as createInteraction,
@@ -636,13 +637,7 @@ describe("Discord native plugin command dispatch", () => {
       guildId: "345678901234567890",
       guildName: "Test Guild",
     });
-    Object.defineProperty(interaction.channel, "parentId", {
-      configurable: true,
-      enumerable: true,
-      get() {
-        throw new Error("Cannot access rawData on partial Channel. Use fetch() to populate data.");
-      },
-    });
+    defineThrowingDiscordChannelGetter(interaction.channel, "parentId");
     (interaction.client as { fetchChannel: ReturnType<typeof vi.fn> }).fetchChannel = vi.fn(
       async (channelId: string) => {
         if (channelId === "partial-thread-123") {

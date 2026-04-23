@@ -1,4 +1,4 @@
-import { Buffer } from "buffer";
+import { Buffer } from "node:buffer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const adapterMocks = vi.hoisted(() => ({

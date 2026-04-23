@@ -29,6 +29,11 @@ export function createDiffsHttpHandler(params: {
   allowRemoteViewer?: boolean;
   trustedProxies?: readonly string[];
   allowRealIpFallback?: boolean;
+  resolveAccessConfig?: () => {
+    allowRemoteViewer?: boolean;
+    trustedProxies?: readonly string[];
+    allowRealIpFallback?: boolean;
+  };
 }) {
   const viewerFailureLimiter = new ViewerFailureLimiter();
 
@@ -46,11 +51,16 @@ export function createDiffsHttpHandler(params: {
       return false;
     }
 
-    const access = resolveViewerAccess(req, {
+    const accessConfig = params.resolveAccessConfig?.() ?? {
+      allowRemoteViewer: params.allowRemoteViewer,
       trustedProxies: params.trustedProxies,
       allowRealIpFallback: params.allowRealIpFallback,
+    };
+    const access = resolveViewerAccess(req, {
+      trustedProxies: accessConfig.trustedProxies,
+      allowRealIpFallback: accessConfig.allowRealIpFallback,
     });
-    if (!access.localRequest && params.allowRemoteViewer !== true) {
+    if (!access.localRequest && accessConfig.allowRemoteViewer !== true) {
       respondText(res, 404, "Diff not found");
       return true;
     }

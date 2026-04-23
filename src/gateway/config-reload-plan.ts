@@ -1,5 +1,6 @@
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { isPlainObject } from "../utils.js";
 
 export type ChannelKind = ChannelId;
 
@@ -30,6 +31,11 @@ type ReloadAction =
   | "restart-heartbeat"
   | "restart-health-monitor"
   | `restart-channel:${ChannelId}`;
+
+export type GatewayReloadPlanOptions = {
+  noopPaths?: Iterable<string>;
+  forceChangedPaths?: Iterable<string>;
+};
 
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
@@ -178,7 +184,73 @@ function matchRule(path: string): ReloadRule | null {
   return null;
 }
 
-export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPlan {
+function isPluginInstallTimestampPath(path: string): boolean {
+  return /^plugins\.installs\..+\.(installedAt|resolvedAt)$/.test(path);
+}
+
+function getPluginInstallRecords(config: unknown): Record<string, unknown> {
+  if (!isPlainObject(config)) {
+    return {};
+  }
+  const plugins = config.plugins;
+  if (!isPlainObject(plugins)) {
+    return {};
+  }
+  const installs = plugins.installs;
+  return isPlainObject(installs) ? installs : {};
+}
+
+export function listPluginInstallTimestampMetadataPaths(
+  prevConfig: unknown,
+  nextConfig: unknown,
+): string[] {
+  const prevInstalls = getPluginInstallRecords(prevConfig);
+  const nextInstalls = getPluginInstallRecords(nextConfig);
+  const ids = new Set([...Object.keys(prevInstalls), ...Object.keys(nextInstalls)]);
+  const paths: string[] = [];
+
+  for (const id of ids) {
+    const prevRecord = prevInstalls[id];
+    const nextRecord = nextInstalls[id];
+    if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
+      continue;
+    }
+    for (const key of ["installedAt", "resolvedAt"] as const) {
+      if (prevRecord[key] !== nextRecord[key]) {
+        paths.push(`plugins.installs.${id}.${key}`);
+      }
+    }
+  }
+
+  return paths;
+}
+
+export function listPluginInstallWholeRecordPaths(
+  prevConfig: unknown,
+  nextConfig: unknown,
+): string[] {
+  const prevInstalls = getPluginInstallRecords(prevConfig);
+  const nextInstalls = getPluginInstallRecords(nextConfig);
+  const ids = new Set([...Object.keys(prevInstalls), ...Object.keys(nextInstalls)]);
+  const paths: string[] = [];
+
+  for (const id of ids) {
+    const prevRecord = prevInstalls[id];
+    const nextRecord = nextInstalls[id];
+    if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
+      paths.push(`plugins.installs.${id}`);
+    }
+  }
+
+  return paths;
+}
+
+export function buildGatewayReloadPlan(
+  changedPaths: string[],
+  options: GatewayReloadPlanOptions = {},
+): GatewayReloadPlan {
+  const noopPaths = new Set(options.noopPaths);
+  const forceChangedPaths = new Set(options.forceChangedPaths);
   const plan: GatewayReloadPlan = {
     changedPaths,
     restartGateway: false,
@@ -221,6 +293,13 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
   };
 
   for (const path of changedPaths) {
+    const isTimestampNoop =
+      !forceChangedPaths.has(path) &&
+      (noopPaths.size > 0 ? noopPaths.has(path) : isPluginInstallTimestampPath(path));
+    if (isTimestampNoop) {
+      plan.noopPaths.push(path);
+      continue;
+    }
     const rule = matchRule(path);
     if (!rule) {
       plan.restartGateway = true;

@@ -1,6 +1,7 @@
 export type JsonPrimitive = null | boolean | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
+export type CodexServiceTier = "fast" | "flex";
 
 export type RpcRequest = {
   id?: number | string;
@@ -55,7 +56,7 @@ export type CodexThreadStartParams = {
   approvalPolicy?: "never" | "on-request" | "on-failure" | "untrusted";
   approvalsReviewer?: "user" | "guardian_subagent";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
-  serviceTier?: string | null;
+  serviceTier?: CodexServiceTier | null;
   config?: JsonObject | null;
   serviceName?: string | null;
   baseInstructions?: string | null;
@@ -73,7 +74,9 @@ export type CodexThreadResumeParams = {
   approvalPolicy?: "never" | "on-request" | "on-failure" | "untrusted";
   approvalsReviewer?: "user" | "guardian_subagent";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
-  serviceTier?: string | null;
+  serviceTier?: CodexServiceTier | null;
+  baseInstructions?: string | null;
+  developerInstructions?: string | null;
   persistExtendedHistory?: boolean;
 };
 
@@ -92,7 +95,7 @@ export type CodexTurnStartParams = {
   approvalPolicy?: "never" | "on-request" | "on-failure" | "untrusted";
   approvalsReviewer?: "user" | "guardian_subagent";
   model?: string | null;
-  serviceTier?: string | null;
+  serviceTier?: CodexServiceTier | null;
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | null;
 };
 

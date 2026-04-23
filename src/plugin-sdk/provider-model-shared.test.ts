@@ -191,6 +191,23 @@ describe("buildProviderReplayFamilyHooks", () => {
       validateGeminiTurns: true,
     });
 
+    const nativeIdsHooks = buildProviderReplayFamilyHooks({
+      family: "openai-compatible",
+      sanitizeToolCallIds: false,
+    });
+    const nativeIdsPolicy = nativeIdsHooks.buildReplayPolicy?.({
+      provider: "moonshot",
+      modelApi: "openai-completions",
+      modelId: "kimi-k2.6",
+    } as never);
+    expect(nativeIdsPolicy).toMatchObject({
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    });
+    expect(nativeIdsPolicy).not.toHaveProperty("sanitizeToolCallIds");
+    expect(nativeIdsPolicy).not.toHaveProperty("toolCallIdMode");
+
     expect(
       PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy?.({
         provider: "openrouter",

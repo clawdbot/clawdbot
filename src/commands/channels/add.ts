@@ -34,10 +34,9 @@ function loadOnboardChannels(): Promise<OnboardChannelsModule> {
 export type ChannelsAddOptions = {
   channel?: string;
   account?: string;
-  initialSyncLimit?: number | string;
-  groupChannels?: string;
-  dmAllowlist?: string;
-} & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
+} & Record<string, unknown>;
+
+const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
 
 async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = normalizeOptionalLowercaseString(raw);
@@ -54,6 +53,38 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
       (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
     );
   });
+}
+
+function parseOptionalInt(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    return Number.parseInt(value, 10);
+  }
+  return undefined;
+}
+
+function parseOptionalDelimitedInput(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string");
+  }
+  return parseOptionalDelimitedEntries(typeof value === "string" ? value : undefined);
+}
+
+function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
+  const input: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(opts)) {
+    if (CHANNEL_ADD_CONTROL_OPTION_KEYS.has(key) || value === undefined) {
+      continue;
+    }
+    input[key] = value;
+  }
+
+  input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit);
+  input.groupChannels = parseOptionalDelimitedInput(opts.groupChannels);
+  input.dmAllowlist = parseOptionalDelimitedInput(opts.dmAllowlist);
+  return input as ChannelSetupInput;
 }
 
 export async function channelsAddCommand(
@@ -282,51 +313,7 @@ export async function channelsAddCommand(
     runtime.exit(1);
     return;
   }
-  const useEnv = opts.useEnv === true;
-  const initialSyncLimit =
-    typeof opts.initialSyncLimit === "number"
-      ? opts.initialSyncLimit
-      : typeof opts.initialSyncLimit === "string" && opts.initialSyncLimit.trim()
-        ? Number.parseInt(opts.initialSyncLimit, 10)
-        : undefined;
-  const groupChannels = parseOptionalDelimitedEntries(opts.groupChannels);
-  const dmAllowlist = parseOptionalDelimitedEntries(opts.dmAllowlist);
-
-  const input: ChannelSetupInput = {
-    name: opts.name,
-    token: opts.token,
-    privateKey: opts.privateKey,
-    tokenFile: opts.tokenFile,
-    botToken: opts.botToken,
-    appToken: opts.appToken,
-    signalNumber: opts.signalNumber,
-    cliPath: opts.cliPath,
-    dbPath: opts.dbPath,
-    service: opts.service,
-    region: opts.region,
-    authDir: opts.authDir,
-    httpUrl: opts.httpUrl,
-    httpHost: opts.httpHost,
-    httpPort: opts.httpPort,
-    webhookPath: opts.webhookPath,
-    webhookUrl: opts.webhookUrl,
-    audienceType: opts.audienceType,
-    audience: opts.audience,
-    homeserver: opts.homeserver,
-    userId: opts.userId,
-    accessToken: opts.accessToken,
-    password: opts.password,
-    deviceName: opts.deviceName,
-    initialSyncLimit,
-    useEnv,
-    ship: opts.ship,
-    url: opts.url,
-    relayUrls: opts.relayUrls,
-    code: opts.code,
-    groupChannels,
-    dmAllowlist,
-    autoDiscoverChannels: opts.autoDiscoverChannels,
-  };
+  const input = buildChannelSetupInput(opts);
   const accountId =
     plugin.setup.resolveAccountId?.({
       cfg: nextConfig,

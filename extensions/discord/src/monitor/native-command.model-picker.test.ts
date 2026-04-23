@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordChannelContext } from "./agent-components-helpers.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
@@ -76,6 +77,7 @@ function createModelPickerContext(): ModelPickerContext {
     accountId: "default",
     sessionPrefix: "discord:slash",
     threadBindings: createNoopThreadBindingManager("default"),
+    postApplySettleMs: 0,
   };
 }
 
@@ -103,20 +105,6 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
     acknowledge: vi.fn().mockResolvedValue({ ok: true }),
     client: {},
   };
-}
-
-function makePartialChannelThrow<T extends object>(
-  target: T,
-  key: keyof T & string,
-  message = "Cannot access rawData on partial Channel. Use fetch() to populate data.",
-) {
-  Object.defineProperty(target, key, {
-    configurable: true,
-    enumerable: true,
-    get() {
-      throw new Error(message);
-    },
-  });
 }
 
 function createDefaultModelPickerData(): ModelsProviderData {
@@ -357,7 +345,7 @@ describe("Discord model picker interactions", () => {
 
     const dispatchSpy = createDispatchSpy();
     const submitInteraction = createInteraction({ userId: "owner" });
-    makePartialChannelThrow(submitInteraction.channel, "name");
+    defineThrowingDiscordChannelGetter(submitInteraction.channel, "name");
 
     const button = createModelPickerFallbackButton(context, dispatchSpy);
     await button.run(
@@ -395,7 +383,10 @@ describe("Discord model picker interactions", () => {
       parent?: { id?: string; name?: string };
     };
     submitInteraction.channel = threadChannel as MockInteraction["channel"];
-    makePartialChannelThrow(threadChannel.parent as { id?: string; name?: string }, "name");
+    defineThrowingDiscordChannelGetter(
+      threadChannel.parent as { id?: string; name?: string },
+      "name",
+    );
 
     const button = createModelPickerFallbackButton(context, dispatchSpy);
     await button.run(

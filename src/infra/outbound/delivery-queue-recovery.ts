@@ -36,6 +36,10 @@ export interface PendingDeliveryDrainDecision {
   bypassBackoff?: boolean;
 }
 
+export type ActiveDeliveryClaimResult<T> =
+  | { status: "claimed"; value: T }
+  | { status: "claimed-by-other-owner" };
+
 const MAX_RETRIES = 5;
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
@@ -88,6 +92,21 @@ function claimRecoveryEntry(entryId: string): boolean {
 
 function releaseRecoveryEntry(entryId: string): void {
   entriesInProgress.delete(entryId);
+}
+
+export async function withActiveDeliveryClaim<T>(
+  entryId: string,
+  fn: () => Promise<T>,
+): Promise<ActiveDeliveryClaimResult<T>> {
+  if (!claimRecoveryEntry(entryId)) {
+    return { status: "claimed-by-other-owner" };
+  }
+
+  try {
+    return { status: "claimed", value: await fn() };
+  } finally {
+    releaseRecoveryEntry(entryId);
+  }
 }
 
 function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) {
@@ -230,15 +249,8 @@ export async function drainPendingDeliveries(opts: {
     const now = Date.now();
     const deliver = opts.deliver;
     const matchingEntries = (await loadPendingDeliveries(opts.stateDir))
-      .map((entry) => ({
-        entry,
-        decision: opts.selectEntry(entry, now),
-      }))
-      .filter(
-        (item): item is { entry: QueuedDelivery; decision: PendingDeliveryDrainDecision } =>
-          item.decision.match,
-      )
-      .toSorted((a, b) => a.entry.enqueuedAt - b.entry.enqueuedAt);
+      .filter((entry) => opts.selectEntry(entry, now).match)
+      .toSorted((a, b) => a.enqueuedAt - b.enqueuedAt);
 
     if (matchingEntries.length === 0) {
       return;
@@ -248,7 +260,7 @@ export async function drainPendingDeliveries(opts: {
       `${opts.logLabel}: ${matchingEntries.length} pending message(s) matched ${opts.drainKey}`,
     );
 
-    for (const { entry, decision } of matchingEntries) {
+    for (const entry of matchingEntries) {
       if (!claimRecoveryEntry(entry.id)) {
         opts.log.info(`${opts.logLabel}: entry ${entry.id} is already being recovered`);
         continue;
@@ -261,6 +273,12 @@ export async function drainPendingDeliveries(opts: {
         const currentEntry = await loadPendingDelivery(entry.id, opts.stateDir);
         if (!currentEntry) {
           opts.log.info(`${opts.logLabel}: entry ${entry.id} already gone, skipping`);
+          continue;
+        }
+
+        const currentDecision = opts.selectEntry(currentEntry, Date.now());
+        if (!currentDecision.match) {
+          opts.log.info(`${opts.logLabel}: entry ${currentEntry.id} no longer matches, skipping`);
           continue;
         }
 
@@ -280,7 +298,7 @@ export async function drainPendingDeliveries(opts: {
           continue;
         }
 
-        if (!decision.bypassBackoff) {
+        if (!currentDecision.bypassBackoff) {
           const retryEligibility = isEntryEligibleForRecoveryRetry(currentEntry, Date.now());
           if (!retryEligibility.eligible) {
             opts.log.info(

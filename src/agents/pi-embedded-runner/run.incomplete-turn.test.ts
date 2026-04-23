@@ -23,6 +23,7 @@ import {
   resolveEmptyResponseRetryInstruction,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
@@ -291,7 +292,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     );
   });
 
-  it("does not retry reasoning-only turns after side effects", async () => {
+  it("does not retry or warn on reasoning-only turns when a messaging tool already delivered", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -299,7 +300,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         didSendViaMessagingTool: true,
         lastAssistant: {
           role: "assistant",
-          stopReason: "end_turn",
+          stopReason: "stop",
           provider: "openai",
           model: "gpt-5.4",
           content: [
@@ -321,8 +322,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("verify before retrying");
+    expect(result.payloads).toBeUndefined();
   });
 
   it("does not retry reasoning-only turns when the assistant ended in error", async () => {
@@ -359,7 +359,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toContain("Please try again");
   });
 
-  it("does not retry reasoning-only turns for non-openai assistant metadata", async () => {
+  it("does not retry reasoning-only turns for non-strict-agentic providers", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -385,8 +385,8 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
-      provider: "openai",
-      model: "gpt-5.4",
+      provider: "anthropic",
+      model: "sonnet-4.6",
       runId: "run-reasoning-only-provider-mismatch",
     });
 
@@ -730,6 +730,77 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("treats exact NO_REPLY as a deliberate silent assistant reply", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_no_reply", type: "reasoning" }),
+            },
+            { type: "text", text: "" },
+            { type: "text", text: "NO_REPLY" },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("suppresses the incomplete-turn warning when a messaging tool delivered and the turn ended cleanly", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "kimi-k2.6:cloud",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("still surfaces the incomplete-turn warning after a messaging tool when the provider signalled an error", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "ollama",
+          model: "kimi-k2.6:cloud",
+          errorMessage: "provider failed mid-turn",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("verify before retrying");
   });
 
   it("does not retry reasoning-only GPT turns after side effects", () => {

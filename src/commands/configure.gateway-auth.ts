@@ -99,27 +99,53 @@ export async function promptAuthConfig(
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
-  const authChoice = await promptAuthChoiceGrouped({
-    prompter,
-    store: ensureAuthProfileStore(undefined, {
-      allowKeychainPrompt: false,
-    }),
-    includeSkip: true,
-    config: cfg,
-  });
-
   let next = cfg;
-  const preferredProvider =
-    authChoice === "skip"
-      ? undefined
-      : await resolvePreferredProviderForAuthChoice({
-          choice: authChoice,
-          config: cfg,
-        });
-  if (authChoice === "custom-api-key") {
-    const customResult = await promptCustomApiConfig({ prompter, runtime, config: next });
-    next = customResult.config;
-  } else if (authChoice !== "skip") {
+  let authChoice: string = "skip";
+  let preferredProvider: string | undefined;
+  while (true) {
+    authChoice = await promptAuthChoiceGrouped({
+      prompter,
+      store: ensureAuthProfileStore(undefined, {
+        allowKeychainPrompt: false,
+      }),
+      includeSkip: true,
+      config: next,
+    });
+
+    preferredProvider =
+      authChoice === "skip"
+        ? undefined
+        : await resolvePreferredProviderForAuthChoice({
+            choice: authChoice,
+            config: next,
+          });
+
+    if (authChoice === "custom-api-key") {
+      const customResult = await promptCustomApiConfig({ prompter, runtime, config: next });
+      next = customResult.config;
+      break;
+    }
+
+    if (authChoice === "skip") {
+      const modelSelection = await promptDefaultModel({
+        config: next,
+        prompter,
+        allowKeep: true,
+        ignoreAllowlist: true,
+        includeProviderPluginSetups: true,
+        preferredProvider,
+        workspaceDir: resolveDefaultAgentWorkspaceDir(),
+        runtime,
+      });
+      if (modelSelection.config) {
+        next = modelSelection.config;
+      }
+      if (modelSelection.model) {
+        next = applyPrimaryModel(next, modelSelection.model);
+      }
+      break;
+    }
+
     const applied = await applyAuthChoice({
       authChoice,
       config: next,
@@ -128,23 +154,10 @@ export async function promptAuthConfig(
       setDefaultModel: true,
     });
     next = applied.config;
-  } else {
-    const modelSelection = await promptDefaultModel({
-      config: next,
-      prompter,
-      allowKeep: true,
-      ignoreAllowlist: true,
-      includeProviderPluginSetups: true,
-      preferredProvider,
-      workspaceDir: resolveDefaultAgentWorkspaceDir(),
-      runtime,
-    });
-    if (modelSelection.config) {
-      next = modelSelection.config;
+    if (applied.retrySelection) {
+      continue;
     }
-    if (modelSelection.model) {
-      next = applyPrimaryModel(next, modelSelection.model);
-    }
+    break;
   }
 
   if (authChoice !== "custom-api-key") {
@@ -163,7 +176,9 @@ export async function promptAuthConfig(
       preferredProvider,
     });
     if (allowlistSelection.models) {
-      next = applyModelAllowlist(next, allowlistSelection.models);
+      next = applyModelAllowlist(next, allowlistSelection.models, {
+        scopeKeys: allowlistSelection.scopeKeys,
+      });
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models);
     }
   }

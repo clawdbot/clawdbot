@@ -637,9 +637,10 @@ What still needs Playwright:
 Element screenshots also reject `--full-page`; the route returns `fullPage is
 not supported for element screenshots`.
 
-If you see `Playwright is not available in this gateway build`, install the full
-Playwright package (not `playwright-core`) and restart the gateway, or reinstall
-OpenClaw with browser support.
+If you see `Playwright is not available in this gateway build`, repair the
+bundled browser plugin runtime dependencies so `playwright-core` is installed,
+then restart the gateway. For packaged installs, run `openclaw doctor --fix`.
+For Docker, also install the Chromium browser binaries as shown below.
 
 #### Docker Playwright install
 

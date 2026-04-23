@@ -18,6 +18,7 @@ export {
   readSourceConfigSnapshot,
   readSourceConfigSnapshotForWrite,
   recoverConfigFromLastKnownGood,
+  recoverConfigFromJsonRootSuffix,
   resetConfigRuntimeState,
   resolveConfigSnapshotHash,
   setRuntimeConfigSnapshotRefreshHandler,

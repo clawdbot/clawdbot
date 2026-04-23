@@ -1,4 +1,5 @@
 import { killProcessTree } from "../../kill-tree.js";
+import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -55,9 +56,11 @@ export async function createPtyAdapter(params: {
   if (!spawn) {
     throw new Error("PTY support is unavailable (node-pty spawn not found).");
   }
-  const pty = spawn(params.shell, params.args, {
+  const baseEnv = params.env ? toStringEnv(params.env) : undefined;
+  const preparedSpawn = prepareOomScoreAdjustedSpawn(params.shell, params.args, { env: baseEnv });
+  const pty = spawn(preparedSpawn.command, preparedSpawn.args, {
     cwd: params.cwd,
-    env: params.env ? toStringEnv(params.env) : undefined,
+    env: preparedSpawn.env ? toStringEnv(preparedSpawn.env) : undefined,
     name: params.name ?? process.env.TERM ?? "xterm-256color",
     cols: params.cols ?? 120,
     rows: params.rows ?? 30,

@@ -233,6 +233,10 @@ export class MediaStreamHandler {
               session = null;
             }
             break;
+
+          case "clear":
+          case "mark":
+            break;
         }
       } catch (error) {
         console.error("[MediaStream] Error processing message:", error);

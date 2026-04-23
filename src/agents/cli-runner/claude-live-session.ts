@@ -882,11 +882,12 @@ export async function runClaudeLiveSessionTurn(params: {
     });
   });
   const abort = () => abortTurn(liveSession, createAbortError());
+  let replyBackendCompleted = false;
   const replyBackendHandle: ReplyBackendHandle | undefined = params.context.params.replyOperation
     ? {
         kind: "cli",
         cancel: abort,
-        isStreaming: () => false,
+        isStreaming: () => !replyBackendCompleted,
       }
     : undefined;
   params.context.params.abortSignal?.addEventListener("abort", abort, { once: true });
@@ -905,6 +906,7 @@ export async function runClaudeLiveSessionTurn(params: {
     }
     return { output: await outputPromise };
   } finally {
+    replyBackendCompleted = true;
     params.context.params.abortSignal?.removeEventListener("abort", abort);
     if (replyBackendHandle) {
       params.context.params.replyOperation?.detachBackend(replyBackendHandle);

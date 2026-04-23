@@ -94,7 +94,7 @@ export const RemindSchema = {
 export function parseRelativeTime(timeStr: string): number | null {
   const s = timeStr.toLowerCase();
   if (/^\d+$/.test(s)) {
-    return parseInt(s, 10) * 60_000;
+    return Number.parseInt(s, 10) * 60_000;
   }
 
   let totalMs = 0;
@@ -103,7 +103,7 @@ export function parseRelativeTime(timeStr: string): number | null {
   let match: RegExpExecArray | null;
   while ((match = regex.exec(s)) !== null) {
     matched = true;
-    const value = parseFloat(match[1]);
+    const value = Number.parseFloat(match[1]);
     const unit = match[2];
     switch (unit) {
       case "d":

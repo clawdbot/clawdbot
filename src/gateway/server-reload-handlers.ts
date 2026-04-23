@@ -1,3 +1,4 @@
+import { resetModelCatalogCache } from "../agents/model-catalog.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -80,6 +81,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
 > & {
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
+  initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash: string | null;
   watchPath: string;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
@@ -101,6 +103,20 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
     const nextState = { ...state };
+
+    if (
+      plan.changedPaths.some(
+        (path) =>
+          path === "models" ||
+          path.startsWith("models.") ||
+          path === "agents.defaults.model" ||
+          path.startsWith("agents.defaults.model.") ||
+          path === "agents.defaults.models" ||
+          path.startsWith("agents.defaults.models."),
+      )
+    ) {
+      resetModelCatalogCache();
+    }
 
     if (plan.reloadHooks) {
       try {
@@ -262,15 +278,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         },
       });
       return true;
-    } else {
-      // No active operations or pending replies, restart immediately
-      params.logReload.warn(`config change requires gateway restart (${reasons})`);
-      const emitted = emitGatewayRestart();
-      if (!emitted) {
-        params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
-      }
-      return true;
     }
+    // No active operations or pending replies, restart immediately
+    params.logReload.warn(`config change requires gateway restart (${reasons})`);
+    const emitted = emitGatewayRestart();
+    if (!emitted) {
+      params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
+    }
+    return true;
   };
 
   return { applyHotReload, requestGatewayRestart };
@@ -301,6 +316,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
 
   return startGatewayConfigReloader({
     initialConfig: params.initialConfig,
+    initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
     readSnapshot: params.readSnapshot,
     recoverSnapshot: async (snapshot, reason) =>

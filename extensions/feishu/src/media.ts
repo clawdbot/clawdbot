@@ -1,6 +1,6 @@
-import fs from "fs";
-import path from "path";
-import { Readable } from "stream";
+import fs from "node:fs";
+import path from "node:path";
+import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
@@ -627,22 +627,21 @@ export async function sendMediaFeishu(params: {
   if (routing.msgType === "image") {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
-  } else {
-    const { fileKey } = await uploadFileFeishu({
-      cfg,
-      file: buffer,
-      fileName: name,
-      fileType: routing.fileType ?? "stream",
-      accountId,
-    });
-    return sendFileFeishu({
-      cfg,
-      to,
-      fileKey,
-      msgType: routing.msgType,
-      replyToMessageId,
-      replyInThread,
-      accountId,
-    });
   }
+  const { fileKey } = await uploadFileFeishu({
+    cfg,
+    file: buffer,
+    fileName: name,
+    fileType: routing.fileType ?? "stream",
+    accountId,
+  });
+  return sendFileFeishu({
+    cfg,
+    to,
+    fileKey,
+    msgType: routing.msgType,
+    replyToMessageId,
+    replyInThread,
+    accountId,
+  });
 }

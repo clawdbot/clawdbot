@@ -12,19 +12,24 @@ import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
-import { clearCliSession, getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
+import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
-import { resolveFallbackRetryPrompt } from "./attempt-execution.helpers.js";
+import {
+  claudeCliSessionTranscriptHasContent,
+  resolveFallbackRetryPrompt,
+} from "./attempt-execution.helpers.js";
 import { persistSessionEntry } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
+import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export {
+  claudeCliSessionTranscriptHasContent,
   createAcpVisibleTextAccumulator,
   resolveFallbackRetryPrompt,
   sessionFileHasContent,
@@ -156,6 +161,10 @@ function resolveCliTranscriptReplyText(result: EmbeddedPiRunResult): string {
     .join("\n\n");
 }
 
+function isClaudeCliProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === "claude-cli";
+}
+
 export async function persistAcpTurnTranscript(params: {
   body: string;
   finalText: string;
@@ -259,7 +268,35 @@ export function runAgentAttempt(params: {
       : undefined;
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, params.providerOverride);
-    const runCliWithSession = (nextCliSessionId: string | undefined) =>
+    const resolveReusableCliSessionBinding = async () => {
+      if (
+        !isClaudeCliProvider(params.providerOverride) ||
+        !cliSessionBinding?.sessionId ||
+        (await claudeCliSessionTranscriptHasContent({ sessionId: cliSessionBinding.sessionId }))
+      ) {
+        return cliSessionBinding;
+      }
+
+      log.warn(
+        `cli session reset: provider=${sanitizeForLog(params.providerOverride)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
+      );
+
+      if (params.sessionKey && params.sessionStore && params.storePath) {
+        params.sessionEntry =
+          (await clearCliSessionInStore({
+            provider: params.providerOverride,
+            sessionKey: params.sessionKey,
+            sessionStore: params.sessionStore,
+            storePath: params.storePath,
+          })) ?? params.sessionEntry;
+      }
+
+      return undefined;
+    };
+    const runCliWithSession = (
+      nextCliSessionId: string | undefined,
+      activeCliSessionBinding = cliSessionBinding,
+    ) =>
       runCliAgent({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
@@ -276,7 +313,9 @@ export function runAgentAttempt(params: {
         extraSystemPrompt: params.opts.extraSystemPrompt,
         cliSessionId: nextCliSessionId,
         cliSessionBinding:
-          nextCliSessionId === cliSessionBinding?.sessionId ? cliSessionBinding : undefined,
+          nextCliSessionId === activeCliSessionBinding?.sessionId
+            ? activeCliSessionBinding
+            : undefined,
         authProfileId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
@@ -288,65 +327,60 @@ export function runAgentAttempt(params: {
         agentAccountId: params.runContext.accountId,
         senderIsOwner: params.opts.senderIsOwner,
       });
-    return runCliWithSession(cliSessionBinding?.sessionId).catch(async (err) => {
-      if (
-        err instanceof FailoverError &&
-        err.reason === "session_expired" &&
-        cliSessionBinding?.sessionId &&
-        params.sessionKey &&
-        params.sessionStore &&
-        params.storePath
-      ) {
-        log.warn(
-          `CLI session expired, clearing from session store: provider=${sanitizeForLog(params.providerOverride)} sessionKey=${params.sessionKey}`,
-        );
+    return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
+      try {
+        return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
+      } catch (err) {
+        if (
+          err instanceof FailoverError &&
+          err.reason === "session_expired" &&
+          activeCliSessionBinding?.sessionId &&
+          params.sessionKey &&
+          params.sessionStore &&
+          params.storePath
+        ) {
+          log.warn(
+            `CLI session expired, clearing from session store: provider=${sanitizeForLog(params.providerOverride)} sessionKey=${params.sessionKey}`,
+          );
 
-        const entry = params.sessionStore[params.sessionKey];
-        if (entry) {
-          const updatedEntry = { ...entry };
-          clearCliSession(updatedEntry, params.providerOverride);
-          updatedEntry.updatedAt = Date.now();
+          params.sessionEntry =
+            (await clearCliSessionInStore({
+              provider: params.providerOverride,
+              sessionKey: params.sessionKey,
+              sessionStore: params.sessionStore,
+              storePath: params.storePath,
+            })) ?? params.sessionEntry;
 
-          await persistSessionEntry({
-            sessionStore: params.sessionStore,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-            entry: updatedEntry,
-            clearedFields: ["cliSessionBindings", "cliSessionIds", "claudeCliSessionId"],
-          });
+          return await runCliWithSession(undefined).then(async (result) => {
+            if (
+              result.meta.agentMeta?.cliSessionBinding?.sessionId &&
+              params.sessionKey &&
+              params.sessionStore &&
+              params.storePath
+            ) {
+              const entry = params.sessionStore[params.sessionKey];
+              if (entry) {
+                const updatedEntry = { ...entry };
+                setCliSessionBinding(
+                  updatedEntry,
+                  params.providerOverride,
+                  result.meta.agentMeta.cliSessionBinding,
+                );
+                updatedEntry.updatedAt = Date.now();
 
-          params.sessionEntry = updatedEntry;
-        }
-
-        return runCliWithSession(undefined).then(async (result) => {
-          if (
-            result.meta.agentMeta?.cliSessionBinding?.sessionId &&
-            params.sessionKey &&
-            params.sessionStore &&
-            params.storePath
-          ) {
-            const entry = params.sessionStore[params.sessionKey];
-            if (entry) {
-              const updatedEntry = { ...entry };
-              setCliSessionBinding(
-                updatedEntry,
-                params.providerOverride,
-                result.meta.agentMeta.cliSessionBinding,
-              );
-              updatedEntry.updatedAt = Date.now();
-
-              await persistSessionEntry({
-                sessionStore: params.sessionStore,
-                sessionKey: params.sessionKey,
-                storePath: params.storePath,
-                entry: updatedEntry,
-              });
+                await persistSessionEntry({
+                  sessionStore: params.sessionStore,
+                  sessionKey: params.sessionKey,
+                  storePath: params.storePath,
+                  entry: updatedEntry,
+                });
+              }
             }
-          }
-          return result;
-        });
+            return result;
+          });
+        }
+        throw err;
       }
-      throw err;
     });
   }
 

@@ -1,3 +1,11 @@
+---
+summary: "Rich output shortcode protocol for embeds, media, audio hints, and replies"
+read_when:
+  - Changing assistant output rendering in the Control UI
+  - Debugging `[embed ...]`, `MEDIA:`, reply, or audio presentation directives
+title: "Rich Output Protocol"
+---
+
 # Rich Output Protocol
 
 Assistant output can carry a small set of delivery/render directives:

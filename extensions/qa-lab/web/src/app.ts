@@ -1531,7 +1531,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
         const currentIndex = markers.findIndex(
           (node) => (node.dataset.captureEvent ?? null) === state.selectedCaptureEventKey,
         );
-        let nextIndex = currentIndex >= 0 ? currentIndex : 0;
+        let nextIndex = Math.max(currentIndex, 0);
         if (event.key === "Home") {
           nextIndex = 0;
         } else if (event.key === "End") {

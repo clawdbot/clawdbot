@@ -75,6 +75,12 @@ type TelegramCompatFetch = (
   input: TelegramFetchInput,
   init?: TelegramFetchInit,
 ) => ReturnType<TelegramClientFetch>;
+type TelegramAbortSignalLike = {
+  aborted: boolean;
+  reason?: unknown;
+  addEventListener: (type: "abort", listener: () => void, options?: { once?: boolean }) => void;
+  removeEventListener: (type: "abort", listener: () => void) => void;
+};
 
 function asTelegramClientFetch(
   fetchImpl: TelegramCompatFetch | typeof globalThis.fetch,
@@ -84,6 +90,17 @@ function asTelegramClientFetch(
 
 function asTelegramCompatFetch(fetchImpl: TelegramClientFetch): TelegramCompatFetch {
   return fetchImpl as unknown as TelegramCompatFetch;
+}
+
+function isTelegramAbortSignalLike(value: unknown): value is TelegramAbortSignalLike {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "aborted" in value &&
+    typeof (value as { aborted?: unknown }).aborted === "boolean" &&
+    typeof (value as { addEventListener?: unknown }).addEventListener === "function" &&
+    typeof (value as { removeEventListener?: unknown }).removeEventListener === "function"
+  );
 }
 
 function readRequestUrl(input: TelegramFetchInput): string | null {
@@ -172,8 +189,11 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     // causing "signals[0] must be an instance of AbortSignal" errors).
     finalFetch = (input: TelegramFetchInput, init?: TelegramFetchInit) => {
       const controller = new AbortController();
-      const abortWith = (signal: AbortSignal) => controller.abort(signal.reason);
-      const shutdownSignal = opts.fetchAbortSignal;
+      const abortWith = (signal: Pick<TelegramAbortSignalLike, "reason">) =>
+        controller.abort(signal.reason);
+      const shutdownSignal = isTelegramAbortSignalLike(opts.fetchAbortSignal)
+        ? opts.fetchAbortSignal
+        : undefined;
       const onShutdown = () => {
         if (shutdownSignal) {
           abortWith(shutdownSignal);
@@ -183,7 +203,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
       const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method);
       let requestTimeout: ReturnType<typeof setTimeout> | undefined;
       let onRequestAbort: (() => void) | undefined;
-      const requestSignal = init?.signal;
+      const requestSignal = isTelegramAbortSignalLike(init?.signal) ? init.signal : undefined;
       if (shutdownSignal?.aborted) {
         abortWith(shutdownSignal);
       } else if (shutdownSignal) {

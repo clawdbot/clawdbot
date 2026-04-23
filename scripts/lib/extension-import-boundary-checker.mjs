@@ -38,13 +38,16 @@ function classifyResolvedExtensionReason(kind, boundaryLabel) {
   return `${verb} bundled plugin file from ${boundaryLabel} boundary`;
 }
 
-function scanImportBoundaryViolations(sourceFile, filePath, boundaryLabel) {
+function scanImportBoundaryViolations(sourceFile, filePath, boundaryLabel, allowResolvedPath) {
   const entries = [];
   const relativeFile = normalizeRepoPath(repoRoot, filePath);
 
   visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
     const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
     if (!resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+      return;
+    }
+    if (allowResolvedPath?.(resolvedPath, { kind, specifier, file: relativeFile })) {
       return;
     }
     entries.push({
@@ -74,7 +77,12 @@ export function createExtensionImportBoundaryChecker(params) {
       files,
       compareEntries,
       collectEntries(sourceFile, filePath) {
-        return scanImportBoundaryViolations(sourceFile, filePath, params.boundaryLabel);
+        return scanImportBoundaryViolations(
+          sourceFile,
+          filePath,
+          params.boundaryLabel,
+          params.allowResolvedPath,
+        );
       },
       shouldParseSource: params.skipSourcesWithoutBundledPluginPrefix
         ? (source) => source.includes(BUNDLED_PLUGIN_PATH_PREFIX)

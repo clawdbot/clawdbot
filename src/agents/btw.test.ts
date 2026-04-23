@@ -17,6 +17,7 @@ const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const resolveSessionAgentIdMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
+const registerProviderStreamForModelMock = vi.fn();
 const diagDebugMock = vi.fn();
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -69,6 +70,11 @@ vi.mock("./agent-scope.js", () => ({
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: (...args: unknown[]) => prepareProviderRuntimeAuthMock(...args),
+}));
+
+vi.mock("./provider-stream.js", () => ({
+  registerProviderStreamForModel: (...args: unknown[]) =>
+    registerProviderStreamForModelMock(...args),
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -275,6 +281,7 @@ describe("runBtwSideQuestion", () => {
     resolveSessionAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     prepareProviderRuntimeAuthMock.mockReset();
+    registerProviderStreamForModelMock.mockReset();
     diagDebugMock.mockReset();
 
     buildSessionContextMock.mockReturnValue({
@@ -293,6 +300,7 @@ describe("runBtwSideQuestion", () => {
     resolveSessionAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
+    registerProviderStreamForModelMock.mockReturnValue(undefined);
   });
 
   it("streams blocks without persisting BTW data to disk", async () => {
@@ -430,6 +438,49 @@ describe("runBtwSideQuestion", () => {
       expect.anything(),
       expect.objectContaining({ apiKey: "copilot-runtime-token" }),
     );
+  });
+
+  it("uses the provider's stream fn when registered so provider URL construction runs (#68336)", async () => {
+    // Regression: before this fix, /btw called streamSimple directly and
+    // bypassed the provider's createStreamFn/wrapStreamFn hooks. That caused
+    // Ollama Cloud (api: "openai-completions", baseUrl: "https://ollama.com/")
+    // to hit the marketing site instead of /v1/chat/completions.
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "ollama",
+      id: "glm-5.1",
+      api: "openai-completions",
+      baseUrl: "https://ollama.com/",
+    });
+    const providerStreamFn = vi
+      .fn()
+      .mockReturnValue(makeAsyncEvents([createDoneEvent("Ollama Cloud answer.")]));
+    registerProviderStreamForModelMock.mockReturnValue(providerStreamFn);
+
+    const result = await runSideQuestion({ provider: "ollama", model: "glm-5.1" });
+
+    expect(result).toEqual({ text: "Ollama Cloud answer." });
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "ollama",
+          api: "openai-completions",
+          baseUrl: "https://ollama.com/",
+        }),
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to streamSimple when no provider stream fn is registered", async () => {
+    registerProviderStreamForModelMock.mockReturnValue(undefined);
+    mockDoneAnswer("Fallback answer.");
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Fallback answer." });
+    expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
   it("strips injected empty tools arrays from BTW payloads before sending", async () => {

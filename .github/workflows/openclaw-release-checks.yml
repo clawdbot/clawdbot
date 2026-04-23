@@ -32,6 +32,8 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.33.0"
 
 jobs:
   resolve_target:
@@ -121,7 +123,7 @@ jobs:
             echo "- Validated SHA: \`${RELEASE_SHA}\`"
             echo "- Cross-OS provider: \`${RELEASE_PROVIDER}\`"
             echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
-            echo "- This run will execute cross-OS release validation plus the non-Parallels Docker/live/openwebui coverage from the CI migration plan."
+            echo "- This run will execute cross-OS release validation, QA Lab parity, Matrix, and Telegram lanes, and the non-Parallels Docker/live/openwebui coverage from the CI migration plan."
           } >> "$GITHUB_STEP_SUMMARY"
 
   cross_os_release_checks:
@@ -144,6 +146,7 @@ jobs:
     needs: [resolve_target]
     permissions:
       contents: read
+      packages: write
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
@@ -196,3 +199,232 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+
+  qa_lab_parity_release_checks:
+    name: Run QA Lab parity gate
+    needs: [resolve_target]
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      QA_PARITY_CONCURRENCY: "1"
+      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      OPENCLAW_LIVE_OPENAI_KEY: ""
+      OPENCLAW_LIVE_ANTHROPIC_KEY: ""
+      OPENCLAW_LIVE_GEMINI_KEY: ""
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.ref }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run GPT-5.4 lane
+        run: |
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --parity-pack agentic \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4-alt \
+            --output-dir .artifacts/qa-e2e/gpt54
+
+      - name: Run Opus 4.6 lane
+        run: |
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --parity-pack agentic \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model anthropic/claude-opus-4-6 \
+            --alt-model anthropic/claude-sonnet-4-6 \
+            --output-dir .artifacts/qa-e2e/opus46
+
+      - name: Generate parity report
+        run: |
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
+            --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
+            --candidate-label openai/gpt-5.4 \
+            --baseline-label anthropic/claude-opus-4-6 \
+            --output-dir .artifacts/qa-e2e/parity
+
+      - name: Upload parity artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-parity-${{ needs.resolve_target.outputs.sha }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
+
+  qa_live_matrix_release_checks:
+    name: Run QA Lab live Matrix lane
+    needs: [resolve_target]
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: qa-live-shared
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.ref }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing required OPENAI_API_KEY." >&2
+            exit 1
+          fi
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run Matrix live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/matrix-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa matrix \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode live-frontier \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4 \
+            --fast
+
+      - name: Upload Matrix QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-live-matrix-${{ needs.resolve_target.outputs.sha }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn
+
+  qa_live_telegram_release_checks:
+    name: Run QA Lab live Telegram lane
+    needs: [resolve_target]
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: qa-live-shared
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.ref }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENAI_API_KEY
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run Telegram live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/telegram-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa telegram \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode live-frontier \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4 \
+            --fast \
+            --credential-source convex \
+            --credential-role ci
+
+      - name: Upload Telegram QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-live-telegram-${{ needs.resolve_target.outputs.sha }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn

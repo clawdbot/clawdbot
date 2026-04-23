@@ -20,7 +20,9 @@ COPY --chown=appuser:appuser patches ./patches
 # This image only exercises the root qrcode-terminal dependency path.
 # Keep the pre-install copy set limited to the manifests needed for root
 # workspace resolution so unrelated extension edits do not bust the layer.
+ARG OPENCLAW_QR_INSTALL_CACHE_BUSTER=stable
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/home/appuser/.local/share/pnpm/store,sharing=locked \
+    printf '%s\n' "$OPENCLAW_QR_INSTALL_CACHE_BUSTER" >/tmp/openclaw-qr-install-cache-buster && \
     if ! pnpm install --frozen-lockfile --ignore-scripts >/tmp/openclaw-qr-pnpm-install.log 2>&1; then \
       cat /tmp/openclaw-qr-pnpm-install.log; \
       exit 1; \

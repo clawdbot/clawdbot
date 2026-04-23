@@ -180,7 +180,7 @@ async function connectGatewayOnce(params: {
     }
     pending.delete(typed.id);
     if (typed.ok === true) {
-      match.resolve(typed.result);
+      match.resolve(typed.payload ?? typed.result);
       return;
     }
     match.reject(

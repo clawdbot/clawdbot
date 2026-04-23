@@ -2,7 +2,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
 import {
   mkdirPathWithinRoot,
@@ -407,9 +407,13 @@ function checkPatchBoundariesLenient(lines: string[]): string[] {
     throw new Error(strictError);
   }
   const first = lines[0];
-  const last = lines[lines.length - 1];
-  if ((first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') && last.endsWith("EOF")) {
-    const inner = lines.slice(1, lines.length - 1);
+  const last = lines.at(-1);
+  if (
+    last &&
+    (first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') &&
+    last.endsWith("EOF")
+  ) {
+    const inner = lines.slice(1, -1);
     const innerError = checkPatchBoundariesStrict(inner);
     if (!innerError) {
       return inner;

@@ -208,6 +208,7 @@ export const CommandsSchema = z
     native: NativeCommandsSettingSchema.optional().default("auto"),
     nativeSkills: NativeCommandsSettingSchema.optional().default("auto"),
     text: z.boolean().optional(),
+    modelsWrite: z.boolean().optional().default(true),
     bash: z.boolean().optional(),
     bashForegroundMs: z.number().int().min(0).max(30_000).optional(),
     config: z.boolean().optional(),
@@ -224,5 +225,12 @@ export const CommandsSchema = z
   .strict()
   .optional()
   .default(
-    () => ({ native: "auto", nativeSkills: "auto", restart: true, ownerDisplay: "raw" }) as const,
+    () =>
+      ({
+        native: "auto",
+        nativeSkills: "auto",
+        modelsWrite: true,
+        restart: true,
+        ownerDisplay: "raw",
+      }) as const,
   );

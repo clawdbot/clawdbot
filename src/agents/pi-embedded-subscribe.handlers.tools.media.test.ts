@@ -231,7 +231,11 @@ describe("handleToolExecutionEnd media emission", () => {
   });
 
   it("still queues structured media when verbose is full", async () => {
-    const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult: vi.fn() });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
 
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",
@@ -239,7 +243,7 @@ describe("handleToolExecutionEnd media emission", () => {
       toolCallId: "tc-1",
       isError: false,
       result: {
-        content: [{ type: "text", text: "Generated audio reply." }],
+        content: [{ type: "text", text: "(spoken) hello" }],
         details: {
           media: {
             mediaUrl: "/tmp/reply.opus",
@@ -252,6 +256,34 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.emitToolOutput).toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+  });
+
+  it("does not queue a duplicate voice copy when emitted tool output already sent the same audio", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated audio reply.\nMEDIA:/tmp/reply.opus" }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });
 
   async function handleVerboseGeneratedImage(toolResultFormat: "plain" | "markdown") {

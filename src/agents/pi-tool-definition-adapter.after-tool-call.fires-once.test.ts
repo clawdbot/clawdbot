@@ -7,7 +7,7 @@
  * after_tool_call invocation (see PR #27283 → dedup in this fix).
  */
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers.js";
 

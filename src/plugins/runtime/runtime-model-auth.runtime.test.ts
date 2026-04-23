@@ -15,7 +15,9 @@ vi.mock("../provider-runtime.runtime.js", () => ({
   prepareProviderRuntimeAuth: hoisted.prepareProviderRuntimeAuth,
 }));
 
+let getApiKeyForModel: typeof import("./runtime-model-auth.runtime.js").getApiKeyForModel;
 let getRuntimeAuthForModel: typeof import("./runtime-model-auth.runtime.js").getRuntimeAuthForModel;
+let resolveApiKeyForProvider: typeof import("./runtime-model-auth.runtime.js").resolveApiKeyForProvider;
 
 const MODEL = {
   id: "github-copilot/gpt-4o",
@@ -26,7 +28,8 @@ const MODEL = {
 
 describe("runtime-model-auth.runtime", () => {
   beforeAll(async () => {
-    ({ getRuntimeAuthForModel } = await import("./runtime-model-auth.runtime.js"));
+    ({ getApiKeyForModel, getRuntimeAuthForModel, resolveApiKeyForProvider } =
+      await import("./runtime-model-auth.runtime.js"));
   });
 
   beforeEach(() => {
@@ -114,5 +117,25 @@ describe("runtime-model-auth.runtime", () => {
       mode: "aws-sdk",
     });
     expect(hoisted.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it("keeps direct model auth exports available for bundled runtime facades", async () => {
+    hoisted.getApiKeyForModel.mockResolvedValue({
+      apiKey: "model-key",
+      source: "env:OPENAI_API_KEY",
+      mode: "api-key",
+    });
+    hoisted.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "provider-key",
+      source: "env:OPENAI_API_KEY",
+      mode: "api-key",
+    });
+
+    await expect(getApiKeyForModel({ model: MODEL as never })).resolves.toMatchObject({
+      apiKey: "model-key",
+    });
+    await expect(resolveApiKeyForProvider({ provider: "openai" })).resolves.toMatchObject({
+      apiKey: "provider-key",
+    });
   });
 });

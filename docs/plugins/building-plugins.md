@@ -190,6 +190,8 @@ Hook guard semantics to keep in mind:
 - `before_install`: `{ block: false }` is treated as no decision.
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is treated as no decision.
+- `message_received`: prefer the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
+- `message_sending`: prefer typed `replyToId` / `threadId` routing fields over channel-specific metadata keys.
 
 The `/approve` command handles both exec and plugin approvals with bounded fallback: when an exec approval id is not found, OpenClaw retries the same id through plugin approvals. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
 

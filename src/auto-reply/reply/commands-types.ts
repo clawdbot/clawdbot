@@ -53,6 +53,7 @@ export type HandleCommandsParams = {
   opts?: GetReplyOptions;
   defaultGroupActivation: () => "always" | "mention";
   resolvedThinkLevel?: ThinkLevel;
+  resolvedFastMode?: boolean;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;

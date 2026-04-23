@@ -21,6 +21,8 @@ const runtimeModuleId = new URL("../src/runtime.js", import.meta.url).pathname;
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 const loadedMonitorModules = new Set<MonitorModule>();
+const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
+let cachedWebhookModule: Promise<WebhookModule> | undefined;
 
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
@@ -102,20 +104,17 @@ async function importSecretInputModule(cacheBust: string): Promise<SecretInputMo
   )) as SecretInputModule;
 }
 
-async function importWebhookModule(cacheBust: string): Promise<WebhookModule> {
-  return (await import(`${webhookModuleUrl}?t=${cacheBust}-${Date.now()}`)) as WebhookModule;
+async function importCachedWebhookModule(): Promise<WebhookModule> {
+  cachedWebhookModule ??= import(webhookModuleUrl) as Promise<WebhookModule>;
+  return await cachedWebhookModule;
 }
 
 export async function resetLifecycleTestState() {
   vi.clearAllMocks();
-  (await importWebhookModule("reset-webhook")).clearZaloWebhookSecurityStateForTest();
+  (await importCachedWebhookModule()).clearZaloWebhookSecurityStateForTest();
   for (const module of loadedMonitorModules) {
     module.__testing.clearHostedMediaRouteRefsForTest();
   }
-  (
-    await importMonitorModule({ cacheBust: "reset-monitor", mocked: false })
-  ).__testing.clearHostedMediaRouteRefsForTest();
-  loadedMonitorModules.clear();
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
 
@@ -133,12 +132,30 @@ export async function loadLifecycleMonitorModule(): Promise<MonitorModule> {
   return await importMonitorModule({ cacheBust: "monitor", mocked: true });
 }
 
+export async function loadCachedLifecycleMonitorModule(cacheKey: string): Promise<MonitorModule> {
+  const key = cacheKey.trim();
+  if (!key) {
+    throw new Error("cacheKey is required");
+  }
+  const cached =
+    cachedMonitorModules.get(key) ??
+    (async () => {
+      installLifecycleModuleMocks();
+      const module = (await import(`${monitorModuleUrl}?t=${key}`)) as MonitorModule;
+      loadedMonitorModules.add(module);
+      return module;
+    })();
+  cachedMonitorModules.set(key, cached);
+  return await cached;
+}
+
 export async function startWebhookLifecycleMonitor(params: {
   account: ResolvedZaloAccount;
   config: OpenClawConfig;
   token?: string;
   webhookUrl?: string;
   webhookSecret?: string;
+  cacheKey?: string;
 }) {
   const registry = createEmptyPluginRegistry();
   setActivePluginRegistry(registry);
@@ -152,7 +169,9 @@ export async function startWebhookLifecycleMonitor(params: {
   const { normalizeSecretInputString } = await importSecretInputModule("secret-input");
   const webhookSecret =
     params.webhookSecret ?? normalizeSecretInputString(params.account.config?.webhookSecret);
-  const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+  const { monitorZaloProvider } = params.cacheKey
+    ? await loadCachedLifecycleMonitorModule(params.cacheKey)
+    : await loadLifecycleMonitorModule();
   const run = monitorZaloProvider({
     token: params.token ?? "zalo-token",
     account: params.account,

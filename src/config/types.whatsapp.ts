@@ -5,6 +5,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
+  ReplyToMode,
 } from "./types.base.js";
 import type {
   ChannelHealthMonitorConfig,
@@ -102,6 +103,8 @@ type WhatsAppSharedConfig = {
   reactionLevel?: WhatsAppReactionLevel;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Reply threading mode for auto-replies (off|first|all|batched). */
+  replyToMode?: ReplyToMode;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */

@@ -57,6 +57,39 @@ export type UpdateRunResult = {
   after?: { sha?: string | null; version?: string | null };
   steps: UpdateStepResult[];
   durationMs: number;
+  postUpdate?: {
+    plugins?: {
+      status: "ok" | "skipped" | "error";
+      reason?: string;
+      changed: boolean;
+      sync: {
+        changed: boolean;
+        switchedToBundled: string[];
+        switchedToNpm: string[];
+        warnings: string[];
+        errors: string[];
+      };
+      npm: {
+        changed: boolean;
+        outcomes: Array<{
+          pluginId: string;
+          status: "updated" | "unchanged" | "skipped" | "error";
+          message: string;
+          currentVersion?: string;
+          nextVersion?: string;
+        }>;
+      };
+      integrityDrifts: Array<{
+        pluginId: string;
+        spec: string;
+        expectedIntegrity: string;
+        actualIntegrity: string;
+        resolvedSpec?: string;
+        resolvedVersion?: string;
+        action: "aborted";
+      }>;
+    };
+  };
 };
 
 type CommandRunner = (

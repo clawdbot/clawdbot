@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug, logWarn } from "../logger.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { loadEmbeddedPiLspConfig } from "./embedded-pi-lsp.js";
 import {
@@ -65,7 +66,7 @@ function parseLspMessages(buffer: string): { messages: unknown[]; remaining: str
       continue;
     }
 
-    const contentLength = parseInt(match[1], 10);
+    const contentLength = Number.parseInt(match[1], 10);
     const bodyStart = headerEnd + 4;
     const bodyEnd = bodyStart + contentLength;
 
@@ -368,6 +369,10 @@ export async function createBundleLspToolRuntime(params: {
             continue;
           }
           reservedNames.add(normalizedName);
+          setPluginToolMeta(tool, {
+            pluginId: "bundle-lsp",
+            optional: false,
+          });
           tools.push(tool);
         }
 

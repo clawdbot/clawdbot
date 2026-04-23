@@ -452,6 +452,7 @@ export async function setupFeishuLifecycleHandler(params: {
     account: params.account,
     runtime: params.runtime,
     botOpenIdSource: FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE,
+    fireAndForget: false,
   });
 
   const handlers: Record<string, (data: unknown) => Promise<void>> = {};

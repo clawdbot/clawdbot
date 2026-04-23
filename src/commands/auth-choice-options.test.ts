@@ -447,7 +447,7 @@ describe("buildAuthChoiceOptions", () => {
     ]);
   });
 
-  it("orders OpenAI auth methods as api key, login, import, then device pairing", () => {
+  it("orders OpenAI auth methods as api key, browser login, then device pairing", () => {
     resolveProviderWizardOptions.mockReturnValue([
       {
         value: "openai-api-key",
@@ -462,13 +462,6 @@ describe("buildAuthChoiceOptions", () => {
         groupId: "openai",
         groupLabel: "OpenAI",
         assistantPriority: -30,
-      },
-      {
-        value: "openai-codex-import",
-        label: "Import Existing Codex Login (~/.codex detected)",
-        groupId: "openai",
-        groupLabel: "OpenAI",
-        assistantPriority: -20,
       },
       {
         value: "openai-codex-device-code",
@@ -489,7 +482,6 @@ describe("buildAuthChoiceOptions", () => {
     expect(openAIGroup?.options.map((option) => option.value)).toEqual([
       "openai-api-key",
       "openai-codex",
-      "openai-codex-import",
       "openai-codex-device-code",
     ]);
   });

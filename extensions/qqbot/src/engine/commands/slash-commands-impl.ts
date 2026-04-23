@@ -94,7 +94,7 @@ registerCommand({
   handler: (ctx) => {
     const now = Date.now();
     const eventTime = new Date(ctx.eventTimestamp).getTime();
-    if (isNaN(eventTime)) {
+    if (Number.isNaN(eventTime)) {
       return `✅ pong!`;
     }
     const totalMs = now - eventTime;

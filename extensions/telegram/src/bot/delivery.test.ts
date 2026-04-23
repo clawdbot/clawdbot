@@ -402,6 +402,36 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("passes shared routing fields to message_sending hooks", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "caption", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      thread: { id: 42, scope: "forum" },
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "123",
+        content: "caption",
+        replyToId: 500,
+        threadId: 42,
+        metadata: expect.objectContaining({
+          channel: "telegram",
+          threadId: 42,
+        }),
+      }),
+      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
   it("invokes onVoiceRecording before sending a voice note", async () => {
     const events: string[] = [];
     const runtime = createRuntime(false);

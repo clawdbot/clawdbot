@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import {
   AGENT_INTERNAL_EVENT_SOURCES,
   AGENT_INTERNAL_EVENT_STATUSES,
@@ -95,6 +95,8 @@ export const SendParamsSchema = Type.Object(
     accountId: Type.Optional(Type.String()),
     /** Optional agent id for per-agent media root resolution on gateway sends. */
     agentId: Type.Optional(Type.String()),
+    /** Reply target message id for native quoted/threaded sends where supported. */
+    replyToId: Type.Optional(Type.String()),
     /** Thread id (channel-specific meaning, e.g. Telegram forum topic id). */
     threadId: Type.Optional(Type.String()),
     /** Optional session key for mirroring delivered output back into the transcript. */
@@ -150,6 +152,7 @@ export const AgentParamsSchema = Type.Object(
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
+    cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
     extraSystemPrompt: Type.Optional(Type.String()),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),

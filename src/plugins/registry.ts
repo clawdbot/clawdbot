@@ -30,6 +30,8 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
+import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
+import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
 import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
 import {
@@ -252,6 +254,69 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       }
     };
     registry.embeddedExtensionFactories.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      rawFactory: factory,
+      factory: safeFactory,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerCodexAppServerExtensionFactory = (
+    record: PluginRecord,
+    factory: Parameters<OpenClawPluginApi["registerCodexAppServerExtensionFactory"]>[0],
+  ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register Codex app-server extension factories",
+      });
+      return;
+    }
+    if (
+      !(record.contracts?.embeddedExtensionFactories ?? []).includes(
+        CODEX_APP_SERVER_EXTENSION_RUNTIME_ID,
+      )
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
+      });
+      return;
+    }
+    if (typeof (factory as unknown) !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "codex app-server extension factory must be a function",
+      });
+      return;
+    }
+    if (
+      registry.codexAppServerExtensionFactories.some(
+        (entry) => entry.pluginId === record.id && entry.rawFactory === factory,
+      )
+    ) {
+      return;
+    }
+    const safeFactory: CodexAppServerExtensionFactory = async (codex) => {
+      try {
+        await factory(codex);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        registryParams.logger.warn(
+          `[plugins] codex app-server extension factory failed for ${record.id}: ${detail}`,
+        );
+      }
+    };
+    registry.codexAppServerExtensionFactories.push({
       pluginId: record.id,
       pluginName: record.name,
       rawFactory: factory,
@@ -1338,6 +1403,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerEmbeddedExtensionFactory: (factory) => {
                 registerPiEmbeddedExtensionFactory(record, factory);
+              },
+              registerCodexAppServerExtensionFactory: (factory) => {
+                registerCodexAppServerExtensionFactory(record, factory);
               },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {

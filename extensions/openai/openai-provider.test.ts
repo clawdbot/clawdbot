@@ -49,6 +49,16 @@ function runWrappedPayloadCase(params: {
 }
 
 describe("buildOpenAIProvider", () => {
+  it("exposes grouped model/auth picker labels for API key setup", () => {
+    const provider = buildOpenAIProvider();
+    const apiKey = provider.auth.find((method) => method.id === "api-key");
+
+    expect(apiKey?.wizard).toMatchObject({
+      choiceLabel: "OpenAI API Key",
+      groupHint: "API key or Codex sign-in",
+    });
+  });
+
   it("resolves gpt-5.4 mini and nano from GPT-5 small-model templates", () => {
     const provider = buildOpenAIProvider();
     const registry = {
@@ -355,6 +365,129 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "low" });
     expect(result.payload.reasoning).toEqual({ effort: "none" });
+    expect(result.payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("uses native OpenAI web search instead of the managed web_search function", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [
+          { type: "function", name: "read" },
+          { type: "function", name: "web_search" },
+        ],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([
+      { type: "function", name: "read" },
+      { type: "web_search" },
+    ]);
+  });
+
+  it("raises minimal reasoning when native OpenAI web search is injected", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        reasoning: { effort: "minimal", summary: "auto" },
+      },
+    });
+
+    expect(result.payload.reasoning).toEqual({ effort: "low", summary: "auto" });
+    expect(result.payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("does not inject native OpenAI web search when disabled or proxied", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const disabled = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      cfg: { tools: { web: { search: { enabled: false } } } },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", name: "web_search" }] },
+    });
+    const proxied = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://example-proxy.invalid/v1",
+      } as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", name: "web_search" }] },
+    });
+
+    expect(disabled.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
+    expect(proxied.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
+  });
+
+  it("keeps managed web_search when another search provider is configured", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      cfg: { tools: { web: { search: { enabled: true, provider: "brave" } } } },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", name: "web_search" }] },
+    });
+
+    expect(result.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
   });
 
   it("preserves explicit OpenAI responses transport and warmup overrides", () => {

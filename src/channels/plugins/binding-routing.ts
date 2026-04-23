@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
+import {
+  getSessionBindingService,
+  type ConversationRef,
+  type SessionBindingRecord,
+} from "../../infra/outbound/session-binding-service.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -9,6 +13,13 @@ import type { ConfiguredBindingResolution } from "./binding-types.js";
 
 export type ConfiguredBindingRouteResult = {
   bindingResolution: ConfiguredBindingResolution | null;
+  route: ResolvedAgentRoute;
+  boundSessionKey?: string;
+  boundAgentId?: string;
+};
+
+export type RuntimeConversationBindingRouteResult = {
+  bindingRecord: SessionBindingRecord | null;
   route: ResolvedAgentRoute;
   boundSessionKey?: string;
   boundAgentId?: string;
@@ -37,6 +48,18 @@ function resolveConfiguredBindingConversationRef(
     conversationId: params.conversationId,
     parentConversationId: params.parentConversationId,
   };
+}
+
+function isPluginOwnedRuntimeBindingRecord(record: SessionBindingRecord | null): boolean {
+  const metadata = record?.metadata;
+  if (!metadata || typeof metadata !== "object") {
+    return false;
+  }
+  return (
+    metadata.pluginBindingOwner === "plugin" &&
+    typeof metadata.pluginId === "string" &&
+    typeof metadata.pluginRoot === "string"
+  );
 }
 
 export function resolveConfiguredBindingRoute(
@@ -68,6 +91,48 @@ export function resolveConfiguredBindingRoute(
     resolveAgentIdFromSessionKey(boundSessionKey) || bindingResolution.statefulTarget.agentId;
   return {
     bindingResolution,
+    boundSessionKey,
+    boundAgentId,
+    route: {
+      ...params.route,
+      sessionKey: boundSessionKey,
+      agentId: boundAgentId,
+      lastRoutePolicy: deriveLastRoutePolicy({
+        sessionKey: boundSessionKey,
+        mainSessionKey: params.route.mainSessionKey,
+      }),
+      matchedBy: "binding.channel",
+    },
+  };
+}
+
+export function resolveRuntimeConversationBindingRoute(
+  params: {
+    route: ResolvedAgentRoute;
+  } & ConfiguredBindingRouteConversationInput,
+): RuntimeConversationBindingRouteResult {
+  const bindingRecord = getSessionBindingService().resolveByConversation(
+    resolveConfiguredBindingConversationRef(params),
+  );
+  const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
+  if (!bindingRecord || !boundSessionKey) {
+    return {
+      bindingRecord: null,
+      route: params.route,
+    };
+  }
+
+  getSessionBindingService().touch(bindingRecord.bindingId);
+  if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
+    return {
+      bindingRecord,
+      route: params.route,
+    };
+  }
+
+  const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey) || params.route.agentId;
+  return {
+    bindingRecord,
     boundSessionKey,
     boundAgentId,
     route: {

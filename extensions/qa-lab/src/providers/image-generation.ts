@@ -6,6 +6,7 @@ type QaImageGenerationPatchInput = {
   providerMode: QaProviderMode;
   providerBaseUrl?: string;
   requiredPluginIds: readonly string[];
+  existingPluginIds?: readonly string[];
 };
 
 function splitModelProviderId(modelRef: string) {
@@ -48,6 +49,7 @@ export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchI
     plugins: {
       allow: uniqueNonEmpty([
         ...QA_BASE_RUNTIME_PLUGIN_IDS,
+        ...(input.existingPluginIds ?? []),
         ...enabledPluginIds,
         ...input.requiredPluginIds,
       ]),

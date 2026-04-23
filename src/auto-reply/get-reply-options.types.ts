@@ -108,6 +108,7 @@ export type GetReplyOptions = {
     command?: string;
     host?: string;
     reason?: string;
+    scope?: "turn" | "session";
     message?: string;
   }) => Promise<void> | void;
   /** Called when command output streams or completes. */

@@ -15,6 +15,7 @@ import {
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
+import { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getActiveTaskCount,
@@ -52,6 +53,12 @@ export async function runGatewayLoop(params: {
   const exitProcess = (code: number) => {
     cleanupSignals();
     params.runtime.exit(code);
+  };
+  const writeStabilityBundle = (reason: string, error?: unknown) => {
+    const result = writeDiagnosticStabilityBundleForFailureSync(reason, error);
+    if ("message" in result) {
+      gatewayLog.warn(result.message);
+    }
   };
   const releaseLockIfHeld = async (): Promise<boolean> => {
     if (!lock) {
@@ -96,6 +103,7 @@ export async function runGatewayLoop(params: {
       return;
     }
     if (respawn.mode === "failed") {
+      writeStabilityBundle("gateway.restart_respawn_failed");
       gatewayLog.warn(
         `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
       );
@@ -144,6 +152,9 @@ export async function runGatewayLoop(params: {
       : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
+      writeStabilityBundle(
+        isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
+      );
       // Keep the in-process watchdog below the supervisor stop budget so this
       // path wins before launchd/systemd escalates to a hard kill. Exit
       // non-zero on any timeout so supervised installs restart cleanly.
@@ -278,6 +289,7 @@ export async function runGatewayLoop(params: {
         await releaseLockIfHeld();
         const errMsg = formatErrorMessage(err);
         const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
+        writeStabilityBundle("gateway.restart_startup_failed", err);
         gatewayLog.error(
           `gateway startup failed: ${errMsg}. ` +
             `Process will stay alive; fix the issue and restart.${errStack}`,

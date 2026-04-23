@@ -163,6 +163,22 @@ describe("matrix live qa scenarios", () => {
     ).toBe("@sut:matrix-qa.test reply with only this exact marker: MATRIX_QA_CANARY_TOKEN");
   });
 
+  it("keeps live Matrix model and E2EE waits above observed CI latency", () => {
+    const scenarios = new Map(MATRIX_QA_SCENARIOS.map((scenario) => [scenario.id, scenario]));
+
+    expect(scenarios.get("matrix-subagent-thread-spawn")?.timeoutMs).toBeGreaterThanOrEqual(
+      120_000,
+    );
+    expect(scenarios.get("matrix-room-generated-image-delivery")?.timeoutMs).toBeGreaterThanOrEqual(
+      180_000,
+    );
+    expect(scenarios.get("matrix-e2ee-restart-resume")?.timeoutMs).toBeGreaterThanOrEqual(150_000);
+    expect(scenarios.get("matrix-e2ee-artifact-redaction")?.timeoutMs).toBeGreaterThanOrEqual(
+      150_000,
+    );
+    expect(scenarios.get("matrix-e2ee-media-image")?.timeoutMs).toBeGreaterThanOrEqual(180_000);
+  });
+
   it("requires Matrix replies to match the exact marker body", () => {
     expect(
       scenarioTesting.buildMatrixReplyArtifact(
@@ -588,6 +604,73 @@ describe("matrix live qa scenarios", () => {
         roomId: "!main:matrix-qa.test",
       }),
     );
+  });
+
+  it("ignores stale Matrix SUT replies before a no-reply trigger", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("observer-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$observer-command-trigger");
+    const waitForOptionalRoomEvent = vi.fn().mockImplementation(async (params) => {
+      expect(
+        params.predicate({
+          eventId: "$previous-reply",
+          kind: "message",
+          relatesTo: {
+            eventId: "$previous-trigger",
+            inReplyToId: "$previous-trigger",
+            isFallingBack: true,
+            relType: "m.thread",
+          },
+          roomId: "!main:matrix-qa.test",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+        }),
+      ).toBe(false);
+      expect(
+        params.predicate({
+          eventId: "$observer-command-trigger",
+          kind: "message",
+          roomId: "!main:matrix-qa.test",
+          sender: "@observer:matrix-qa.test",
+          type: "m.room.message",
+        }),
+      ).toBe(false);
+      expect(
+        params.predicate({
+          eventId: "$current-reply",
+          kind: "message",
+          relatesTo: {
+            eventId: "$observer-command-trigger",
+            inReplyToId: "$observer-command-trigger",
+            isFallingBack: true,
+            relType: "m.thread",
+          },
+          roomId: "!main:matrix-qa.test",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+        }),
+      ).toBe(true);
+      return {
+        matched: false,
+        since: "observer-sync-next",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForOptionalRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-mxid-prefixed-command-block",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        driverEventId: "$observer-command-trigger",
+      },
+    });
   });
 
   it("hot-reloads group allowlist removals inside one running Matrix gateway", async () => {
@@ -1276,7 +1359,12 @@ describe("matrix live qa scenarios", () => {
     });
 
     expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Use sessions_spawn for this QA check"),
+      body: expect.stringContaining("Call sessions_spawn now for this QA check"),
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!main:matrix-qa.test",
+    });
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      body: expect.stringContaining("runTimeoutSeconds=60"),
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });

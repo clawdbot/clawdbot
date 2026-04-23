@@ -540,10 +540,14 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   }
 
   if (hasSetupAutoEnableRelevantConfig(params.config)) {
+    const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
+    const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(params.config).filter(
+      (pluginId) => !manifestMatchedPluginIds.has(pluginId),
+    );
     for (const entry of resolvePluginSetupAutoEnableReasons({
       config: params.config,
       env: params.env,
-      pluginIds: resolveRelevantSetupAutoEnablePluginIds(params.config),
+      pluginIds: setupPluginIds,
     })) {
       changes.push({
         pluginId: entry.pluginId,
@@ -684,7 +688,7 @@ function resolveChannelAutoEnableDisplayLabel(
 ): string | undefined {
   const builtInChannelId = normalizeChatChannelId(entry.channelId);
   if (builtInChannelId) {
-    return getChatChannelMeta(builtInChannelId).label;
+    return getChatChannelMeta(builtInChannelId)?.label;
   }
   const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
   return plugin?.channelConfigs?.[entry.channelId]?.label ?? plugin?.channelCatalogMeta?.label;

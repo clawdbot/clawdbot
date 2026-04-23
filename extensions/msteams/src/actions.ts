@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
@@ -6,6 +5,7 @@ import type {
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 import type { ChannelMessageActionName, ChannelPlugin } from "./channel-api.js";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { resolveMSTeamsCredentials } from "./token.js";

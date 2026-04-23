@@ -64,6 +64,15 @@ describe("agent defaults schema", () => {
     expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
   });
 
+  it("accepts compaction.truncateAfterCompaction", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        truncateAfterCompaction: true,
+      },
+    })!;
+    expect(result.compaction?.truncateAfterCompaction).toBe(true);
+  });
+
   it("accepts focused contextLimits on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
       contextLimits: {

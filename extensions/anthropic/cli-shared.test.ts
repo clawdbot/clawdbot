@@ -107,6 +107,21 @@ describe("normalizeClaudeBackendConfig", () => {
       "--permission-mode",
       "bypassPermissions",
     ]);
+    expect(normalized.output).toBe("jsonl");
+    expect(normalized.liveSession).toBe("claude-stdio");
+    expect(normalized.input).toBe("stdin");
+  });
+
+  it("does not infer live stdio when explicit transport overrides are incompatible", () => {
+    const normalized = normalizeClaudeBackendConfig({
+      command: "claude",
+      output: "json",
+      input: "arg",
+    });
+
+    expect(normalized.output).toBe("json");
+    expect(normalized.liveSession).toBeUndefined();
+    expect(normalized.input).toBe("arg");
   });
 
   it("is wired through the anthropic cli backend normalize hook", () => {
@@ -129,12 +144,16 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(normalized?.resumeArgs).toContain("bypassPermissions");
     expect(normalized?.resumeArgs).toContain("--setting-sources");
     expect(normalized?.resumeArgs).toContain("user");
+    expect(normalized?.liveSession).toBe("claude-stdio");
   });
 
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {
     const backend = buildAnthropicCliBackend();
 
     expect(backend.config.env).toBeUndefined();
+    expect(backend.config.liveSession).toBe("claude-stdio");
+    expect(backend.config.output).toBe("jsonl");
+    expect(backend.config.input).toBe("stdin");
     expect(backend.config.args).toContain("--setting-sources");
     expect(backend.config.args).toContain("user");
     expect(backend.config.resumeArgs).toContain("--setting-sources");

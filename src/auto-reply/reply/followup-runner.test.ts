@@ -1268,12 +1268,17 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       ok: false,
       error: "outbound adapter unavailable",
     });
+    const queued = baseQueuedRun(" Feishu ");
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "hello world!" }] },
       queued: {
-        ...baseQueuedRun(" Feishu "),
+        ...queued,
         originatingChannel: "FEISHU",
         originatingTo: "ou_abc123",
+        run: {
+          ...queued.run,
+          agentAccountId: undefined,
+        },
       } as FollowupRun,
     });
 

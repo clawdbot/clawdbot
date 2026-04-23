@@ -14,3 +14,8 @@ export {
   listRealtimeTranscriptionProviders,
   normalizeRealtimeTranscriptionProviderId,
 } from "../realtime-transcription/provider-registry.js";
+export {
+  createRealtimeTranscriptionWebSocketSession,
+  type RealtimeTranscriptionWebSocketSessionOptions,
+  type RealtimeTranscriptionWebSocketTransport,
+} from "../realtime-transcription/websocket-session.js";

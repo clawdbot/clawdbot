@@ -246,7 +246,9 @@ async function persistProviderAuthResult(params: {
   await updateConfig((cfg) => {
     let next = cfg;
     if (params.result.configPatch) {
-      next = applyProviderAuthConfigPatch(next, params.result.configPatch);
+      next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
+        replaceDefaultModels: params.result.replaceDefaultModels,
+      });
     }
     for (const profile of params.result.profiles) {
       next = applyAuthProfileConfig(next, {

@@ -141,6 +141,13 @@ timeout only when the provider context is actually OpenRouter. Generic internal
 fallback text such as `LLM request failed with an unknown error.` stays
 conservative and does not trigger failover by itself.
 
+Some provider SDKs may otherwise sleep for a long `Retry-After` window before
+returning control to OpenClaw. For Stainless-based SDKs such as Anthropic and
+OpenAI, OpenClaw caps SDK-internal `retry-after-ms` / `retry-after` waits at 60
+seconds by default and surfaces longer retryable responses immediately so this
+failover path can run. Tune or disable the cap with
+`OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS`; see [/concepts/retry](/concepts/retry).
+
 Rate-limit cooldowns can also be model-scoped:
 
 - OpenClaw records `cooldownModel` for rate-limit failures when the failing

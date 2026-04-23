@@ -1,3 +1,7 @@
+import {
+  resolvePluginConfigObject,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
@@ -24,7 +28,15 @@ export default definePluginEntry({
   name: "GitHub Copilot Provider",
   description: "Bundled GitHub Copilot provider plugin",
   register(api) {
-    const pluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
+    const startupPluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
+
+    function resolveCurrentPluginConfig(config?: OpenClawConfig): GithubCopilotPluginConfig {
+      const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");
+      if (runtimePluginConfig) {
+        return runtimePluginConfig as GithubCopilotPluginConfig;
+      }
+      return config ? {} : startupPluginConfig;
+    }
 
     async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
       const { githubCopilotLoginCommand } = await loadGithubCopilotRuntime();
@@ -100,6 +112,7 @@ export default definePluginEntry({
       catalog: {
         order: "late",
         run: async (ctx) => {
+          const pluginConfig = resolveCurrentPluginConfig(ctx.config);
           const discoveryEnabled =
             pluginConfig.discovery?.enabled ?? ctx.config?.models?.copilotDiscovery?.enabled;
           if (discoveryEnabled === false) {

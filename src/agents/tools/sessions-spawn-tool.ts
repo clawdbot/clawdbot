@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -245,6 +245,7 @@ export function createSessionsSpawnTool(
             label: label || undefined,
             agentId: requestedAgentId,
             resumeSessionId,
+            model: modelOverride,
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,

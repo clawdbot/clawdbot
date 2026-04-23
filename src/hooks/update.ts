@@ -61,7 +61,7 @@ function createHookPackUpdateIntegrityDriftHandler(params: {
     params.logger.warn?.(
       `Integrity drift for hook pack "${params.hookId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
     );
-    return true;
+    return false;
   };
 }
 

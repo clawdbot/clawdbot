@@ -40,28 +40,32 @@ export async function getSharedCodexAppServerClient(options?: {
     clearSharedCodexAppServerClient();
   }
   state.key = key;
-  state.promise ??= (async () => {
-    const client = CodexAppServerClient.start(startOptions);
-    state.client = client;
-    client.addCloseHandler(clearSharedClientIfCurrent);
-    try {
-      await client.initialize();
-      return client;
-    } catch (error) {
-      // Startup failures happen before callers own the shared client, so close
-      // the child here instead of leaving a rejected daemon attached to stdio.
-      client.close();
-      throw error;
-    }
-  })();
+  const sharedPromise =
+    state.promise ??
+    (state.promise = (async () => {
+      const client = CodexAppServerClient.start(startOptions);
+      state.client = client;
+      client.addCloseHandler(clearSharedClientIfCurrent);
+      try {
+        await client.initialize();
+        return client;
+      } catch (error) {
+        // Startup failures happen before callers own the shared client, so close
+        // the child here instead of leaving a rejected daemon attached to stdio.
+        client.close();
+        throw error;
+      }
+    })());
   try {
     return await withTimeout(
-      state.promise,
+      sharedPromise,
       options?.timeoutMs ?? 0,
       "codex app-server initialize timed out",
     );
   } catch (error) {
-    clearSharedCodexAppServerClient();
+    if (state.promise === sharedPromise && state.key === key) {
+      clearSharedCodexAppServerClient();
+    }
     throw error;
   }
 }
@@ -83,7 +87,7 @@ export async function createIsolatedCodexAppServerClient(options?: {
     return client;
   } catch (error) {
     client.close();
-    await initialize.catch(() => undefined);
+    void initialize.catch(() => undefined);
     throw error;
   }
 }

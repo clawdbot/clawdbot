@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { ENV_SECRET_REF_ID_RE } from "../../../config/types.secrets.js";
 import {
   EXEC_SECRET_REF_ID_JSON_SCHEMA_PATTERN,
@@ -30,13 +30,9 @@ export const InputProvenanceSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const GatewayClientIdSchema = Type.Union(
-  Object.values(GATEWAY_CLIENT_IDS).map((value) => Type.Literal(value)),
-);
+export const GatewayClientIdSchema = Type.Enum(GATEWAY_CLIENT_IDS);
 
-export const GatewayClientModeSchema = Type.Union(
-  Object.values(GATEWAY_CLIENT_MODES).map((value) => Type.Literal(value)),
-);
+export const GatewayClientModeSchema = Type.Enum(GATEWAY_CLIENT_MODES);
 
 export const SecretRefSourceSchema = Type.Union([
   Type.Literal("env"),

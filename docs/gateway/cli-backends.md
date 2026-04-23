@@ -181,16 +181,27 @@ child process environment for the run.
   - `always`: always send a session id (new UUID if none stored).
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
-- The bundled `claude-cli` backend uses `liveSession: "claude-stdio"` so
-  follow-up turns reuse the live Claude process while it is active. If the
-  Gateway restarts or the idle process exits, OpenClaw resumes from the stored
-  Claude session id.
+- `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`,
+  and `input: "stdin"` so follow-up turns reuse the live Claude process while
+  it is active. Warm stdio is the default now, including for custom configs
+  that omit transport fields. If the Gateway restarts or the idle process
+  exits, OpenClaw resumes from the stored Claude session id. Stored session
+  ids are verified against an existing readable project transcript before
+  resume, so phantom bindings are cleared with `reason=transcript-missing`
+  instead of silently starting a fresh Claude CLI session under `--resume`.
+- Stored CLI sessions are provider-owned continuity. The implicit daily session
+  reset does not cut them; `/reset` and explicit `session.reset` policies still
+  do.
 
 Serialization notes:
 
 - `serialize: true` keeps same-lane runs ordered.
 - Most CLIs serialize on one provider lane.
-- OpenClaw drops stored CLI session reuse when the backend auth state changes, including relogin, token rotation, or a changed auth profile credential.
+- OpenClaw drops stored CLI session reuse when the selected auth identity changes,
+  including a changed auth profile id, static API key, static token, or OAuth
+  account identity when the CLI exposes one. OAuth access and refresh token
+  rotation does not cut the stored CLI session. If a CLI does not expose a
+  stable OAuth account id, OpenClaw lets that CLI enforce resume permissions.
 
 ## Images (pass-through)
 

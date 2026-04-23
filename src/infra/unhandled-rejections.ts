@@ -7,6 +7,7 @@ import {
   formatUncaughtError,
   readErrorName,
 } from "./errors.js";
+import { runFatalErrorHooks } from "./fatal-error-hooks.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
@@ -337,7 +338,10 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
 }
 
 export function installUnhandledRejectionHandler(): void {
-  const exitWithTerminalRestore = (reason: string) => {
+  const exitWithTerminalRestore = (reason: string, error?: unknown, hookReason = reason) => {
+    for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
+      console.error("[openclaw]", message);
+    }
     restoreTerminalState(reason, { resumeStdinIfPaused: false });
     process.exit(1);
   };
@@ -356,13 +360,13 @@ export function installUnhandledRejectionHandler(): void {
 
     if (isFatalError(reason)) {
       console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
-      exitWithTerminalRestore("fatal unhandled rejection");
+      exitWithTerminalRestore("fatal unhandled rejection", reason, "fatal_unhandled_rejection");
       return;
     }
 
     if (isConfigError(reason)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
-      exitWithTerminalRestore("configuration error");
+      exitWithTerminalRestore("configuration error", reason, "configuration_error");
       return;
     }
 
@@ -375,6 +379,6 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
-    exitWithTerminalRestore("unhandled rejection");
+    exitWithTerminalRestore("unhandled rejection", reason, "unhandled_rejection");
   });
 }

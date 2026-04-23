@@ -71,6 +71,36 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   return {
     ...actual,
     resolveConfiguredBindingRoute: persistentBindingMocks.resolveConfiguredBindingRoute,
+    resolveRuntimeConversationBindingRoute: (
+      params: Parameters<typeof actual.resolveRuntimeConversationBindingRoute>[0],
+    ) => {
+      const conversation =
+        "conversation" in params
+          ? params.conversation
+          : {
+              channel: params.channel,
+              accountId: params.accountId,
+              conversationId: params.conversationId,
+              parentConversationId: params.parentConversationId,
+            };
+      const bindingRecord = sessionBindingMocks.resolveByConversation(conversation);
+      const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
+      if (!bindingRecord || !boundSessionKey) {
+        return { bindingRecord: null, route: params.route };
+      }
+      sessionBindingMocks.touch(bindingRecord.bindingId, undefined);
+      return {
+        bindingRecord,
+        boundSessionKey,
+        boundAgentId: params.route.agentId,
+        route: {
+          ...params.route,
+          sessionKey: boundSessionKey,
+          lastRoutePolicy: boundSessionKey === params.route.mainSessionKey ? "main" : "session",
+          matchedBy: "binding.channel",
+        },
+      };
+    },
     ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
     recordInboundSessionMetaSafe: vi.fn(
       async (params: {

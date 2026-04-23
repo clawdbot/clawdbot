@@ -287,7 +287,17 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     sessions_list: {
       emoji: "🗂️",
       title: "Sessions",
-      detailKeys: ["kinds", "limit", "activeMinutes", "messageLimit"],
+      detailKeys: [
+        "kinds",
+        "label",
+        "agentId",
+        "search",
+        "limit",
+        "activeMinutes",
+        "includeDerivedTitles",
+        "includeLastMessage",
+        "messageLimit",
+      ],
     },
     sessions_send: {
       emoji: "📨",

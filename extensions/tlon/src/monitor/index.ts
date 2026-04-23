@@ -104,7 +104,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         if (attempt >= maxAttempts) {
           throw error;
         }
-        const delay = Math.min(30000, 1000 * Math.pow(2, attempt - 1));
+        const delay = Math.min(30000, 1000 * 2 ** (attempt - 1));
         runtime.log?.(`[tlon] Retrying authentication in ${delay}ms...`);
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, delay);
@@ -788,7 +788,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                     type: "channel",
                     requestingShip: senderShip,
                     channelNest: nest,
-                    messagePreview: rawText.substring(0, 100),
+                    messagePreview: rawText.slice(0, 100),
                     originalMessage: {
                       messageId: messageId ?? "",
                       messageText: rawText,
@@ -991,7 +991,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               const approval = createPendingApproval({
                 type: "dm",
                 requestingShip: senderShip,
-                messagePreview: messageText.substring(0, 100),
+                messagePreview: messageText.slice(0, 100),
                 originalMessage: {
                   messageId: messageId ?? "",
                   messageText,

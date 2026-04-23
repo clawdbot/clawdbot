@@ -33,7 +33,7 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
     id: "image",
     testFile: "test/image-generation.runtime.live.test.ts",
     providerEnvVar: "OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS",
-    providers: ["fal", "google", "minimax", "openai", "vydra"],
+    providers: ["fal", "google", "minimax", "openai", "vydra", "xai"],
   },
   music: {
     id: "music",

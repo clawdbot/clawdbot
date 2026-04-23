@@ -4,21 +4,15 @@ import {
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { registerMatrixCliMetadata } from "./cli-metadata.js";
+import { registerMatrixSubagentHooks } from "./subagent-hooks-api.js";
 
 type MatrixHandlersRuntimeModule = typeof import("./plugin-entry.handlers.runtime.js");
-type MatrixSubagentHooksModule = typeof import("./src/matrix/subagent-hooks.js");
 
 let matrixHandlersRuntimePromise: Promise<MatrixHandlersRuntimeModule> | null = null;
-let matrixSubagentHooksPromise: Promise<MatrixSubagentHooksModule> | null = null;
 
 function loadMatrixHandlersRuntimeModule() {
   matrixHandlersRuntimePromise ??= import("./plugin-entry.handlers.runtime.js");
   return matrixHandlersRuntimePromise;
-}
-
-function loadMatrixSubagentHooksModule() {
-  matrixSubagentHooksPromise ??= import("./src/matrix/subagent-hooks.js");
-  return matrixSubagentHooksPromise;
 }
 
 export function registerMatrixFullRuntime(api: OpenClawPluginApi): void {
@@ -49,18 +43,7 @@ export function registerMatrixFullRuntime(api: OpenClawPluginApi): void {
     await handleVerificationStatus(ctx);
   });
 
-  api.on("subagent_spawning", async (event) => {
-    const { handleMatrixSubagentSpawning } = await loadMatrixSubagentHooksModule();
-    return await handleMatrixSubagentSpawning(api, event);
-  });
-  api.on("subagent_ended", async (event) => {
-    const { handleMatrixSubagentEnded } = await loadMatrixSubagentHooksModule();
-    await handleMatrixSubagentEnded(event);
-  });
-  api.on("subagent_delivery_target", async (event) => {
-    const { handleMatrixSubagentDeliveryTarget } = await loadMatrixSubagentHooksModule();
-    return handleMatrixSubagentDeliveryTarget(event);
-  });
+  registerMatrixSubagentHooks(api);
 }
 
 export default defineBundledChannelEntry({

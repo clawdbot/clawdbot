@@ -1,4 +1,4 @@
-import { Type, type Static } from "@sinclair/typebox";
+import { Type, type Static } from "typebox";
 
 export const FeishuWikiSchema = Type.Union([
   Type.Object({

@@ -22,6 +22,32 @@ describe("provider replay helpers", () => {
     });
   });
 
+  it("omits tool-call id sanitization when opted out for openai-completions", () => {
+    const policy = buildOpenAICompatibleReplayPolicy("openai-completions", {
+      sanitizeToolCallIds: false,
+    });
+    expect(policy).toMatchObject({
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    });
+    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
+    expect(policy).not.toHaveProperty("toolCallIdMode");
+  });
+
+  it("omits tool-call id sanitization when opted out for openai-responses", () => {
+    const policy = buildOpenAICompatibleReplayPolicy("openai-responses", {
+      sanitizeToolCallIds: false,
+    });
+    expect(policy).toMatchObject({
+      applyAssistantFirstOrderingFix: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+    });
+    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
+    expect(policy).not.toHaveProperty("toolCallIdMode");
+  });
+
   it("builds strict anthropic replay policy", () => {
     expect(buildStrictAnthropicReplayPolicy({ dropThinkingBlocks: true })).toMatchObject({
       sanitizeMode: "full",

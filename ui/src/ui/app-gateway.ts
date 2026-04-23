@@ -30,6 +30,7 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "./controllers/chat.ts";
+import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import { loadDevices, type DevicesState } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
@@ -292,6 +293,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode = null;
       host.hello = hello;
       applySnapshot(host, hello);
+      void loadControlUiBootstrapConfig(
+        host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+      );
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;

@@ -53,6 +53,23 @@ function expectRuntimePluginWrapperContains(params: {
   expect(fs.readFileSync(runtimePath, "utf8")).toContain(params.expectedImport);
 }
 
+function expectRuntimePluginWrapperForwardsDefault(params: {
+  repoRoot: string;
+  pluginId: string;
+  expectedImport: string;
+}) {
+  const runtimePath = path.join(
+    params.repoRoot,
+    "dist-runtime",
+    "extensions",
+    params.pluginId,
+    "index.js",
+  );
+  expect(fs.readFileSync(runtimePath, "utf8")).toContain(
+    `import defaultModule from "${params.expectedImport}";`,
+  );
+}
+
 function expectRuntimeArtifactText(params: {
   repoRoot: string;
   pluginId: string;
@@ -98,6 +115,11 @@ describe("stageBundledPluginRuntime", () => {
 
     const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", "diffs");
     expectRuntimePluginWrapperContains({
+      repoRoot,
+      pluginId: "diffs",
+      expectedImport: distRuntimeImportPath("diffs"),
+    });
+    expectRuntimePluginWrapperForwardsDefault({
       repoRoot,
       pluginId: "diffs",
       expectedImport: distRuntimeImportPath("diffs"),

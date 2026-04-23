@@ -1,4 +1,4 @@
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
 import {
   AgentEventSchema,
   AgentIdentityParamsSchema,

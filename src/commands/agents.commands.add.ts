@@ -274,28 +274,34 @@ export async function agentsAddCommand(
       const authStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
       });
-      const authChoice = await promptAuthChoiceGrouped({
-        prompter,
-        store: authStore,
-        includeSkip: true,
-        config: nextConfig,
-      });
-
-      const authResult = await applyAuthChoice({
-        authChoice,
-        config: nextConfig,
-        prompter,
-        runtime,
-        agentDir,
-        setDefaultModel: false,
-        agentId,
-      });
-      nextConfig = authResult.config;
-      if (authResult.agentModelOverride) {
-        nextConfig = applyAgentConfig(nextConfig, {
-          agentId,
-          model: authResult.agentModelOverride,
+      while (true) {
+        const authChoice = await promptAuthChoiceGrouped({
+          prompter,
+          store: authStore,
+          includeSkip: true,
+          config: nextConfig,
         });
+
+        const authResult = await applyAuthChoice({
+          authChoice,
+          config: nextConfig,
+          prompter,
+          runtime,
+          agentDir,
+          setDefaultModel: false,
+          agentId,
+        });
+        nextConfig = authResult.config;
+        if (authResult.retrySelection) {
+          continue;
+        }
+        if (authResult.agentModelOverride) {
+          nextConfig = applyAgentConfig(nextConfig, {
+            agentId,
+            model: authResult.agentModelOverride,
+          });
+        }
+        break;
       }
     }
 

@@ -58,86 +58,270 @@ function createResetAwareSessionStore(baseStore: AcpSessionStore): ResetAwareSes
   };
 }
 
-type AcpxRuntimeLike = AcpRuntime & {
-  probeAvailability(): Promise<void>;
-  isHealthy(): boolean;
-  doctor(): Promise<AcpRuntimeDoctorReport>;
-};
+const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
+const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 
-export class AcpxRuntime implements AcpxRuntimeLike {
+function normalizeAgentName(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function readAgentFromSessionKey(sessionKey: string | undefined): string | undefined {
+  const normalized = sessionKey?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const match = /^agent:(?<agent>[^:]+):/i.exec(normalized);
+  return normalizeAgentName(match?.groups?.agent);
+}
+
+function readAgentFromHandle(handle: AcpRuntimeHandle): string | undefined {
+  const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+  if (typeof decoded === "object" && decoded !== null) {
+    const { agent } = decoded as { agent?: unknown };
+    if (typeof agent === "string") {
+      return normalizeAgentName(agent) ?? readAgentFromSessionKey(handle.sessionKey);
+    }
+  }
+  return readAgentFromSessionKey(handle.sessionKey);
+}
+
+function readAgentCommandFromRecord(record: AcpLoadedSessionRecord): string | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { agentCommand } = record as { agentCommand?: unknown };
+  return typeof agentCommand === "string" ? agentCommand.trim() || undefined : undefined;
+}
+
+function splitCommandParts(value: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaping = false;
+
+  for (const ch of value) {
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaping = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+
+  if (escaping) {
+    current += "\\";
+  }
+  if (current) {
+    parts.push(current);
+  }
+  return parts;
+}
+
+function basename(value: string): string {
+  return value.split(/[\\/]/).pop() ?? value;
+}
+
+function isEnvAssignment(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(value);
+}
+
+function unwrapEnvCommand(parts: string[]): string[] {
+  if (!parts.length || basename(parts[0]) !== "env") {
+    return parts;
+  }
+  let index = 1;
+  while (index < parts.length && isEnvAssignment(parts[index])) {
+    index += 1;
+  }
+  return parts.slice(index);
+}
+
+function isOpenClawBridgeCommand(command: string | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
+  if (basename(parts[0] ?? "") === OPENCLAW_BRIDGE_EXECUTABLE) {
+    return parts[1] === OPENCLAW_BRIDGE_SUBCOMMAND;
+  }
+  if (basename(parts[0] ?? "") !== "node") {
+    return false;
+  }
+  const scriptName = basename(parts[1] ?? "");
+  return /^openclaw(?:\.[cm]?js)?$/i.test(scriptName) && parts[2] === OPENCLAW_BRIDGE_SUBCOMMAND;
+}
+
+function resolveAgentCommand(params: {
+  agentName: string | undefined;
+  agentRegistry: AcpAgentRegistry;
+}): string | undefined {
+  const normalizedAgentName = normalizeAgentName(params.agentName);
+  if (!normalizedAgentName) {
+    return undefined;
+  }
+  const resolvedCommand = params.agentRegistry.resolve(normalizedAgentName);
+  return typeof resolvedCommand === "string" ? resolvedCommand.trim() || undefined : undefined;
+}
+
+function resolveProbeAgentName(options: AcpRuntimeOptions): string {
+  const { probeAgent } = options as { probeAgent?: unknown };
+  return normalizeAgentName(typeof probeAgent === "string" ? probeAgent : undefined) ?? "codex";
+}
+
+function resolveAgentCommandForName(params: {
+  agentName: string | undefined;
+  agentRegistry: AcpAgentRegistry;
+}): string | undefined {
+  return resolveAgentCommand(params);
+}
+
+function shouldUseBridgeSafeDelegateForCommand(command: string | undefined): boolean {
+  return isOpenClawBridgeCommand(command);
+}
+
+function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
+  const { mcpServers } = options as { mcpServers?: unknown };
+  return Array.isArray(mcpServers) && mcpServers.length > 0;
+}
+
+export class AcpxRuntime implements AcpRuntime {
   private readonly sessionStore: ResetAwareSessionStore;
+  private readonly agentRegistry: AcpAgentRegistry;
   private readonly delegate: BaseAcpxRuntime;
+  private readonly bridgeSafeDelegate: BaseAcpxRuntime;
+  private readonly probeDelegate: BaseAcpxRuntime;
 
   constructor(
     options: AcpRuntimeOptions,
     testOptions?: ConstructorParameters<typeof BaseAcpxRuntime>[1],
   ) {
     this.sessionStore = createResetAwareSessionStore(options.sessionStore);
-    this.delegate = new BaseAcpxRuntime(
-      {
-        ...options,
-        sessionStore: this.sessionStore,
-      },
-      testOptions,
-    );
+    this.agentRegistry = options.agentRegistry;
+    const sharedOptions = {
+      ...options,
+      sessionStore: this.sessionStore,
+    };
+    this.delegate = new BaseAcpxRuntime(sharedOptions, testOptions);
+    this.bridgeSafeDelegate = shouldUseDistinctBridgeDelegate(options)
+      ? new BaseAcpxRuntime(
+          {
+            ...sharedOptions,
+            mcpServers: [],
+          },
+          testOptions,
+        )
+      : this.delegate;
+    this.probeDelegate = this.resolveDelegateForAgent(resolveProbeAgentName(options));
+  }
+
+  private resolveDelegateForAgent(agentName: string | undefined): BaseAcpxRuntime {
+    const command = resolveAgentCommandForName({
+      agentName,
+      agentRegistry: this.agentRegistry,
+    });
+    return this.resolveDelegateForCommand(command);
+  }
+
+  private resolveDelegateForCommand(command: string | undefined): BaseAcpxRuntime {
+    return shouldUseBridgeSafeDelegateForCommand(command) ? this.bridgeSafeDelegate : this.delegate;
+  }
+
+  private async resolveDelegateForHandle(handle: AcpRuntimeHandle): Promise<BaseAcpxRuntime> {
+    const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+    const recordCommand = readAgentCommandFromRecord(record);
+    if (recordCommand) {
+      return this.resolveDelegateForCommand(recordCommand);
+    }
+    return this.resolveDelegateForAgent(readAgentFromHandle(handle));
   }
 
   isHealthy(): boolean {
-    return this.delegate.isHealthy();
+    return this.probeDelegate.isHealthy();
   }
 
   probeAvailability(): Promise<void> {
-    return this.delegate.probeAvailability();
+    return this.probeDelegate.probeAvailability();
   }
 
   doctor(): Promise<AcpRuntimeDoctorReport> {
-    return this.delegate.doctor();
+    return this.probeDelegate.doctor();
   }
 
   ensureSession(input: Parameters<AcpRuntime["ensureSession"]>[0]): Promise<AcpRuntimeHandle> {
-    return this.delegate.ensureSession(input);
+    return this.resolveDelegateForAgent(input.agent).ensureSession(input);
   }
 
-  runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
-    return this.delegate.runTurn(input);
+  async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
+    yield* (await this.resolveDelegateForHandle(input.handle)).runTurn(input);
   }
 
   getCapabilities(): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
     return this.delegate.getCapabilities();
   }
 
-  getStatus(input: Parameters<NonNullable<AcpRuntime["getStatus"]>>[0]): Promise<AcpRuntimeStatus> {
-    return this.delegate.getStatus(input);
+  async getStatus(
+    input: Parameters<NonNullable<AcpRuntime["getStatus"]>>[0],
+  ): Promise<AcpRuntimeStatus> {
+    const delegate = await this.resolveDelegateForHandle(input.handle);
+    return delegate.getStatus(input);
   }
 
-  setMode(input: Parameters<NonNullable<AcpRuntime["setMode"]>>[0]): Promise<void> {
-    return this.delegate.setMode(input);
+  async setMode(input: Parameters<NonNullable<AcpRuntime["setMode"]>>[0]): Promise<void> {
+    const delegate = await this.resolveDelegateForHandle(input.handle);
+    await delegate.setMode(input);
   }
 
-  setConfigOption(input: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]): Promise<void> {
-    return this.delegate.setConfigOption(input);
+  async setConfigOption(
+    input: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0],
+  ): Promise<void> {
+    const delegate = await this.resolveDelegateForHandle(input.handle);
+    await delegate.setConfigOption(input);
   }
 
-  cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
-    return this.delegate.cancel(input);
+  async cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
+    const delegate = await this.resolveDelegateForHandle(input.handle);
+    await delegate.cancel(input);
   }
 
   async prepareFreshSession(input: { sessionKey: string }): Promise<void> {
     this.sessionStore.markFresh(input.sessionKey);
   }
 
-  close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
-    return this.delegate
-      .close({
-        handle: input.handle,
-        reason: input.reason,
-        discardPersistentState: input.discardPersistentState,
-      })
-      .then(() => {
-        if (input.discardPersistentState) {
-          this.sessionStore.markFresh(input.handle.sessionKey);
-        }
-      });
+  async close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
+    await (
+      await this.resolveDelegateForHandle(input.handle)
+    ).close({
+      handle: input.handle,
+      reason: input.reason,
+      discardPersistentState: input.discardPersistentState,
+    });
+    if (input.discardPersistentState) {
+      this.sessionStore.markFresh(input.handle.sessionKey);
+    }
   }
 }
 

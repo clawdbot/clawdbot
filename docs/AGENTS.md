@@ -5,8 +5,8 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 ## Mintlify Rules
 
 - Docs are hosted on Mintlify (`https://docs.openclaw.ai`).
-- Internal doc links in `docs/**/*.md` must stay root-relative with no `.md` or `.mdx` suffix (example: `[Config](/configuration)`).
-- Section cross-references should use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
+- Internal doc links in `docs/**/*.md` must stay root-relative with no `.md` or `.mdx` suffix (example: `[Config](/gateway/configuration)`).
+- Section cross-references should use anchors on root-relative paths (example: `[Hooks](/gateway/configuration-reference#hooks)`).
 - Doc headings should avoid em dashes and apostrophes because Mintlify anchor generation is brittle there.
 - README and other GitHub-rendered docs should keep absolute docs URLs so links work outside Mintlify.
 - Docs content must stay generic: no personal device names, hostnames, or local paths; use placeholders like `user@gateway-host`.

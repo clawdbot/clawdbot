@@ -1,6 +1,8 @@
 // Cloud Code Assist API rejects a subset of JSON Schema keywords.
 // This module scrubs/normalizes tool schemas to keep Gemini happy.
 
+import type { TSchema } from "typebox";
+
 // Keywords that Cloud Code Assist API rejects (not compliant with their JSON Schema subset)
 export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
@@ -443,14 +445,14 @@ function flattenUnionFallback(
   return merged;
 }
 
-export function cleanSchemaForGemini(schema: unknown): unknown {
+export function cleanSchemaForGemini(schema: unknown): TSchema {
   if (!schema || typeof schema !== "object") {
-    return schema;
+    return schema as TSchema;
   }
   if (Array.isArray(schema)) {
-    return schema.map(cleanSchemaForGemini);
+    return schema.map(cleanSchemaForGemini) as TSchema;
   }
 
   const defs = extendSchemaDefs(undefined, schema as Record<string, unknown>);
-  return cleanSchemaForGeminiWithDefs(schema, defs, undefined);
+  return cleanSchemaForGeminiWithDefs(schema, defs, undefined) as TSchema;
 }

@@ -13,6 +13,7 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
+import { runRealtimeSttLiveTest } from "../../test/helpers/stt-live-audio.js";
 import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -140,6 +141,41 @@ async function createTempAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openai-plugin-live-"));
 }
 
+function normalizeTranscriptForMatch(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function linearToMulaw(sample: number): number {
+  const bias = 132;
+  const clip = 32635;
+  let next = Math.max(-clip, Math.min(clip, sample));
+  const sign = next < 0 ? 0x80 : 0;
+  if (next < 0) {
+    next = -next;
+  }
+
+  next += bias;
+  let exponent = 7;
+  for (let expMask = 0x4000; (next & expMask) === 0 && exponent > 0; exponent -= 1) {
+    expMask >>= 1;
+  }
+
+  const mantissa = (next >> (exponent + 3)) & 0x0f;
+  return ~(sign | (exponent << 4) | mantissa) & 0xff;
+}
+
+function convertPcm24kToMulaw8k(pcm: Buffer): Buffer {
+  const inputSamples = Math.floor(pcm.length / 2);
+  const outputSamples = Math.floor(inputSamples / 3);
+  const mulaw = Buffer.alloc(outputSamples);
+
+  for (let i = 0; i < outputSamples; i += 1) {
+    mulaw[i] = linearToMulaw(pcm.readInt16LE(i * 3 * 2));
+  }
+
+  return mulaw;
+}
+
 describeLive("openai plugin live", () => {
   it("registers an OpenAI provider that can complete a live request", async () => {
     const { providers } = await registerOpenAIPlugin();
@@ -246,6 +282,68 @@ describeLive("openai plugin live", () => {
     expect(collapsedText).toContain("openclaw");
     expect(text).toMatch(/\bok\b/);
   }, 45_000);
+
+  it("opens OpenAI realtime STT before sending audio", async () => {
+    const { realtimeTranscriptionProviders } = await registerOpenAIPlugin();
+    const realtimeProvider = requireRegisteredProvider(realtimeTranscriptionProviders, "openai");
+    const errors: Error[] = [];
+    const session = realtimeProvider.createSession({
+      providerConfig: {
+        apiKey: OPENAI_API_KEY,
+        language: "en",
+      },
+      onError: (error) => errors.push(error),
+    });
+
+    try {
+      await session.connect();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect(errors).toEqual([]);
+      expect(session.isConnected()).toBe(true);
+    } finally {
+      session.close();
+    }
+  }, 30_000);
+
+  it("streams realtime STT through the registered transcription provider", async () => {
+    const { realtimeTranscriptionProviders, speechProviders } = await registerOpenAIPlugin();
+    const realtimeProvider = requireRegisteredProvider(realtimeTranscriptionProviders, "openai");
+    const speechProvider = requireRegisteredProvider(speechProviders, "openai");
+    const cfg = createLiveConfig();
+    const ttsConfig = createLiveTtsConfig();
+    const phrase = "Testing OpenClaw OpenAI realtime transcription integration test OK.";
+
+    const telephony = await speechProvider.synthesizeTelephony?.({
+      text: phrase,
+      cfg,
+      providerConfig: ttsConfig.providerConfigs.openai ?? {},
+      timeoutMs: ttsConfig.timeoutMs,
+    });
+    if (!telephony) {
+      throw new Error("OpenAI telephony synthesis did not return audio");
+    }
+    expect(telephony.outputFormat).toBe("pcm");
+    expect(telephony.sampleRate).toBe(24_000);
+
+    const speech = convertPcm24kToMulaw8k(telephony.audioBuffer);
+    const silence = Buffer.alloc(8_000, 0xff);
+    const audio = Buffer.concat([silence.subarray(0, 4_000), speech, silence]);
+    const { transcripts, partials } = await runRealtimeSttLiveTest({
+      provider: realtimeProvider,
+      providerConfig: {
+        apiKey: OPENAI_API_KEY,
+        language: "en",
+        silenceDurationMs: 500,
+      },
+      audio,
+    });
+
+    const normalized = transcripts.join(" ").toLowerCase();
+    const compact = normalizeTranscriptForMatch(normalized);
+    expect(compact).toContain("openclaw");
+    expect(normalized).toContain("transcription");
+    expect(partials.length + transcripts.length).toBeGreaterThan(0);
+  }, 180_000);
 
   it("generates an image through the registered image provider", async () => {
     const { imageProviders } = await registerOpenAIPlugin();

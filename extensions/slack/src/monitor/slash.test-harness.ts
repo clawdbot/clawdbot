@@ -11,16 +11,15 @@ const mocks = vi.hoisted(() => ({
   resolveStorePathMock: vi.fn(),
 }));
 
-vi.mock("./slash-dispatch.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./slash-dispatch.runtime.js")>(
-    "./slash-dispatch.runtime.js",
-  );
+vi.mock("./slash-dispatch.runtime.js", () => {
   return {
-    ...actual,
+    deliverSlackSlashReplies: vi.fn(async () => {}),
     dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
     finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
     resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
+    resolveChunkMode: vi.fn(() => "auto"),
     resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
+    resolveMarkdownTableMode: vi.fn(() => "auto"),
     recordInboundSessionMetaSafe: (...args: unknown[]) =>
       mocks.recordSessionMetaFromInboundMock(...args),
   };

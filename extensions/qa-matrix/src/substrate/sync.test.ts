@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MatrixQaObservedEvent } from "./events.js";
 import {
   createMatrixQaRoomObserver,
@@ -50,16 +50,22 @@ describe("matrix sync helpers", () => {
 
     const observedEvents: MatrixQaObservedEvent[] = [];
 
-    const result = await waitForOptionalMatrixQaRoomEvent({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
-      observedEvents,
-      predicate: (event) => event.sender === "@sut:matrix-qa.test",
-      roomId: "!room:matrix-qa.test",
-      since: "start-batch",
-      timeoutMs: 1,
-    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(1);
+    let result: Awaited<ReturnType<typeof waitForOptionalMatrixQaRoomEvent>>;
+    try {
+      result = await waitForOptionalMatrixQaRoomEvent({
+        accessToken: "token",
+        baseUrl: "http://127.0.0.1:28008/",
+        fetchImpl,
+        observedEvents,
+        predicate: (event) => event.sender === "@sut:matrix-qa.test",
+        roomId: "!room:matrix-qa.test",
+        since: "start-batch",
+        timeoutMs: 1,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
 
     expect(result).toEqual({
       matched: false,

@@ -18,4 +18,5 @@ export type ApplyAuthChoiceParams = {
 export type ApplyAuthChoiceResult = {
   config: OpenClawConfig;
   agentModelOverride?: string;
+  retrySelection?: boolean;
 };

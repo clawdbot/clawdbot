@@ -50,6 +50,9 @@ steps:
       - set: originalToolsDeny
         value:
           expr: "originalTools ? (Object.prototype.hasOwnProperty.call(originalTools, 'deny') ? structuredClone(originalTools.deny) : undefined) : undefined"
+      - set: originalImageGenerationModelPrimary
+        value:
+          expr: "original.config.agents?.defaults?.imageGenerationModel?.primary ?? null"
       - set: denied
         value:
           expr: "Array.isArray(originalToolsDeny) ? originalToolsDeny.map((entry) => String(entry)) : []"
@@ -112,7 +115,8 @@ steps:
                     agents:
                       defaults:
                         imageGenerationModel:
-                          primary: openai/gpt-image-1
+                          primary:
+                            ref: originalImageGenerationModelPrimary
                   sessionKey:
                     ref: sessionKey
                   note:

@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
+  createSubscribedSessionHarness,
   createStubSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
   emitMessageStartAndEndForAssistantText,
@@ -10,6 +11,7 @@ import {
   findLifecycleErrorAgentEvent,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedPiSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
@@ -108,6 +110,75 @@ describe("subscribeEmbeddedPiSession", () => {
       result: params.result,
     });
   }
+
+  it("captures usage from completions timings on done events", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        timings: {
+          prompt_n: 30_834,
+          predicted_n: 34,
+        },
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: makeZeroUsageSnapshot(),
+      },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 30_834,
+      output: 34,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 30_868,
+    });
+  });
+
+  it("does not double-count usage when done and message_end carry the same snapshot", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const usage = {
+      input: 100,
+      output: 20,
+      totalTokens: 120,
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        message: {
+          role: "assistant",
+          usage,
+        },
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage,
+      },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 100,
+      output: 20,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 120,
+    });
+  });
 
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
@@ -446,7 +517,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads).toHaveLength(1);
   });
 
-  it("emits a replacement snapshot when cleaned text rewinds mid-stream", () => {
+  it("emits one cleaned media snapshot when a streamed MEDIA line resolves to caption text", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -454,20 +525,26 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDelta(emit, " https://example.com/a.png\nCaption");
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("MEDIA:");
-    expect(payloads[0]?.delta).toBe("MEDIA:");
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Caption");
+    expect(payloads[0]?.delta).toBe("Caption");
     expect(payloads[0]?.replace).toBeUndefined();
-    expect(payloads[1]?.text).toBe("Caption");
-    expect(payloads[1]?.delta).toBe("");
-    expect(payloads[1]?.replace).toBe(true);
+    expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
-  it("emits agent events when media arrives without text", () => {
+  it("emits agent events when media-only text is finalized", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "MEDIA: https://example.com/a.png");
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "MEDIA: https://example.com/a.png",
+      },
+    });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(1);

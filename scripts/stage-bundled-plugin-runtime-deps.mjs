@@ -6,6 +6,9 @@ import { pathToFileURL } from "node:url";
 import semverSatisfies from "semver/functions/satisfies.js";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
+const TRANSIENT_TEMP_REMOVE_ERROR_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+const TEMP_REMOVE_RETRY_DELAYS_MS = [10, 25, 50];
+
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -23,6 +26,22 @@ function readOptionalUtf8(filePath) {
 
 function removePathIfExists(targetPath) {
   fs.rmSync(targetPath, { recursive: true, force: true });
+}
+
+function isTransientTempRemoveError(error) {
+  return (
+    !!error &&
+    typeof error === "object" &&
+    typeof error.code === "string" &&
+    TRANSIENT_TEMP_REMOVE_ERROR_CODES.has(error.code)
+  );
+}
+
+function sleepSync(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function makeTempDir(parentDir, prefix) {
@@ -852,8 +871,17 @@ function runNpmInstall(params) {
   throw new Error(output || "npm install failed");
 }
 
-function resolveRuntimeDepsStampPath(pluginDir) {
+function resolveLegacyRuntimeDepsStampPath(pluginDir) {
   return path.join(pluginDir, ".openclaw-runtime-deps-stamp.json");
+}
+
+function resolveRuntimeDepsStampPath(repoRoot, pluginId) {
+  return path.join(
+    repoRoot,
+    ".artifacts",
+    "bundled-runtime-deps-stamps",
+    `${sanitizeTempPrefixSegment(pluginId)}.json`,
+  );
 }
 
 function createRuntimeDepsFingerprint(packageJson, pruneConfig, params = {}) {
@@ -892,6 +920,32 @@ function readRuntimeDepsStamp(stampPath) {
   }
 }
 
+function removeStaleRuntimeDepsTempDirs(pluginDir) {
+  if (!fs.existsSync(pluginDir)) {
+    return;
+  }
+  for (const entry of fs.readdirSync(pluginDir, { withFileTypes: true })) {
+    if (entry.name.startsWith(".openclaw-runtime-deps-")) {
+      const targetPath = path.join(pluginDir, entry.name);
+      for (let attempt = 0; attempt <= TEMP_REMOVE_RETRY_DELAYS_MS.length; attempt += 1) {
+        try {
+          removePathIfExists(targetPath);
+          break;
+        } catch (error) {
+          if (!isTransientTempRemoveError(error)) {
+            throw error;
+          }
+          const delay = TEMP_REMOVE_RETRY_DELAYS_MS[attempt];
+          if (delay === undefined) {
+            break;
+          }
+          sleepSync(delay);
+        }
+      }
+    }
+  }
+}
+
 function stageInstalledRootRuntimeDeps(params) {
   const {
     directDependencyPackageRoot = null,
@@ -900,6 +954,7 @@ function stageInstalledRootRuntimeDeps(params) {
     pluginDir,
     pruneConfig,
     repoRoot,
+    stampPath,
   } = params;
   const dependencySpecs = {
     ...packageJson.dependencies,
@@ -931,7 +986,6 @@ function stageInstalledRootRuntimeDeps(params) {
   }
   const rootsToCopy = selectRuntimeDependencyRootsToCopy(resolution);
   const nodeModulesDir = path.join(pluginDir, "node_modules");
-  const stampPath = resolveRuntimeDepsStampPath(pluginDir);
   if (rootsToCopy.length === 0) {
     assertPathIsNotSymlink(nodeModulesDir, "remove runtime deps");
     removePathIfExists(nodeModulesDir);
@@ -1030,9 +1084,9 @@ function installPluginRuntimeDeps(params) {
     pluginId,
     pruneConfig,
     repoRoot,
+    stampPath,
   } = params;
   const nodeModulesDir = path.join(pluginDir, "node_modules");
-  const stampPath = resolveRuntimeDepsStampPath(pluginDir);
   const tempInstallDir = makePluginOwnedTempDir(pluginDir, "install");
   const pinnedGroups = resolvePinnedRuntimeDependencyGroups(packageJson, {
     directDependencyPackageRoot,
@@ -1088,7 +1142,10 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
       : null;
     const packageJson = sanitizeBundledManifestForRuntimeInstall(pluginDir);
     const nodeModulesDir = path.join(pluginDir, "node_modules");
-    const stampPath = resolveRuntimeDepsStampPath(pluginDir);
+    const stampPath = resolveRuntimeDepsStampPath(repoRoot, pluginId);
+    const legacyStampPath = resolveLegacyRuntimeDepsStampPath(pluginDir);
+    removePathIfExists(legacyStampPath);
+    removeStaleRuntimeDepsTempDirs(pluginDir);
     if (!hasRuntimeDeps(packageJson) || !shouldStageRuntimeDeps(packageJson)) {
       removePathIfExists(nodeModulesDir);
       removePathIfExists(stampPath);
@@ -1115,6 +1172,7 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
         pluginDir,
         pruneConfig,
         repoRoot,
+        stampPath,
       })
     ) {
       continue;
@@ -1131,6 +1189,7 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
           pluginId,
           pruneConfig,
           repoRoot,
+          stampPath,
         },
       });
     } catch (error) {

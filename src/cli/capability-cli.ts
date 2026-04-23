@@ -73,6 +73,7 @@ import {
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { createDefaultDeps } from "./deps.js";
+import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
 type CapabilityTransport = "local" | "gateway";
@@ -1235,6 +1236,9 @@ function registerCapabilityListAndInspect(capability: Command) {
 }
 
 export function registerCapabilityCli(program: Command) {
+  removeCommandByName(program, "infer");
+  removeCommandByName(program, "capability");
+
   const capability = program
     .command("infer")
     .alias("capability")

@@ -1238,6 +1238,8 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
+  - Safe edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing allowlist entries unless you pass `--replace`.
+  - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
 - `embeddedHarness`: default low-level embedded agent runtime policy. Use `runtime: "auto"` to let registered plugin harnesses claim supported models, `runtime: "pi"` to force the built-in PI harness, or a registered harness id such as `runtime: "codex"`. Set `fallback: "none"` to disable automatic PI fallback.
@@ -1337,6 +1339,28 @@ Replace the entire OpenClaw-assembled system prompt with a fixed string. Set at 
   },
 }
 ```
+
+### `agents.defaults.promptOverlays`
+
+Provider-independent prompt overlays applied by model family. GPT-5-family model ids receive the shared behavior contract across providers; `personality` controls only the friendly interaction-style layer.
+
+```json5
+{
+  agents: {
+    defaults: {
+      promptOverlays: {
+        gpt5: {
+          personality: "friendly", // friendly | on | off
+        },
+      },
+    },
+  },
+}
+```
+
+- `"friendly"` (default) and `"on"` enable the friendly interaction-style layer.
+- `"off"` disables only the friendly layer; the tagged GPT-5 behavior contract remains enabled.
+- Legacy `plugins.entries.openai.config.personality` is still read when this shared setting is unset.
 
 ### `agents.defaults.heartbeat`
 
@@ -2469,6 +2493,8 @@ Notes:
 - File permissions are `0700` for directories and `0600` for files.
 - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
 
+<a id="toolsexperimental"></a>
+
 ### `tools.experimental`
 
 Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto-enable rule applies.
@@ -2562,6 +2588,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
 
 - `models.mode`: provider catalog behavior (`merge` or `replace`).
 - `models.providers`: custom provider map keyed by provider id.
+  - Safe edits: use `openclaw config set models.providers.<id> '<json>' --strict-json --merge` or `openclaw config set models.providers.<id>.models '<json-array>' --strict-json --merge` for additive updates. `config set` refuses destructive replacements unless you pass `--replace`.
 - `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, etc).
 - `models.providers.*.apiKey`: provider credential (prefer SecretRef/env substitution).
 - `models.providers.*.auth`: auth strategy (`api-key`, `token`, `oauth`, `aws-sdk`).
@@ -2866,7 +2893,7 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
     allow: ["voice-call"],
     deny: [],
     load: {
-      paths: ["~/Projects/oss/voice-call-extension"],
+      paths: ["~/Projects/oss/voice-call-plugin"],
     },
     entries: {
       "voice-call": {
@@ -3878,6 +3905,8 @@ Split config into multiple files:
 - Sibling keys: merged after includes (override included values).
 - Nested includes: up to 10 levels deep.
 - Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
+- OpenClaw-owned writes that change only one top-level section backed by a single-file include write through to that included file. For example, `plugins install` updates `plugins: { $include: "./plugins.json5" }` in `plugins.json5` and leaves `openclaw.json` intact.
+- Root includes, include arrays, and includes with sibling overrides are read-only for OpenClaw-owned writes; those writes fail closed instead of flattening the config.
 - Errors: clear messages for missing files, parse errors, and circular includes.
 
 ---

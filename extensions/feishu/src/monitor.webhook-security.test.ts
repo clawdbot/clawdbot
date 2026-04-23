@@ -28,6 +28,14 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
   ),
 }));
 
+vi.mock("./monitor.state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor.state.js")>();
+  return {
+    ...actual,
+    FEISHU_WEBHOOK_BODY_TIMEOUT_MS: 50,
+  };
+});
+
 import type { RuntimeEnv } from "../runtime-api.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
@@ -197,10 +205,10 @@ describe("Feishu webhook security hardening", () => {
       },
       monitorFeishuProvider,
       async (url) => {
-        const result = await waitForSlowBodyTimeoutResponse(url, 15_000);
+        const result = await waitForSlowBodyTimeoutResponse(url, 1_000);
         expect(result.body).toContain("408 Request Timeout");
         expect(result.body).toContain("Request body timeout");
-        expect(result.elapsedMs).toBeLessThan(12_000);
+        expect(result.elapsedMs).toBeLessThan(500);
       },
     );
   });

@@ -1,5 +1,6 @@
 ---
 title: "Text-to-Speech"
+summary: "Redirect to /tools/tts"
 redirect: /tools/tts
 ---
 

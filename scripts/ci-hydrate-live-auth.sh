@@ -64,7 +64,8 @@ for env_key in \
   Z_AI_API_KEY \
   BYTEPLUS_ACCESS_KEY_ID \
   BYTEPLUS_SECRET_ACCESS_KEY \
-  CLAUDE_CODE_OAUTH_TOKEN
+  CLAUDE_CODE_OAUTH_TOKEN \
+  FIREWORKS_API_KEY
 do
   append_profile_env "$env_key"
 done

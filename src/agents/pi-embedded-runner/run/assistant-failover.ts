@@ -135,6 +135,7 @@ export async function handleAssistantFailover(params: {
               model: params.activeErrorContext.model,
               profileId: params.lastProfileId,
               status,
+              rawError: params.lastAssistant?.errorMessage?.trim(),
             },
           ),
         };
@@ -216,6 +217,7 @@ export async function handleAssistantFailover(params: {
         model: params.activeErrorContext.model,
         profileId: params.lastProfileId,
         status,
+        rawError: params.lastAssistant?.errorMessage?.trim(),
       }),
     };
   }

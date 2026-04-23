@@ -5,7 +5,12 @@ export { resolveCronStyleNow } from "../agents/current-time.js";
 export { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../agents/pi-settings.js";
 export { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
 export { resolveMemorySearchConfig } from "../agents/memory-search.js";
-export { jsonResult, readNumberParam, readStringParam } from "../agents/tools/common.js";
+export {
+  asToolParamsRecord,
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "../agents/tools/common.js";
 export { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { parseNonNegativeByteSize } from "../config/byte-size.js";
 export { loadConfig } from "../config/config.js";

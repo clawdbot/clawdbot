@@ -232,6 +232,21 @@ describe("whatsapp inbound dispatch", () => {
     expect(ctx.GroupSystemPrompt).toBeUndefined();
   });
 
+  it("preserves reply threading policy in the inbound context", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "hi",
+      conversationId: "+1000",
+      msg: makeMsg(),
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+      replyThreading: { implicitCurrentMessage: "allow" },
+    });
+
+    expect(ctx.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
+  });
+
   it("defaults responsePrefix to identity name in self-chats when unset", () => {
     const responsePrefix = resolveWhatsAppResponsePrefix({
       cfg: {

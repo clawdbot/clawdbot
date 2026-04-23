@@ -34,6 +34,7 @@ describe("ui i18n locale registry", () => {
       "uk",
       "id",
       "pl",
+      "th",
     ]);
     expect(DEFAULT_LOCALE).toBe("en");
   });
@@ -52,6 +53,7 @@ describe("ui i18n locale registry", () => {
     expect(resolveNavigatorLocale("uk-UA")).toBe("uk");
     expect(resolveNavigatorLocale("id-ID")).toBe("id");
     expect(resolveNavigatorLocale("pl-PL")).toBe("pl");
+    expect(resolveNavigatorLocale("th-TH")).toBe("th");
   });
 
   it("loads lazy locale translations from the registry", async () => {
@@ -59,12 +61,14 @@ describe("ui i18n locale registry", () => {
     const es = await loadLazyLocaleTranslation("es");
     const ptBR = await loadLazyLocaleTranslation("pt-BR");
     const zhCN = await loadLazyLocaleTranslation("zh-CN");
+    const th = await loadLazyLocaleTranslation("th");
 
     expect(getNestedTranslation(de, "common", "health")).toBe("Status");
     expect(getNestedTranslation(es, "common", "health")).toBe("Estado");
     expect(getNestedTranslation(es, "languages", "de")).toBe("Deutsch (Alemán)");
     expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
     expect(getNestedTranslation(zhCN, "common", "health")).toBe("\u5065\u5eb7\u72b6\u51b5");
+    expect(getNestedTranslation(th, "languages", "en")).toBeTruthy();
     expect(await loadLazyLocaleTranslation("en")).toBeNull();
   });
 });

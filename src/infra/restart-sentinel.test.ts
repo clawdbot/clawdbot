@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+  buildRestartSuccessContinuation,
   consumeRestartSentinel,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
@@ -34,6 +36,10 @@ describe("restart sentinel", () => {
         status: "ok" as const,
         ts: Date.now(),
         sessionKey: "agent:main:mobilechat:dm:+15555550123",
+        continuation: {
+          kind: "agentTurn" as const,
+          message: "Reply with exactly: Yay! I did it!",
+        },
         stats: { mode: "git" },
       };
       const filePath = await writeRestartSentinel(payload);
@@ -41,9 +47,11 @@ describe("restart sentinel", () => {
 
       const read = await readRestartSentinel();
       expect(read?.payload.kind).toBe("update");
+      expect(read?.payload.continuation).toEqual(payload.continuation);
 
       const consumed = await consumeRestartSentinel();
       expect(consumed?.payload.sessionKey).toBe(payload.sessionKey);
+      expect(consumed?.payload.continuation).toEqual(payload.continuation);
 
       const empty = await readRestartSentinel();
       expect(empty).toBeNull();
@@ -82,6 +90,20 @@ describe("restart sentinel", () => {
       message: "Config updated successfully",
     };
     expect(formatRestartSentinelMessage(payload)).toBe("Config updated successfully");
+  });
+
+  it("uses the exact auto-recovery message for config recovery notices", () => {
+    const payload = {
+      kind: "config-auto-recovery" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message:
+        "Gateway recovered automatically after a failed config change and restored the last known good configuration.",
+      stats: { mode: "config-auto-recovery", reason: "gateway-run-invalid-config" },
+    };
+
+    expect(formatRestartSentinelMessage(payload)).toBe(payload.message);
+    expect(summarizeRestartSentinel(payload)).toBe("Gateway auto-recovery");
   });
 
   it("formatRestartSentinelMessage falls back to summary when no message", () => {
@@ -161,6 +183,31 @@ describe("restart sentinel", () => {
     ).toBe("Gateway restart update skipped");
     expect(trimLogTail("hello\n")).toBe("hello");
     expect(trimLogTail(undefined)).toBeNull();
+  });
+});
+
+describe("restart success continuation", () => {
+  it("builds the default agent turn for session-scoped restarts", () => {
+    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
+  });
+
+  it("keeps explicit continuation messages", () => {
+    expect(
+      buildRestartSuccessContinuation({
+        sessionKey: "agent:main:main",
+        continuationMessage: "wake after restart",
+      }),
+    ).toEqual({
+      kind: "agentTurn",
+      message: "wake after restart",
+    });
+  });
+
+  it("stays silent without session context", () => {
+    expect(buildRestartSuccessContinuation({})).toBeNull();
   });
 });
 

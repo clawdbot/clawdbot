@@ -30,6 +30,7 @@ declare module "acpx/runtime" {
     permissionMode?: unknown;
     nonInteractivePermissions?: unknown;
     timeoutMs?: number;
+    probeAgent?: string;
   };
 
   export class AcpxRuntime {

@@ -1,4 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -19,7 +20,7 @@ export type McpCatalogTool = {
   toolName: string;
   title?: string;
   description?: string;
-  inputSchema: unknown;
+  inputSchema: TSchema;
   fallbackDescription: string;
 };
 

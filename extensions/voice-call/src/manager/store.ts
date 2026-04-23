@@ -3,13 +3,25 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { CallRecordSchema, TerminalStates, type CallId, type CallRecord } from "../types.js";
 
+const pendingPersistWrites = new Set<Promise<void>>();
+
 export function persistCallRecord(storePath: string, call: CallRecord): void {
   const logPath = path.join(storePath, "calls.jsonl");
   const line = `${JSON.stringify(call)}\n`;
   // Fire-and-forget async write to avoid blocking event loop.
-  fsp.appendFile(logPath, line).catch((err) => {
-    console.error("[voice-call] Failed to persist call record:", err);
-  });
+  const write = fsp
+    .appendFile(logPath, line)
+    .catch((err) => {
+      console.error("[voice-call] Failed to persist call record:", err);
+    })
+    .finally(() => {
+      pendingPersistWrites.delete(write);
+    });
+  pendingPersistWrites.add(write);
+}
+
+export async function flushPendingCallRecordWritesForTest(): Promise<void> {
+  await Promise.allSettled(pendingPersistWrites);
 }
 
 export function loadActiveCallsFromStore(storePath: string): {

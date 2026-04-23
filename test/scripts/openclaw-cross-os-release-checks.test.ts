@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import {
   buildWindowsDevUpdateToolchainCheckScript,
@@ -286,7 +287,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     await new Promise((resolvePromise) => {
       server.close(resolvePromise);
     });
-    expect(await canConnectToLoopbackPort(port)).toBe(false);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (!(await canConnectToLoopbackPort(port, 100))) {
+        return;
+      }
+      await delay(25);
+    }
+    expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
   });
 
   it("writes Discord smoke config using the strict guild channel schema", () => {

@@ -26,6 +26,31 @@ function looksLikeCliIncludePattern(value: string): boolean {
   );
 }
 
+function literalPrefixForGlobPattern(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  const globIndex = normalized.search(/[?*[\]{}]/u);
+  if (globIndex === -1) {
+    return normalized;
+  }
+  const slashIndex = normalized.lastIndexOf("/", globIndex);
+  return slashIndex === -1 ? "" : normalized.slice(0, slashIndex + 1);
+}
+
+function patternsCouldOverlap(value: string, pattern: string): boolean {
+  if (path.matchesGlob(value, pattern) || path.matchesGlob(pattern, value)) {
+    return true;
+  }
+
+  const valuePrefix = literalPrefixForGlobPattern(value);
+  const patternPrefix = literalPrefixForGlobPattern(pattern);
+  return (
+    patternPrefix === "" ||
+    valuePrefix === "" ||
+    valuePrefix.startsWith(patternPrefix) ||
+    patternPrefix.startsWith(valuePrefix)
+  );
+}
+
 export function loadPatternListFile(filePath: string, label: string): string[] {
   const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
   if (!Array.isArray(parsed)) {
@@ -99,9 +124,7 @@ export function narrowIncludePatternsForCli(
   }
 
   const matched = cliPatterns.filter((value) =>
-    includePatterns.some(
-      (pattern) => path.matchesGlob(value, pattern) || path.matchesGlob(pattern, value),
-    ),
+    includePatterns.some((pattern) => patternsCouldOverlap(value, pattern)),
   );
 
   return [...new Set(matched)];

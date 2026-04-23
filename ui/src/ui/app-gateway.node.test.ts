@@ -5,6 +5,7 @@ import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts"
 import type { GatewayHelloOk } from "./gateway.ts";
 
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadControlUiBootstrapConfigMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
@@ -93,6 +94,10 @@ vi.mock("./controllers/chat.ts", async (importOriginal) => {
     loadChatHistory: loadChatHistoryMock,
   };
 });
+
+vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
+  loadControlUiBootstrapConfig: loadControlUiBootstrapConfigMock,
+}));
 
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResult: unknown;
@@ -192,6 +197,7 @@ describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
+    loadControlUiBootstrapConfigMock.mockClear();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -503,6 +509,19 @@ describe("connectGateway", () => {
 
     client.emitClose({ code: 1006 });
     expect(host.lastError).toBe("disconnected (1006): no reason");
+  });
+
+  it("refreshes bootstrap config after hello", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitHello();
+
+    expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1);
+    expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host);
   });
 
   it("keeps shutdown restart reasons on service restart closes", () => {

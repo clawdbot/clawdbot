@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   applyPluginAutoEnable,
   detectPluginAutoEnableCandidates,
+  materializePluginAutoEnableCandidates,
   resolvePluginAutoEnableCandidateReason,
 } from "./plugin-auto-enable.js";
 import {
@@ -97,16 +98,20 @@ describe("applyPluginAutoEnable core", () => {
     expect(Object.getPrototypeOf(result.autoEnabledReasons)).toBeNull();
   });
 
-  it("auto-enables browser when browser config exists under a restrictive plugins.allow", () => {
-    const result = applyPluginAutoEnable({
+  it("materializes setup auto-enable candidates under a restrictive plugins.allow", () => {
+    const result = materializePluginAutoEnableCandidates({
       config: {
-        browser: {
-          defaultProfile: "openclaw",
-        },
         plugins: {
           allow: ["telegram"],
         },
       },
+      candidates: [
+        {
+          pluginId: "browser",
+          kind: "setup-auto-enable",
+          reason: "browser configured",
+        },
+      ],
       env,
     });
 
@@ -115,16 +120,20 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("browser configured, enabled automatically.");
   });
 
-  it("auto-enables browser when tools.alsoAllow references browser", () => {
-    const result = applyPluginAutoEnable({
+  it("materializes setup auto-enable tool-reference reasons", () => {
+    const result = materializePluginAutoEnableCandidates({
       config: {
-        tools: {
-          alsoAllow: ["browser"],
-        },
         plugins: {
           allow: ["telegram"],
         },
       },
+      candidates: [
+        {
+          pluginId: "browser",
+          kind: "setup-auto-enable",
+          reason: "browser tool referenced",
+        },
+      ],
       env,
     });
 

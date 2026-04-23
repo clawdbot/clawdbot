@@ -393,6 +393,8 @@ Use full IDs for durable automations and storage:
 
 See [Configuration](/gateway/configuration) for template variables.
 
+<a id="coalescing-split-send-dms-command--url-in-one-composition"></a>
+
 ## Coalescing split-send DMs (command + URL in one composition)
 
 When a user types a command and a URL together in iMessage — e.g. `Dump https://example.com/article` — Apple splits the send into **two separate webhook deliveries**:

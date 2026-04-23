@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
-  parseAvailableTags,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
@@ -12,6 +11,11 @@ import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
 } from "./runtime.moderation-shared.js";
+import {
+  readDiscordChannelCreateParams,
+  readDiscordChannelEditParams,
+  readDiscordChannelMoveParams,
+} from "./runtime.shared.js";
 
 type Ctx = Pick<
   ChannelMessageActionContext,
@@ -21,9 +25,8 @@ type Ctx = Pick<
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
-  readParentIdParam: (params: Record<string, unknown>) => string | null | undefined;
 }): Promise<AgentToolResult<unknown> | undefined> {
-  const { ctx, resolveChannelId, readParentIdParam } = params;
+  const { ctx, resolveChannelId } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
 
@@ -154,25 +157,11 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const guildId = readStringParam(actionParams, "guildId", {
       required: true,
     });
-    const name = readStringParam(actionParams, "name", { required: true });
-    const type = readNumberParam(actionParams, "type", { integer: true });
-    const parentId = readParentIdParam(actionParams);
-    const topic = readStringParam(actionParams, "topic");
-    const position = readNumberParam(actionParams, "position", {
-      integer: true,
-    });
-    const nsfw = typeof actionParams.nsfw === "boolean" ? actionParams.nsfw : undefined;
     return await handleDiscordAction(
       {
         action: "channelCreate",
         accountId: accountId ?? undefined,
-        guildId,
-        name,
-        type: type ?? undefined,
-        parentId: parentId ?? undefined,
-        topic: topic ?? undefined,
-        position: position ?? undefined,
-        nsfw,
+        ...readDiscordChannelCreateParams({ ...actionParams, guildId }),
       },
       cfg,
     );
@@ -182,37 +171,11 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const channelId = readStringParam(actionParams, "channelId", {
       required: true,
     });
-    const name = readStringParam(actionParams, "name");
-    const topic = readStringParam(actionParams, "topic");
-    const position = readNumberParam(actionParams, "position", {
-      integer: true,
-    });
-    const parentId = readParentIdParam(actionParams);
-    const nsfw = typeof actionParams.nsfw === "boolean" ? actionParams.nsfw : undefined;
-    const rateLimitPerUser = readNumberParam(actionParams, "rateLimitPerUser", {
-      integer: true,
-    });
-    const archived = typeof actionParams.archived === "boolean" ? actionParams.archived : undefined;
-    const locked = typeof actionParams.locked === "boolean" ? actionParams.locked : undefined;
-    const autoArchiveDuration = readNumberParam(actionParams, "autoArchiveDuration", {
-      integer: true,
-    });
-    const availableTags = parseAvailableTags(actionParams.availableTags);
     return await handleDiscordAction(
       {
         action: "channelEdit",
         accountId: accountId ?? undefined,
-        channelId,
-        name: name ?? undefined,
-        topic: topic ?? undefined,
-        position: position ?? undefined,
-        parentId: parentId === undefined ? undefined : parentId,
-        nsfw,
-        rateLimitPerUser: rateLimitPerUser ?? undefined,
-        archived,
-        locked,
-        autoArchiveDuration: autoArchiveDuration ?? undefined,
-        availableTags,
+        ...readDiscordChannelEditParams({ ...actionParams, channelId }),
       },
       cfg,
     );
@@ -235,18 +198,11 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const channelId = readStringParam(actionParams, "channelId", {
       required: true,
     });
-    const parentId = readParentIdParam(actionParams);
-    const position = readNumberParam(actionParams, "position", {
-      integer: true,
-    });
     return await handleDiscordAction(
       {
         action: "channelMove",
         accountId: accountId ?? undefined,
-        guildId,
-        channelId,
-        parentId: parentId === undefined ? undefined : parentId,
-        position: position ?? undefined,
+        ...readDiscordChannelMoveParams({ ...actionParams, guildId, channelId }),
       },
       cfg,
     );

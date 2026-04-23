@@ -16,6 +16,7 @@ let removeReactionDiscord: typeof import("./send.js").removeReactionDiscord;
 let searchMessagesDiscord: typeof import("./send.js").searchMessagesDiscord;
 let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
 let unpinMessageDiscord: typeof import("./send.js").unpinMessageDiscord;
+let resolveDiscordTargetChannelId: typeof import("./send.shared.js").resolveDiscordTargetChannelId;
 let loadWebMedia: typeof import("openclaw/plugin-sdk/web-media").loadWebMedia;
 let __resetDiscordDirectoryCacheForTest: typeof import("./directory-cache.js").__resetDiscordDirectoryCacheForTest;
 let rememberDiscordDirectoryUser: typeof import("./directory-cache.js").rememberDiscordDirectoryUser;
@@ -39,6 +40,7 @@ beforeAll(async () => {
     sendMessageDiscord,
     unpinMessageDiscord,
   } = await import("./send.js"));
+  ({ resolveDiscordTargetChannelId } = await import("./send.shared.js"));
   ({ loadWebMedia } = await import("openclaw/plugin-sdk/web-media"));
   ({ __resetDiscordDirectoryCacheForTest, rememberDiscordDirectoryUser } =
     await import("./directory-cache.js"));
@@ -47,6 +49,39 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   __resetDiscordDirectoryCacheForTest();
+});
+
+describe("resolveDiscordTargetChannelId", () => {
+  it("creates a DM channel for user targets", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValueOnce({ id: "dm-1" });
+
+    await expect(
+      resolveDiscordTargetChannelId("user:U1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toEqual({ channelId: "dm-1", dm: true });
+
+    expect(postMock).toHaveBeenCalledWith(Routes.userChannels(), {
+      body: { recipient_id: "U1" },
+    });
+  });
+
+  it("keeps channel targets on the channel path", async () => {
+    const { rest, postMock } = makeDiscordRest();
+
+    await expect(
+      resolveDiscordTargetChannelId("channel:C1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toEqual({ channelId: "C1" });
+
+    expect(postMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("sendMessageDiscord", () => {

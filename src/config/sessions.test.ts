@@ -243,7 +243,8 @@ describe("sessions", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[mainSessionKey]?.sessionId).toBe("sess-1");
-    expect(store[mainSessionKey]?.updatedAt).toBeGreaterThanOrEqual(123);
+    // updateLastRoute must preserve existing updatedAt (activity timestamp)
+    expect(store[mainSessionKey]?.updatedAt).toBe(123);
     expect(store[mainSessionKey]?.lastChannel).toBe("telegram");
     expect(store[mainSessionKey]?.lastTo).toBe("12345");
     expect(store[mainSessionKey]?.deliveryContext).toEqual({
@@ -353,6 +354,36 @@ describe("sessions", () => {
     expect(store[sessionKey]?.origin?.label).toBe("Family");
     expect(store[sessionKey]?.origin?.provider).toBe("demo-chat");
     expect(store[sessionKey]?.origin?.chatType).toBe("group");
+  });
+
+  it("updateLastRoute does not bump updatedAt on existing sessions (#49515)", async () => {
+    const mainSessionKey = "agent:main:main";
+    const frozenUpdatedAt = 1000;
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute-preserve-activity",
+      entries: {
+        [mainSessionKey]: buildMainSessionEntry({
+          updatedAt: frozenUpdatedAt,
+        }),
+      },
+    });
+
+    await updateLastRoute({
+      storePath,
+      sessionKey: mainSessionKey,
+      deliveryContext: {
+        channel: "telegram",
+        to: "99999",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    // Route updates must not refresh activity timestamps; idle/daily reset
+    // evaluation relies on updatedAt from actual session turns.
+    expect(store[mainSessionKey]?.updatedAt).toBe(frozenUpdatedAt);
+    // Routing fields should still be updated
+    expect(store[mainSessionKey]?.lastChannel).toBe("telegram");
+    expect(store[mainSessionKey]?.lastTo).toBe("99999");
   });
 
   it("updateSessionStoreEntry preserves existing fields when patching", async () => {

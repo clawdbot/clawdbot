@@ -1,5 +1,6 @@
 import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 const resolveDiscordDmCommandAccessMock = vi.hoisted(() => vi.fn());
@@ -754,6 +755,67 @@ describe("preflightDiscordMessage", () => {
     expect(result?.guildInfo?.id).toBe("guild-1");
     expect(result?.threadParentId).toBe(parentId);
     expect(result?.channelConfig?.allowed).toBe(true);
+    expect(result?.shouldRequireMention).toBe(false);
+  });
+
+  it("handles partial thread channel owner getters during mention preflight", async () => {
+    const threadId = "thread-partial-owner";
+    const parentId = "parent-partial-owner";
+    const message = createDiscordMessage({
+      id: "m-thread-partial-owner",
+      channelId: threadId,
+      content: "thread hello",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Peter",
+      },
+    });
+    Object.defineProperty(message, "channel", {
+      value: createPartialDiscordChannelWithThrowingGetters(
+        {
+          id: threadId,
+          isThread: () => true,
+          ownerId: "owner-1",
+          parentId,
+          parent: { id: parentId, name: "general" },
+        },
+        ["ownerId", "parentId", "parent"],
+      ),
+      configurable: true,
+      enumerable: true,
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId: threadId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+          includeGuildObject: false,
+        }),
+        client: createThreadClient({
+          threadId,
+          parentId,
+        }),
+      }),
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            [parentId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.threadParentId).toBe(parentId);
     expect(result?.shouldRequireMention).toBe(false);
   });
 

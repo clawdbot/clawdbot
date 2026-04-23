@@ -1305,7 +1305,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "room:!room:example.org",
+          conversationId: "!room:example.org",
         }),
       }),
     );
@@ -1333,7 +1333,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "room:!room:example.org",
+          conversationId: "!room:example.org",
         }),
       }),
     );

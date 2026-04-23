@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "@clack/prompts": "^1.2.0",
-    "@mariozechner/pi-ai": "0.68.1"
+    "@mariozechner/pi-ai": "0.69.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

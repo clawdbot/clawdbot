@@ -185,13 +185,58 @@ describe("ollama plugin", () => {
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
 
     const result = await provider.discovery.run({
-      config: {},
+      config: {
+        plugins: {
+          entries: {
+            ollama: {
+              config: {
+                discovery: { enabled: false },
+              },
+            },
+          },
+        },
+      },
       env: {},
       resolveProviderApiKey: () => ({ apiKey: "", discoveryApiKey: "" }),
     } as never);
 
     expect(result).toBeNull();
     expect(buildOllamaProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("uses live plugin config to re-enable discovery after startup disable", async () => {
+    const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [{ id: "llama3.2", name: "Llama 3.2" }],
+    });
+
+    const result = await provider.discovery.run({
+      config: {
+        plugins: {
+          entries: {
+            ollama: {
+              config: {
+                discovery: { enabled: true },
+              },
+            },
+          },
+        },
+      },
+      env: { OLLAMA_API_KEY: "ollama-live" },
+      resolveProviderApiKey: () => ({ apiKey: "ollama-live", discoveryApiKey: "ollama-live" }),
+    } as never);
+
+    expect(buildOllamaProviderMock).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      provider: {
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+        models: [{ id: "llama3.2", name: "Llama 3.2" }],
+        apiKey: "OLLAMA_API_KEY",
+      },
+    });
   });
 
   it("keeps empty default-ish provider stubs quiet", async () => {

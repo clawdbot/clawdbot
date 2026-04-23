@@ -2,7 +2,7 @@ export const EXEC_TOOL_DISPLAY_SUMMARY = "Run shell commands that start now.";
 export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect and control running exec sessions.";
 export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule cron jobs, reminders, and wake events.";
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY =
-  "List visible sessions and optional recent messages.";
+  "List visible sessions with mailbox filters and optional previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY =
   "Read sanitized message history for a visible session.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Send a message to another visible session.";
@@ -12,7 +12,7 @@ export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track a short structured work p
 
 export function describeSessionsListTool(): string {
   return [
-    "List visible sessions with optional filters for kind, recent activity, and last messages.",
+    "List visible sessions with optional filters for kind, label, agentId, search, recent activity, derived titles, and last-message previews.",
     "Use this to discover a target session before calling sessions_history or sessions_send.",
   ].join(" ");
 }

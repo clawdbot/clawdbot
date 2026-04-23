@@ -535,6 +535,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-agent-audio",
       expectBroadcast: false,
+      waitFor: "none",
     });
 
     await waitForAssertion(() => {

@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./npm-update-compat-sidecars.js";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
+const LEGACY_VERIFIER_COMPAT_INVENTORY_PATHS = ["dist/extensions/qa-channel/runtime-api.js"];
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
-const PACKAGED_QA_RUNTIME_PATHS = new Set(["dist/extensions/qa-channel/runtime-api.js"]);
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
   `dist/extensions/${LEGACY_QA_LAB_DIR}/`,
@@ -22,6 +23,7 @@ const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
 const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
+  /^dist\/extensions\/[^/]+\/\.openclaw-runtime-deps-[^/]+(?:\/|$)/u,
   /^dist\/extensions\/qa-matrix(?:\/|$)/u,
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
 ] as const;
@@ -37,11 +39,17 @@ function isPackagedDistPath(relativePath: string): boolean {
   if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
     return false;
   }
+  if (relativePath.endsWith("/.openclaw-runtime-deps-stamp.json")) {
+    return false;
+  }
   if (relativePath.endsWith(".map")) {
     return false;
   }
   if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
     return false;
+  }
+  if (LEGACY_VERIFIER_COMPAT_INVENTORY_PATHS.includes(relativePath)) {
+    return true;
   }
   if (
     OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
@@ -51,7 +59,7 @@ function isPackagedDistPath(relativePath: string): boolean {
     return false;
   }
   if (OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))) {
-    return PACKAGED_QA_RUNTIME_PATHS.has(relativePath);
+    return false;
   }
   return true;
 }
@@ -103,7 +111,12 @@ export async function collectPackageDistInventory(packageRoot: string): Promise<
 }
 
 export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
-  const inventory = await collectPackageDistInventory(packageRoot);
+  const inventory = [
+    ...new Set([
+      ...(await collectPackageDistInventory(packageRoot)),
+      ...LEGACY_VERIFIER_COMPAT_INVENTORY_PATHS,
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   await fs.mkdir(path.dirname(inventoryPath), { recursive: true });
   await fs.writeFile(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
@@ -148,6 +161,9 @@ export async function collectPackageDistInventoryErrors(packageRoot: string): Pr
 
   for (const relativePath of expectedFiles) {
     if (!actualSet.has(relativePath)) {
+      if (NPM_UPDATE_COMPAT_SIDECAR_PATHS.has(relativePath)) {
+        continue;
+      }
       errors.push(`missing packaged dist file ${relativePath}`);
     }
   }

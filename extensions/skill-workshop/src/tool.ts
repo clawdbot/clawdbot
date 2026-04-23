@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
 import {

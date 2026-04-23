@@ -551,7 +551,7 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
         channel.accounts && typeof channel.accounts === "object" && !Array.isArray(channel.accounts)
           ? (channel.accounts as Record<string, unknown>)
           : {};
-      const hasNamedAccounts = Object.keys(accounts).filter(Boolean).length > 0;
+      const hasNamedAccounts = Object.keys(accounts).some(Boolean);
       const allowedNamedKeys = namedAccountPromotionKeys[channelKey];
       return Object.entries(channel)
         .filter(([key, value]) => {

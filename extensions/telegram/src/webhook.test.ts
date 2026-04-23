@@ -455,7 +455,7 @@ describe("startTelegramWebhook", () => {
           {
             secretToken: TELEGRAM_SECRET,
             onTimeout: "return",
-            timeoutMilliseconds: 10_000,
+            timeoutMilliseconds: 5_000,
           },
         );
         expect(runtimeLog).toHaveBeenCalledWith(
@@ -533,6 +533,60 @@ describe("startTelegramWebhook", () => {
           TELEGRAM_SECRET,
           expect.any(Function),
         );
+      },
+    );
+  });
+
+  it("returns after grammY timeout reply while webhook work continues", async () => {
+    let finishWork: (() => void) | undefined;
+    let workFinished = false;
+    webhookCallbackSpy.mockImplementationOnce(
+      () =>
+        vi.fn(
+          async (
+            update: unknown,
+            reply: (json: string) => Promise<void>,
+            _secretHeader: string | undefined,
+            _unauthorized: () => Promise<void>,
+          ) => {
+            expect(update).toEqual({ update_id: 2, message: { text: "slow" } });
+            await reply("{}");
+            await new Promise<void>((resolve) => {
+              finishWork = resolve;
+            });
+            workFinished = true;
+          },
+        ) as unknown as typeof handlerSpy,
+    );
+
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+      },
+      async ({ port }) => {
+        expect(webhookCallbackSpy).toHaveBeenCalledWith(
+          expect.anything(),
+          "callback",
+          expect.objectContaining({
+            onTimeout: "return",
+            timeoutMilliseconds: 5_000,
+          }),
+        );
+        const response = await postWebhookJson({
+          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+          payload: JSON.stringify({ update_id: 2, message: { text: "slow" } }),
+          secret: TELEGRAM_SECRET,
+          timeoutMs: 1_000,
+        });
+
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe("{}");
+        expect(workFinished).toBe(false);
+
+        finishWork?.();
+        await sleep(WEBHOOK_TEST_YIELD_MS);
+        expect(workFinished).toBe(true);
       },
     );
   });

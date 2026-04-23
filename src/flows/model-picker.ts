@@ -45,7 +45,7 @@ export type PromptDefaultModelParams = {
 };
 
 export type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
-export type PromptModelAllowlistResult = { models?: string[] };
+export type PromptModelAllowlistResult = { models?: string[]; scopeKeys?: string[] };
 
 async function loadModelPickerRuntime() {
   return import("../commands/model-picker.runtime.js");
@@ -658,6 +658,12 @@ export async function promptModelAllowlist(params: {
       ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
       : allowedCatalog;
 
+  const scopeKeys = allowedKeySet
+    ? allowedKeys
+    : preferredProvider
+      ? filteredCatalog.map((entry) => modelKey(entry.provider, entry.id))
+      : undefined;
+
   for (const entry of filteredCatalog) {
     addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
   }
@@ -686,7 +692,17 @@ export async function promptModelAllowlist(params: {
   });
   const selected = normalizeModelKeys(selection);
   if (selected.length > 0) {
-    return { models: selected };
+    return { models: selected, ...(scopeKeys ? { scopeKeys } : {}) };
+  }
+  if (scopeKeys) {
+    const confirmScopedClear = await params.prompter.confirm({
+      message: "Remove these provider models from the /model picker?",
+      initialValue: false,
+    });
+    if (!confirmScopedClear) {
+      return {};
+    }
+    return { models: [], scopeKeys };
   }
   if (existingKeys.length === 0) {
     return { models: [] };
@@ -701,12 +717,33 @@ export async function promptModelAllowlist(params: {
   return { models: [] };
 }
 
-export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): OpenClawConfig {
+export function applyModelAllowlist(
+  cfg: OpenClawConfig,
+  models: string[],
+  opts: { scopeKeys?: string[] } = {},
+): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
   const normalized = normalizeModelKeys(models);
+  const scopeKeys = opts.scopeKeys ? normalizeModelKeys(opts.scopeKeys) : [];
+  const scopeKeySet = scopeKeys.length > 0 ? new Set(scopeKeys) : null;
   if (normalized.length === 0) {
     if (!defaults?.models) {
       return cfg;
+    }
+    if (scopeKeySet) {
+      const nextModels = { ...defaults.models };
+      for (const key of scopeKeySet) {
+        delete nextModels[key];
+      }
+      const { models: _ignored, ...restDefaults } = defaults;
+      return {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults:
+            Object.keys(nextModels).length > 0 ? { ...defaults, models: nextModels } : restDefaults,
+        },
+      };
     }
     const { models: _ignored, ...restDefaults } = defaults;
     return {
@@ -719,6 +756,26 @@ export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): Open
   }
 
   const existingModels = defaults?.models ?? {};
+  if (scopeKeySet) {
+    const nextModels = { ...existingModels };
+    for (const key of scopeKeySet) {
+      delete nextModels[key];
+    }
+    for (const key of normalized) {
+      nextModels[key] = existingModels[key] ?? {};
+    }
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...defaults,
+          models: nextModels,
+        },
+      },
+    };
+  }
+
   const nextModels: Record<string, { alias?: string }> = {};
   for (const key of normalized) {
     nextModels[key] = existingModels[key] ?? {};

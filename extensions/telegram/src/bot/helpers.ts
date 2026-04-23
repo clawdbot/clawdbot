@@ -144,7 +144,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
   // DM pairing store entries are not a group authorization source.
   const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? params.groupAllowFrom);
-  const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+  const hasGroupAllowOverride = groupAllowOverride !== undefined;
   return {
     resolvedThreadId,
     dmThreadId,

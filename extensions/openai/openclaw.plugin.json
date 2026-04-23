@@ -14,13 +14,13 @@
       "provider": "openai-codex",
       "method": "oauth",
       "choiceId": "openai-codex",
-      "deprecatedChoiceIds": ["codex-cli"],
+      "deprecatedChoiceIds": ["codex-cli", "openai-codex-import"],
       "choiceLabel": "OpenAI Codex Browser Login",
       "choiceHint": "Sign in with OpenAI in your browser",
       "assistantPriority": -30,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "API key + Codex auth"
+      "groupHint": "API key or Codex sign-in"
     },
     {
       "provider": "openai-codex",
@@ -31,18 +31,7 @@
       "assistantPriority": -10,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "API key + Codex auth"
-    },
-    {
-      "provider": "openai-codex",
-      "method": "import-codex-cli",
-      "choiceId": "openai-codex-import",
-      "choiceLabel": "Import Existing Codex Login",
-      "choiceHint": "Import an existing ~/.codex login",
-      "assistantPriority": -20,
-      "groupId": "openai",
-      "groupLabel": "OpenAI",
-      "groupHint": "API key + Codex auth"
+      "groupHint": "API key or Codex sign-in"
     },
     {
       "provider": "openai",
@@ -52,7 +41,7 @@
       "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "API key + Codex auth",
+      "groupHint": "API key or Codex sign-in",
       "optionKey": "openaiApiKey",
       "cliFlag": "--openai-api-key",
       "cliOption": "--openai-api-key <key>",
@@ -95,7 +84,7 @@
         "type": "string",
         "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Controls the OpenAI-specific friendly interaction-style overlay for GPT-5 OpenAI and OpenAI Codex runs. `friendly` and `on` enable the style overlay; `off` disables only that style layer."
+        "description": "Legacy compatibility fallback for the shared GPT-5 friendly interaction-style overlay. Prefer agents.defaults.promptOverlays.gpt5.personality. `friendly` and `on` enable the style overlay; `off` disables only that style layer."
       }
     }
   }

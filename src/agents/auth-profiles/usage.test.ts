@@ -521,7 +521,7 @@ describe("clearExpiredCooldowns", () => {
   it("ignores NaN and Infinity cooldown values", () => {
     const store = makeStore({
       "anthropic:default": {
-        cooldownUntil: NaN,
+        cooldownUntil: Number.NaN,
         errorCount: 2,
       },
       "openai:default": {

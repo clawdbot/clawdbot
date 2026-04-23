@@ -98,9 +98,9 @@ export function resolveSingleAccountKeysToMove(params: {
   channelKey: string;
   channel: Record<string, unknown>;
 }): string[] {
-  const hasNamedAccounts =
-    Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
-    0;
+  const hasNamedAccounts = Object.keys(
+    (params.channel.accounts as Record<string, unknown>) ?? {},
+  ).some(Boolean);
   const entries = Object.entries(params.channel)
     .filter(
       ([key, value]) =>

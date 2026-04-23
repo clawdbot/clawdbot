@@ -5,6 +5,7 @@ import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapte
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildMistralProvider } from "./provider-catalog.js";
 import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
+import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const PROVIDER_ID = "mistral";
 export function buildMistralReplayPolicy() {
@@ -55,5 +56,6 @@ export default defineSingleProviderPluginEntry({
   register(api) {
     api.registerMemoryEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
+    api.registerRealtimeTranscriptionProvider(buildMistralRealtimeTranscriptionProvider());
   },
 });

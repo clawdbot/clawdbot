@@ -22,7 +22,7 @@ jobs:
     permissions:
       issues: write
       pull-requests: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/create-github-app-token@v3
         id: app-token

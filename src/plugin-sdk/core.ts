@@ -243,7 +243,7 @@ export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
 
-var cachedSdkChatChannelMeta:
+let cachedSdkChatChannelMeta:
   | {
       cacheKey: string;
       metaById: ReturnType<typeof buildChatChannelMetaById>;

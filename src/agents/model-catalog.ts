@@ -51,10 +51,14 @@ function loadModelSuppression() {
   return modelSuppressionPromise;
 }
 
-export function resetModelCatalogCacheForTest() {
+export function resetModelCatalogCache() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
   importPiSdk = defaultImportPiSdk;
+}
+
+export function resetModelCatalogCacheForTest() {
+  resetModelCatalogCache();
 }
 
 // Test-only escape hatch: allow mocking the dynamic import to simulate transient failures.

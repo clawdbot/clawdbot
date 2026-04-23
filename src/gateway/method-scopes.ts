@@ -68,6 +68,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [READ_SCOPE]: [
     "assistant.media.get",
     "health",
+    "diagnostics.stability",
     "doctor.memory.status",
     "doctor.memory.dreamDiary",
     "logs.tail",

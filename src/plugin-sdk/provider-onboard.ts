@@ -182,13 +182,17 @@ export function applyOnboardAuthAgentModelsAndProviders(
     providers: Record<string, ModelProviderConfig>;
   },
 ): OpenClawConfig {
+  const mergedAgentModels = {
+    ...cfg.agents?.defaults?.models,
+    ...params.agentModels,
+  };
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        models: params.agentModels,
+        models: mergedAgentModels,
       },
     },
     models: {

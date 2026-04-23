@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { loadConfig } from "../../config/config.js";
 import {
   DEFAULT_AGENT_ID,

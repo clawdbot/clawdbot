@@ -680,6 +680,7 @@ export const ja_JP: TranslationMap = {
     uk: "Українська（ウクライナ語）",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
+    th: "ไทย (Thai)",
   },
   cron: {
     summary: {

@@ -1,4 +1,5 @@
 import { z, type ZodTypeAny } from "zod";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type { OpenClawPluginConfigSchema } from "./types.js";
 
@@ -92,7 +93,7 @@ export function buildPluginConfigSchema(
           io: "input",
           unrepresentable: "any",
         }),
-      ) as Record<string, unknown>,
+      ) as JsonSchemaObject,
     };
   }
 

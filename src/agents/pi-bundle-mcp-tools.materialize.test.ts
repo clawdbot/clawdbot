@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
@@ -58,6 +59,7 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    expect(getPluginToolMeta(runtime.tools[0])?.pluginId).toBe("bundle-mcp");
     const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
     expect(result.content[0]).toMatchObject({
       type: "text",

@@ -1,4 +1,10 @@
-import type { AnyMessageContent, proto, WAMessage, WASocket } from "@whiskeysockets/baileys";
+import type {
+  AnyMessageContent,
+  MiscMessageGenerationOptions,
+  proto,
+  WAMessage,
+  WASocket,
+} from "@whiskeysockets/baileys";
 import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
@@ -6,6 +12,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
+import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
@@ -209,6 +216,7 @@ export async function attachWebInboxToSocket(
           body: combinedBody,
           mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
           mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+          isBatched: true,
         };
         await options.onMessage(combinedMessage);
         await finalizeInboundDedupe(entries);
@@ -247,13 +255,19 @@ export async function attachWebInboxToSocket(
     });
   };
 
-  const sendTrackedMessage = async (jid: string, content: AnyMessageContent) => {
+  const sendTrackedMessage = async (
+    jid: string,
+    content: AnyMessageContent,
+    sendOptions?: MiscMessageGenerationOptions,
+  ) => {
     let lastErr: unknown = new Error(RECONNECT_IN_PROGRESS_ERROR);
     for (let attempt = 1; ; attempt++) {
       const currentSock = getCurrentSock();
       if (currentSock) {
         try {
-          const result = await currentSock.sendMessage(jid, content);
+          const result = sendOptions
+            ? await currentSock.sendMessage(jid, content, sendOptions)
+            : await currentSock.sendMessage(jid, content);
           rememberOutboundMessage(jid, result);
           return result;
         } catch (err) {
@@ -398,7 +412,9 @@ export async function attachWebInboxToSocket(
       messageTimestampMs,
       connectedAtMs,
       verbose: options.verbose,
-      sock: { sendMessage: (jid, content) => sendTrackedMessage(jid, content) },
+      sock: {
+        sendMessage: (jid: string, content: AnyMessageContent) => sendTrackedMessage(jid, content),
+      },
       remoteJid,
     });
     if (!access.allowed) {
@@ -515,11 +531,14 @@ export async function attachWebInboxToSocket(
         logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
       }
     };
-    const reply = async (text: string) => {
-      await sendTrackedMessage(chatJid, { text });
+    const reply = async (text: string, options?: MiscMessageGenerationOptions) => {
+      await sendTrackedMessage(chatJid, { text }, options);
     };
-    const sendMedia = async (payload: AnyMessageContent) => {
-      await sendTrackedMessage(chatJid, payload);
+    const sendMedia = async (
+      payload: AnyMessageContent,
+      options?: MiscMessageGenerationOptions,
+    ) => {
+      await sendTrackedMessage(chatJid, payload, options);
     };
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
@@ -580,6 +599,15 @@ export async function attachWebInboxToSocket(
       mediaFileName: enriched.mediaFileName,
       dedupeKey: inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : undefined,
     };
+    if (inboundMessage.id) {
+      cacheInboundMessageMeta(inboundMessage.accountId, inboundMessage.chatId, inboundMessage.id, {
+        participant: inboundMessage.senderJid,
+        participantE164:
+          inboundMessage.chatType === "direct" ? inboundMessage.senderE164 : undefined,
+        body: inboundMessage.body,
+        fromMe: inboundMessage.fromMe,
+      });
+    }
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
       void task.catch((err) => {
@@ -613,7 +641,7 @@ export async function attachWebInboxToSocket(
       if (upsert.type === "append") {
         const APPEND_RECENT_GRACE_MS = 60_000;
         const msgTsRaw = msg.messageTimestamp;
-        const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : NaN;
+        const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
         const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
         if (msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
           continue;
@@ -692,7 +720,11 @@ export async function attachWebInboxToSocket(
 
   const sendApi = createWebSendApi({
     sock: {
-      sendMessage: (jid: string, content: AnyMessageContent) => sendTrackedMessage(jid, content),
+      sendMessage: (
+        jid: string,
+        content: AnyMessageContent,
+        options?: MiscMessageGenerationOptions,
+      ) => sendTrackedMessage(jid, content, options),
       sendPresenceUpdate: async (presence, jid?: string) => {
         const currentSock = getCurrentSock();
         if (!currentSock) {

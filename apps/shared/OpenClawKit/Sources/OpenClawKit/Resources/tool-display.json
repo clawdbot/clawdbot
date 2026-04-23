@@ -412,8 +412,13 @@
       "title": "Sessions",
       "detailKeys": [
         "kinds",
+        "label",
+        "agentId",
+        "search",
         "limit",
         "activeMinutes",
+        "includeDerivedTitles",
+        "includeLastMessage",
         "messageLimit"
       ]
     },

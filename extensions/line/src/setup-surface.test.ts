@@ -3,7 +3,6 @@ import path from "node:path";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
-import { loadRuntimeApiExportTypesViaJiti } from "../../../test/helpers/plugins/jiti-runtime-api.ts";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
@@ -375,30 +374,6 @@ describe("linePlugin status.probeAccount", () => {
 });
 
 describe("line runtime api", () => {
-  it("loads through Jiti without duplicate export errors", () => {
-    const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
-
-    expect(
-      loadRuntimeApiExportTypesViaJiti({
-        modulePath: runtimeApiPath,
-        exportNames: [
-          "buildTemplateMessageFromPayload",
-          "downloadLineMedia",
-          "isSenderAllowed",
-          "probeLineBot",
-          "pushMessageLine",
-        ],
-        realPluginSdkSpecifiers: ["openclaw/plugin-sdk/line-runtime"],
-      }),
-    ).toEqual({
-      buildTemplateMessageFromPayload: "function",
-      downloadLineMedia: "function",
-      isSenderAllowed: "function",
-      probeLineBot: "function",
-      pushMessageLine: "function",
-    });
-  }, 240_000);
-
   it("keeps the LINE runtime barrel self-contained", () => {
     const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
     expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);

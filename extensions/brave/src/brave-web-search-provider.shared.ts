@@ -1,8 +1,8 @@
-import { Type } from "@sinclair/typebox";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 
 export type BraveConfig = {
   mode?: string;

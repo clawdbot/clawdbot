@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -76,6 +76,12 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
+  resolveRuntimePluginRegistry: vi.fn(),
+}));
+
+vi.mock("../../infra/outbound/channel-bootstrap.runtime.js", () => ({
+  bootstrapOutboundChannelPlugin: vi.fn(),
+  resetOutboundChannelBootstrapStateForTests: vi.fn(),
 }));
 
 vi.mock("../../infra/outbound/targets.js", () => ({
@@ -106,8 +112,7 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
-async function loadFreshSendHandlersForTest() {
-  vi.resetModules();
+async function loadSendHandlersForTest() {
   ({ sendHandlers } = await import("./send.js"));
 }
 
@@ -194,6 +199,10 @@ function mockDeliverySuccess(messageId: string) {
 describe("gateway send mirroring", () => {
   let registrySeq = 0;
 
+  beforeAll(async () => {
+    await loadSendHandlersForTest();
+  });
+
   beforeEach(async () => {
     vi.clearAllMocks();
     registrySeq += 1;
@@ -218,7 +227,6 @@ describe("gateway send mirroring", () => {
     });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
     mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
-    await loadFreshSendHandlersForTest();
   });
 
   it("accepts media-only sends without message", async () => {
@@ -1001,6 +1009,42 @@ describe("gateway send mirroring", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ messageId: "m-threaded" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
+  it("forwards replyToId on gateway sends", async () => {
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "123" });
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m-reply", channel: "slack" }]);
+    const outboundPlugin = { outbound: { sendPoll: mocks.sendPoll } };
+    mocks.getChannelPlugin.mockReturnValue(outboundPlugin);
+
+    const { respond } = await runSend({
+      to: "123",
+      message: "threaded completion",
+      channel: "slack",
+      replyToId: "wamid.42",
+      idempotencyKey: "idem-reply-to",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "123",
+        replyToId: "wamid.42",
+      }),
+    );
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        target: "123",
+        replyToId: "wamid.42",
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-reply" }),
       undefined,
       expect.objectContaining({ channel: "slack" }),
     );

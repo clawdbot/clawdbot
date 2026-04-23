@@ -56,7 +56,7 @@ describe("config view", () => {
   } {
     const buttons = Array.from(container.querySelectorAll("button"));
     return {
-      clearButton: buttons.find((btn) => btn.textContent?.trim() === "Clear pending updates"),
+      clearButton: buttons.find((btn) => btn.textContent?.trim() === "Clear"),
       saveButton: buttons.find((btn) => btn.textContent?.trim() === "Save"),
       applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
     };

@@ -37,7 +37,7 @@ export function resolveMatrixMonitorAccessState(params: {
   ]);
   const effectiveGroupAllowFrom = normalizeMatrixAllowList(params.groupAllowFrom);
   const effectiveRoomUsers = normalizeMatrixAllowList(params.roomUsers);
-  const commandAllowFrom = params.isRoom ? configuredAllowFrom : effectiveAllowFrom;
+  const commandAllowFrom = params.isRoom ? [] : effectiveAllowFrom;
 
   const directAllowMatch = resolveMatrixAllowListMatch({
     allowList: effectiveAllowFrom,

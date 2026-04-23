@@ -110,7 +110,7 @@ export async function fetchCodexUsage(
     const balance =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : parseFloat(data.credits.balance) || 0;
+        : Number.parseFloat(data.credits.balance) || 0;
     plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
   }
 

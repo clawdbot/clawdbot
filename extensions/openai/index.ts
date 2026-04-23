@@ -1,3 +1,4 @@
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { buildOpenAICodexCliBackend } from "./cli-backend.js";
@@ -23,19 +24,25 @@ export default definePluginEntry({
   name: "OpenAI Provider",
   description: "Bundled OpenAI provider plugins",
   register(api) {
-    const promptOverlayMode = resolveOpenAIPromptOverlayMode(api.pluginConfig);
     const openAIToolCompatHooks = buildProviderToolCompatFamilyHooks("openai");
     const buildProviderWithPromptContribution = <T extends ReturnType<typeof buildOpenAIProvider>>(
       provider: T,
     ): T => ({
       ...provider,
       ...openAIToolCompatHooks,
-      resolveSystemPromptContribution: (ctx) =>
-        resolveOpenAISystemPromptContribution({
-          mode: promptOverlayMode,
+      resolveSystemPromptContribution: (ctx) => {
+        const runtimePluginConfig = resolvePluginConfigObject(ctx.config, "openai");
+        const pluginConfig =
+          runtimePluginConfig ??
+          (ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>));
+        return resolveOpenAISystemPromptContribution({
+          config: ctx.config,
+          legacyPluginConfig: pluginConfig,
+          mode: resolveOpenAIPromptOverlayMode(pluginConfig),
           modelProviderId: provider.id,
           modelId: ctx.modelId,
-        }),
+        });
+      },
     });
     api.registerCliBackend(buildOpenAICodexCliBackend());
     api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));

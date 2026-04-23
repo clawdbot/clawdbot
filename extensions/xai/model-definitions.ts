@@ -2,14 +2,16 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
-export const XAI_DEFAULT_MODEL_ID = "grok-4";
-export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
+export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
+export const XAI_IMAGE_MODELS = ["grok-imagine-image", "grok-imagine-image-pro"] as const;
 export const XAI_DEFAULT_CONTEXT_WINDOW = 256_000;
 export const XAI_LARGE_CONTEXT_WINDOW = 2_000_000;
 export const XAI_CODE_CONTEXT_WINDOW = 256_000;
 export const XAI_DEFAULT_MAX_TOKENS = 64_000;
 export const XAI_LEGACY_CONTEXT_WINDOW = 131_072;
 export const XAI_LEGACY_MAX_TOKENS = 8_192;
+export const XAI_DEFAULT_MODEL_ID = "grok-4";
+export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
 
 type XaiCost = ModelDefinitionConfig["cost"];
 

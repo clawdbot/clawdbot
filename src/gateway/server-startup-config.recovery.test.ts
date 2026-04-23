@@ -7,6 +7,7 @@ vi.mock("../config/config.js", () => ({
   isNixMode: false,
   readConfigFileSnapshot: vi.fn(),
   recoverConfigFromLastKnownGood: vi.fn(),
+  recoverConfigFromJsonRootSuffix: vi.fn(),
   writeConfigFile: vi.fn(),
 }));
 
@@ -95,6 +96,7 @@ describe("gateway startup config recovery", () => {
     const invalidSnapshot = buildSnapshot({ valid: false, raw: "{ invalid json" });
     vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
     vi.mocked(configIo.recoverConfigFromLastKnownGood).mockResolvedValueOnce(false);
+    vi.mocked(configIo.recoverConfigFromJsonRootSuffix).mockResolvedValueOnce(false);
 
     await expect(
       loadGatewayStartupConfigSnapshot({
@@ -106,5 +108,38 @@ describe("gateway startup config recovery", () => {
     );
 
     expect(recoveryNotice.enqueueConfigRecoveryNotice).not.toHaveBeenCalled();
+  });
+
+  it("strips a valid JSON suffix when last-known-good recovery is unavailable", async () => {
+    const invalidSnapshot = buildSnapshot({
+      valid: false,
+      raw: `Found and updated: False\n${JSON.stringify(validConfig)}\n`,
+    });
+    const repairedSnapshot = buildSnapshot({
+      valid: true,
+      raw: `${JSON.stringify(validConfig)}\n`,
+      config: validConfig,
+    });
+    vi.mocked(configIo.readConfigFileSnapshot)
+      .mockResolvedValueOnce(invalidSnapshot)
+      .mockResolvedValueOnce(repairedSnapshot);
+    vi.mocked(configIo.recoverConfigFromLastKnownGood).mockResolvedValueOnce(false);
+    vi.mocked(configIo.recoverConfigFromJsonRootSuffix).mockResolvedValueOnce(true);
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await expect(
+      loadGatewayStartupConfigSnapshot({
+        minimalTestGateway: true,
+        log,
+      }),
+    ).resolves.toEqual({
+      snapshot: repairedSnapshot,
+      wroteConfig: true,
+    });
+
+    expect(configIo.recoverConfigFromJsonRootSuffix).toHaveBeenCalledWith(invalidSnapshot);
+    expect(log.warn).toHaveBeenCalledWith(
+      `gateway: invalid config was repaired by stripping a non-JSON prefix: ${configPath}`,
+    );
   });
 });

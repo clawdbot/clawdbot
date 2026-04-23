@@ -41,6 +41,16 @@ export type { ProviderPlugin } from "../plugins/types.js";
 export type { KilocodeModelCatalogEntry } from "../plugins/provider-model-kilocode.js";
 
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+export {
+  GPT5_BEHAVIOR_CONTRACT,
+  GPT5_FRIENDLY_PROMPT_OVERLAY,
+  isGpt5ModelId,
+  normalizeGpt5PromptOverlayMode,
+  renderGpt5PromptOverlay,
+  resolveGpt5PromptOverlayMode,
+  resolveGpt5SystemPromptContribution,
+  type Gpt5PromptOverlayMode,
+} from "../agents/gpt5-prompt-overlay.js";
 export { resolveProviderEndpoint } from "../agents/provider-attribution.js";
 export {
   applyModelCompatPatch,
@@ -108,7 +118,7 @@ type ProviderReplayFamilyHooks = Pick<
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
-  | { family: "openai-compatible" }
+  | { family: "openai-compatible"; sanitizeToolCallIds?: boolean }
   | { family: "anthropic-by-model" }
   | { family: "native-anthropic-by-model" }
   | { family: "google-gemini" }
@@ -122,11 +132,13 @@ export function buildProviderReplayFamilyHooks(
   options: BuildProviderReplayFamilyHooksOptions,
 ): ProviderReplayFamilyHooks {
   switch (options.family) {
-    case "openai-compatible":
+    case "openai-compatible": {
+      const policyOptions = { sanitizeToolCallIds: options.sanitizeToolCallIds };
       return {
         buildReplayPolicy: (ctx: ProviderReplayPolicyContext) =>
-          buildOpenAICompatibleReplayPolicy(ctx.modelApi),
+          buildOpenAICompatibleReplayPolicy(ctx.modelApi, policyOptions),
       };
+    }
     case "anthropic-by-model":
       return {
         buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>

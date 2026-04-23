@@ -236,3 +236,15 @@ export function createReplyMediaPathNormalizer(params: {
     };
   };
 }
+
+export type ReplyMediaContext = {
+  normalizePayload: (payload: ReplyPayload) => Promise<ReplyPayload>;
+};
+
+export function createReplyMediaContext(
+  params: Parameters<typeof createReplyMediaPathNormalizer>[0],
+): ReplyMediaContext {
+  return {
+    normalizePayload: createReplyMediaPathNormalizer(params),
+  };
+}

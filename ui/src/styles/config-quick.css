@@ -44,16 +44,22 @@
 
 .qs-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
-  align-items: stretch;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: start;
   gap: 14px;
+}
+
+.qs-stack {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
 }
 
 /* ── Card ── */
 
 .qs-card {
   min-width: 0;
-  height: 100%;
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: var(--radius-lg);
@@ -178,6 +184,77 @@
   font-family: var(--mono);
   font-size: 0.75rem;
   color: var(--accent);
+}
+
+.qs-field {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.qs-field__input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 8px 10px;
+}
+
+.qs-field__input::placeholder {
+  color: var(--muted);
+}
+
+.qs-personal-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px 10px;
+}
+
+.qs-personal-preview__copy {
+  min-width: 0;
+}
+
+.qs-personal-preview__title {
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.qs-user-avatar {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  object-fit: cover;
+  object-position: center;
+}
+
+.qs-user-avatar--text,
+.qs-user-avatar--default {
+  display: grid;
+  place-items: center;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.qs-user-avatar--default svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.qs-personal-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px 16px;
 }
 
 .qs-row__chevron svg {
@@ -565,6 +642,24 @@
   font-size: 0.6875rem;
   line-height: 1.4;
   color: var(--muted);
+}
+
+@media (max-width: 1380px) {
+  .qs-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .qs-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .qs-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 480px) {

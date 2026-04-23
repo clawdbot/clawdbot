@@ -29,6 +29,15 @@ describe("command-tree", () => {
     expect(program.commands.map((command) => command.name())).toEqual(["beta"]);
   });
 
+  it("removes by command alias", () => {
+    const program = new Command();
+    program.command("alpha").alias("a");
+    program.command("beta");
+
+    expect(removeCommandByName(program, "a")).toBe(true);
+    expect(program.commands.map((command) => command.name())).toEqual(["beta"]);
+  });
+
   it("returns false when name does not exist", () => {
     const program = new Command();
     program.command("alpha");

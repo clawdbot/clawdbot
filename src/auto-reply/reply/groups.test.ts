@@ -84,4 +84,87 @@ describe("group runtime loading", () => {
     expect(groupsRuntimeLoads).toHaveBeenCalled();
     vi.doUnmock("./groups.runtime.js");
   });
+
+  it("honors Discord guild channel requireMention fallback when runtime plugin is unavailable", async () => {
+    vi.doMock("./groups.runtime.js", () => ({
+      getChannelPlugin: () => undefined,
+      normalizeChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
+    }));
+    const groups = await import("./groups.js");
+
+    await expect(
+      groups.resolveGroupRequireMention({
+        cfg: {
+          channels: {
+            discord: {
+              guilds: {
+                G1: {
+                  requireMention: true,
+                  channels: {
+                    C1: { requireMention: false },
+                  },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        ctx: {
+          Provider: "discord",
+          From: "discord:channel:C1",
+          GroupSpace: "G1",
+          GroupChannel: "general",
+        },
+        groupResolution: {
+          key: "discord:channel:C1",
+          channel: "discord",
+          id: "C1",
+          chatType: "group",
+        },
+      }),
+    ).resolves.toBe(false);
+    vi.doUnmock("./groups.runtime.js");
+  });
+
+  it("honors account-scoped Discord guild requireMention fallback", async () => {
+    vi.doMock("./groups.runtime.js", () => ({
+      getChannelPlugin: () => undefined,
+      normalizeChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
+    }));
+    const groups = await import("./groups.js");
+
+    await expect(
+      groups.resolveGroupRequireMention({
+        cfg: {
+          channels: {
+            discord: {
+              guilds: {
+                G1: { requireMention: true },
+              },
+              accounts: {
+                work: {
+                  guilds: {
+                    G1: { requireMention: false },
+                  },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        ctx: {
+          Provider: "discord",
+          From: "discord:channel:C1",
+          GroupSpace: "G1",
+          GroupChannel: "general",
+          AccountId: "work",
+        },
+        groupResolution: {
+          key: "discord:channel:C1",
+          channel: "discord",
+          id: "C1",
+          chatType: "group",
+        },
+      }),
+    ).resolves.toBe(false);
+    vi.doUnmock("./groups.runtime.js");
+  });
 });

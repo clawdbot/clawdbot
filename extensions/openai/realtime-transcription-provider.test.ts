@@ -27,7 +27,9 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       rawConfig: {
         providers: {
           openai: {
+            language: "en",
             model: "gpt-4o-transcribe",
+            prompt: "expect OpenClaw product names",
             silenceDurationMs: 900,
             vadThreshold: 0.45,
           },
@@ -36,7 +38,9 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     });
 
     expect(resolved).toEqual({
+      language: "en",
       model: "gpt-4o-transcribe",
+      prompt: "expect OpenClaw product names",
       silenceDurationMs: 900,
       vadThreshold: 0.45,
     });

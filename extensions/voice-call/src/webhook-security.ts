@@ -190,7 +190,7 @@ function extractHostname(hostHeader: string): string | null {
     if (endBracket === -1) {
       return null; // Malformed IPv6
     }
-    hostname = hostHeader.substring(1, endBracket);
+    hostname = hostHeader.slice(1, endBracket);
     return normalizeLowercaseStringOrEmpty(hostname);
   }
 
@@ -520,7 +520,7 @@ export function verifyTelnyxWebhook(
     return { ok: false, reason: "Missing signature or timestamp header" };
   }
 
-  const eventTimeSec = parseInt(timestamp, 10);
+  const eventTimeSec = Number.parseInt(timestamp, 10);
   if (!Number.isFinite(eventTimeSec)) {
     return { ok: false, reason: "Invalid timestamp header" };
   }

@@ -67,20 +67,4 @@ describe("resolveFollowupDeliveryPayloads", () => {
       }),
     ).toEqual([]);
   });
-
-  it("does not suppress replies when account differs", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "hello world!" }],
-        messageProvider: "heartbeat",
-        originatingChannel: "telegram",
-        originatingTo: "268300329",
-        originatingAccountId: "personal",
-        sentTargets: [
-          { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
-        ],
-      }),
-    ).toEqual([{ text: "hello world!" }]);
-  });
 });

@@ -119,6 +119,12 @@ describe("ensureConfigReady", () => {
     const statusRuntime = await runEnsureConfigReady(["status"]);
     expect(statusRuntime.exit).not.toHaveBeenCalled();
 
+    const bareGatewayRuntime = await runEnsureConfigReady(["gateway"]);
+    expect(bareGatewayRuntime.exit).not.toHaveBeenCalled();
+
+    const gatewayRunRuntime = await runEnsureConfigReady(["gateway", "run"]);
+    expect(gatewayRunRuntime.exit).not.toHaveBeenCalled();
+
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
   });

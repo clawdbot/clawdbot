@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
@@ -9,7 +9,7 @@ import {
 } from "../test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
-  loadLifecycleMonitorModule,
+  loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendPhotoMock,
   setLifecycleRuntimeCore,
@@ -75,7 +75,7 @@ describe("Zalo polling media replies", () => {
     });
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await resetLifecycleTestState();
   });
 
@@ -95,7 +95,9 @@ describe("Zalo polling media replies", () => {
       })
       .mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
+      "zalo-polling-media-reply",
+    );
     const abort = new AbortController();
     const runtime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({
@@ -155,7 +157,9 @@ describe("Zalo polling media replies", () => {
       })
       .mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
+      "zalo-polling-media-reply",
+    );
     const abort = new AbortController();
     const runtime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({
@@ -195,7 +199,9 @@ describe("Zalo polling media replies", () => {
     setActivePluginRegistry(firstRegistry);
     getUpdatesMock.mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
+      "zalo-polling-media-reply",
+    );
     const firstAbort = new AbortController();
     const firstRuntime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({

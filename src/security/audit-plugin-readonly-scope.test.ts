@@ -18,11 +18,32 @@ vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
     loadPluginMetadataRegistrySnapshotMock(...args),
 }));
 
-let runSecurityAudit: typeof import("./audit.js").runSecurityAudit;
+let collectPluginSecurityAuditFindings: typeof import("./audit.js").collectPluginSecurityAuditFindings;
+
+function createAuditContext(params: {
+  sourceConfig: Parameters<typeof collectPluginSecurityAuditFindings>[0]["sourceConfig"];
+  plugins: Parameters<typeof collectPluginSecurityAuditFindings>[0]["plugins"];
+}): Parameters<typeof collectPluginSecurityAuditFindings>[0] {
+  return {
+    cfg: params.sourceConfig,
+    sourceConfig: params.sourceConfig,
+    env: {},
+    platform: process.platform,
+    includeFilesystem: false,
+    includeChannelSecurity: true,
+    deep: false,
+    deepTimeoutMs: 5000,
+    stateDir: "/tmp/openclaw-test-state",
+    configPath: "/tmp/openclaw-test-config.json",
+    plugins: params.plugins,
+    configSnapshot: null,
+    codeSafetySummaryCache: new Map<string, Promise<unknown>>(),
+  };
+}
 
 describe("security audit read-only plugin scope", () => {
   beforeAll(async () => {
-    ({ runSecurityAudit } = await import("./audit.js"));
+    ({ collectPluginSecurityAuditFindings } = await import("./audit.js"));
   });
 
   beforeEach(() => {
@@ -56,14 +77,12 @@ describe("security audit read-only plugin scope", () => {
     });
     resolveConfiguredChannelPluginIdsMock.mockReturnValue(["external-channel-plugin"]);
 
-    await runSecurityAudit({
-      config: sourceConfig,
-      sourceConfig,
-      env: {} as NodeJS.ProcessEnv,
-      includeFilesystem: false,
-      includeChannelSecurity: true,
-      plugins: [],
-    });
+    await collectPluginSecurityAuditFindings(
+      createAuditContext({
+        sourceConfig,
+        plugins: [],
+      }),
+    );
 
     expect(resolveConfiguredChannelPluginIdsMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -95,14 +114,12 @@ describe("security audit read-only plugin scope", () => {
     });
     resolveConfiguredChannelPluginIdsMock.mockReturnValue(["external-channel-plugin"]);
 
-    await runSecurityAudit({
-      config: sourceConfig,
-      sourceConfig,
-      env: {} as NodeJS.ProcessEnv,
-      includeFilesystem: false,
-      includeChannelSecurity: true,
-      plugins: [{ id: "external-channel-plugin" }] as never,
-    });
+    await collectPluginSecurityAuditFindings(
+      createAuditContext({
+        sourceConfig,
+        plugins: [{ id: "external-channel-plugin" }] as never,
+      }),
+    );
 
     expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
       expect.objectContaining({

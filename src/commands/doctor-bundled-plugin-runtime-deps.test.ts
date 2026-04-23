@@ -219,6 +219,55 @@ describe("doctor bundled plugin runtime deps", () => {
     ]);
   });
 
+  it("repairs Feishu runtime deps from preserved source config", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "feishu", { "@larksuiteoapi/node-sdk": "^1.61.0" });
+    const installed: Array<{
+      installRoot: string;
+      missingSpecs: string[];
+      installSpecs: string[];
+    }> = [];
+    const prompter = {
+      shouldRepair: false,
+      shouldForce: false,
+      repairMode: {
+        shouldRepair: false,
+        shouldForce: false,
+        nonInteractive: true,
+        canPrompt: false,
+        updateInProgress: true,
+      },
+      confirm: async () => false,
+      confirmAutoFix: async () => false,
+      confirmAggressiveAutoFix: async () => false,
+      confirmRuntimeRepair: async () => false,
+      select: async (_params: unknown, fallback: unknown) => fallback,
+    } as DoctorPrompter;
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: { error: () => {} } as never,
+      prompter,
+      packageRoot: root,
+      includeConfiguredChannels: true,
+      config: {
+        plugins: { enabled: true },
+        channels: { feishu: { enabled: true } },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    expect(installed).toEqual([
+      {
+        installRoot: root,
+        missingSpecs: ["@larksuiteoapi/node-sdk@^1.61.0"],
+        installSpecs: ["@larksuiteoapi/node-sdk@^1.61.0"],
+      },
+    ]);
+  });
+
   it("repairs missing deps into an external stage dir when configured", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-stage-"));

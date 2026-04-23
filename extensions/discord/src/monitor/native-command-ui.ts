@@ -63,6 +63,7 @@ export type DiscordCommandArgContext = {
   accountId: string;
   sessionPrefix: string;
   threadBindings: ThreadBindingManager;
+  postApplySettleMs?: number;
 };
 
 export type DiscordModelPickerContext = DiscordCommandArgContext;
@@ -793,7 +794,10 @@ export async function handleDiscordModelPickerInteraction(params: {
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    const settleMs = ctx.postApplySettleMs ?? 250;
+    if (settleMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, settleMs));
+    }
 
     const effectiveModelRef = resolveDiscordModelPickerCurrentModel({
       cfg: ctx.cfg,

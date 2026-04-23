@@ -7,6 +7,27 @@ const SAME_TEXT = "same reply";
 const createSlackDraftStreamMock = vi.fn();
 const deliverRepliesMock = vi.fn(async () => {});
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
+const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
+const appendSlackStreamMock = vi.fn(async () => {});
+const startSlackStreamMock = vi.fn(async () => ({
+  channel: "C123",
+  threadTs: THREAD_TS,
+  stopped: false,
+  delivered: true,
+  pendingText: "",
+}));
+const stopSlackStreamMock = vi.fn(async () => {});
+class TestSlackStreamNotDeliveredError extends Error {
+  readonly pendingText: string;
+  readonly slackCode: string;
+  constructor(pendingText: string, slackCode: string) {
+    super(`slack-stream not delivered: ${slackCode}`);
+    this.name = "SlackStreamNotDeliveredError";
+    this.pendingText = pendingText;
+    this.slackCode = slackCode;
+  }
+}
+let mockedNativeStreaming = false;
 let mockedDispatchSequence: Array<{
   kind: "tool" | "block" | "final";
   payload: { text: string; isError?: boolean; mediaUrl?: string; mediaUrls?: string[] };
@@ -35,7 +56,7 @@ function createPreparedSlackMessage() {
       cfg: {},
       runtime: {},
       botToken: "xoxb-test",
-      app: { client: {} },
+      app: { client: { chat: { postMessage: postMessageMock } } },
       teamId: "T1",
       textLimit: 4000,
       typingReaction: "",
@@ -109,7 +130,7 @@ vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
 
 vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
   resolveChannelStreamingBlockEnabled: () => false,
-  resolveChannelStreamingNativeTransport: () => false,
+  resolveChannelStreamingNativeTransport: () => mockedNativeStreaming,
   resolveChannelStreamingPreviewToolProgress: () => true,
 }));
 
@@ -183,18 +204,28 @@ vi.mock("../../stream-mode.js", () => ({
   buildStatusFinalPreviewText: () => "status",
   resolveSlackStreamingConfig: () => ({
     mode: "partial",
-    nativeStreaming: false,
+    nativeStreaming: mockedNativeStreaming,
     draftMode: "append",
   }),
 }));
 
 vi.mock("../../streaming.js", () => ({
-  appendSlackStream: async () => {},
-  startSlackStream: async () => ({
-    threadTs: THREAD_TS,
-    stopped: false,
-  }),
-  stopSlackStream: async () => {},
+  appendSlackStream: appendSlackStreamMock,
+  markSlackStreamFallbackDelivered: (session: {
+    delivered: boolean;
+    pendingText: string;
+    stopped: boolean;
+  }) => {
+    const hadNativeDelivery = session.delivered;
+    session.delivered = true;
+    session.pendingText = "";
+    if (!hadNativeDelivery) {
+      session.stopped = true;
+    }
+  },
+  SlackStreamNotDeliveredError: TestSlackStreamNotDeliveredError,
+  startSlackStream: startSlackStreamMock,
+  stopSlackStream: stopSlackStreamMock,
 }));
 
 vi.mock("../../threading.js", () => ({
@@ -269,10 +300,24 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReset();
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
+    postMessageMock.mockClear();
+    appendSlackStreamMock.mockReset();
+    startSlackStreamMock.mockReset();
+    stopSlackStreamMock.mockReset();
+    mockedNativeStreaming = false;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
     finalizeSlackPreviewEditMock.mockRejectedValue(new Error("socket closed"));
+    startSlackStreamMock.mockResolvedValue({
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: true,
+      pendingText: "",
+    });
+    appendSlackStreamMock.mockResolvedValue(undefined);
+    stopSlackStreamMock.mockResolvedValue(undefined);
   });
 
   it("falls back to normal delivery when preview finalize fails", async () => {
@@ -362,5 +407,62 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("posts pending native stream text when finalize fails before the SDK buffer flushes", async () => {
+    mockedNativeStreaming = true;
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: FINAL_REPLY_TEXT,
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError(FINAL_REPLY_TEXT, "user_not_found"),
+    );
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(postMessageMock).toHaveBeenCalledTimes(1);
+    expect(postMessageMock).toHaveBeenCalledWith({
+      channel: "C123",
+      thread_ts: THREAD_TS,
+      text: FINAL_REPLY_TEXT,
+    });
+    expect(session.stopped).toBe(true);
+  });
+
+  it("posts all pending native stream text when an append flush fails", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "first buffered" } },
+      { kind: "final", payload: { text: "second flushes" } },
+    ];
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: "first buffered",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    appendSlackStreamMock.mockImplementationOnce(async () => {
+      session.pendingText += "\nsecond flushes";
+      throw new TestSlackStreamNotDeliveredError(session.pendingText, "user_not_found");
+    });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(postMessageMock).toHaveBeenCalledTimes(1);
+    expect(postMessageMock).toHaveBeenCalledWith({
+      channel: "C123",
+      thread_ts: THREAD_TS,
+      text: "first buffered\nsecond flushes",
+    });
+    expect(stopSlackStreamMock).not.toHaveBeenCalled();
   });
 });

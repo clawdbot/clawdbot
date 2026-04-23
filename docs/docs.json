@@ -1215,6 +1215,7 @@
                   "tools/btw",
                   "tools/code-execution",
                   "tools/diffs",
+                  "tools/trajectory",
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
@@ -1266,6 +1267,7 @@
                   "providers/comfy",
                   "providers/deepgram",
                   "providers/deepseek",
+                  "providers/elevenlabs",
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
@@ -1378,6 +1380,7 @@
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/audit-checks",
                       "gateway/sandboxing",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
@@ -1483,7 +1486,8 @@
                       "cli/message",
                       "cli/models",
                       "cli/sessions",
-                      "cli/system"
+                      "cli/system",
+                      "cli/tasks"
                     ]
                   },
                   {

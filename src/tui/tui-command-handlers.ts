@@ -497,7 +497,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`elevated failed: ${String(err)}`);
         }
         break;
-      case "activation":
+      case "activation": {
         if (!args) {
           chatLog.addSystem("usage: /activation <mention|always>");
           break;
@@ -519,6 +519,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`activation failed: ${String(err)}`);
         }
         break;
+      }
       case "new":
         try {
           // Clear token counts immediately to avoid stale display (#1523)

@@ -223,6 +223,8 @@ describe("anthropic provider replay hooks", () => {
       id: "claude-opus-4-7",
       api: "anthropic-messages",
       reasoning: true,
+      contextWindow: 1_048_576,
+      contextTokens: 1_048_576,
     });
     expect(
       provider.resolveThinkingProfile?.({
@@ -250,6 +252,37 @@ describe("anthropic provider replay hooks", () => {
         } as never)
         ?.levels.some((level) => level.id === "xhigh" || level.id === "max"),
     ).toBe(false);
+  });
+
+  it("normalizes exact claude opus 4.7 variants to 1M context", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    for (const [runtimeProvider, modelId] of [
+      ["anthropic", "claude-opus-4-7"],
+      ["claude-cli", "claude-opus-4.7-20260219"],
+    ] as const) {
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: runtimeProvider,
+          modelId,
+          model: {
+            id: modelId,
+            name: "Claude Opus 4.7",
+            provider: runtimeProvider,
+            api: "anthropic-messages",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 200_000,
+            contextTokens: 200_000,
+            maxTokens: 32_000,
+          },
+        } as never),
+      ).toMatchObject({
+        contextWindow: 1_048_576,
+        contextTokens: 1_048_576,
+      });
+    }
   });
 
   it("resolves claude-cli synthetic oauth auth", async () => {

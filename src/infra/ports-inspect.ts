@@ -219,7 +219,7 @@ function parseNetstatListeners(output: string, port: number): PortListener[] {
       continue;
     }
     const pidRaw = parts.at(-1);
-    const pid = pidRaw ? Number.parseInt(pidRaw, 10) : NaN;
+    const pid = pidRaw ? Number.parseInt(pidRaw, 10) : Number.NaN;
     const localAddr = parts[1];
     const listener: PortListener = {};
     if (Number.isFinite(pid)) {

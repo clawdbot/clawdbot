@@ -273,6 +273,133 @@ describe("config cli", () => {
       });
     });
 
+    it("dry-runs nested plugin install updates without dropping sibling fields", async () => {
+      const resolved = {
+        plugins: {
+          installs: {
+            "openclaw-web-search": {
+              source: "npm",
+              spec: "@ollama/openclaw-web-search",
+              installPath: "/tmp/openclaw-web-search",
+              version: "0.2.2",
+              resolvedName: "@ollama/openclaw-web-search",
+              resolvedVersion: "0.2.2",
+              resolvedSpec: "@ollama/openclaw-web-search@0.2.2",
+              integrity: "sha512-test",
+              resolvedAt: "2026-04-22T10:33:58.083Z",
+              installedAt: "2026-04-22T10:33:58.240Z",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        'plugins.installs["openclaw-web-search"].spec',
+        '"@ollama/openclaw-web-search@0.2.2"',
+        "--strict-json",
+        "--dry-run",
+      ]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Dry run successful"));
+    });
+
+    it("rejects protected model map replacement unless explicitly requested", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { alias: "GPT" },
+              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "agents.defaults.models",
+          '{"openai/gpt-5.4":{}}',
+          "--strict-json",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("Refusing to replace agents.defaults.models"),
+      );
+    });
+
+    it("merges protected model map values with --merge", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { alias: "GPT" },
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.defaults.models",
+        '{"anthropic/claude-sonnet-4-6":{"alias":"Sonnet"}}',
+        "--strict-json",
+        "--merge",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.models).toEqual({
+        "openai/gpt-5.4": { alias: "GPT" },
+        "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+      });
+    });
+
+    it("merges provider model arrays by id with --merge", async () => {
+      const resolved = {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              models: [
+                { id: "llama3.2", name: "Llama 3.2", contextWindow: 131072 },
+                { id: "qwen3", name: "Qwen 3" },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "models.providers.ollama.models",
+        '[{"id":"llama3.2","name":"Llama 3.2 latest"},{"id":"gemma4","name":"Gemma 4"}]',
+        "--strict-json",
+        "--merge",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.models?.providers?.ollama?.models).toEqual([
+        { id: "llama3.2", name: "Llama 3.2 latest", contextWindow: 131072 },
+        { id: "qwen3", name: "Qwen 3" },
+        { id: "gemma4", name: "Gemma 4" },
+      ]);
+    });
+
     it("writes agents.defaults.llm.idleTimeoutSeconds without disturbing sibling defaults", async () => {
       const resolved: OpenClawConfig = {
         agents: {
@@ -1219,6 +1346,57 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = mockWriteConfigFile.mock.calls[0]?.[0];
       expect(written.gateway?.auth).toEqual({ mode: "token" });
+    });
+
+    it("batch-file nested leaf updates preserve agents defaults and list siblings", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { alias: "GPT" },
+            },
+            model: { primary: "openai/gpt-5.4" },
+          },
+          list: [{ id: "main" }, { id: "ops" }],
+        },
+        plugins: {
+          entries: {
+            "github-copilot": { enabled: true },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      const pathname = path.join(
+        os.tmpdir(),
+        `openclaw-config-memory-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+      );
+      fs.writeFileSync(
+        pathname,
+        JSON.stringify([
+          { path: "agents.defaults.memorySearch.enabled", value: true },
+          { path: "agents.defaults.memorySearch.provider", value: "gemini" },
+          { path: "agents.defaults.memorySearch.sources", value: ["memory"] },
+        ]),
+        "utf8",
+      );
+      try {
+        await runConfigCommand(["config", "set", "--batch-file", pathname]);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.models).toEqual(resolved.agents?.defaults?.models);
+      expect(written.agents?.defaults?.model).toEqual(resolved.agents?.defaults?.model);
+      expect(written.agents?.defaults?.memorySearch).toEqual({
+        enabled: true,
+        provider: "gemini",
+        sources: ["memory"],
+      });
+      expect(written.agents?.list).toEqual(resolved.agents?.list);
+      expect(written.plugins).toEqual(resolved.plugins);
     });
 
     it("rejects malformed batch-file payloads", async () => {

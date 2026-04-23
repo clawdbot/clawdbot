@@ -12,10 +12,92 @@ const resolvePluginConversationBindingApprovalMock = vi.hoisted(() => vi.fn());
 const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn(() => "Binding updated."));
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
-let enqueueSystemEventSpy: ReturnType<typeof vi.spyOn>;
-let dispatchPluginInteractiveHandlerSpy: ReturnType<typeof vi.spyOn>;
-let resolvePluginConversationBindingApprovalSpy: ReturnType<typeof vi.spyOn>;
-let buildPluginBindingResolvedTextSpy: ReturnType<typeof vi.spyOn>;
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+}));
+
+vi.mock("../../interactive-dispatch.js", () => ({
+  dispatchSlackPluginInteractiveHandler: (params: {
+    data: string;
+    interactionId: string;
+    ctx: {
+      interaction?: Record<string, unknown>;
+    } & Record<string, unknown>;
+    respond: unknown;
+  }) =>
+    (dispatchPluginInteractiveHandlerMock as (arg: unknown) => Promise<unknown>)({
+      channel: "slack",
+      data: params.data,
+      dedupeId: params.interactionId,
+      invoke: async ({
+        registration,
+        namespace,
+        payload,
+      }: {
+        registration: { handler: (ctx: unknown) => unknown };
+        namespace: string;
+        payload: string;
+      }) =>
+        registration.handler({
+          ...params.ctx,
+          channel: "slack",
+          interaction: {
+            ...params.ctx.interaction,
+            data: params.data,
+            namespace,
+            payload,
+          },
+          respond: params.respond,
+          requestConversationBinding: vi.fn(),
+          detachConversationBinding: vi.fn(),
+          getCurrentConversationBinding: vi.fn(),
+        }),
+    }),
+}));
+
+vi.mock("../conversation.runtime.js", () => {
+  const parsePluginBindingApprovalCustomId = (value: string) => {
+    const prefix = "pluginbind:";
+    const trimmed = value.trim();
+    if (!trimmed.startsWith(prefix)) {
+      return null;
+    }
+    const body = trimmed.slice(prefix.length);
+    const separator = body.lastIndexOf(":");
+    if (separator <= 0 || separator === body.length - 1) {
+      return null;
+    }
+    const decisionCode = body.slice(separator + 1).trim();
+    const decision =
+      decisionCode === "o"
+        ? "allow-once"
+        : decisionCode === "a"
+          ? "allow-always"
+          : decisionCode === "d"
+            ? "deny"
+            : null;
+    if (!decision) {
+      return null;
+    }
+    return {
+      approvalId: decodeURIComponent(body.slice(0, separator).trim()),
+      decision,
+    };
+  };
+
+  return {
+    buildPluginBindingResolvedText: (...args: unknown[]) =>
+      (buildPluginBindingResolvedTextMock as (...innerArgs: unknown[]) => string)(...args),
+    parsePluginBindingApprovalCustomId,
+    resolvePluginConversationBindingApproval: (...args: unknown[]) =>
+      (
+        resolvePluginConversationBindingApprovalMock as (
+          ...innerArgs: unknown[]
+        ) => Promise<unknown>
+      )(...args),
+  };
+});
 
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
@@ -167,49 +249,10 @@ function createContext(overrides?: {
 
 describe("registerSlackInteractionEvents", () => {
   beforeAll(async () => {
-    const channelRuntime = await import("openclaw/plugin-sdk/infra-runtime");
-    const pluginRuntime = await import("openclaw/plugin-sdk/plugin-runtime");
-    const conversationBinding = await import("../../../../../src/plugins/conversation-binding.js");
-    enqueueSystemEventSpy = vi
-      .spyOn(channelRuntime, "enqueueSystemEvent")
-      .mockImplementation(((...args: Parameters<typeof channelRuntime.enqueueSystemEvent>) =>
-        (enqueueSystemEventMock as (...innerArgs: unknown[]) => boolean)(
-          ...args,
-        )) as typeof channelRuntime.enqueueSystemEvent);
-    dispatchPluginInteractiveHandlerSpy = vi
-      .spyOn(pluginRuntime, "dispatchPluginInteractiveHandler")
-      .mockImplementation(((
-        ...args: Parameters<typeof pluginRuntime.dispatchPluginInteractiveHandler>
-      ) =>
-        (dispatchPluginInteractiveHandlerMock as (...innerArgs: unknown[]) => Promise<unknown>)(
-          ...args,
-        )) as typeof pluginRuntime.dispatchPluginInteractiveHandler);
-    resolvePluginConversationBindingApprovalSpy = vi
-      .spyOn(conversationBinding, "resolvePluginConversationBindingApproval")
-      .mockImplementation(((
-        ...args: Parameters<typeof conversationBinding.resolvePluginConversationBindingApproval>
-      ) =>
-        (
-          resolvePluginConversationBindingApprovalMock as (
-            ...innerArgs: unknown[]
-          ) => Promise<unknown>
-        )(...args)) as typeof conversationBinding.resolvePluginConversationBindingApproval);
-    buildPluginBindingResolvedTextSpy = vi
-      .spyOn(conversationBinding, "buildPluginBindingResolvedText")
-      .mockImplementation(((
-        ...args: Parameters<typeof conversationBinding.buildPluginBindingResolvedText>
-      ) =>
-        (buildPluginBindingResolvedTextMock as (...innerArgs: unknown[]) => string)(
-          ...args,
-        )) as typeof conversationBinding.buildPluginBindingResolvedText);
     ({ registerSlackInteractionEvents } = await import("./interactions.js"));
   });
 
   beforeEach(() => {
-    enqueueSystemEventSpy.mockClear();
-    dispatchPluginInteractiveHandlerSpy.mockClear();
-    resolvePluginConversationBindingApprovalSpy.mockClear();
-    buildPluginBindingResolvedTextSpy.mockClear();
     enqueueSystemEventMock.mockClear();
     dispatchPluginInteractiveHandlerMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();

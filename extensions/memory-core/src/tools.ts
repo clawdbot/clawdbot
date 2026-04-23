@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  asToolParamsRecord,
   jsonResult,
   readNumberParam,
   readStringParam,
@@ -191,10 +192,11 @@ export function createMemorySearchTool(options: {
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params) => {
-        const query = readStringParam(params, "query", { required: true });
-        const maxResults = readNumberParam(params, "maxResults");
-        const minScore = readNumberParam(params, "minScore");
-        const requestedCorpus = readStringParam(params, "corpus") as
+        const rawParams = asToolParamsRecord(params);
+        const query = readStringParam(rawParams, "query", { required: true });
+        const maxResults = readNumberParam(rawParams, "maxResults");
+        const minScore = readNumberParam(rawParams, "minScore");
+        const requestedCorpus = readStringParam(rawParams, "corpus") as
           | "memory"
           | "wiki"
           | "all"
@@ -332,10 +334,11 @@ export function createMemoryGetTool(options: {
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params) => {
-        const relPath = readStringParam(params, "path", { required: true });
-        const from = readNumberParam(params, "from", { integer: true });
-        const lines = readNumberParam(params, "lines", { integer: true });
-        const requestedCorpus = readStringParam(params, "corpus") as
+        const rawParams = asToolParamsRecord(params);
+        const relPath = readStringParam(rawParams, "path", { required: true });
+        const from = readNumberParam(rawParams, "from", { integer: true });
+        const lines = readNumberParam(rawParams, "lines", { integer: true });
+        const requestedCorpus = readStringParam(rawParams, "corpus") as
           | "memory"
           | "wiki"
           | "all"

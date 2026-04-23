@@ -352,7 +352,7 @@ describe("promptModelAllowlist", () => {
     const prompter = makePrompter({ multiselect });
     const config = { agents: { defaults: {} } } as OpenClawConfig;
 
-    await promptModelAllowlist({
+    const result = await promptModelAllowlist({
       config,
       prompter,
       allowedKeys: ["anthropic/claude-opus-4-6"],
@@ -362,6 +362,7 @@ describe("promptModelAllowlist", () => {
     expect(options.map((opt: { value: string }) => opt.value)).toEqual([
       "anthropic/claude-opus-4-6",
     ]);
+    expect(result.scopeKeys).toEqual(["anthropic/claude-opus-4-6"]);
   });
 
   it("scopes the initial allowlist picker to the preferred provider", async () => {
@@ -449,6 +450,28 @@ describe("applyModelAllowlist", () => {
     const next = applyModelAllowlist(config, ["openai/gpt-5.4"]);
     expect(next.agents?.defaults?.models).toEqual({
       "openai/gpt-5.4": { alias: "gpt" },
+    });
+  });
+
+  it("preserves entries outside scoped allowlist updates", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": { alias: "gpt" },
+            "anthropic/claude-opus-4-6": { alias: "opus" },
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelAllowlist(config, ["anthropic/claude-sonnet-4-6"], {
+      scopeKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.4": { alias: "gpt" },
+      "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
     });
   });
 

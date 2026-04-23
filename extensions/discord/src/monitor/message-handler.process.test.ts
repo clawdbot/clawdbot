@@ -175,15 +175,15 @@ vi.spyOn(conversationRuntimeModule, "recordInboundSession").mockImplementation(
     recordInboundSession(params) as never) as never,
 );
 
-const configRuntimeModule = await import("openclaw/plugin-sdk/config-runtime");
-vi.spyOn(configRuntimeModule, "readSessionUpdatedAt").mockImplementation(
-  ((params: Parameters<typeof configRuntimeModule.readSessionUpdatedAt>[0]) =>
+const sessionStoreRuntimeModule = await import("openclaw/plugin-sdk/session-store-runtime");
+vi.spyOn(sessionStoreRuntimeModule, "readSessionUpdatedAt").mockImplementation(
+  ((params: Parameters<typeof sessionStoreRuntimeModule.readSessionUpdatedAt>[0]) =>
     configSessionsMocks.readSessionUpdatedAt(params) as never) as never,
 );
-vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
+vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(
   ((
-    path: Parameters<typeof configRuntimeModule.resolveStorePath>[0],
-    opts: Parameters<typeof configRuntimeModule.resolveStorePath>[1],
+    path: Parameters<typeof sessionStoreRuntimeModule.resolveStorePath>[0],
+    opts: Parameters<typeof sessionStoreRuntimeModule.resolveStorePath>[1],
   ) => configSessionsMocks.resolveStorePath(path, opts) as never) as never,
 );
 

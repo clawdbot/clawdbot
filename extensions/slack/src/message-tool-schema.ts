@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 export function createSlackMessageToolBlocksSchema() {
   return Type.Array(

@@ -13,10 +13,9 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatMention } from "../mentions.js";
-import { normalizeDiscordSlug } from "../monitor/allow-list.js";
-import { resolveDiscordChannelInfo } from "../monitor/message-utils.js";
+import { resolveDiscordChannelNameSafe } from "../monitor/channel-access.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
-import { resolveDiscordThreadParentInfo } from "../monitor/threading.js";
+import { resolveDiscordThreadLikeChannelContext } from "../monitor/thread-channel-context.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import type { DiscordVoiceManager } from "./manager.js";
 
@@ -62,40 +61,12 @@ async function authorizeVoiceCommand(
   }
 
   const channelId = channelOverride?.id ?? channel?.id ?? "";
-  const rawChannelName =
-    channelOverride?.name ?? (channel && "name" in channel ? (channel.name as string) : undefined);
-  const rawParentId =
-    channelOverride?.parentId ??
-    ("parentId" in (channel ?? {})
-      ? ((channel as { parentId?: string }).parentId ?? undefined)
-      : undefined);
-  const channelInfo = channelId
-    ? await resolveDiscordChannelInfo(interaction.client, channelId)
-    : null;
-  const channelName = rawChannelName ?? channelInfo?.name;
-  const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-  const isThreadChannel =
-    channelInfo?.type === CarbonChannelType.PublicThread ||
-    channelInfo?.type === CarbonChannelType.PrivateThread ||
-    channelInfo?.type === CarbonChannelType.AnnouncementThread;
-  let parentId: string | undefined;
-  let parentName: string | undefined;
-  let parentSlug: string | undefined;
-  if (isThreadChannel && channelId) {
-    const parentInfo = await resolveDiscordThreadParentInfo({
-      client: interaction.client,
-      threadChannel: {
-        id: channelId,
-        name: channelName,
-        parentId: rawParentId ?? channelInfo?.parentId,
-        parent: undefined,
-      },
-      channelInfo,
-    });
-    parentId = parentInfo.id;
-    parentName = parentInfo.name;
-    parentSlug = parentName ? normalizeDiscordSlug(parentName) : undefined;
-  }
+  const channelContext = await resolveDiscordThreadLikeChannelContext({
+    client: interaction.client,
+    channel: channelOverride ?? channel,
+    channelIdFallback: channelId,
+  });
+  const channelName = channelOverride?.name ?? channelContext.channelName;
 
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
@@ -110,11 +81,11 @@ async function authorizeVoiceCommand(
     guildId: interaction.guild.id,
     channelId,
     channelName,
-    channelSlug,
-    parentId,
-    parentName,
-    parentSlug,
-    scope: isThreadChannel ? "thread" : "channel",
+    channelSlug: channelContext.channelSlug,
+    parentId: channelOverride?.parentId ?? channelContext.threadParentId,
+    parentName: channelContext.threadParentName,
+    parentSlug: channelContext.threadParentSlug,
+    scope: channelContext.isThreadChannel ? "thread" : "channel",
     channelLabel: channelId ? formatMention({ channelId }) : "This channel",
     memberRoleIds,
     sender: {
@@ -200,11 +171,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
       const access = await authorizeVoiceCommand(interaction, params, {
         channelOverride: {
           id: channel.id,
-          name: "name" in channel ? (channel.name as string) : undefined,
-          parentId:
-            "parentId" in channel
-              ? ((channel as { parentId?: string }).parentId ?? undefined)
-              : undefined,
+          name: resolveDiscordChannelNameSafe(channel),
         },
       });
       if (!access.ok) {

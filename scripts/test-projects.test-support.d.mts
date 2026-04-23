@@ -14,6 +14,8 @@ export type VitestRunSpec = {
   watchMode: boolean;
 };
 
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS: string;
+
 export function parseTestProjectsArgs(
   args: string[],
   cwd?: string,
@@ -48,6 +50,21 @@ export function createVitestRunSpecs(
     baseEnv?: Record<string, string | undefined>;
     cwd?: string;
     tempDir?: string;
+  },
+): VitestRunSpec[];
+
+export function applyDefaultVitestNoOutputTimeout(
+  specs: VitestRunSpec[],
+  params?: {
+    env?: Record<string, string | undefined>;
+  },
+): VitestRunSpec[];
+
+export function applyDefaultMultiSpecVitestCachePaths(
+  specs: VitestRunSpec[],
+  params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
   },
 ): VitestRunSpec[];
 

@@ -1,5 +1,5 @@
-import { Type } from "@sinclair/typebox";
-import type { TSchema } from "@sinclair/typebox";
+import { Type } from "typebox";
+import type { TSchema } from "typebox";
 import { stringEnum as createStringEnum } from "../agents/schema/typebox.js";
 
 export {

@@ -5,8 +5,9 @@
   "description": "OpenClaw xAI plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.68.1",
-    "@sinclair/typebox": "0.34.49"
+    "@mariozechner/pi-ai": "0.69.0",
+    "typebox": "1.1.28",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

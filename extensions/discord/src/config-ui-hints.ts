@@ -85,6 +85,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
   },
+  "thread.inheritParent": {
+    label: "Discord Thread Parent Inheritance",
+    help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
+  },
   "inboundWorker.runTimeoutMs": {
     label: "Discord Inbound Worker Timeout (ms)",
     help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",

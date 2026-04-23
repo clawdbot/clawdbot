@@ -28,6 +28,7 @@ export function getCliSessionBinding(
       sessionId: bindingSessionId,
       authProfileId: normalizeOptionalString(fromBindings?.authProfileId),
       authEpoch: normalizeOptionalString(fromBindings?.authEpoch),
+      authEpochVersion: fromBindings?.authEpochVersion,
       extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
@@ -78,6 +79,9 @@ export function setCliSessionBinding(
       ...(normalizeOptionalString(binding.authEpoch)
         ? { authEpoch: normalizeOptionalString(binding.authEpoch) }
         : {}),
+      ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
+        ? { authEpochVersion: binding.authEpochVersion }
+        : {}),
       ...(normalizeOptionalString(binding.extraSystemPromptHash)
         ? { extraSystemPromptHash: normalizeOptionalString(binding.extraSystemPromptHash) }
         : {}),
@@ -108,20 +112,21 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
     entry.cliSessionIds = Object.keys(next).length > 0 ? next : undefined;
   }
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    delete entry.claudeCliSessionId;
+    entry.claudeCliSessionId = undefined;
   }
 }
 
 export function clearAllCliSessions(entry: SessionEntry): void {
-  delete entry.cliSessionBindings;
-  delete entry.cliSessionIds;
-  delete entry.claudeCliSessionId;
+  entry.cliSessionBindings = undefined;
+  entry.cliSessionIds = undefined;
+  entry.claudeCliSessionId = undefined;
 }
 
 export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
   authProfileId?: string;
   authEpoch?: string;
+  authEpochVersion: number;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -144,7 +149,10 @@ export function resolveCliSessionReuse(params: {
     return { invalidatedReason: "auth-profile" };
   }
   const storedAuthEpoch = normalizeOptionalString(binding?.authEpoch);
-  if (storedAuthEpoch !== currentAuthEpoch) {
+  if (
+    binding?.authEpochVersion === params.authEpochVersion &&
+    storedAuthEpoch !== currentAuthEpoch
+  ) {
     return { invalidatedReason: "auth-epoch" };
   }
   const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
@@ -152,7 +160,7 @@ export function resolveCliSessionReuse(params: {
     return { invalidatedReason: "system-prompt" };
   }
   const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
-  if (storedMcpResumeHash || currentMcpResumeHash) {
+  if (storedMcpResumeHash && currentMcpResumeHash) {
     if (storedMcpResumeHash !== currentMcpResumeHash) {
       return { invalidatedReason: "mcp" };
     }

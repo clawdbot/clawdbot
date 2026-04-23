@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { isStrictAgenticSupportedProviderModel } from "../../execution-contract.js";
@@ -19,6 +20,7 @@ type IncompleteTurnAttempt = Pick<
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
@@ -173,7 +175,21 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+    return null;
+  }
+
   const stopReason = params.attempt.lastAssistant?.stopReason;
+  // If the assistant already delivered user-visible content via a messaging
+  // tool during this turn and ended cleanly (stopReason=stop), do not surface
+  // an incomplete-turn warning. The user has received the reply; a follow-up
+  // "couldn't generate a response" bubble is a false positive. Provider-side
+  // failures (stopReason=error, toolUse interruption) still fall through to
+  // the normal incomplete-turn paths below; tool-error cases are already
+  // handled by the lastToolError early return above.
+  if (params.attempt.didSendViaMessagingTool && stopReason === "stop") {
+    return null;
+  }
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
     lastAssistant: params.attempt.lastAssistant,
@@ -197,6 +213,14 @@ export function resolveIncompleteTurnPayloadText(params: {
   return params.attempt.replayMetadata.hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
+}
+
+function hasOnlySilentAssistantReply(assistantTexts: readonly string[]): boolean {
+  const nonEmptyTexts = assistantTexts.filter((text) => text.trim().length > 0);
+  return (
+    nonEmptyTexts.length > 0 &&
+    nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
+  );
 }
 
 export function resolveReplayInvalidFlag(params: {
@@ -294,6 +318,7 @@ function shouldSkipPlanningOnlyRetry(params: {
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
@@ -306,6 +331,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     })
   ) {
     return null;
@@ -328,6 +354,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
@@ -341,6 +368,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     })
   ) {
     return null;
@@ -361,7 +389,11 @@ export function resolveEmptyResponseRetryInstruction(params: {
 function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
 }): boolean {
+  if (params.executionContract === "strict-agentic") {
+    return true;
+  }
   return isStrictAgenticSupportedProviderModel({
     provider: params.provider,
     modelId: params.modelId,
@@ -518,6 +550,7 @@ export function resolvePlanningOnlyRetryLimit(
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   prompt?: string;
   aborted: boolean;
   timedOut: boolean;
@@ -534,6 +567,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     }) ||
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||

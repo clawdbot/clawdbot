@@ -5,22 +5,22 @@ import { createCapturedThinkingConfigStream } from "../../test/helpers/plugins/s
 import plugin from "./index.js";
 
 describe("moonshot provider plugin", () => {
-  it("owns replay policy for OpenAI-compatible Moonshot transports", async () => {
+  it("owns replay policy for OpenAI-compatible Moonshot transports without mangling native Kimi tool_call IDs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "moonshot",
-        modelApi: "openai-completions",
-        modelId: "kimi-k2.6",
-      } as never),
-    ).toMatchObject({
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
+    const policy = provider.buildReplayPolicy?.({
+      provider: "moonshot",
+      modelApi: "openai-completions",
+      modelId: "kimi-k2.6",
+    } as never);
+
+    expect(policy).toMatchObject({
       applyAssistantFirstOrderingFix: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
     });
+    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
+    expect(policy).not.toHaveProperty("toolCallIdMode");
   });
 
   it("wires moonshot-thinking stream hooks", async () => {

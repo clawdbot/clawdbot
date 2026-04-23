@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   buildEmbeddedAttemptToolRunContext,
   clearActiveEmbeddedRun,
-  createOpenClawCodingTools,
   embeddedAgentLog,
+  formatErrorMessage,
   isSubagentSessionKey,
   normalizeProviderToolSchemas,
   resolveAttemptSpawnWorkspaceDir,
@@ -12,11 +13,15 @@ import {
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
+  resolveAgentHarnessBeforePromptBuildResult,
+  runAgentHarnessAgentEndHook,
+  runAgentHarnessLlmInputHook,
+  runAgentHarnessLlmOutputHook,
   setActiveEmbeddedRun,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   createCodexAppServerClientFactoryTestHooks,
@@ -25,6 +30,7 @@ import {
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   isJsonObject,
@@ -36,7 +42,17 @@ import {
 } from "./protocol.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { clearSharedCodexAppServerClient } from "./shared-client.js";
-import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  buildDeveloperInstructions,
+  buildTurnStartParams,
+  startOrResumeThread,
+} from "./thread-lifecycle.js";
+import {
+  createCodexTrajectoryRecorder,
+  normalizeCodexTrajectoryError,
+  recordCodexTrajectoryCompletion,
+  recordCodexTrajectoryContext,
+} from "./trajectory.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 let clientFactory = defaultCodexAppServerClientFactory;
@@ -45,6 +61,7 @@ export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: { pluginConfig?: unknown; startupTimeoutFloorMs?: number } = {},
 ): Promise<EmbeddedRunAttemptResult> {
+  const attemptStartedAt = Date.now();
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -94,9 +111,40 @@ export async function runCodexAppServerAttempt(
   const toolBridge = createCodexDynamicToolBridge({
     tools,
     signal: runAbortController.signal,
+    hookContext: {
+      agentId: sessionAgentId,
+      sessionId: params.sessionId,
+      sessionKey: sandboxSessionKey,
+      runId: params.runId,
+    },
+  });
+  const historyMessages = readMirroredSessionHistoryMessages(params.sessionFile);
+  const hookContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: sandboxSessionKey,
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    messageProvider: params.messageProvider ?? undefined,
+    trigger: params.trigger,
+    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+  };
+  const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
+    prompt: params.prompt,
+    developerInstructions: buildDeveloperInstructions(params),
+    messages: historyMessages,
+    ctx: hookContext,
+  });
+  const trajectoryRecorder = createCodexTrajectoryRecorder({
+    attempt: params,
+    cwd: effectiveWorkspace,
+    developerInstructions: promptBuild.developerInstructions,
+    prompt: promptBuild.prompt,
+    tools: toolBridge.specs,
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadBinding;
+  let trajectoryEndRecorded = false;
   try {
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
@@ -110,6 +158,7 @@ export async function runCodexAppServerAttempt(
           cwd: effectiveWorkspace,
           dynamicTools: toolBridge.specs,
           appServer,
+          developerInstructions: promptBuild.developerInstructions,
         });
         return { client: startupClient, thread: startupThread };
       },
@@ -119,6 +168,20 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
+  trajectoryRecorder?.recordEvent("session.started", {
+    sessionFile: params.sessionFile,
+    threadId: thread.threadId,
+    authProfileId: startupAuthProfileId,
+    workspaceDir: effectiveWorkspace,
+    toolCount: toolBridge.specs.length,
+  });
+  recordCodexTrajectoryContext(trajectoryRecorder, {
+    attempt: params,
+    cwd: effectiveWorkspace,
+    developerInstructions: promptBuild.developerInstructions,
+    prompt: promptBuild.prompt,
+    tools: toolBridge.specs,
+  });
 
   let projector: CodexAppServerEventProjector | undefined;
   let turnId: string | undefined;
@@ -140,7 +203,8 @@ export async function runCodexAppServerAttempt(
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
     const isTurnCompletion =
-      notification.method === "turn/completed" && isTurnNotification(notification.params, turnId);
+      notification.method === "turn/completed" &&
+      isTurnNotification(notification.params, thread.threadId, turnId);
     try {
       await projector.handleNotification(notification);
     } catch (error) {
@@ -168,6 +232,15 @@ export async function runCodexAppServerAttempt(
     if (!turnId) {
       return undefined;
     }
+    if (request.method === "mcpServer/elicitation/request") {
+      return handleCodexAppServerElicitationRequest({
+        requestParams: request.params,
+        paramsForRun: params,
+        threadId: thread.threadId,
+        turnId,
+        signal: runAbortController.signal,
+      });
+    }
     if (request.method !== "item/tool/call") {
       if (isCodexAppServerApprovalRequest(request.method)) {
         return handleApprovalRequest({
@@ -185,33 +258,116 @@ export async function runCodexAppServerAttempt(
     if (!call || call.threadId !== thread.threadId || call.turnId !== turnId) {
       return undefined;
     }
-    return toolBridge.handleToolCall(call) as Promise<JsonValue>;
+    trajectoryRecorder?.recordEvent("tool.call", {
+      threadId: call.threadId,
+      turnId: call.turnId,
+      toolCallId: call.callId,
+      name: call.tool,
+      arguments: call.arguments,
+    });
+    const response = await toolBridge.handleToolCall(call);
+    trajectoryRecorder?.recordEvent("tool.result", {
+      threadId: call.threadId,
+      turnId: call.turnId,
+      toolCallId: call.callId,
+      name: call.tool,
+      success: response.success,
+      contentItems: response.contentItems,
+    });
+    return response as JsonValue;
   });
+
+  const llmInputEvent = {
+    runId: params.runId,
+    sessionId: params.sessionId,
+    provider: params.provider,
+    model: params.modelId,
+    systemPrompt: promptBuild.developerInstructions,
+    prompt: promptBuild.prompt,
+    historyMessages,
+    imagesCount: params.images?.length ?? 0,
+  };
+  const turnStartFailureMessages = [
+    ...historyMessages,
+    {
+      role: "user",
+      content: [{ type: "text", text: promptBuild.prompt }],
+    },
+  ];
 
   let turn: CodexTurnStartResponse;
   try {
+    runAgentHarnessLlmInputHook({
+      event: llmInputEvent,
+      ctx: hookContext,
+    });
     turn = await client.request<CodexTurnStartResponse>(
       "turn/start",
       buildTurnStartParams(params, {
         threadId: thread.threadId,
         cwd: effectiveWorkspace,
         appServer,
+        promptText: promptBuild.prompt,
       }),
       { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
     );
   } catch (error) {
+    trajectoryRecorder?.recordEvent("session.ended", {
+      status: "error",
+      threadId: thread.threadId,
+      timedOut,
+      aborted: runAbortController.signal.aborted,
+      promptError: normalizeCodexTrajectoryError(error),
+    });
+    trajectoryEndRecorded = true;
+    runAgentHarnessLlmOutputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.provider,
+        model: params.modelId,
+        assistantTexts: [],
+      },
+      ctx: hookContext,
+    });
+    runAgentHarnessAgentEndHook({
+      event: {
+        messages: turnStartFailureMessages,
+        success: false,
+        error: formatErrorMessage(error),
+        durationMs: Date.now() - attemptStartedAt,
+      },
+      ctx: hookContext,
+    });
     notificationCleanup();
     requestCleanup();
+    await trajectoryRecorder?.flush();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
   turnId = turn.turn.id;
+  trajectoryRecorder?.recordEvent("prompt.submitted", {
+    threadId: thread.threadId,
+    turnId,
+    prompt: promptBuild.prompt,
+    imagesCount: params.images?.length ?? 0,
+  });
   projector = new CodexAppServerEventProjector(params, thread.threadId, turnId);
+  const activeTurnId = turnId;
+  const activeProjector = projector;
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
   }
-  const activeTurnId = turnId;
-  const activeProjector = projector;
+  if (!completed && isTerminalTurnStatus(turn.turn.status)) {
+    await enqueueNotification({
+      method: "turn/completed",
+      params: {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        turn: turn.turn as unknown as JsonObject,
+      },
+    });
+  }
 
   const handle = {
     kind: "embedded" as const,
@@ -253,20 +409,73 @@ export async function runCodexAppServerAttempt(
   try {
     await completion;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
-    await mirrorTranscriptBestEffort({
-      params,
+    const finalAborted = result.aborted || runAbortController.signal.aborted;
+    const finalPromptError = timedOut ? "codex app-server attempt timed out" : result.promptError;
+    const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
+    recordCodexTrajectoryCompletion(trajectoryRecorder, {
+      attempt: params,
       result,
       threadId: thread.threadId,
       turnId: activeTurnId,
+      timedOut,
+      yieldDetected,
+    });
+    trajectoryRecorder?.recordEvent("session.ended", {
+      status: finalPromptError ? "error" : finalAborted || timedOut ? "interrupted" : "success",
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      timedOut,
+      yieldDetected,
+      promptError: normalizeCodexTrajectoryError(finalPromptError),
+    });
+    trajectoryEndRecorded = true;
+    await mirrorTranscriptBestEffort({
+      params,
+      agentId: sessionAgentId,
+      result,
+      sessionKey: sandboxSessionKey,
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+    });
+    runAgentHarnessLlmOutputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.provider,
+        model: params.modelId,
+        assistantTexts: result.assistantTexts,
+        ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
+        ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+      },
+      ctx: hookContext,
+    });
+    runAgentHarnessAgentEndHook({
+      event: {
+        messages: result.messagesSnapshot,
+        success: !finalAborted && !finalPromptError,
+        ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+        durationMs: Date.now() - attemptStartedAt,
+      },
+      ctx: hookContext,
     });
     return {
       ...result,
       timedOut,
-      aborted: result.aborted || runAbortController.signal.aborted,
-      promptError: timedOut ? "codex app-server attempt timed out" : result.promptError,
-      promptErrorSource: timedOut ? "prompt" : result.promptErrorSource,
+      aborted: finalAborted,
+      promptError: finalPromptError,
+      promptErrorSource: finalPromptErrorSource,
     };
   } finally {
+    if (trajectoryRecorder && !trajectoryEndRecorded) {
+      trajectoryRecorder.recordEvent("session.ended", {
+        status: timedOut || runAbortController.signal.aborted ? "interrupted" : "cleanup",
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        timedOut,
+        aborted: runAbortController.signal.aborted,
+      });
+    }
+    await trajectoryRecorder?.flush();
     clearTimeout(timeout);
     notificationCleanup();
     requestCleanup();
@@ -308,6 +517,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
   }
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
@@ -459,16 +669,28 @@ function readDynamicToolCallParams(
   };
 }
 
-function isTurnNotification(value: JsonValue | undefined, turnId: string): boolean {
+function isTurnNotification(
+  value: JsonValue | undefined,
+  threadId: string,
+  turnId: string,
+): boolean {
   if (!isJsonObject(value)) {
     return false;
   }
-  const directTurnId = readString(value, "turnId");
-  if (directTurnId === turnId) {
-    return true;
-  }
-  const turn = isJsonObject(value.turn) ? value.turn : undefined;
-  return readString(turn ?? {}, "id") === turnId;
+  return readString(value, "threadId") === threadId && readNotificationTurnId(value) === turnId;
+}
+
+function isTerminalTurnStatus(status: string | undefined): boolean {
+  return status === "completed" || status === "interrupted" || status === "failed";
+}
+
+function readNotificationTurnId(record: JsonObject): string | undefined {
+  return readString(record, "turnId") ?? readNestedTurnId(record);
+}
+
+function readNestedTurnId(record: JsonObject): string | undefined {
+  const turn = record.turn;
+  return isJsonObject(turn) ? readString(turn, "id") : undefined;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
@@ -476,16 +698,31 @@ function readString(record: JsonObject, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function readMirroredSessionHistoryMessages(sessionFile: string): unknown[] {
+  try {
+    return SessionManager.open(sessionFile).buildSessionContext().messages;
+  } catch (error) {
+    embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
+      error,
+      sessionFile,
+    });
+    return [];
+  }
+}
+
 async function mirrorTranscriptBestEffort(params: {
   params: EmbeddedRunAttemptParams;
+  agentId?: string;
   result: EmbeddedRunAttemptResult;
+  sessionKey?: string;
   threadId: string;
   turnId: string;
 }): Promise<void> {
   try {
     await mirrorCodexAppServerTranscript({
       sessionFile: params.params.sessionFile,
-      sessionKey: params.params.sessionKey,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
       idempotencyScope: `codex-app-server:${params.threadId}:${params.turnId}`,
     });

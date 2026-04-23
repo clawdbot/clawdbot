@@ -512,6 +512,45 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(readAllowFromStore).not.toHaveBeenCalled();
   });
 
+  it("blocks room control commands from configured DM-only senders", async () => {
+    const hasControlCommand = vi.fn((text?: string) => text === "/new");
+    const { handler, finalizeInboundContext, recordInboundSession } =
+      createMatrixHandlerTestHarness({
+        isDirectMessage: false,
+        roomsConfig: {
+          "!room:example.org": { requireMention: false },
+        },
+        shouldHandleTextCommands: () => true,
+        hasControlCommand,
+        cfg: {
+          commands: {
+            useAccessGroups: true,
+          },
+          channels: {
+            matrix: {
+              dm: { allowFrom: ["@observer:example.org"] },
+              groupAllowFrom: ["@driver:example.org"],
+            },
+          },
+        },
+        groupPolicy: "open",
+        getMemberDisplayName: async () => "observer",
+      });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dm-configured-room-command",
+        sender: "@observer:example.org",
+        body: "@bot:example.org /new",
+      }),
+    );
+
+    expect(hasControlCommand).toHaveBeenCalledWith("/new", expect.anything());
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+  });
+
   it("strips the Matrix self user id before room slash command detection", async () => {
     const hasControlCommand = vi.fn((text?: string) => text === "/new");
     const { handler, finalizeInboundContext, recordInboundSession } =

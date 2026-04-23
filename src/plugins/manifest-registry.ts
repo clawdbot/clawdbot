@@ -47,6 +47,7 @@ import { resolvePluginCacheInputs } from "./roots.js";
 
 type PluginManifestContractListKey =
   | "speechProviders"
+  | "externalAuthProviders"
   | "mediaUnderstandingProviders"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"

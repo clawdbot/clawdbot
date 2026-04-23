@@ -539,7 +539,7 @@ describe("runWithModelFallback – probe logic", () => {
   it("handles NaN soonest safely (treats as probe-worthy)", async () => {
     const cfg = makeCfg();
 
-    mockedGetSoonestCooldownExpiry.mockReturnValue(NaN);
+    mockedGetSoonestCooldownExpiry.mockReturnValue(Number.NaN);
 
     const run = vi.fn().mockResolvedValue("ok-nan");
 

@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { OPENAI_RESPONSES_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { createOpenAINativeWebSearchWrapper } from "./native-web-search.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
   resolveOpenAITransportTurnState,
@@ -82,6 +83,14 @@ const resolveOpenAIResponsesWebSocketSessionPolicy: NonNullable<
   OpenAIResponsesProviderHooks["resolveWebSocketSessionPolicy"]
 > = (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx);
 
+const wrapOpenAIResponsesStreamFn = OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn;
+const wrapOpenAIResponsesProviderStreamFn: NonNullable<
+  OpenAIResponsesProviderHooks["wrapStreamFn"]
+> = (ctx) =>
+  createOpenAINativeWebSearchWrapper(wrapOpenAIResponsesStreamFn?.(ctx) ?? ctx.streamFn, {
+    config: ctx.config,
+  });
+
 export function buildOpenAIResponsesProviderHooks(options?: {
   openaiWsWarmup?: boolean;
 }): OpenAIResponsesProviderHooks {
@@ -89,6 +98,7 @@ export function buildOpenAIResponsesProviderHooks(options?: {
     buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
     ...OPENAI_RESPONSES_STREAM_HOOKS,
+    wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
     resolveTransportTurnState: resolveOpenAIResponsesTransportTurnState,
     resolveWebSocketSessionPolicy: resolveOpenAIResponsesWebSocketSessionPolicy,
   };

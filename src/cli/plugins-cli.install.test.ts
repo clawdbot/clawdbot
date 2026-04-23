@@ -678,6 +678,29 @@ describe("plugins cli install", () => {
     );
   });
 
+  it("suggests update or --force when npm plugin install target already exists", async () => {
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    mockClawHubPackageNotFound("@example/lossless-claw");
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error:
+        "plugin already exists: /home/openclaw/.openclaw/extensions/lossless-claw (delete it first)",
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    await expect(
+      runPluginsCommand(["plugins", "install", "@example/lossless-claw"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Use `openclaw plugins update <id-or-npm-spec>` to upgrade the tracked plugin, or rerun install with `--force` to replace it.",
+    );
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+  });
+
   it("passes the install logger to the --link dry-run probe", async () => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-link-plugin-"));
     const cfg = {

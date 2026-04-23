@@ -68,7 +68,30 @@ describe("applyNonInteractiveAuthChoice", () => {
 
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(
-      '"demo-provider-legacy" is no longer supported. Use --auth-choice demo-provider-modern-api instead.',
+      '"demo-provider-legacy" is no longer supported. Use --auth-choice "demo-provider-modern-api" instead.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
+  });
+
+  it("escapes deprecated auth choice guidance for terminal output", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveManifestDeprecatedProviderAuthChoice.mockReturnValueOnce({
+      choiceId: "modern\nchoice",
+    } as never);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "legacy\u001b[31mchoice",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      '"legacy\\u001b[31mchoice" is no longer supported. Use --auth-choice "modern\\nchoice" instead.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();

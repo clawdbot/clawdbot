@@ -94,7 +94,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 
   const config = await loadNodeHostConfig();
   const { host, port } = resolveNodeDefaults(opts, config);
-  if (!Number.isFinite(port ?? NaN) || (port ?? 0) <= 0) {
+  if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0) {
     fail("Invalid port");
     return;
   }

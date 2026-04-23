@@ -50,7 +50,7 @@ auth/API key. Typical examples: `GEMINI_API_KEY` or `GOOGLE_API_KEY` for
 
 Examples:
 
-- Native Nano Banana-style setup: `agents.defaults.imageGenerationModel.primary: "google/gemini-3.1-flash-image-preview"`
+- Native Nano Banana Pro-style setup: `agents.defaults.imageGenerationModel.primary: "google/gemini-3-pro-image-preview"`
 - Native fal setup: `agents.defaults.imageGenerationModel.primary: "fal/fal-ai/flux/dev"`
 
 ## Agent skill allowlists

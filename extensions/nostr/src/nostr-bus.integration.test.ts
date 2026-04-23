@@ -459,7 +459,7 @@ describe("Reconnect Backoff", () => {
     const JITTER = 0.3;
 
     for (let attempt = 0; attempt < 10; attempt++) {
-      const exponential = BASE * Math.pow(2, attempt);
+      const exponential = BASE * 2 ** attempt;
       const capped = Math.min(exponential, MAX);
       const minDelay = capped * (1 - JITTER);
       const maxDelay = capped * (1 + JITTER);

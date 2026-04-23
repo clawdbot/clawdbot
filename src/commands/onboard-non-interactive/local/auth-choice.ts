@@ -163,7 +163,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   });
   if (deprecatedChoice) {
     runtime.error(
-      `"${authChoice as string}" is no longer supported. Use --auth-choice ${deprecatedChoice.choiceId} instead.`,
+      `${JSON.stringify(authChoice as string)} is no longer supported. Use --auth-choice ${JSON.stringify(deprecatedChoice.choiceId)} instead.`,
     );
     runtime.exit(1);
     return null;

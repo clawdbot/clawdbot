@@ -3,9 +3,12 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  cleanTsdownOutputRoots,
+  createTsdownOutputScanner,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
   resolveTsdownBuildInvocation,
+  runTsdownBuildInvocation,
 } from "../../scripts/tsdown-build.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -30,10 +33,10 @@ describe("resolveTsdownBuildInvocation", () => {
         "unrun",
         "--logLevel",
         "warn",
+        "--no-clean",
       ],
       options: {
-        encoding: "utf8",
-        stdio: "pipe",
+        stdio: ["ignore", "pipe", "pipe"],
         shell: false,
         windowsVerbatimArguments: undefined,
         env: {},
@@ -101,5 +104,120 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(
       fsPromises.stat(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js")),
     ).rejects.toThrow();
+  });
+
+  it("cleans tsdown output roots before using tsdown --no-clean", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-");
+    const distFile = path.join(rootDir, "dist", "stale.js");
+    const distRuntimeFile = path.join(rootDir, "dist-runtime", "stale.js");
+    const unrelatedFile = path.join(rootDir, "tmp", "keep.js");
+    await fsPromises.mkdir(path.dirname(distFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(distRuntimeFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(unrelatedFile), { recursive: true });
+    await fsPromises.writeFile(distFile, "stale\n");
+    await fsPromises.writeFile(distRuntimeFile, "stale\n");
+    await fsPromises.writeFile(unrelatedFile, "keep\n");
+
+    cleanTsdownOutputRoots({ cwd: rootDir });
+
+    await expect(fsPromises.stat(path.join(rootDir, "dist"))).rejects.toThrow();
+    await expect(fsPromises.stat(path.join(rootDir, "dist-runtime"))).rejects.toThrow();
+    await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
+  });
+});
+
+describe("createTsdownOutputScanner", () => {
+  it("tracks fatal build diagnostics while bounding captured output", () => {
+    const scanner = createTsdownOutputScanner({ maxCaptureBytes: 20 });
+
+    scanner.append("prefix that should be trimmed\n");
+    scanner.append("[INEFFECTIVE_DYNAMIC_IMPORT]\n");
+    scanner.append("[UNRESOLVED_IMPORT] src/index.ts\n");
+
+    const result = scanner.finish();
+
+    expect(result.hasIneffectiveDynamicImport).toBe(true);
+    expect(result.fatalUnresolvedImport).toContain("[UNRESOLVED_IMPORT] src/index.ts");
+    expect(result.captured.length).toBeLessThanOrEqual(20);
+  });
+
+  it("ignores unresolved imports from bundled plugin and dependency paths", () => {
+    const scanner = createTsdownOutputScanner();
+
+    scanner.append("[UNRESOLVED_IMPORT] extensions/telegram/src/index.ts\n");
+    scanner.append("[UNRESOLVED_IMPORT] node_modules/example/index.js\n");
+
+    expect(scanner.finish().fatalUnresolvedImport).toBeNull();
+  });
+});
+
+describe("runTsdownBuildInvocation", () => {
+  function createWriteSink() {
+    const chunks: string[] = [];
+    return {
+      sink: {
+        write(chunk: unknown) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
+          return true;
+        },
+      },
+      chunks,
+    };
+  }
+
+  it("streams child output while preserving diagnostics for post-run checks", async () => {
+    const output = createWriteSink();
+    const result = await runTsdownBuildInvocation(
+      {
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.stdout.write('stdout-ok\\n'); process.stderr.write('[INEFFECTIVE_DYNAMIC_IMPORT]\\n')",
+        ],
+        options: {
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: false,
+          env: process.env,
+        },
+      },
+      {
+        stdout: output.sink,
+        stderr: output.sink,
+        env: { ...process.env, OPENCLAW_TSDOWN_HEARTBEAT_MS: "0" },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.hasIneffectiveDynamicImport).toBe(true);
+    expect(output.chunks.join("")).toContain("stdout-ok");
+  });
+
+  it("terminates the child when OPENCLAW_TSDOWN_TIMEOUT_MS elapses", async () => {
+    const output = createWriteSink();
+    const result = await runTsdownBuildInvocation(
+      {
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 10000)"],
+        options: {
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: false,
+          env: process.env,
+        },
+      },
+      {
+        stdout: output.sink,
+        stderr: output.sink,
+        env: {
+          ...process.env,
+          OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
+          OPENCLAW_TSDOWN_TIMEOUT_MS: "50",
+        },
+      },
+    );
+
+    expect(result.timedOut).toBe(true);
+    expect(result.status).toBeNull();
+    expect(result.signal).toBe("SIGTERM");
+    expect(output.chunks.join("")).toContain("timeout after 50ms");
   });
 });

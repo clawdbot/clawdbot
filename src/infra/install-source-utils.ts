@@ -34,6 +34,68 @@ export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmRes
   };
 }
 
+function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const rec = value as Record<string, unknown>;
+  const name = toOptionalString(rec.name);
+  const version = toOptionalString(rec.version);
+  const resolvedSpec = name && version ? `${name}@${version}` : undefined;
+  const dist =
+    rec.dist && typeof rec.dist === "object" ? (rec.dist as Record<string, unknown>) : {};
+  return {
+    name,
+    version,
+    resolvedSpec,
+    integrity: toOptionalString(rec["dist.integrity"]) ?? toOptionalString(dist.integrity),
+    shasum: toOptionalString(rec["dist.shasum"]) ?? toOptionalString(dist.shasum),
+  };
+}
+
+export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
+  | {
+      ok: true;
+      metadata: NpmSpecResolution;
+    }
+  | {
+      ok: false;
+      error: string;
+    }
+> {
+  const res = await runCommandWithTimeout(
+    ["npm", "view", params.spec, "name", "version", "dist.integrity", "dist.shasum", "--json"],
+    {
+      timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
+      env: {
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        NPM_CONFIG_IGNORE_SCRIPTS: "true",
+      },
+    },
+  );
+  if (res.code !== 0) {
+    const raw = res.stderr.trim() || res.stdout.trim();
+    if (/E404|is not in this registry/i.test(raw)) {
+      return {
+        ok: false,
+        error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
+      };
+    }
+    return { ok: false, error: `npm view failed: ${raw}` };
+  }
+
+  try {
+    const parsed = JSON.parse(res.stdout.trim()) as unknown;
+    const metadata = normalizeNpmViewMetadata(parsed);
+    if (!metadata?.name || !metadata.version) {
+      return { ok: false, error: "npm view produced incomplete package metadata" };
+    }
+    return { ok: true, metadata };
+  } catch (err) {
+    return { ok: false, error: `npm view produced invalid JSON: ${String(err)}` };
+  }
+}
+
 export type NpmIntegrityDrift = {
   expectedIntegrity: string;
   actualIntegrity: string;

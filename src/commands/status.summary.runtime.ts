@@ -158,6 +158,7 @@ function resolveSessionModelRef(
       runtimeModel: entry?.model,
       overrideProvider: entry?.providerOverride,
       overrideModel: entry?.modelOverride,
+      allowPluginNormalization: false,
     }) ?? resolved
   );
 }

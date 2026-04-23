@@ -112,6 +112,7 @@ Built-in commands available today:
 - `/tasks` lists active/recent background tasks for the current session.
 - `/context [list|detail|json]` explains how context is assembled.
 - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
+- `/export-trajectory [path]` exports a JSONL [trajectory bundle](/tools/trajectory) for the current session. Alias: `/trajectory`.
 - `/whoami` shows your sender id. Alias: `/id`.
 - `/skill <name> [input]` runs a skill by name.
 - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.

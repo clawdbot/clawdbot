@@ -93,7 +93,7 @@ export async function qaWebWait(params: QaWebWaitParams) {
   }
   if (params.text) {
     await session.page.waitForFunction(
-      (expected) => document.body?.innerText?.toLowerCase().includes(expected.toLowerCase()),
+      (expected) => document.body?.textContent?.toLowerCase().includes(expected.toLowerCase()),
       params.text,
       { timeout: timeoutMs },
     );
@@ -119,7 +119,7 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   const body = session.page.locator("body");
   await body.waitFor({ timeout: timeoutMs });
-  const text = await body.innerText({ timeout: timeoutMs });
+  const text = (await body.textContent({ timeout: timeoutMs })) ?? "";
   const maxChars =
     typeof params.maxChars === "number" && Number.isFinite(params.maxChars)
       ? Math.max(1, Math.floor(params.maxChars))

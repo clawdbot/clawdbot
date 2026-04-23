@@ -31,6 +31,10 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
+vi.mock("../../../extensions/openai/openai-codex-provider.runtime.js", () => ({
+  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+}));
+
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
     id: overrides.id,

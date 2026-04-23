@@ -12,11 +12,15 @@ const INTENTS = {
   PUBLIC_GUILD_MESSAGES: 1 << 30,
   DIRECT_MESSAGE: 1 << 12,
   GROUP_AND_C2C: 1 << 25,
+  INTERACTION: 1 << 26,
 } as const;
 
-/** Full intent mask: groups + DMs + channels. */
+/** Full intent mask: groups + DMs + channels + interaction. */
 export const FULL_INTENTS =
-  INTENTS.PUBLIC_GUILD_MESSAGES | INTENTS.DIRECT_MESSAGE | INTENTS.GROUP_AND_C2C;
+  INTENTS.PUBLIC_GUILD_MESSAGES |
+  INTENTS.DIRECT_MESSAGE |
+  INTENTS.GROUP_AND_C2C |
+  INTENTS.INTERACTION;
 
 /** Exponential backoff delays for reconnection attempts (ms). */
 export const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000, 60000] as const;

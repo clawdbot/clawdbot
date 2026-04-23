@@ -20,6 +20,15 @@ const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
     this.options = options;
   }),
 }));
+const logWarnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../../logger.js")>("../../logger.js");
+  return {
+    ...actual,
+    logWarn: logWarnMock,
+  };
+});
 
 function createPinnedDispatcherCompatibilityError(): Error {
   const cause = Object.assign(new Error("invalid onRequestStart method"), {
@@ -161,6 +170,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     agentCtor.mockClear();
     envHttpProxyAgentCtor.mockClear();
     proxyAgentCtor.mockClear();
+    logWarnMock.mockClear();
     Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   });
 
@@ -192,6 +202,26 @@ describe("fetchWithSsrFGuard hardening", () => {
       }),
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("logs blocked URL fetches without path/query metadata", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://127.0.0.1:8080/private/secret?token=abc#frag",
+        fetchImpl,
+        auditContext: "qa-audit",
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+    const [warning] = logWarnMock.mock.calls[0] as [string];
+    expect(warning).toContain(
+      "security: blocked URL fetch (qa-audit) targetOrigin=http://127.0.0.1:8080",
+    );
+    expect(warning).not.toContain("/private/secret");
+    expect(warning).not.toContain("token=abc");
+    expect(warning).not.toContain("#frag");
   });
 
   it("allows RFC2544 benchmark range IPv4 literal URLs when explicitly opted in", async () => {

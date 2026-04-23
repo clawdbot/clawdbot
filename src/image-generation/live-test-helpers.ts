@@ -16,6 +16,7 @@ export const DEFAULT_LIVE_IMAGE_MODELS: Record<string, string> = {
   minimax: "minimax/image-01",
   openai: "openai/gpt-image-2",
   vydra: "vydra/grok-imagine",
+  xai: "xai/grok-imagine-image",
 };
 
 export function parseCaseFilter(raw?: string): Set<string> | null {

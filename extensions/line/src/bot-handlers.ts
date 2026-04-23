@@ -281,7 +281,7 @@ async function shouldProcessLineEvent(
       logVerbose(`Blocked line group ${groupId ?? roomId ?? "unknown"} (group disabled)`);
       return denied;
     }
-    if (typeof groupAllowOverride !== "undefined") {
+    if (groupAllowOverride !== undefined) {
       if (!senderId) {
         logVerbose("Blocked line group message (group allowFrom override, no sender ID)");
         return denied;

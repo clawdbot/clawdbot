@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as replyRunTesting,
+  createReplyOperation,
+  replyRunRegistry,
+} from "../auto-reply/reply/reply-run-registry.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
@@ -32,8 +37,14 @@ type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 beforeEach(() => {
   resetAgentEventsForTest();
   resetClaudeLiveSessionsForTest();
+  replyRunTesting.resetReplyRunRegistry();
   restoreCliRunnerPrepareTestDeps();
   supervisorSpawnMock.mockClear();
+});
+
+afterEach(() => {
+  resetClaudeLiveSessionsForTest();
+  replyRunTesting.resetReplyRunRegistry();
 });
 
 function buildPreparedCliRunContext(params: {
@@ -111,6 +122,7 @@ function buildPreparedCliRunContext(params: {
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    authEpochVersion: 2,
   };
 }
 
@@ -170,6 +182,7 @@ describe("runCliAgent spawn path", () => {
       systemPrompt: "You are a helpful assistant.",
       systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
       bootstrapPromptWarningLines: [],
+      authEpochVersion: 2,
     };
     await executePreparedCliRun(context);
 
@@ -416,6 +429,22 @@ describe("runCliAgent spawn path", () => {
     });
 
     expect(params.senderIsOwner).toBe(false);
+  });
+
+  it("forwards static extra system prompt through the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      timeoutMs: 1_000,
+      runId: "run-claude-static-prompt-wrapper",
+      extraSystemPrompt: "dynamic\n\nstatic",
+      extraSystemPromptStatic: "static",
+    });
+
+    expect(params.extraSystemPrompt).toBe("dynamic\n\nstatic");
+    expect(params.extraSystemPromptStatic).toBe("static");
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -749,6 +778,76 @@ describe("runCliAgent spawn path", () => {
     } finally {
       stop();
     }
+  });
+
+  it("reports Claude live session reply backends as streaming until the turn finishes", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    let markWriteReady: (() => void) | undefined;
+    const writeReady = new Promise<void>((resolve) => {
+      markWriteReady = resolve;
+    });
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        markWriteReady?.();
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "live-session-reply",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "sonnet",
+      runId: "run-live-reply-streaming",
+      sessionId: "live-session-reply",
+      sessionKey: "agent:main:main",
+      prompt: "hello",
+      backend: {
+        liveSession: "claude-stdio",
+      },
+    });
+
+    const run = executePreparedCliRun({
+      ...context,
+      params: {
+        ...context.params,
+        replyOperation: operation,
+      },
+    });
+
+    await writeReady;
+    expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(true);
+
+    stdoutListener?.(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "live-session-reply" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "live-session-reply",
+          result: "done",
+        }),
+      ].join("\n") + "\n",
+    );
+
+    await expect(run).resolves.toMatchObject({ text: "done" });
+    expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(false);
+    operation.complete();
   });
 
   it("reuses a Claude live session when resumed turns omit the system prompt arg", async () => {

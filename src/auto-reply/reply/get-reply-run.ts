@@ -50,6 +50,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -233,6 +234,11 @@ export async function runPreparedReply(
     workspaceDir,
     sessionStore,
   } = params;
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
+    cfg,
+    ctx,
+    sessionKey,
+  });
   let {
     sessionEntry,
     resolvedThinkLevel,
@@ -295,6 +301,18 @@ export async function runPreparedReply(
   );
   const extraSystemPromptParts = [
     inboundMetaPrompt,
+    groupChatContext,
+    groupIntro,
+    groupSystemPrompt,
+    buildExecOverridePromptHint({
+      execOverrides,
+      elevatedLevel: resolvedElevatedLevel,
+      fullAccessAvailable: fullAccessState.available,
+      fullAccessBlockedReason: fullAccessState.blockedReason,
+    }),
+  ].filter(Boolean);
+  // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
+  const extraSystemPromptStaticParts = [
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
@@ -677,6 +695,7 @@ export async function runPreparedReply(
       agentDir,
       sessionId: preparedSessionState.sessionId,
       sessionKey,
+      runtimePolicySessionKey,
       messageProvider: resolveOriginMessageProvider({
         originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
         // Prefer Provider over Surface for fallback channel identity.
@@ -734,6 +753,7 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {
@@ -745,6 +765,14 @@ export async function runPreparedReply(
         : {}),
     },
   };
+
+  const replyThreadingOverride =
+    isBareSessionReset && sessionCtx.ReplyThreading?.implicitCurrentMessage !== "deny"
+      ? {
+          ...sessionCtx.ReplyThreading,
+          implicitCurrentMessage: "deny" as const,
+        }
+      : undefined;
 
   return runReplyAgent({
     commandBody: prefixedCommandBody,
@@ -766,6 +794,7 @@ export async function runPreparedReply(
     sessionEntry: preparedSessionState.sessionEntry,
     sessionStore,
     sessionKey,
+    runtimePolicySessionKey,
     storePath,
     defaultModel,
     agentCfgContextTokens: agentCfg?.contextTokens,
@@ -778,5 +807,6 @@ export async function runPreparedReply(
     shouldInjectGroupIntro,
     typingMode,
     resetTriggered: effectiveResetTriggered,
+    replyThreadingOverride,
   });
 }

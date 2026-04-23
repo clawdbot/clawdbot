@@ -259,6 +259,7 @@ describe("channelsAddCommand", () => {
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
       cfg,
       installed: true,
+      status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReset();
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
@@ -372,6 +373,7 @@ describe("channelsAddCommand", () => {
       cfg,
       installed: true,
       pluginId: "@vendor/external-chat-runtime",
+      status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry([

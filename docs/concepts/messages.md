@@ -167,6 +167,10 @@ Defaults live under `agents.defaults.silentReply` and
 `agents.defaults.silentReplyRewrite`; `surfaces.<id>.silentReply` and
 `surfaces.<id>.silentReplyRewrite` can override them per surface.
 
+When the parent session has one or more pending spawned subagent runs, bare
+silent replies are dropped on all surfaces instead of being rewritten, so the
+parent stays quiet until the child completion event delivers the real reply.
+
 ## Related
 
 - [Streaming](/concepts/streaming) — real-time message delivery

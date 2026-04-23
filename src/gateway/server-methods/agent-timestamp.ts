@@ -6,7 +6,7 @@ import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts
  * Cron jobs inject "Current time: ..." into their messages.
  * Skip injection for those.
  */
-const CRON_TIME_PATTERN = /Current time: /;
+const CRON_TIME_MARKER = "Current time: ";
 
 /**
  * Matches a leading `[... YYYY-MM-DD HH:MM ...]` envelope — either from
@@ -49,7 +49,7 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
   }
 
   // Already has a cron-injected timestamp
-  if (CRON_TIME_PATTERN.test(message)) {
+  if (message.includes(CRON_TIME_MARKER)) {
     return message;
   }
 

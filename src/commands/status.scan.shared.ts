@@ -5,6 +5,7 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
+import { defaultSlotIdForKey } from "../plugins/slots.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -76,7 +77,7 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
   if (normalizeOptionalLowercaseString(raw) === "none") {
     return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
   }
-  return { enabled: true, slot: raw || "memory-core" };
+  return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
 }
 
 export async function resolveGatewayProbeSnapshot(params: {

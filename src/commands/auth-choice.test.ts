@@ -5,6 +5,7 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice } from "./auth-choice.apply.js";
@@ -691,6 +692,43 @@ describe("applyAuthChoice", () => {
     );
   });
 
+  it("fails fast when a removed provider auth choice is passed to the interactive flow", async () => {
+    await expect(
+      applyAuthChoice({
+        authChoice: "openai-codex-import",
+        config: {},
+        prompter: createPrompter({}),
+        runtime: createExitThrowingRuntime(),
+        setDefaultModel: true,
+      }),
+    ).rejects.toThrow(
+      'Auth choice "openai-codex-import" is no longer supported. Use "openai-codex" instead.',
+    );
+  });
+
+  it("escapes removed provider auth choice guidance for terminal output", async () => {
+    const spy = vi
+      .spyOn(providerAuthChoices, "resolveManifestDeprecatedProviderAuthChoice")
+      .mockReturnValueOnce({
+        choiceId: "modern\nchoice",
+      } as never);
+    try {
+      await expect(
+        applyAuthChoice({
+          authChoice: "legacy\u001b[31mchoice",
+          config: {},
+          prompter: createPrompter({}),
+          runtime: createExitThrowingRuntime(),
+          setDefaultModel: true,
+        }),
+      ).rejects.toThrow(
+        'Auth choice "legacy\\u001b[31mchoice" is no longer supported. Use "modern\\nchoice" instead.',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("prompts and writes provider API key profiles for common providers", async () => {
     const scenarios: Array<{
       authChoice: "huggingface-api-key";
@@ -977,8 +1015,8 @@ describe("applyAuthChoice", () => {
 
     expect(resolvePluginProviders).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: {},
         env,
+        mode: "setup",
       }),
     );
     expect(confirm).toHaveBeenCalledWith(

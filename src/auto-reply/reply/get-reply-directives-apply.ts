@@ -317,6 +317,7 @@ export async function applyInlineDirectiveOverrides(params: {
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
+      ctx,
       messageProvider: ctx.Provider,
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,

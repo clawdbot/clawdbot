@@ -180,6 +180,8 @@ export function buildAnthropicCliMigrationResult(
         },
       },
     },
+    // Rewrites `anthropic/*` -> `claude-cli/*`; merge would keep stale keys.
+    replaceDefaultModels: true,
     defaultModel,
     notes: [
       "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",

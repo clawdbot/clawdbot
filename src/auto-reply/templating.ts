@@ -55,6 +55,11 @@ export type MsgContext = {
   From?: string;
   To?: string;
   SessionKey?: string;
+  /**
+   * Session-like key used for runtime policy (sandbox/tool policy) when the
+   * conversation key intentionally remains broader, such as a main-session DM.
+   */
+  RuntimePolicySessionKey?: string;
   /** Provider account id (multi-account). */
   AccountId?: string;
   ParentSessionKey?: string;

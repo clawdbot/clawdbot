@@ -1,3 +1,4 @@
+import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
@@ -103,6 +104,7 @@ type DispatchCronDeliveryParams = {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
+  sessionId: string;
   runStartedAt: number;
   runEndedAt: number;
   timeoutMs: number;
@@ -477,6 +479,10 @@ export async function dispatchCronDelivery(
       });
       directCronSessionDeleted = true;
     } catch {
+      await retireSessionMcpRuntime({
+        sessionId: params.sessionId,
+        reason: "cron-delete-after-run-fallback",
+      });
       // Best-effort; direct delivery result should still be returned.
     }
   };

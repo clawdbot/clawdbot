@@ -1,6 +1,7 @@
 import { complete, type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -101,6 +102,10 @@ async function setRuntimeApiKeyForCompletion(params: {
   authStorage: SimpleCompletionAuthStorage;
   model: Model<Api>;
   apiKey: string;
+  authMode: ResolvedProviderAuth["mode"];
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  profileId?: string;
 }): Promise<CompletionRuntimeCredential> {
   if (params.model.provider === "github-copilot") {
     const { resolveCopilotApiToken } = await import("./github-copilot-token.js");
@@ -113,9 +118,28 @@ async function setRuntimeApiKeyForCompletion(params: {
       baseUrl: copilotToken.baseUrl,
     };
   }
-  params.authStorage.setRuntimeApiKey(params.model.provider, params.apiKey);
+  const preparedAuth = await prepareProviderRuntimeAuth({
+    provider: params.model.provider,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+    context: {
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      provider: params.model.provider,
+      modelId: params.model.id,
+      model: params.model,
+      apiKey: params.apiKey,
+      authMode: params.authMode,
+      profileId: params.profileId,
+    },
+  });
+  const runtimeApiKey = preparedAuth?.apiKey?.trim() || params.apiKey;
+  params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
   return {
-    apiKey: params.apiKey,
+    apiKey: runtimeApiKey,
+    baseUrl: preparedAuth?.baseUrl,
   };
 }
 
@@ -177,6 +201,10 @@ export async function prepareSimpleCompletionModel(params: {
       authStorage: resolved.authStorage,
       model: resolved.model,
       apiKey: rawApiKey,
+      authMode: auth.mode,
+      cfg: params.cfg,
+      workspaceDir: params.agentDir,
+      profileId: auth.profileId,
     });
     resolvedApiKey = runtimeCredential.apiKey;
     const runtimeBaseUrl = runtimeCredential.baseUrl?.trim();

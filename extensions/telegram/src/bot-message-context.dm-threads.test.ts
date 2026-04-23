@@ -79,7 +79,7 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
   });
 
-  it("keeps legacy dm session key when no thread id", async () => {
+  it("uses the main session key when no thread id", async () => {
     const ctx = await buildContext({
       message_id: 2,
       chat: { id: 1234, type: "private" },

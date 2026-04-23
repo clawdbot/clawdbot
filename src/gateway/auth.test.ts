@@ -4,6 +4,8 @@ import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
+  hasForwardedRequestHeaders,
+  isLocalDirectRequest,
   resolveEffectiveSharedGatewayAuth,
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
@@ -135,6 +137,32 @@ describe("gateway auth", () => {
       mode: "password",
       secret: "config-password",
     });
+  });
+
+  it.each([
+    { name: "Forwarded", headers: { forwarded: "for=203.0.113.10;proto=https" } },
+    { name: "X-Forwarded-For", headers: { "x-forwarded-for": "203.0.113.10" } },
+    { name: "X-Forwarded-Proto", headers: { "x-forwarded-proto": "https" } },
+    { name: "X-Forwarded-Host", headers: { "x-forwarded-host": "gateway.example" } },
+    { name: "X-Real-IP", headers: { "x-real-ip": "203.0.113.10" } },
+  ])("treats $name as forwarded request evidence", ({ headers }) => {
+    const req = {
+      socket: { remoteAddress: "127.0.0.1" },
+      headers,
+    } as never;
+
+    expect(hasForwardedRequestHeaders(req)).toBe(true);
+    expect(isLocalDirectRequest(req)).toBe(false);
+  });
+
+  it("keeps clean loopback requests eligible for direct-local handling", () => {
+    const req = {
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: { host: "127.0.0.1:18789" },
+    } as never;
+
+    expect(hasForwardedRequestHeaders(req)).toBe(false);
+    expect(isLocalDirectRequest(req)).toBe(true);
   });
 
   it("returns null for non-shared gateway auth modes", () => {

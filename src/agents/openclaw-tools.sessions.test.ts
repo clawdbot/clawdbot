@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
@@ -200,10 +202,15 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_list", "limit").type).toBe("number");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
+    expect(schemaProp("sessions_list", "label").type).toBe("string");
+    expect(schemaProp("sessions_list", "agentId").type).toBe("string");
+    expect(schemaProp("sessions_list", "search").type).toBe("string");
+    expect(schemaProp("sessions_list", "includeDerivedTitles").type).toBe("boolean");
+    expect(schemaProp("sessions_list", "includeLastMessage").type).toBe("boolean");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
   });
 
-  it("sessions_list filters kinds and includes messages", async () => {
+  it("sessions_list forwards mailbox filters and includes messages", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -216,6 +223,8 @@ describe("sessions tools", () => {
               sessionId: "s-main",
               updatedAt: 10,
               lastChannel: "whatsapp",
+              derivedTitle: "Main mailbox",
+              lastMessagePreview: "Latest assistant update",
             },
             {
               key: "discord:group:dev",
@@ -229,6 +238,8 @@ describe("sessions tools", () => {
               runtimeMs: 42,
               estimatedCostUsd: 0.0042,
               childSessions: ["agent:main:subagent:worker"],
+              derivedTitle: "Dev room",
+              lastMessagePreview: "Need review on the patch",
             },
             {
               key: "agent:main:dashboard:child",
@@ -275,11 +286,34 @@ describe("sessions tools", () => {
       throw new Error("missing sessions_list tool");
     }
 
-    const result = await tool.execute("call1", { messageLimit: 1 });
+    const result = await tool.execute("call1", {
+      agentId: "main",
+      label: "mailbox",
+      search: "review",
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      messageLimit: 1,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.list",
+      params: {
+        activeMinutes: undefined,
+        agentId: "main",
+        includeGlobal: true,
+        includeUnknown: true,
+        label: "mailbox",
+        limit: undefined,
+        search: "review",
+        spawnedBy: undefined,
+      },
+    });
     const details = result.details as {
       sessions?: Array<{
         key?: string;
+        agentId?: string;
         channel?: string;
+        derivedTitle?: string;
+        lastMessagePreview?: string;
         spawnedBy?: string;
         status?: string;
         startedAt?: number;
@@ -292,7 +326,10 @@ describe("sessions tools", () => {
     };
     expect(details.sessions).toHaveLength(5);
     const main = details.sessions?.find((s) => s.key === "main");
+    expect(main?.agentId).toBe("main");
     expect(main?.channel).toBe("whatsapp");
+    expect(main?.derivedTitle).toBe("Main mailbox");
+    expect(main?.lastMessagePreview).toBe("Latest assistant update");
     expect(main?.messages?.length).toBe(1);
     expect(main?.messages?.[0]?.role).toBe("assistant");
 
@@ -302,6 +339,8 @@ describe("sessions tools", () => {
     expect(group?.runtimeMs).toBe(42);
     expect(group?.estimatedCostUsd).toBe(0.0042);
     expect(group?.childSessions).toEqual(["agent:main:subagent:worker"]);
+    expect(group?.derivedTitle).toBe("Dev room");
+    expect(group?.lastMessagePreview).toBe("Need review on the patch");
 
     const dashboardChild = details.sessions?.find((s) => s.key === "agent:main:dashboard:child");
     expect(dashboardChild?.parentSessionKey).toBe("agent:main:main");
@@ -315,6 +354,93 @@ describe("sessions tools", () => {
     };
     expect(cronDetails.sessions).toHaveLength(1);
     expect(cronDetails.sessions?.[0]?.kind).toBe("cron");
+  });
+
+  it("derives mailbox previews only after agent visibility filtering", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, "visible.jsonl"),
+        [
+          JSON.stringify({ type: "session", id: "visible" }),
+          JSON.stringify({ message: { role: "user", content: "Visible project kickoff" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Visible latest reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "hidden.jsonl"),
+        [
+          JSON.stringify({ type: "session", id: "hidden" }),
+          JSON.stringify({ message: { role: "user", content: "Hidden cross-agent topic" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Hidden latest reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: Record<string, unknown> };
+        if (request.method === "sessions.list") {
+          expect(request.params?.includeDerivedTitles).toBeUndefined();
+          expect(request.params?.includeLastMessage).toBeUndefined();
+          return {
+            path: storePath,
+            sessions: [
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                sessionId: "visible",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:other:main",
+                kind: "direct",
+                sessionId: "hidden",
+                updatedAt: 21,
+              },
+            ],
+          };
+        }
+        return {};
+      });
+
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+        config: {
+          ...TEST_CONFIG,
+          tools: {
+            sessions: { visibility: "agent" },
+            agentToAgent: { enabled: false },
+          },
+        } as OpenClawConfig,
+      }).find((candidate) => candidate.name === "sessions_list");
+      expect(tool).toBeDefined();
+      if (!tool) {
+        throw new Error("missing sessions_list tool");
+      }
+
+      const result = await tool.execute("call-preview", {
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      });
+      const details = result.details as {
+        sessions?: Array<{
+          key?: string;
+          derivedTitle?: string;
+          lastMessagePreview?: string;
+        }>;
+      };
+      expect(details.sessions).toHaveLength(1);
+      expect(details.sessions?.[0]).toMatchObject({
+        key: "agent:main:main",
+        derivedTitle: "Visible project kickoff",
+        lastMessagePreview: "Visible latest reply",
+      });
+      expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("sessions_list resolves transcriptPath from agent state dir for multi-store listings", async () => {

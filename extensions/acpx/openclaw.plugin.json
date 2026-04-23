@@ -31,6 +31,9 @@
       "pluginToolsMcpBridge": {
         "type": "boolean"
       },
+      "openClawToolsMcpBridge": {
+        "type": "boolean"
+      },
       "strictWindowsCmdWrapper": {
         "type": "boolean"
       },
@@ -42,6 +45,10 @@
       "queueOwnerTtlSeconds": {
         "type": "number",
         "minimum": 0
+      },
+      "probeAgent": {
+        "type": "string",
+        "minLength": 1
       },
       "mcpServers": {
         "type": "object",
@@ -91,11 +98,6 @@
       "label": "State Directory",
       "help": "Directory used for embedded ACP session state and persistence."
     },
-    "probeAgent": {
-      "label": "Health Probe Agent",
-      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to Codex when unset.",
-      "advanced": true
-    },
     "permissionMode": {
       "label": "Permission Mode",
       "help": "Default permission policy for embedded ACP runtime prompts."
@@ -107,6 +109,11 @@
     "pluginToolsMcpBridge": {
       "label": "Plugin Tools MCP Bridge",
       "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into embedded ACP sessions so ACP agents can call plugin-registered tools.",
+      "advanced": true
+    },
+    "openClawToolsMcpBridge": {
+      "label": "OpenClaw Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw core-tools MCP server into embedded ACP sessions so ACP agents can call selected built-in tools such as cron.",
       "advanced": true
     },
     "strictWindowsCmdWrapper": {
@@ -122,6 +129,11 @@
     "queueOwnerTtlSeconds": {
       "label": "Queue Owner TTL Seconds",
       "help": "Reserved compatibility field for the older embedded ACPX queue-owner path. Accepted for compatibility and logged as ignored.",
+      "advanced": true
+    },
+    "probeAgent": {
+      "label": "Health Probe Agent",
+      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to the runtime built-in probe agent (codex). Set this to another configured ACP agent id (for example `opencode` or `claude`) when the default probe agent is not installed or not authenticated, so the whole embedded ACP backend does not get marked unavailable.",
       "advanced": true
     },
     "mcpServers": {

@@ -13,12 +13,12 @@ the Mantle OpenAI-compatible endpoint. Mantle hosts open-source and
 third-party models (GPT-OSS, Qwen, Kimi, GLM, and similar) through a standard
 `/v1/chat/completions` surface backed by Bedrock infrastructure.
 
-| Property       | Value                                                                               |
-| -------------- | ----------------------------------------------------------------------------------- |
-| Provider ID    | `amazon-bedrock-mantle`                                                             |
-| API            | `openai-completions` (OpenAI-compatible)                                            |
-| Auth           | Explicit `AWS_BEARER_TOKEN_BEDROCK` or IAM credential-chain bearer-token generation |
-| Default region | `us-east-1` (override with `AWS_REGION` or `AWS_DEFAULT_REGION`)                    |
+| Property       | Value                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------- |
+| Provider ID    | `amazon-bedrock-mantle`                                                                     |
+| API            | `openai-completions` (OpenAI-compatible) or `anthropic-messages` (Anthropic Messages route) |
+| Auth           | Explicit `AWS_BEARER_TOKEN_BEDROCK` or IAM credential-chain bearer-token generation         |
+| Default region | `us-east-1` (override with `AWS_REGION` or `AWS_DEFAULT_REGION`)                            |
 
 ## Getting started
 
@@ -145,6 +145,35 @@ If you prefer explicit config instead of auto-discovery:
     If the Mantle endpoint is unavailable or returns no models, the provider is
     silently skipped. OpenClaw does not error; other configured providers
     continue to work normally.
+  </Accordion>
+
+  <Accordion title="Claude Opus 4.7 via the Anthropic Messages route">
+    Mantle also exposes an Anthropic Messages route that carries Claude models through the same bearer-authenticated streaming path. Claude Opus 4.7 (`amazon-bedrock-mantle/claude-opus-4.7`) is callable through this route with provider-owned streaming, so AWS bearer tokens are not treated like Anthropic API keys.
+
+    When you pin an Anthropic Messages model on the Mantle provider, OpenClaw uses the `anthropic-messages` API surface instead of `openai-completions` for that model. Auth still comes from `AWS_BEARER_TOKEN_BEDROCK` (or the minted IAM bearer token).
+
+    ```json5
+    {
+      models: {
+        providers: {
+          "amazon-bedrock-mantle": {
+            models: [
+              {
+                id: "claude-opus-4.7",
+                name: "Claude Opus 4.7",
+                api: "anthropic-messages",
+                reasoning: true,
+                input: ["text", "image"],
+                contextWindow: 1000000,
+                maxTokens: 32000,
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
   </Accordion>
 
   <Accordion title="Relationship to Amazon Bedrock provider">

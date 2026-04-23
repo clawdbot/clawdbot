@@ -4,8 +4,8 @@
   "description": "OpenClaw Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1032.0",
-    "@aws-sdk/s3-request-presigner": "3.1032.0",
+    "@aws-sdk/client-s3": "3.1033.0",
+    "@aws-sdk/s3-request-presigner": "3.1033.0",
     "@tloncorp/tlon-skill": "0.3.5",
     "@urbit/aura": "^3.0.0"
   },
@@ -34,7 +34,33 @@
       "docsLabel": "tlon",
       "blurb": "decentralized messaging on Urbit; install the plugin to enable.",
       "order": 90,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "cliAddOptions": [
+        {
+          "flags": "--ship <ship>",
+          "description": "Tlon ship name (~sampel-palnet)"
+        },
+        {
+          "flags": "--code <code>",
+          "description": "Tlon login code"
+        },
+        {
+          "flags": "--group-channels <list>",
+          "description": "Tlon group channels (comma-separated)"
+        },
+        {
+          "flags": "--dm-allowlist <list>",
+          "description": "Tlon DM allowlist (comma-separated ships)"
+        },
+        {
+          "flags": "--auto-discover-channels",
+          "description": "Tlon auto-discover group channels"
+        },
+        {
+          "flags": "--no-auto-discover-channels",
+          "description": "Disable Tlon auto-discovery"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/tlon",

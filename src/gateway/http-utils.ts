@@ -54,6 +54,16 @@ export type AuthorizedGatewayHttpRequest = {
   trustDeclaredOperatorScopes: boolean;
 };
 
+export type GatewayHttpRequestAuthCheckResult =
+  | {
+      ok: true;
+      requestAuth: AuthorizedGatewayHttpRequest;
+    }
+  | {
+      ok: false;
+      authResult: GatewayAuthResult;
+    };
+
 export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
   cfg = loadConfig(),
@@ -96,8 +106,24 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
 }): Promise<AuthorizedGatewayHttpRequest | null> {
+  const result = await checkGatewayHttpRequestAuth(params);
+  if (!result.ok) {
+    sendGatewayAuthFailure(params.res, result.authResult);
+    return null;
+  }
+  return result.requestAuth;
+}
+
+export async function checkGatewayHttpRequestAuth(params: {
+  req: IncomingMessage;
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+  cfg?: OpenClawConfig;
+}): Promise<GatewayHttpRequestAuthCheckResult> {
   const token = getBearerToken(params.req);
-  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req);
+  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req, params.cfg);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -108,16 +134,21 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
     browserOriginPolicy,
   });
   if (!authResult.ok) {
-    sendGatewayAuthFailure(params.res, authResult);
-    return null;
+    return {
+      ok: false,
+      authResult,
+    };
   }
   return {
-    authMethod: authResult.method,
-    // Shared-secret bearer auth proves possession of the gateway secret, but it
-    // does not prove a narrower per-request operator identity. HTTP endpoints
-    // must opt in explicitly if they want to treat that shared-secret path as a
-    // full trusted-operator surface.
-    trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
+    ok: true,
+    requestAuth: {
+      authMethod: authResult.method,
+      // Shared-secret bearer auth proves possession of the gateway secret, but it
+      // does not prove a narrower per-request operator identity. HTTP endpoints
+      // must opt in explicitly if they want to treat that shared-secret path as a
+      // full trusted-operator surface.
+      trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
+    },
   };
 }
 

@@ -23,7 +23,21 @@
       "aliases": [
         "imsg"
       ],
-      "systemImage": "message.fill"
+      "systemImage": "message.fill",
+      "cliAddOptions": [
+        {
+          "flags": "--db-path <path>",
+          "description": "iMessage database path"
+        },
+        {
+          "flags": "--service <service>",
+          "description": "iMessage service (imessage|sms|auto)"
+        },
+        {
+          "flags": "--region <region>",
+          "description": "iMessage region (for SMS)"
+        }
+      ]
     }
   }
 }

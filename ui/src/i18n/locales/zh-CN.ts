@@ -664,6 +664,7 @@ export const zh_CN: TranslationMap = {
     uk: "乌克兰语（Ukrainian）",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
+    th: "ไทย (泰语)",
   },
   cron: {
     summary: {

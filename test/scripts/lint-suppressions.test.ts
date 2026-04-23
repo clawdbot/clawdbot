@@ -81,7 +81,6 @@ describe("production lint suppressions", () => {
       "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
       "extensions/browser/src/cli/browser-cli-actions-input/register.files-downloads.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/browser/src/node-host/invoke-browser.ts|typescript/no-unnecessary-type-parameters|1",
-      "extensions/discord/src/monitor.tool-result.test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/discord/src/outbound-adapter.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
@@ -95,7 +94,6 @@ describe("production lint suppressions", () => {
       "src/agents/skills-clawhub.ts|no-control-regex|1",
       "src/agents/subagent-attachments.ts|no-control-regex|1",
       "src/agents/subagent-spawn.ts|no-control-regex|1",
-      "src/agents/tools/common.ts|typescript/no-explicit-any|1",
       "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
       "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
       "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
@@ -137,10 +135,6 @@ describe("production lint suppressions", () => {
     );
 
     expect(anySuppressions).toEqual([
-      {
-        file: "src/agents/tools/common.ts",
-        rule: "typescript/no-explicit-any",
-      },
       {
         file: "src/channels/plugins/types.plugin.ts",
         rule: "typescript/no-explicit-any",

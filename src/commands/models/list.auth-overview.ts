@@ -47,6 +47,7 @@ export function resolveProviderAuthOverview(params: {
   cfg: OpenClawConfig;
   store: AuthProfileStore;
   modelsPath: string;
+  syntheticAuth?: { value: string; source: string };
 }): ProviderAuthOverview {
   const { provider, cfg, store } = params;
   const now = Date.now();
@@ -126,6 +127,9 @@ export function resolveProviderAuthOverview(params: {
     if (usableCustomKey) {
       return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
     }
+    if (params.syntheticAuth) {
+      return { kind: "synthetic", detail: params.syntheticAuth.source };
+    }
     return { kind: "missing", detail: "missing" };
   })();
 
@@ -160,5 +164,6 @@ export function resolveProviderAuthOverview(params: {
           },
         }
       : {}),
+    ...(params.syntheticAuth ? { syntheticAuth: params.syntheticAuth } : {}),
   };
 }

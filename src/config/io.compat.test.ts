@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
@@ -67,6 +67,45 @@ describe("config io paths", () => {
       const customPath = await writeConfig(home, ".openclaw", 20002, "custom.json");
       const io = createIoForHome(home, { OPENCLAW_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
       expect(io.configPath).toBe(customPath);
+    });
+  });
+
+  it("logs validation warnings with real line breaks", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            plugins: {
+              entries: {
+                "google-antigravity-auth": {
+                  enabled: false,
+                  config: { stale: true },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const io = createConfigIO({
+        configPath,
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+      io.loadConfig();
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/^Config warnings:\n- /));
+      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("Config warnings:\\n"));
     });
   });
 

@@ -1,8 +1,24 @@
 {
   "id": "elevenlabs",
   "enabledByDefault": true,
+  "providerAuthEnvVars": {
+    "elevenlabs": ["ELEVENLABS_API_KEY", "XI_API_KEY"]
+  },
   "contracts": {
-    "speechProviders": ["elevenlabs"]
+    "speechProviders": ["elevenlabs"],
+    "mediaUnderstandingProviders": ["elevenlabs"],
+    "realtimeTranscriptionProviders": ["elevenlabs"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "elevenlabs": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "scribe_v2"
+      },
+      "autoPriority": {
+        "audio": 45
+      }
+    }
   },
   "configContracts": {
     "compatibilityMigrationPaths": [

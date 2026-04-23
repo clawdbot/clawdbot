@@ -1,0 +1,27 @@
+{
+  "entries": [
+    {
+      "name": "@wecom/wecom-openclaw-plugin",
+      "description": "OpenClaw WeCom channel plugin by the Tencent WeCom team.",
+      "source": "external",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "wecom",
+          "label": "WeCom",
+          "selectionLabel": "WeCom (Enterprise WeChat)",
+          "detailLabel": "WeCom",
+          "docsPath": "/plugins/community#wecom",
+          "docsLabel": "wecom",
+          "blurb": "Enterprise WeChat bot and conversation channel.",
+          "aliases": ["qywx", "wework", "enterprise-wechat"],
+          "order": 45
+        },
+        "install": {
+          "npmSpec": "@wecom/wecom-openclaw-plugin",
+          "defaultChoice": "npm"
+        }
+      }
+    }
+  ]
+}

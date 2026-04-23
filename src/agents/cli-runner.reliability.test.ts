@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as replyRunTesting,
+  createReplyOperation,
+  replyRunRegistry,
+} from "../auto-reply/reply/reply-run-registry.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -55,10 +60,15 @@ function buildPreparedContext(params?: {
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    authEpochVersion: 2,
   };
 }
 
 describe("runCliAgent reliability", () => {
+  afterEach(() => {
+    replyRunTesting.resetReplyRunRegistry();
+  });
+
   it("fails with timeout when no-output watchdog trips", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -216,6 +226,62 @@ describe("runCliAgent reliability", () => {
       stopReason: "completed",
       refusal: false,
     });
+  });
+
+  it("reports CLI reply backends as streaming until the managed run finishes", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "s1",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    let finishRun: (() => void) | undefined;
+    const waitForExit = new Promise<
+      Awaited<ReturnType<ReturnType<typeof createManagedRun>["wait"]>>
+    >((resolve) => {
+      finishRun = () => {
+        resolve({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "hello from cli",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      };
+    });
+    supervisorSpawnMock.mockResolvedValueOnce({
+      ...createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "unused",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      wait: vi.fn(() => waitForExit),
+    });
+
+    const run = executePreparedCliRun({
+      ...buildPreparedContext({ sessionKey: "agent:main:main" }),
+      params: {
+        ...buildPreparedContext({ sessionKey: "agent:main:main" }).params,
+        replyOperation: operation,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(true);
+    });
+
+    finishRun?.();
+    await expect(run).resolves.toMatchObject({ text: "hello from cli" });
+    expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(false);
+    operation.complete();
   });
 
   it("keeps raw assistant output separate from transformed visible CLI output", async () => {

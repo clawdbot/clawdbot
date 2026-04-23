@@ -3,6 +3,7 @@ import type {
   MediaUnderstandingProviderPlugin,
   MusicGenerationProviderPlugin,
   ProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
   VideoGenerationProviderPlugin,
 } from "../../../src/plugins/types.js";
@@ -10,6 +11,7 @@ import { createTestPluginApi } from "./plugin-api.js";
 
 type RegisteredProviderCollections = {
   providers: ProviderPlugin[];
+  realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   speechProviders: SpeechProviderPlugin[];
   mediaProviders: MediaUnderstandingProviderPlugin[];
   imageProviders: ImageGenerationProviderPlugin[];
@@ -27,6 +29,7 @@ export async function registerProviderPlugin(params: {
   name: string;
 }): Promise<RegisteredProviderCollections> {
   const providers: ProviderPlugin[] = [];
+  const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const mediaProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageProviders: ImageGenerationProviderPlugin[] = [];
@@ -42,6 +45,9 @@ export async function registerProviderPlugin(params: {
       runtime: {} as never,
       registerProvider: (provider) => {
         providers.push(provider);
+      },
+      registerRealtimeTranscriptionProvider: (provider) => {
+        realtimeTranscriptionProviders.push(provider);
       },
       registerSpeechProvider: (provider) => {
         speechProviders.push(provider);
@@ -63,6 +69,7 @@ export async function registerProviderPlugin(params: {
 
   return {
     providers,
+    realtimeTranscriptionProviders,
     speechProviders,
     mediaProviders,
     imageProviders,

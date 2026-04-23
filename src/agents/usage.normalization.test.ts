@@ -34,6 +34,53 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("normalizes llama.cpp completion timings", () => {
+    const usage = normalizeUsage({
+      timings: {
+        prompt_n: 30_834,
+        predicted_n: 34,
+      },
+    });
+    expect(usage).toEqual({
+      input: 30_834,
+      output: 34,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
+  it("clamps negative and fractional usage counts to safe integers", () => {
+    const usage = normalizeUsage({
+      input: -12.8,
+      output: 9.9,
+      cacheRead: -1,
+      cacheWrite: 3.2,
+      total: -99,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 9,
+      cacheRead: 0,
+      cacheWrite: 3,
+      total: 0,
+    });
+  });
+
+  it("caps extremely large usage counts at Number.MAX_SAFE_INTEGER", () => {
+    const usage = normalizeUsage({
+      input: 1e308,
+      output: Number.MAX_SAFE_INTEGER + 1000,
+    });
+    expect(usage).toEqual({
+      input: Number.MAX_SAFE_INTEGER,
+      output: Number.MAX_SAFE_INTEGER,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("returns undefined for empty usage objects", () => {
     expect(normalizeUsage({})).toBeUndefined();
   });

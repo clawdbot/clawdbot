@@ -11,6 +11,8 @@ Interactive prompt to set up credentials, devices, and agent defaults.
 
 Note: The **Model** section now includes a multi-select for the
 `agents.defaults.models` allowlist (what shows up in `/model` and the model picker).
+Provider-scoped setup choices merge their selected models into the existing
+allowlist instead of replacing unrelated providers already in the config.
 
 When configure starts from a provider auth choice, the default-model and
 allowlist pickers prefer that provider automatically. For paired providers such

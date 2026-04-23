@@ -48,6 +48,13 @@ export type LmstudioModelBase = {
   maxTokens: number;
 };
 
+export type FetchLmstudioModelsResult = {
+  reachable: boolean;
+  status?: number;
+  models: LmstudioModelWire[];
+  error?: unknown;
+};
+
 type FacadeModule = {
   LMSTUDIO_DEFAULT_BASE_URL: string;
   LMSTUDIO_DEFAULT_INFERENCE_BASE_URL: string;
@@ -68,7 +75,10 @@ type FacadeModule = {
     baseUrl?: string;
     apiKey?: string;
     headers?: Record<string, string>;
-  }) => Promise<unknown>;
+    ssrfPolicy?: unknown;
+    timeoutMs?: number;
+    fetchImpl?: typeof fetch;
+  }) => Promise<FetchLmstudioModelsResult>;
   mapLmstudioWireEntry: (entry: LmstudioModelWire) => LmstudioModelBase | null;
   discoverLmstudioModels: (params?: {
     config?: OpenClawConfig;
@@ -93,6 +103,16 @@ type FacadeModule = {
     headers?: unknown;
     path?: string;
   }) => Promise<Record<string, string> | undefined>;
+  resolveLmstudioRequestContext: (params: {
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    headers?: unknown;
+    providerHeaders?: unknown;
+    path?: string;
+  }) => Promise<{
+    apiKey?: string;
+    headers?: Record<string, string>;
+  }>;
   resolveLmstudioRuntimeApiKey: (params: {
     config?: OpenClawConfig;
     agentDir?: string;
@@ -151,5 +171,7 @@ export const resolveLmstudioConfiguredApiKey: FacadeModule["resolveLmstudioConfi
   createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioConfiguredApiKey");
 export const resolveLmstudioProviderHeaders: FacadeModule["resolveLmstudioProviderHeaders"] =
   createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioProviderHeaders");
+export const resolveLmstudioRequestContext: FacadeModule["resolveLmstudioRequestContext"] =
+  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioRequestContext");
 export const resolveLmstudioRuntimeApiKey: FacadeModule["resolveLmstudioRuntimeApiKey"] =
   createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioRuntimeApiKey");

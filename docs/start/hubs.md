@@ -162,7 +162,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS skills](/platforms/mac/skills)
 - [macOS Peekaboo](/platforms/mac/peekaboo)
 
-## Extensions + plugins
+## Plugins
 
 - [Plugins overview](/tools/plugin)
 - [Building plugins](/plugins/building-plugins)

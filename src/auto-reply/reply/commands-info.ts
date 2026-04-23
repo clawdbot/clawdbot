@@ -11,7 +11,9 @@ import {
 } from "../status.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { resolveChannelAccountId } from "./channel-context.js";
+import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
+import { buildExportTrajectoryReply } from "./commands-export-trajectory.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { CommandHandler } from "./commands-types.js";
 import { extractExplicitGroupId } from "./group-id.js";
@@ -202,6 +204,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     model: params.model,
     contextTokens: params.contextTokens,
     resolvedThinkLevel: params.resolvedThinkLevel,
+    resolvedFastMode: params.resolvedFastMode,
     resolvedVerboseLevel: params.resolvedVerboseLevel,
     resolvedReasoningLevel: params.resolvedReasoningLevel,
     resolvedElevatedLevel: params.resolvedElevatedLevel,
@@ -233,4 +236,28 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
     return { shouldContinue: false };
   }
   return { shouldContinue: false, reply: await buildExportSessionReply(params) };
+};
+
+export const handleExportTrajectoryCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (
+    normalized !== "/export-trajectory" &&
+    !normalized.startsWith("/export-trajectory ") &&
+    normalized !== "/trajectory" &&
+    !normalized.startsWith("/trajectory ")
+  ) {
+    return null;
+  }
+  const unauthorized = rejectUnauthorizedCommand(params, "/export-trajectory");
+  if (unauthorized) {
+    return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/export-trajectory");
+  if (nonOwner) {
+    return nonOwner;
+  }
+  return { shouldContinue: false, reply: await buildExportTrajectoryReply(params) };
 };

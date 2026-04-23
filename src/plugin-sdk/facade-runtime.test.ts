@@ -6,6 +6,10 @@ import { createPluginActivationSource, normalizePluginsConfig } from "../plugins
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
+  resetFacadeActivationCheckRuntimeStateForTest,
+  resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
+} from "./facade-activation-check.runtime.js";
+import {
   __testing,
   canLoadActivatedBundledPluginPublicSurface,
   listImportedBundledPluginFacadeIds,
@@ -34,6 +38,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   resetFacadeRuntimeStateForTest();
+  resetFacadeActivationCheckRuntimeStateForTest();
   clearPluginDiscoveryCache();
   clearPluginManifestRegistryCache();
   vi.doUnmock("../plugins/manifest-registry.js");
@@ -380,5 +385,53 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
       }),
     ).toBe(true);
+  });
+
+  it("prefers the source runtime snapshot for facade activation checks", () => {
+    const dir = createTempDirSync("openclaw-facade-source-snapshot-");
+    fs.mkdirSync(path.join(dir, "demo"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "demo", "runtime-api.js"),
+      'export const marker = "source-snapshot";\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(dir, "demo", "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "demo",
+      }),
+      "utf8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+    setRuntimeConfigSnapshot(
+      {
+        plugins: {},
+      },
+      {
+        plugins: {
+          entries: {
+            demo: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    );
+
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "demo",
+        artifactBasename: "runtime-api.js",
+        location: {
+          modulePath: path.join(dir, "demo", "runtime-api.js"),
+          boundaryRoot: dir,
+        },
+        sourceExtensionsRoot: dir,
+        resolutionKey: "source-snapshot-demo",
+      }),
+    ).toEqual({
+      allowed: true,
+      pluginId: "demo",
+    });
   });
 });

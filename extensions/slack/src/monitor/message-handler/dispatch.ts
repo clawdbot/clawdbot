@@ -37,7 +37,13 @@ import {
   resolveSlackStreamingConfig,
 } from "../../stream-mode.js";
 import type { SlackStreamSession } from "../../streaming.js";
-import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
+import {
+  appendSlackStream,
+  markSlackStreamFallbackDelivered,
+  SlackStreamNotDeliveredError,
+  startSlackStream,
+  stopSlackStream,
+} from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
@@ -425,6 +431,41 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let usedReplyThreadTs: string | undefined;
   let observedReplyDelivery = false;
   const deliveryTracker = createSlackTurnDeliveryTracker();
+  const deliverPendingStreamFallback = async (
+    session: SlackStreamSession,
+    err: SlackStreamNotDeliveredError,
+  ): Promise<boolean> => {
+    // The Slack SDK still owns this text in-memory; no streaming API call has
+    // acknowledged it. Send it once through normal chat.postMessage.
+    const fallbackText = err.pendingText.trim();
+    if (!fallbackText) {
+      return false;
+    }
+    try {
+      // Rename-bind to dodge eslint-plugin-unicorn/require-post-message-target-origin
+      // which cannot distinguish Slack chat.postMessage from window.postMessage.
+      const postChatMessage = ctx.app.client.chat.postMessage.bind(ctx.app.client.chat);
+      await postChatMessage({
+        channel: session.channel,
+        thread_ts: session.threadTs,
+        text: fallbackText,
+      });
+      markSlackStreamFallbackDelivered(session);
+      observedReplyDelivery = true;
+      usedReplyThreadTs ??= session.threadTs;
+      logVerbose(
+        `slack-stream: streamed delivery failed (${err.slackCode}); delivered ${fallbackText.length} chars via chat.postMessage fallback`,
+      );
+      return true;
+    } catch (postErr) {
+      runtime.error?.(
+        danger(
+          `slack-stream: fallback chat.postMessage failed after ${err.slackCode}: ${formatErrorMessage(postErr)}`,
+        ),
+      );
+      return false;
+    }
+  };
 
   const deliverNormally = async (params: {
     payload: ReplyPayload;
@@ -525,7 +566,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           }),
           userId: message.user,
         });
-        observedReplyDelivery = true;
+        // startSlackStream may only buffer locally. Count delivery only after
+        // the SDK reports a real Slack response.
+        if (streamSession.delivered) {
+          observedReplyDelivery = true;
+        }
         usedReplyThreadTs ??= streamThreadTs;
         replyPlan.markSent();
         deliveryTracker.markDelivered({
@@ -552,6 +597,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         session: streamSession,
         text: "\n" + text,
       });
+      // appendSlackStream also buffers locally below the SDK threshold; avoid
+      // optimistic "done" status until Slack acknowledges a flush.
+      if (streamSession.delivered) {
+        observedReplyDelivery = true;
+      }
       deliveryTracker.markDelivered({
         kind: params.kind,
         payload: params.payload,
@@ -559,6 +609,29 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         textOverride: text,
       });
     } catch (err) {
+      if (err instanceof SlackStreamNotDeliveredError) {
+        streamFailed = true;
+        if (streamSession) {
+          const delivered = await deliverPendingStreamFallback(streamSession, err);
+          if (delivered) {
+            replyPlan.markSent();
+            deliveryTracker.markDelivered({
+              kind: params.kind,
+              payload: params.payload,
+              threadTs: streamSession.threadTs,
+              textOverride: text,
+            });
+            return;
+          }
+          throw err;
+        }
+        await deliverNormally({
+          payload: params.payload,
+          kind: params.kind,
+          forcedThreadTs: plannedThreadTs,
+        });
+        return;
+      }
       runtime.error?.(
         danger(`slack-stream: streaming API call failed: ${formatErrorMessage(err)}, falling back`),
       );
@@ -862,17 +935,26 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // -----------------------------------------------------------------------
   // Finalize the stream if one was started
   // -----------------------------------------------------------------------
+  let streamFallbackDelivered = false;
   const finalStream = streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
     try {
       await stopSlackStream({ session: finalStream });
     } catch (err) {
-      runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatErrorMessage(err)}`));
+      if (err instanceof SlackStreamNotDeliveredError) {
+        streamFallbackDelivered = await deliverPendingStreamFallback(finalStream, err);
+      } else {
+        runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatErrorMessage(err)}`));
+      }
     }
   }
 
   const anyReplyDelivered =
-    observedReplyDelivery || queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+    observedReplyDelivery ||
+    queuedFinal ||
+    streamFallbackDelivered ||
+    (counts.block ?? 0) > 0 ||
+    (counts.final ?? 0) > 0;
 
   if (statusReactionsEnabled) {
     if (dispatchError) {

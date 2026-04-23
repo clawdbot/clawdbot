@@ -1,5 +1,5 @@
 import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { DedupeCache } from "../infra/dedupe.js";
 import type { PluginInteractiveHandlerRegistration } from "./types.js";
 
 export type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration & {
@@ -15,19 +15,56 @@ type InteractiveState = {
 };
 
 const PLUGIN_INTERACTIVE_STATE_KEY = Symbol.for("openclaw.pluginInteractiveState");
+const PLUGIN_INTERACTIVE_CALLBACK_DEDUPE_KEY = Symbol.for(
+  "openclaw.pluginInteractiveCallbackDedupe",
+);
+
+function createInteractiveCallbackDedupe(): DedupeCache {
+  return resolveGlobalDedupeCache(PLUGIN_INTERACTIVE_CALLBACK_DEDUPE_KEY, {
+    ttlMs: 5 * 60_000,
+    maxSize: 4096,
+  });
+}
+
+function createInteractiveState(): InteractiveState {
+  return {
+    interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
+    callbackDedupe: createInteractiveCallbackDedupe(),
+    inflightCallbackDedupe: new Set<string>(),
+  };
+}
+
+function hydrateInteractiveState(value: unknown): InteractiveState {
+  const state =
+    typeof value === "object" && value !== null
+      ? (value as Partial<InteractiveState>)
+      : ({} as Partial<InteractiveState>);
+
+  return {
+    interactiveHandlers:
+      state.interactiveHandlers instanceof Map
+        ? state.interactiveHandlers
+        : new Map<string, RegisteredInteractiveHandler>(),
+    callbackDedupe: createInteractiveCallbackDedupe(),
+    inflightCallbackDedupe:
+      state.inflightCallbackDedupe instanceof Set
+        ? state.inflightCallbackDedupe
+        : new Set<string>(),
+  };
+}
 
 function getState() {
-  return resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
-    interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
-    callbackDedupe: resolveGlobalDedupeCache(
-      Symbol.for("openclaw.pluginInteractiveCallbackDedupe"),
-      {
-        ttlMs: 5 * 60_000,
-        maxSize: 4096,
-      },
-    ),
-    inflightCallbackDedupe: new Set<string>(),
-  }));
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[PLUGIN_INTERACTIVE_STATE_KEY];
+  if (existing !== undefined) {
+    const hydrated = hydrateInteractiveState(existing);
+    globalStore[PLUGIN_INTERACTIVE_STATE_KEY] = hydrated;
+    return hydrated;
+  }
+
+  const created = createInteractiveState();
+  globalStore[PLUGIN_INTERACTIVE_STATE_KEY] = created;
+  return created;
 }
 
 export function getPluginInteractiveHandlersState() {

@@ -8,19 +8,15 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   ensureConfiguredBindingRouteReady,
-  getSessionBindingService,
   recordInboundSession,
   resolvePinnedMainDmOwnerFromAllowlist,
   resolveConfiguredBindingRoute,
+  resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import {
-  deriveLastRoutePolicy,
-  resolveAgentIdFromSessionKey,
-  resolveAgentRoute,
-} from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
@@ -132,26 +128,22 @@ async function resolveLineInboundRoute(params: {
   const configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
   route = configuredRoute.route;
 
-  const boundConversation = getSessionBindingService().resolveByConversation({
-    channel: "line",
-    accountId: params.account.accountId,
-    conversationId: peerId,
+  const runtimeRoute = resolveRuntimeConversationBindingRoute({
+    route,
+    conversation: {
+      channel: "line",
+      accountId: params.account.accountId,
+      conversationId: peerId,
+    },
   });
-  const boundSessionKey = boundConversation?.targetSessionKey?.trim();
-  if (boundConversation && boundSessionKey) {
-    route = {
-      ...route,
-      sessionKey: boundSessionKey,
-      agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
-      lastRoutePolicy: deriveLastRoutePolicy({
-        sessionKey: boundSessionKey,
-        mainSessionKey: route.mainSessionKey,
-      }),
-      matchedBy: "binding.channel",
-    };
+  route = runtimeRoute.route;
+  if (runtimeRoute.bindingRecord) {
     configuredBinding = null;
-    getSessionBindingService().touch(boundConversation.bindingId);
-    logVerbose(`line: routed via bound conversation ${peerId} -> ${boundSessionKey}`);
+    logVerbose(
+      runtimeRoute.boundSessionKey
+        ? `line: routed via bound conversation ${peerId} -> ${runtimeRoute.boundSessionKey}`
+        : `line: plugin-bound conversation ${peerId}`,
+    );
   }
 
   if (configuredBinding) {

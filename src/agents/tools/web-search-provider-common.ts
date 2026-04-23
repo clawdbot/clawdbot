@@ -193,7 +193,7 @@ export function isoToPerplexityDate(iso: string): string | undefined {
     return undefined;
   }
   const [, year, month, day] = match;
-  return `${parseInt(month, 10)}/${parseInt(day, 10)}/${year}`;
+  return `${Number.parseInt(month, 10)}/${Number.parseInt(day, 10)}/${year}`;
 }
 
 export function normalizeToIsoDate(value: string): string | undefined {

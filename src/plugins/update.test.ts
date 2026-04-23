@@ -1,6 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledPluginRootAt } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginNpmIntegrityDriftParams } from "./install.js";
 
 const APP_ROOT = "/app";
 
@@ -12,6 +16,8 @@ const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
 const installPluginFromClawHubMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
+const runCommandWithTimeoutMock = vi.fn();
+const tempDirs: string[] = [];
 
 vi.mock("./install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpecMock(...args),
@@ -31,6 +37,10 @@ vi.mock("./clawhub.js", () => ({
 
 vi.mock("./bundled-sources.js", () => ({
   resolveBundledPluginSources: (...args: unknown[]) => resolveBundledPluginSourcesMock(...args),
+}));
+
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
 const { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } = await import("./update.js");
@@ -167,6 +177,34 @@ function createCodexAppServerInstallConfig(params: {
   };
 }
 
+function createInstalledPackageDir(params: { name?: string; version: string }): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-test-"));
+  tempDirs.push(dir);
+  fs.writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: params.name ?? "test-plugin", version: params.version }, null, 2),
+  );
+  return dir;
+}
+
+function mockNpmViewMetadata(params: {
+  name: string;
+  version: string;
+  integrity?: string;
+  shasum?: string;
+}) {
+  runCommandWithTimeoutMock.mockResolvedValueOnce({
+    code: 0,
+    stdout: JSON.stringify({
+      name: params.name,
+      version: params.version,
+      ...(params.integrity ? { "dist.integrity": params.integrity } : {}),
+      ...(params.shasum ? { "dist.shasum": params.shasum } : {}),
+    }),
+    stderr: "",
+  });
+}
+
 function expectNpmUpdateCall(params: {
   spec: string;
   expectedIntegrity?: string;
@@ -231,6 +269,13 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromMarketplaceMock.mockReset();
     installPluginFromClawHubMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
+    runCommandWithTimeoutMock.mockReset();
+  });
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it.each([
@@ -303,6 +348,208 @@ describe("updateNpmInstalledPlugins", () => {
       expectNpmUpdateCall(expectedCall);
     },
   );
+
+  it("skips npm reinstall and config rewrite when the installed artifact is unchanged", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+    const config: OpenClawConfig = {
+      plugins: {
+        installs: {
+          "lossless-claw": {
+            source: "npm",
+            spec: "@martian-engineering/lossless-claw",
+            installPath,
+            resolvedName: "@martian-engineering/lossless-claw",
+            resolvedVersion: "0.9.0",
+            resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+            integrity: "sha512-same",
+            shasum: "same",
+          },
+        },
+      },
+    };
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["lossless-claw"],
+    });
+
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      [
+        "npm",
+        "view",
+        "@martian-engineering/lossless-claw",
+        "name",
+        "version",
+        "dist.integrity",
+        "dist.shasum",
+        "--json",
+      ],
+      expect.any(Object),
+    );
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "lossless-claw",
+        status: "unchanged",
+        currentVersion: "0.9.0",
+        nextVersion: "0.9.0",
+        message: "lossless-claw is up to date (0.9.0).",
+      },
+    ]);
+  });
+
+  it("falls through to npm reinstall when the recorded integrity differs", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      integrity: "sha512-new",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.9.0",
+        npmResolution: {
+          name: "@martian-engineering/lossless-claw",
+          version: "0.9.0",
+          resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "lossless-claw": {
+              source: "npm",
+              spec: "@martian-engineering/lossless-claw",
+              installPath,
+              resolvedName: "@martian-engineering/lossless-claw",
+              resolvedVersion: "0.9.0",
+              resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+              integrity: "sha512-old",
+            },
+          },
+        },
+      },
+      pluginIds: ["lossless-claw"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(result.changed).toBe(true);
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "lossless-claw",
+      status: "unchanged",
+      currentVersion: "0.9.0",
+      nextVersion: "0.9.0",
+    });
+  });
+
+  it("falls through to npm reinstall when metadata probing fails", async () => {
+    const warn = vi.fn();
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "registry timeout",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.9.0",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw",
+        installPath,
+      }),
+      pluginIds: ["lossless-claw"],
+      logger: { warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "Could not check lossless-claw before update; falling back to installer path: npm view failed: registry timeout",
+    );
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts exact pinned npm plugin updates on integrity drift by default", async () => {
+    const warn = vi.fn();
+    installPluginFromNpmSpecMock.mockImplementation(
+      async (params: {
+        spec: string;
+        onIntegrityDrift?: (drift: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+      }) => {
+        const proceed = await params.onIntegrityDrift?.({
+          spec: params.spec,
+          expectedIntegrity: "sha512-old",
+          actualIntegrity: "sha512-new",
+          resolution: {
+            integrity: "sha512-new",
+            resolvedSpec: "@opik/opik-openclaw@0.2.5",
+            version: "0.2.5",
+          },
+        });
+        if (proceed === false) {
+          return {
+            ok: false,
+            error: "aborted: npm package integrity drift detected for @opik/opik-openclaw@0.2.5",
+          };
+        }
+        return createSuccessfulNpmUpdateResult();
+      },
+    );
+
+    const config = createNpmInstallConfig({
+      pluginId: "opik-openclaw",
+      spec: "@opik/opik-openclaw@0.2.5",
+      integrity: "sha512-old",
+      installPath: "/tmp/opik-openclaw",
+    });
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["opik-openclaw"],
+      logger: { warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      'Integrity drift for "opik-openclaw" (@opik/opik-openclaw@0.2.5): expected sha512-old, got sha512-new',
+    );
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "opik-openclaw",
+        status: "error",
+        message:
+          "Failed to update opik-openclaw: aborted: npm package integrity drift detected for @opik/opik-openclaw@0.2.5",
+      },
+    ]);
+  });
 
   it.each([
     {

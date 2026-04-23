@@ -8,6 +8,69 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
 
+const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
+
+function parseRetryAfterSeconds(headers: Headers): number | undefined {
+  const retryAfterMs = headers.get("retry-after-ms");
+  if (retryAfterMs) {
+    const milliseconds = Number.parseFloat(retryAfterMs);
+    if (Number.isFinite(milliseconds) && milliseconds >= 0) {
+      return milliseconds / 1000;
+    }
+  }
+
+  const retryAfter = headers.get("retry-after");
+  if (!retryAfter) {
+    return undefined;
+  }
+
+  const seconds = Number.parseFloat(retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds;
+  }
+
+  const retryAt = Date.parse(retryAfter);
+  if (Number.isNaN(retryAt)) {
+    return undefined;
+  }
+
+  return Math.max(0, (retryAt - Date.now()) / 1000);
+}
+
+function resolveMaxSdkRetryWaitSeconds(): number | undefined {
+  const raw = process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS?.trim();
+  if (!raw) {
+    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+  }
+
+  if (/^(?:0|false|off|none|disabled)$/i.test(raw)) {
+    return undefined;
+  }
+
+  const seconds = Number.parseFloat(raw);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return seconds;
+  }
+
+  return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+}
+
+function shouldBypassLongSdkRetry(response: Response): boolean {
+  const maxWaitSeconds = resolveMaxSdkRetryWaitSeconds();
+  if (maxWaitSeconds === undefined) {
+    return false;
+  }
+
+  const status = response.status;
+  const stainlessRetryable = status === 408 || status === 409 || status === 429 || status >= 500;
+  if (!stainlessRetryable) {
+    return false;
+  }
+
+  const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
+  return retryAfterSeconds !== undefined && retryAfterSeconds > maxWaitSeconds;
+}
+
 function buildManagedResponse(response: Response, release: () => Promise<void>): Response {
   if (!response.body) {
     void release();
@@ -127,6 +190,16 @@ export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
       allowCrossOriginUnsafeRedirectReplay: false,
       ...(requestConfig.allowPrivateNetwork ? { policy: { allowPrivateNetwork: true } } : {}),
     });
-    return buildManagedResponse(result.response, result.release);
+    let response = result.response;
+    if (shouldBypassLongSdkRetry(response)) {
+      const headers = new Headers(response.headers);
+      headers.set("x-should-retry", "false");
+      response = new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+    return buildManagedResponse(response, result.release);
   };
 }

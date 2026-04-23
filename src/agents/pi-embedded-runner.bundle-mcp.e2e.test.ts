@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   cleanupEmbeddedPiRunnerTestWorkspace,
   createEmbeddedPiRunnerOpenAiConfig,
@@ -33,6 +34,7 @@ let streamCallCount = 0;
 let observedContexts: Array<Array<{ role?: string; content?: unknown }>> = [];
 
 vi.mock("./pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntime: vi.fn(async () => true),
   getOrCreateSessionMcpRuntime: async () => ({
     sessionId: "bundle-mcp-runtime",
     sessionKey: "agent:test:bundle-mcp-e2e",
@@ -52,24 +54,26 @@ vi.mock("./pi-bundle-mcp-tools.js", () => ({
     }),
     dispose: async () => {},
   }),
-  materializeBundleMcpToolsForRun: async () => ({
-    tools: [
-      {
-        name: "bundleProbe__bundle_probe",
-        label: "bundle_probe",
-        description: "Bundle MCP probe",
-        parameters: { type: "object", properties: {} },
-        execute: async () => ({
-          content: [{ type: "text", text: "FROM-BUNDLE" }],
-          details: {
-            mcpServer: "bundleProbe",
-            mcpTool: "bundle_probe",
-          },
-        }),
-      },
-    ],
-    dispose: async () => {},
-  }),
+  materializeBundleMcpToolsForRun: async () => {
+    const tool = {
+      name: "bundleProbe__bundle_probe",
+      label: "bundle_probe",
+      description: "Bundle MCP probe",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({
+        content: [{ type: "text", text: "FROM-BUNDLE" }],
+        details: {
+          mcpServer: "bundleProbe",
+          mcpTool: "bundle_probe",
+        },
+      }),
+    };
+    setPluginToolMeta(tool as any, { pluginId: "bundle-mcp", optional: false });
+    return {
+      tools: [tool],
+      dispose: async () => {},
+    };
+  },
 }));
 
 vi.mock("@mariozechner/pi-ai", async () => {

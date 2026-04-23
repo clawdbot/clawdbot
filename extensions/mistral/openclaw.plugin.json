@@ -22,7 +22,8 @@
   ],
   "contracts": {
     "memoryEmbeddingProviders": ["mistral"],
-    "mediaUnderstandingProviders": ["mistral"]
+    "mediaUnderstandingProviders": ["mistral"],
+    "realtimeTranscriptionProviders": ["mistral"]
   },
   "mediaUnderstandingProviderMetadata": {
     "mistral": {

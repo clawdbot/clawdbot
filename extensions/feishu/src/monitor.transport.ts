@@ -1,5 +1,5 @@
-import * as http from "http";
 import crypto from "node:crypto";
+import * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createFeishuWSClient } from "./client.js";
 import {

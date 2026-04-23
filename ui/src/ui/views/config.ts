@@ -961,7 +961,7 @@ export function renderConfig(props: ConfigProps) {
               ${props.loading ? t("common.loading") : t("common.reload")}
             </button>
             <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
-              Clear pending updates
+              Clear
             </button>
             <button class="btn btn--sm primary" ?disabled=${!canSave} @click=${props.onSave}>
               ${props.saving ? "Saving…" : "Save"}

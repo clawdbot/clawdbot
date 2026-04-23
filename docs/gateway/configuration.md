@@ -10,6 +10,10 @@ title: "Configuration"
 # Configuration
 
 OpenClaw reads an optional <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> config from `~/.openclaw/openclaw.json`.
+The active config path must be a regular file. Symlinked `openclaw.json`
+layouts are unsupported for OpenClaw-owned writes; an atomic write may replace
+the path instead of preserving the symlink. If you keep config outside the
+default state directory, point `OPENCLAW_CONFIG_PATH` directly at the real file.
 
 If the file is missing, OpenClaw uses safe defaults. Common reasons to add a config:
 
@@ -68,26 +72,12 @@ See the [full reference](/gateway/configuration-reference) for every available f
 OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
 
-Schema tooling notes:
-
-- `openclaw config schema` prints the same JSON Schema family used by Control UI
-  and config validation.
-- Treat that schema output as the canonical machine-readable contract for
-  `openclaw.json`; this overview and the configuration reference summarize it.
-- Field `title` and `description` values are carried into the schema output for
-  editor and form tooling.
-- Nested object, wildcard (`*`), and array-item (`[]`) entries inherit the same
-  docs metadata where matching field documentation exists.
-- `anyOf` / `oneOf` / `allOf` composition branches inherit the same docs
-  metadata too, so union/intersection variants keep the same field help.
-- `config.schema.lookup` returns one normalized config path with a shallow
-  schema node (`title`, `description`, `type`, `enum`, `const`, common bounds,
-  and similar validation fields), matched UI hint metadata, and immediate child
-  summaries for drill-down tooling.
-- Runtime plugin/channel schemas are merged in when the gateway can load the
-  current manifest registry.
-- `pnpm config:docs:check` detects drift between docs-facing config baseline
-  artifacts and the current schema surface.
+`openclaw config schema` prints the canonical JSON Schema used by Control UI
+and validation. `config.schema.lookup` fetches a single path-scoped node plus
+child summaries for drill-down tooling. Field `title`/`description` docs metadata
+carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
+`oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
+manifest registry is loaded.
 
 When validation fails:
 
@@ -96,16 +86,13 @@ When validation fails:
 - Run `openclaw doctor` to see exact issues
 - Run `openclaw doctor --fix` (or `--yes`) to apply repairs
 
-The Gateway also keeps a trusted last-known-good copy after a successful startup. If
-`openclaw.json` is later changed outside OpenClaw and no longer validates, startup
-and hot reload preserve the broken file as a timestamped `.clobbered.*` snapshot,
-restore the last-known-good copy, and log a loud warning with the recovery reason.
-The next main-agent turn also receives a system-event warning telling it that the
-config was restored and must not be blindly rewritten. Last-known-good promotion
-is updated after validated startup and after accepted hot reloads, including
-OpenClaw-owned config writes whose persisted file hash still matches the accepted
-write. Promotion is skipped when the candidate contains redacted secret
-placeholders such as `***` or shortened token values.
+The Gateway keeps a trusted last-known-good copy after each successful startup.
+If `openclaw.json` later fails validation (or drops `gateway.mode`, shrinks
+sharply, or has a stray log line prepended), OpenClaw preserves the broken file
+as `.clobbered.*`, restores the last-known-good copy, and logs the recovery
+reason. The next agent turn also receives a system-event warning so the main
+agent does not blindly rewrite the restored config. Promotion to last-known-good
+is skipped when a candidate contains redacted secret placeholders such as `***`.
 
 ## Common tasks
 
@@ -162,6 +149,7 @@ placeholders such as `***` or shortened token values.
     ```
 
     - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`.
+    - Use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add allowlist entries without removing existing models. Plain replacements that would remove entries are rejected unless you pass `--replace`.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
     - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
     - See [Models CLI](/concepts/models) for switching models in chat and [Model Failover](/concepts/model-failover) for auth rotation and fallback behavior.
@@ -496,6 +484,12 @@ placeholders such as `***` or shortened token values.
     - **Sibling keys**: merged after includes (override included values)
     - **Nested includes**: supported up to 10 levels deep
     - **Relative paths**: resolved relative to the including file
+    - **OpenClaw-owned writes**: when a write changes only one top-level section
+      backed by a single-file include such as `plugins: { $include: "./plugins.json5" }`,
+      OpenClaw updates that included file and leaves `openclaw.json` intact
+    - **Unsupported write-through**: root includes, include arrays, and includes
+      with sibling overrides fail closed for OpenClaw-owned writes instead of
+      flattening the config
     - **Error handling**: clear errors for missing files, parse errors, and circular includes
 
   </Accordion>
@@ -554,77 +548,46 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 `gateway.reload` and `gateway.remote` are exceptions — changing them does **not** trigger a restart.
 </Note>
 
+### Reload planning
+
+When you edit a source file that is referenced through `$include`, OpenClaw plans
+the reload from the source-authored layout, not the flattened in-memory view.
+That keeps hot-reload decisions (hot-apply vs restart) predictable even when a
+single top-level section lives in its own included file such as
+`plugins: { $include: "./plugins.json5" }`. Reload planning fails closed if the
+source layout is ambiguous.
+
 ## Config RPC (programmatic updates)
 
+For tooling that writes config over the gateway API, prefer this flow:
+
+- `config.schema.lookup` to inspect one subtree (shallow schema node + child
+  summaries)
+- `config.get` to fetch the current snapshot plus `hash`
+- `config.patch` for partial updates (JSON merge patch: objects merge, `null`
+  deletes, arrays replace)
+- `config.apply` only when you intend to replace the entire config
+- `update.run` for explicit self-update plus restart
+
 <Note>
-Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate-limited to **3 requests per 60 seconds** per `deviceId+clientIp`. When limited, the RPC returns `UNAVAILABLE` with `retryAfterMs`.
+Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
+rate-limited to 3 requests per 60 seconds per `deviceId+clientIp`. Restart
+requests coalesce and then enforce a 30-second cooldown between restart cycles.
 </Note>
 
-Safe/default flow:
+Example partial patch:
 
-- `config.schema.lookup`: inspect one path-scoped config subtree with a shallow
-  schema node, matched hint metadata, and immediate child summaries
-- `config.get`: fetch the current snapshot + hash
-- `config.patch`: preferred partial update path
-- `config.apply`: full-config replacement only
-- `update.run`: explicit self-update + restart
+```bash
+openclaw gateway call config.get --params '{}'  # capture payload.hash
+openclaw gateway call config.patch --params '{
+  "raw": "{ channels: { telegram: { groups: { \"*\": { requireMention: false } } } } }",
+  "baseHash": "<hash>"
+}'
+```
 
-When you are not replacing the entire config, prefer `config.schema.lookup`
-then `config.patch`.
-
-<AccordionGroup>
-  <Accordion title="config.apply (full replace)">
-    Validates + writes the full config and restarts the Gateway in one step.
-
-    <Warning>
-    `config.apply` replaces the **entire config**. Use `config.patch` for partial updates, or `openclaw config set` for single keys.
-    </Warning>
-
-    Params:
-
-    - `raw` (string) — JSON5 payload for the entire config
-    - `baseHash` (optional) — config hash from `config.get` (required when config exists)
-    - `sessionKey` (optional) — session key for the post-restart wake-up ping
-    - `note` (optional) — note for the restart sentinel
-    - `restartDelayMs` (optional) — delay before restart (default 2000)
-
-    Restart requests are coalesced while one is already pending/in-flight, and a 30-second cooldown applies between restart cycles.
-
-    ```bash
-    openclaw gateway call config.get --params '{}'  # capture payload.hash
-    openclaw gateway call config.apply --params '{
-      "raw": "{ agents: { defaults: { workspace: \"~/.openclaw/workspace\" } } }",
-      "baseHash": "<hash>",
-      "sessionKey": "agent:main:whatsapp:direct:+15555550123"
-    }'
-    ```
-
-  </Accordion>
-
-  <Accordion title="config.patch (partial update)">
-    Merges a partial update into the existing config (JSON merge patch semantics):
-
-    - Objects merge recursively
-    - `null` deletes a key
-    - Arrays replace
-
-    Params:
-
-    - `raw` (string) — JSON5 with just the keys to change
-    - `baseHash` (required) — config hash from `config.get`
-    - `sessionKey`, `note`, `restartDelayMs` — same as `config.apply`
-
-    Restart behavior matches `config.apply`: coalesced pending restarts plus a 30-second cooldown between restart cycles.
-
-    ```bash
-    openclaw gateway call config.patch --params '{
-      "raw": "{ channels: { telegram: { groups: { \"*\": { requireMention: false } } } } }",
-      "baseHash": "<hash>"
-    }'
-    ```
-
-  </Accordion>
-</AccordionGroup>
+Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
+`note`, and `restartDelayMs`. `baseHash` is required for both methods when a
+config already exists.
 
 ## Environment variables
 

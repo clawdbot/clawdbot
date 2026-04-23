@@ -441,6 +441,15 @@ function resolveSuspiciousSignature(
   return `${current.hash}:${suspicious.join(",")}`;
 }
 
+function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
+  return (
+    reason === "missing-meta-vs-last-good" ||
+    reason === "gateway-mode-missing-vs-last-good" ||
+    reason === "update-channel-only-root" ||
+    reason.startsWith("size-drop-vs-last-good:")
+  );
+}
+
 function resolveConfigReadRecoveryContext(params: {
   current: ConfigHealthFingerprint;
   parsed: unknown;
@@ -454,7 +463,7 @@ function resolveConfigReadRecoveryContext(params: {
     parsed: params.parsed,
     lastKnownGood: params.backupBaseline,
   });
-  if (!suspicious.includes("update-channel-only-root")) {
+  if (!suspicious.some(isRecoverableConfigReadSuspiciousReason)) {
     return null;
   }
   const suspiciousSignature = resolveSuspiciousSignature(params.current, suspicious);

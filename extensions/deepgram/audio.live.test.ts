@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
+import {
+  runRealtimeSttLiveTest,
+  synthesizeElevenLabsLiveSpeech,
+} from "../../test/helpers/stt-live-audio.js";
 import { transcribeDeepgramAudio } from "./audio.js";
+import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const DEEPGRAM_KEY = process.env.DEEPGRAM_API_KEY ?? "";
+const ELEVENLABS_KEY = process.env.ELEVENLABS_API_KEY ?? "";
 const DEEPGRAM_MODEL = process.env.DEEPGRAM_MODEL?.trim() || "nova-3";
 const DEEPGRAM_BASE_URL = process.env.DEEPGRAM_BASE_URL?.trim();
 const SAMPLE_URL =
@@ -41,4 +47,28 @@ describeLive("deepgram live", () => {
     });
     expect(result.text.trim().length).toBeGreaterThan(0);
   }, 30000);
+
+  it("streams realtime STT through the registered transcription provider", async () => {
+    if (!ELEVENLABS_KEY) {
+      throw new Error("ELEVENLABS_API_KEY required to synthesize live realtime STT input");
+    }
+    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    const phrase = "Testing OpenClaw Deepgram realtime transcription integration OK.";
+    const speech = await synthesizeElevenLabsLiveSpeech({
+      text: phrase,
+      apiKey: ELEVENLABS_KEY,
+      outputFormat: "ulaw_8000",
+      timeoutMs: 30_000,
+    });
+
+    await runRealtimeSttLiveTest({
+      provider,
+      providerConfig: {
+        apiKey: DEEPGRAM_KEY,
+        language: "en-US",
+        endpointingMs: 500,
+      },
+      audio: Buffer.concat([Buffer.alloc(4000, 0xff), speech, Buffer.alloc(8000, 0xff)]),
+    });
+  }, 90_000);
 });

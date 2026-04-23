@@ -15,10 +15,13 @@ type ResolveProviderPluginChoice =
 type ResolvePluginProvidersRuntime =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
 type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
+type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoice;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
-const applyAuthChoice = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
+const applyAuthChoice = vi.hoisted(() =>
+  vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
+);
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<ResolveProviderPluginChoice>(() => null),
@@ -520,6 +523,38 @@ describe("runSetupWizard", () => {
     }
   });
 
+  it("defers channel setup plugin loads during QuickStart until a channel is selected", async () => {
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipChannels: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(setupChannels).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        deferStatusUntilSelection: true,
+        quickstartDefaults: true,
+      }),
+    );
+  });
+
   it("prompts for a model during explicit interactive Ollama setup", async () => {
     promptDefaultModel.mockClear();
     resolveProviderPluginChoice.mockReturnValue({
@@ -570,6 +605,74 @@ describe("runSetupWizard", () => {
     expect(promptDefaultModel).toHaveBeenCalledWith(
       expect.objectContaining({
         allowKeep: false,
+      }),
+    );
+  });
+
+  it("re-prompts for auth when applyAuthChoice requests retry selection", async () => {
+    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("demo-provider-one")
+      .mockResolvedValueOnce("demo-provider-two");
+    applyAuthChoice.mockReset();
+    applyAuthChoice
+      .mockResolvedValueOnce({
+        config: {
+          plugins: {
+            entries: {
+              "demo-provider-plugin": {
+                enabled: true,
+              },
+            },
+          },
+        },
+        retrySelection: true,
+      })
+      .mockResolvedValueOnce({
+        config: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "demo-provider-two/model",
+              },
+            },
+          },
+        },
+      });
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(applyAuthChoice).toHaveBeenCalledTimes(2);
+    expect(applyAuthChoice).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        authChoice: "demo-provider-two",
+        config: {
+          plugins: {
+            entries: {
+              "demo-provider-plugin": {
+                enabled: true,
+              },
+            },
+          },
+        },
       }),
     );
   });

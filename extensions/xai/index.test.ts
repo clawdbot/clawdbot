@@ -1,6 +1,10 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import { registerProviderPlugin } from "../../test/helpers/plugins/provider-registration.js";
 import plugin from "./index.js";
+import setupPlugin from "./setup-api.js";
 import {
   createXaiPayloadCaptureStream,
   expectXaiFastToolStreamShaping,
@@ -27,7 +31,72 @@ function createProviderModel(overrides: {
   };
 }
 
+type XaiAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
+
+function registerXaiAutoEnableProbe(): XaiAutoEnableProbe {
+  const probes: XaiAutoEnableProbe[] = [];
+  setupPlugin.register(
+    createTestPluginApi({
+      registerAutoEnableProbe(probe) {
+        probes.push(probe);
+      },
+    }),
+  );
+  const probe = probes[0];
+  if (!probe) {
+    throw new Error("expected xAI setup plugin to register an auto-enable probe");
+  }
+  return probe;
+}
+
 describe("xai provider plugin", () => {
+  it("registers xAI speech providers for batch and streaming STT", async () => {
+    const { mediaProviders, realtimeTranscriptionProviders } = await registerProviderPlugin({
+      plugin,
+      id: "xai",
+      name: "xAI Provider",
+    });
+
+    expect(mediaProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "xai",
+          capabilities: ["audio"],
+          defaultModels: { audio: "grok-stt" },
+        }),
+      ]),
+    );
+    expect(realtimeTranscriptionProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "xai",
+          label: "xAI Realtime Transcription",
+          aliases: expect.arrayContaining(["xai-realtime"]),
+        }),
+      ]),
+    );
+  });
+
+  it("declares setup auto-enable reasons for plugin-owned tool config", () => {
+    const probe = registerXaiAutoEnableProbe();
+
+    expect(
+      probe({
+        config: { plugins: { entries: { xai: { config: { xSearch: { enabled: true } } } } } },
+        env: {},
+      }),
+    ).toBe("xai tool configured");
+    expect(
+      probe({
+        config: {
+          plugins: { entries: { xai: { config: { codeExecution: { enabled: true } } } } },
+        },
+        env: {},
+      }),
+    ).toBe("xai tool configured");
+    expect(probe({ config: {}, env: {} })).toBeNull();
+  });
+
   it("owns replay policy for xAI OpenAI-compatible transports", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

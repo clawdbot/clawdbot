@@ -258,6 +258,8 @@ export async function resolveGlobalManager(params: {
   return byPresence ?? "npm";
 }
 
+const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+
 export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
@@ -268,6 +270,7 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
     cwd: root,
     env: process.env,
     encoding: "utf-8",
+    timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   });
 
   if (result.error) {

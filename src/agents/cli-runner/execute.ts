@@ -417,13 +417,14 @@ export async function executePreparedCliRun(
           input: stdinPayload,
           onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
         });
+        let replyBackendCompleted = false;
         const replyBackendHandle = params.replyOperation
           ? {
               kind: "cli" as const,
               cancel: () => {
                 managedRun.cancel("manual-cancel");
               },
-              isStreaming: () => false,
+              isStreaming: () => !replyBackendCompleted,
             }
           : undefined;
         if (replyBackendHandle) {
@@ -440,6 +441,7 @@ export async function executePreparedCliRun(
         try {
           result = await managedRun.wait();
         } finally {
+          replyBackendCompleted = true;
           if (replyBackendHandle) {
             params.replyOperation?.detachBackend(replyBackendHandle);
           }

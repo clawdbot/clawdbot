@@ -23,6 +23,7 @@ function createStubPluginRegistry(): PluginRegistry {
     webFetchProviders: [],
     webSearchProviders: [],
     embeddedExtensionFactories: [],
+    codexAppServerExtensionFactories: [],
     memoryEmbeddingProviders: [],
     textTransforms: [],
     agentHarnesses: [],

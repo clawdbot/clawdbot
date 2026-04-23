@@ -555,11 +555,11 @@ describe("qa-lab server", () => {
       path.join(repoRoot, "dist/index.js"),
       [
         'const fs = require("node:fs");',
-        `fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "", "utf8");`,
         "process.on('SIGTERM', () => {",
         `  fs.writeFileSync(${JSON.stringify(stoppedPath)}, "terminated", "utf8");`,
         "  process.exit(0);",
         "});",
+        `fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "", "utf8");`,
         "setInterval(() => {}, 1000);",
       ].join("\n"),
       "utf8",

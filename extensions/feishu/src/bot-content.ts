@@ -38,9 +38,7 @@ type FeishuMessageLike = {
 
 export type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
-type FeishuLogger = {
-  (...args: unknown[]): void;
-};
+type FeishuLogger = (...args: unknown[]) => void;
 
 export type ResolvedFeishuGroupSession = {
   peerId: string;
@@ -215,7 +213,7 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
 
   log?.(`feishu: merge_forward contains ${subMessages.length} sub-messages`);
   subMessages.sort(
-    (a, b) => parseInt(a.create_time || "0", 10) - parseInt(b.create_time || "0", 10),
+    (a, b) => Number.parseInt(a.create_time || "0", 10) - Number.parseInt(b.create_time || "0", 10),
   );
 
   const lines = ["[Merged and Forwarded Messages]"];

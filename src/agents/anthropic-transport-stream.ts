@@ -395,15 +395,18 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   if (!tools) {
     return [];
   }
-  return tools.map((tool) => ({
-    name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
-    description: tool.description,
-    input_schema: {
-      type: "object",
-      properties: tool.parameters.properties || {},
-      required: tool.parameters.required || [],
-    },
-  }));
+  return tools.map((tool) => {
+    const parameters = tool.parameters as Record<string, unknown>;
+    return {
+      name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
+      description: tool.description,
+      input_schema: {
+        type: "object",
+        properties: parameters.properties || {},
+        required: parameters.required || [],
+      },
+    };
+  });
 }
 
 function mapStopReason(reason: string | undefined): string {

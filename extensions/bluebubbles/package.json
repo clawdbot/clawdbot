@@ -35,7 +35,13 @@
         "imessage"
       ],
       "systemImage": "bubble.left.and.text.bubble.right",
-      "order": 75
+      "order": 75,
+      "cliAddOptions": [
+        {
+          "flags": "--webhook-path <path>",
+          "description": "BlueBubbles webhook path"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/bluebubbles",

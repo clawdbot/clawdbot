@@ -33,8 +33,10 @@ describe("resolveAutoMediaKeyProviders", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",
       "groq",
+      "xai",
       "deepgram",
       "google",
+      "elevenlabs",
       "mistral",
     ]);
   });

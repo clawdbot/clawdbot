@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   installVitestNoOutputWatchdog,
+  resolveDirectNodeVitestArgs,
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
@@ -11,6 +12,18 @@ import {
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
     expect(resolveVitestNodeArgs({ PATH: "/usr/bin" })).toEqual(["--no-maglev"]);
+  });
+
+  it("detects pnpm exec node wrappers that can be spawned directly", () => {
+    expect(
+      resolveDirectNodeVitestArgs([
+        "exec",
+        "node",
+        "--no-maglev",
+        "node_modules/vitest/vitest.mjs",
+      ]),
+    ).toEqual(["--no-maglev", "node_modules/vitest/vitest.mjs"]);
+    expect(resolveDirectNodeVitestArgs(["exec", "vitest", "run"])).toBeNull();
   });
 
   it("allows opting back into Maglev explicitly", () => {

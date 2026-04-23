@@ -9,6 +9,8 @@ import {
   resolveAgentWorkspaceDir,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  resolveLivePluginConfigObject,
+  resolvePluginConfigObject,
   resolveSessionStoreEntry,
   updateSessionStore,
   type OpenClawConfig,
@@ -573,12 +575,8 @@ function isActiveMemoryGloballyEnabled(cfg: OpenClawConfig): boolean {
   if (entry?.enabled === false) {
     return false;
   }
-  const pluginConfig = asRecord(entry?.config);
+  const pluginConfig = resolvePluginConfigObject(cfg, "active-memory");
   return pluginConfig?.enabled !== false;
-}
-
-function resolveActiveMemoryPluginConfigFromConfig(cfg: OpenClawConfig): unknown {
-  return asRecord(cfg.plugins?.entries?.["active-memory"])?.config;
 }
 
 function updateActiveMemoryGlobalEnabledInConfig(
@@ -1886,11 +1884,15 @@ export default definePluginEntry({
     };
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
-      const livePluginConfig =
-        resolveActiveMemoryPluginConfigFromConfig(api.runtime.config.loadConfig()) ??
-        api.pluginConfig;
-      config = normalizePluginConfig(livePluginConfig);
-      warnDeprecatedModelFallbackPolicy(livePluginConfig);
+      const livePluginConfig = resolveLivePluginConfigObject(
+        api.runtime.config?.loadConfig,
+        "active-memory",
+        api.pluginConfig as Record<string, unknown>,
+      );
+      config = normalizePluginConfig(livePluginConfig ?? { enabled: false });
+      if (livePluginConfig) {
+        warnDeprecatedModelFallbackPolicy(livePluginConfig);
+      }
     };
     api.registerCommand({
       name: "active-memory",
@@ -1961,6 +1963,7 @@ export default definePluginEntry({
 
     api.on("before_prompt_build", async (event, ctx) => {
       try {
+        refreshLiveConfigFromRuntime();
         const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
         const resolvedSessionKey =
           ctx.sessionKey?.trim() ||

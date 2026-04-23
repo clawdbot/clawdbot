@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import { writeJsonAtomic } from "./json-files.js";
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -27,8 +28,18 @@ export type RestartSentinelStats = {
   durationMs?: number | null;
 };
 
+export type RestartSentinelContinuation =
+  | {
+      kind: "systemEvent";
+      text: string;
+    }
+  | {
+      kind: "agentTurn";
+      message: string;
+    };
+
 export type RestartSentinelPayload = {
-  kind: "config-apply" | "config-patch" | "update" | "restart";
+  kind: "config-apply" | "config-auto-recovery" | "config-patch" | "update" | "restart";
   status: "ok" | "error" | "skipped";
   ts: number;
   sessionKey?: string;
@@ -41,6 +52,7 @@ export type RestartSentinelPayload = {
   /** Thread ID for reply threading (e.g., Slack thread_ts). */
   threadId?: string;
   message?: string | null;
+  continuation?: RestartSentinelContinuation | null;
   doctorHint?: string | null;
   stats?: RestartSentinelStats | null;
 };
@@ -49,6 +61,9 @@ export type RestartSentinel = {
   version: 1;
   payload: RestartSentinelPayload;
 };
+
+export const DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE =
+  "The gateway restart completed successfully. Tell the user OpenClaw restarted successfully and continue any pending work.";
 
 const SENTINEL_FILENAME = "restart-sentinel.json";
 
@@ -67,10 +82,29 @@ export async function writeRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const filePath = resolveRestartSentinelPath(env);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const data: RestartSentinel = { version: 1, payload };
-  await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
+  await writeJsonAtomic(filePath, data, { trailingNewline: true, ensureDirMode: 0o700 });
   return filePath;
+}
+
+export async function removeRestartSentinelFile(filePath: string | null | undefined) {
+  if (!filePath) {
+    return;
+  }
+  await fs.unlink(filePath).catch(() => {});
+}
+
+export function buildRestartSuccessContinuation(params: {
+  sessionKey?: string;
+  continuationMessage?: string | null;
+}): RestartSentinelContinuation | null {
+  const message = params.continuationMessage?.trim();
+  if (message) {
+    return { kind: "agentTurn", message };
+  }
+  return params.sessionKey?.trim()
+    ? { kind: "agentTurn", message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE }
+    : null;
 }
 
 export async function readRestartSentinel(
@@ -113,13 +147,13 @@ export async function consumeRestartSentinel(
   if (!parsed) {
     return null;
   }
-  await fs.unlink(filePath).catch(() => {});
+  await removeRestartSentinelFile(filePath);
   return parsed;
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
   const message = payload.message?.trim();
-  if (message && !payload.stats) {
+  if (message && (!payload.stats || payload.kind === "config-auto-recovery")) {
     return message;
   }
   const lines: string[] = [summarizeRestartSentinel(payload)];
@@ -137,6 +171,9 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
 }
 
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
+  if (payload.kind === "config-auto-recovery") {
+    return "Gateway auto-recovery";
+  }
   const kind = payload.kind;
   const status = payload.status;
   const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";

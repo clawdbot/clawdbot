@@ -1,5 +1,6 @@
 import type { CommandInteraction, CommandWithSubcommands } from "@buape/carbon";
 import { describe, expect, it, vi } from "vitest";
+import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import { createDiscordVoiceCommand } from "./command.js";
 import type { DiscordVoiceManager } from "./manager.js";
 
@@ -91,6 +92,31 @@ describe("createDiscordVoiceCommand", () => {
 
     expect(statusSpy).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      content: "No active voice sessions.",
+      ephemeral: true,
+    });
+  });
+
+  it("vc status tolerates partial thread channels with throwing getters", async () => {
+    const statusSpy = vi.fn(() => []);
+    const manager = {
+      status: statusSpy,
+    } as unknown as DiscordVoiceManager;
+    const { status } = createVoiceCommandHarness(manager);
+    const partialChannel = createPartialDiscordChannelWithThrowingGetters(
+      { id: "123456789012345678" },
+      ["name", "parentId"],
+    );
+    const { interaction, reply } = createInteraction({
+      channel: partialChannel as CommandInteraction["channel"],
+      client: { fetchChannel: vi.fn(async () => null) } as unknown as CommandInteraction["client"],
+      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
+    });
+
+    await expect(status.run(interaction)).resolves.toBeUndefined();
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith({
       content: "No active voice sessions.",
       ephemeral: true,

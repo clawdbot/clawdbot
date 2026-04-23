@@ -1,5 +1,4 @@
 import { normalizeChatChannelId } from "../channels/ids.js";
-import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 
@@ -18,7 +17,14 @@ export function enablePluginInConfig(cfg: OpenClawConfig, pluginId: string): Plu
   if (cfg.plugins?.deny?.includes(pluginId) || cfg.plugins?.deny?.includes(resolvedId)) {
     return { config: cfg, enabled: false, reason: "blocked by denylist" };
   }
-  let next = setPluginEnabledInConfig(cfg, resolvedId, true);
-  next = ensurePluginAllowlisted(next, resolvedId);
-  return { config: next, enabled: true };
+  const allow = cfg.plugins?.allow;
+  if (
+    Array.isArray(allow) &&
+    allow.length > 0 &&
+    !allow.includes(pluginId) &&
+    !allow.includes(resolvedId)
+  ) {
+    return { config: cfg, enabled: false, reason: "blocked by allowlist" };
+  }
+  return { config: setPluginEnabledInConfig(cfg, resolvedId, true), enabled: true };
 }

@@ -1,3 +1,4 @@
+import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -91,6 +92,7 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
 
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
+  const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
 
   const broadcastInternal = (
     event: string,
@@ -126,6 +128,17 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
+      if (!slow) {
+        reportedSlowPayloadClients.delete(c);
+      } else if (!reportedSlowPayloadClients.has(c)) {
+        reportedSlowPayloadClients.add(c);
+        logRejectedLargePayload({
+          surface: "gateway.ws.outbound_buffer",
+          bytes: c.socket.bufferedAmount,
+          limitBytes: MAX_BUFFERED_BYTES,
+          reason: opts?.dropIfSlow ? "ws_send_buffer_drop" : "ws_send_buffer_close",
+        });
+      }
       if (slow && opts?.dropIfSlow) {
         if (!isTargeted) {
           clientSeq.set(c, nextSeq);

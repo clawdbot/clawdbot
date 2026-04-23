@@ -4,6 +4,12 @@ const QA_GATEWAY_DEBUG_SECRET_ENV_VARS = Object.freeze([
   ...QA_PROVIDER_SECRET_ENV_VARS,
   "OPENCLAW_GATEWAY_TOKEN",
 ]);
+const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS = Object.freeze([
+  "botToken",
+  "driverToken",
+  "sutToken",
+  "leaseToken",
+]);
 
 export function redactQaGatewayDebugText(text: string) {
   let redacted = text;
@@ -15,6 +21,17 @@ export function redactQaGatewayDebugText(text: string) {
     );
     redacted = redacted.replace(
       new RegExp(`("${escapedEnvVar}"\\s*:\\s*)"[^"]*"`, "g"),
+      `$1"<redacted>"`,
+    );
+  }
+  for (const key of QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS) {
+    const escapedKey = key.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    redacted = redacted.replace(
+      new RegExp(`\\b(${escapedKey})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "gi"),
+      `$1$2<redacted>`,
+    );
+    redacted = redacted.replace(
+      new RegExp(`("${escapedKey}"\\s*:\\s*)"[^"]*"`, "gi"),
       `$1"<redacted>"`,
     );
   }

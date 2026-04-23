@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Mistral provider plugin",
   "type": "module",
+  "dependencies": {
+    "ws": "^8.20.0"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

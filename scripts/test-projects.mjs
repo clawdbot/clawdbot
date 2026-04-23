@@ -10,6 +10,8 @@ import {
   spawnWatchedVitestProcess,
 } from "./run-vitest.mjs";
 import {
+  applyDefaultMultiSpecVitestCachePaths,
+  applyDefaultVitestNoOutputTimeout,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   createVitestRunSpecs,
@@ -324,7 +326,7 @@ async function main() {
   const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
   const changedTargetArgs =
     targetArgs.length === 0 ? resolveChangedTargetArgs(args, process.cwd()) : null;
-  const runSpecs =
+  const rawRunSpecs =
     targetArgs.length === 0 && changedTargetArgs === null
       ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
           config: plan.config,
@@ -348,6 +350,10 @@ async function main() {
           baseEnv: process.env,
           cwd: process.cwd(),
         });
+  const runSpecs = applyDefaultMultiSpecVitestCachePaths(
+    applyDefaultVitestNoOutputTimeout(rawRunSpecs, { env: process.env }),
+    { cwd: process.cwd(), env: process.env },
+  );
 
   if (runSpecs.length === 0) {
     console.error("[test] no changed test targets; skipping Vitest.");
@@ -366,7 +372,12 @@ async function main() {
     targetArgs.length === 0 &&
     changedTargetArgs === null &&
     !runSpecs.some((spec) => spec.watchMode);
-  const isParallelShardRun = isFullSuiteRun || isFullExtensionsProjectRun(runSpecs);
+  const isExplicitParallelMultiConfigRun =
+    Boolean(process.env.OPENCLAW_TEST_PROJECTS_PARALLEL) &&
+    runSpecs.length > 1 &&
+    !runSpecs.some((spec) => spec.watchMode);
+  const isParallelShardRun =
+    isFullSuiteRun || isFullExtensionsProjectRun(runSpecs) || isExplicitParallelMultiConfigRun;
   if (isParallelShardRun) {
     const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, process.env);
     if (concurrency > 1) {

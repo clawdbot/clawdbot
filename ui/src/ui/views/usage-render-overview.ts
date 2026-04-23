@@ -219,7 +219,8 @@ function renderDailyChartCompact(
             const isSelected = selectedDays.includes(d.date);
             const label = formatDayLabel(d.date);
             // Shorter label for many days (just day number)
-            const shortLabel = daily.length > 20 ? String(parseInt(d.date.slice(8), 10)) : label;
+            const shortLabel =
+              daily.length > 20 ? String(Number.parseInt(d.date.slice(8), 10)) : label;
             const labelClass =
               daily.length > 20 ? "daily-bar-label daily-bar-label--compact" : "daily-bar-label";
             const segments =

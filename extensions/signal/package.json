@@ -21,7 +21,21 @@
       "docsLabel": "signal",
       "blurb": "signal-cli linked device; more setup (David Reagans: \"Hop on Discord.\").",
       "systemImage": "antenna.radiowaves.left.and.right",
-      "markdownCapable": true
+      "markdownCapable": true,
+      "cliAddOptions": [
+        {
+          "flags": "--signal-number <e164>",
+          "description": "Signal account number (E.164)"
+        },
+        {
+          "flags": "--http-host <host>",
+          "description": "Signal HTTP daemon host"
+        },
+        {
+          "flags": "--http-port <port>",
+          "description": "Signal HTTP daemon port"
+        }
+      ]
     }
   }
 }

@@ -4,7 +4,6 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/exec-inline-eval.js";
 import {
@@ -13,11 +12,6 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
-import {
-  hasConfiguredChannelsForReadOnlyScope,
-  resolveConfiguredChannelPluginIds,
-} from "../plugins/channel-plugin-ids.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -80,7 +74,7 @@ export type SecurityAuditOptions = {
   probeGatewayFn?: ProbeGatewayFn;
 };
 
-type AuditExecutionContext = {
+export type AuditExecutionContext = {
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -112,6 +106,13 @@ let pluginRegistryLoaderModulePromise:
 let pluginMetadataRegistryLoaderModulePromise:
   | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
   | undefined;
+let pluginAutoEnableModulePromise:
+  | Promise<typeof import("../config/plugin-auto-enable.js")>
+  | undefined;
+let channelPluginIdsModulePromise:
+  | Promise<typeof import("../plugins/channel-plugin-ids.js")>
+  | undefined;
+let pluginRuntimeModulePromise: Promise<typeof import("../plugins/runtime.js")> | undefined;
 let gatewayProbeDepsPromise:
   | Promise<{
       buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
@@ -145,6 +146,21 @@ async function loadPluginMetadataRegistryLoaderModule() {
   pluginMetadataRegistryLoaderModulePromise ??=
     import("../plugins/runtime/metadata-registry-loader.js");
   return await pluginMetadataRegistryLoaderModulePromise;
+}
+
+async function loadPluginAutoEnableModule() {
+  pluginAutoEnableModulePromise ??= import("../config/plugin-auto-enable.js");
+  return await pluginAutoEnableModulePromise;
+}
+
+async function loadChannelPluginIdsModule() {
+  channelPluginIdsModulePromise ??= import("../plugins/channel-plugin-ids.js");
+  return await channelPluginIdsModulePromise;
+}
+
+async function loadPluginRuntimeModule() {
+  pluginRuntimeModulePromise ??= import("../plugins/runtime.js");
+  return await pluginRuntimeModulePromise;
 }
 
 async function loadGatewayProbeDeps() {
@@ -325,11 +341,13 @@ export function collectGatewayConfigFindings(
   });
 }
 
-async function collectPluginSecurityAuditFindings(
+export async function collectPluginSecurityAuditFindings(
   context: AuditExecutionContext,
 ): Promise<SecurityAuditFinding[]> {
+  const { getActivePluginRegistry } = await loadPluginRuntimeModule();
   let collectors = getActivePluginRegistry()?.securityAuditCollectors ?? [];
   if (collectors.length === 0) {
+    const { applyPluginAutoEnable } = await loadPluginAutoEnableModule();
     const autoEnabled = applyPluginAutoEnable({
       config: context.sourceConfig,
       env: context.env,
@@ -360,6 +378,7 @@ async function collectPluginSecurityAuditFindings(
       }
     }
     if (context.includeChannelSecurity && context.plugins !== undefined) {
+      const { resolveConfiguredChannelPluginIds } = await loadChannelPluginIdsModule();
       const auditedChannelPluginIds = new Set(context.plugins.map((plugin) => plugin.id));
       for (const pluginId of resolveConfiguredChannelPluginIds({
         config: autoEnabled.config,
@@ -1008,21 +1027,28 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     );
   }
 
-  const shouldAuditChannelSecurity =
-    context.includeChannelSecurity &&
-    (context.plugins !== undefined ||
-      hasConfiguredChannelsForReadOnlyScope({
-        config: cfg,
-        activationSourceConfig: context.sourceConfig,
-        workspaceDir: context.workspaceDir,
-        env,
-      }) ||
-      resolveConfiguredChannelPluginIds({
-        config: cfg,
-        activationSourceConfig: context.sourceConfig,
-        workspaceDir: context.workspaceDir,
-        env,
-      }).length > 0);
+  let shouldAuditChannelSecurity = false;
+  if (context.includeChannelSecurity) {
+    if (context.plugins !== undefined) {
+      shouldAuditChannelSecurity = true;
+    } else {
+      const { hasConfiguredChannelsForReadOnlyScope, resolveConfiguredChannelPluginIds } =
+        await loadChannelPluginIdsModule();
+      shouldAuditChannelSecurity =
+        hasConfiguredChannelsForReadOnlyScope({
+          config: cfg,
+          activationSourceConfig: context.sourceConfig,
+          workspaceDir: context.workspaceDir,
+          env,
+        }) ||
+        resolveConfiguredChannelPluginIds({
+          config: cfg,
+          activationSourceConfig: context.sourceConfig,
+          workspaceDir: context.workspaceDir,
+          env,
+        }).length > 0;
+    }
+  }
   if (shouldAuditChannelSecurity) {
     if (context.plugins === undefined) {
       (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({

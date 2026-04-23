@@ -1,10 +1,14 @@
 import {
   ensureMemoryIndexSchema,
+  loadSqliteVecExtension,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
-import { searchKeyword } from "./manager-search.js";
+import { searchKeyword, searchVector } from "./manager-search.js";
+
+const vectorToBlob = (embedding: number[]): Buffer =>
+  Buffer.from(new Float32Array(embedding).buffer);
 
 describe("searchKeyword trigram fallback", () => {
   const { DatabaseSync } = requireNodeSqlite();
@@ -172,5 +176,72 @@ describe("searchKeyword trigram fallback", () => {
     });
 
     expect(repeated[0]?.score).toBe(unique[0]?.score);
+  });
+});
+
+describe("searchVector sqlite-vec KNN", () => {
+  const { DatabaseSync } = requireNodeSqlite();
+
+  it("fills the requested limit after model filters prune nearest KNN candidates", async () => {
+    const db = new DatabaseSync(":memory:", { allowExtension: true });
+    try {
+      const loaded = await loadSqliteVecExtension({ db });
+      expect(loaded.ok, loaded.error).toBe(true);
+      ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: false,
+      });
+      db.exec(`
+        CREATE VIRTUAL TABLE chunks_vec USING vec0(
+          id TEXT PRIMARY KEY,
+          embedding FLOAT[2]
+        );
+      `);
+
+      const insertChunk = db.prepare(
+        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      const insertVector = db.prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)");
+      const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
+        insertChunk.run(
+          params.id,
+          `memory/${params.id}.md`,
+          "memory",
+          1,
+          1,
+          params.id,
+          params.model,
+          `chunk ${params.id}`,
+          JSON.stringify(params.vector),
+          1,
+        );
+        insertVector.run(params.id, vectorToBlob(params.vector));
+      };
+
+      for (let i = 0; i < 20; i += 1) {
+        addChunk({ id: `other-${i}`, model: "other-model", vector: [1, i / 1000] });
+      }
+      addChunk({ id: "target-1", model: "target-model", vector: [0.5, 0.5] });
+      addChunk({ id: "target-2", model: "target-model", vector: [0.4, 0.6] });
+
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerModel: "target-model",
+        queryVec: [1, 0],
+        limit: 2,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => true,
+        sourceFilterVec: { sql: "", params: [] },
+        sourceFilterChunks: { sql: "", params: [] },
+      });
+
+      expect(results.map((row) => row.id)).toEqual(["target-1", "target-2"]);
+    } finally {
+      db.close();
+    }
   });
 });

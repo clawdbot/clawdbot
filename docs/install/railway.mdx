@@ -6,6 +6,8 @@ read_when:
 title: "Railway"
 ---
 
+# Railway
+
 Deploy OpenClaw on Railway with a one-click template and access it through the web Control UI.
 This is the easiest "no terminal on the server" path: Railway runs the Gateway for you.
 

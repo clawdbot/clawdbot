@@ -153,7 +153,8 @@ export async function processAttachments(
         if (att.content_type?.startsWith("image/")) {
           log?.debug?.(`Downloaded attachment to: ${localPath}`);
           return { localPath, type: "image" as const, contentType: att.content_type, meta };
-        } else if (isVoice) {
+        }
+        if (isVoice) {
           log?.debug?.(`Downloaded attachment to: ${localPath}`);
           return processVoiceAttachment(
             localPath,
@@ -164,37 +165,35 @@ export async function processAttachments(
             downloadDir,
             log,
           );
-        } else {
-          log?.debug?.(`Downloaded attachment to: ${localPath}`);
-          return { localPath, type: "other" as const, filename: att.filename, meta };
         }
-      } else {
-        log?.error(`Failed to download: ${attUrl}`);
-        if (att.content_type?.startsWith("image/")) {
-          return {
-            localPath: null,
-            type: "image-fallback" as const,
-            attUrl,
-            contentType: att.content_type,
-            meta,
-          };
-        } else if (isVoice && asrReferText) {
-          log?.info(`Voice attachment download failed, using asr_refer_text fallback`);
-          return {
-            localPath: null,
-            type: "voice-fallback" as const,
-            transcript: asrReferText,
-            meta,
-          };
-        } else {
-          return {
-            localPath: null,
-            type: "other-fallback" as const,
-            filename: att.filename ?? att.content_type,
-            meta,
-          };
-        }
+        log?.debug?.(`Downloaded attachment to: ${localPath}`);
+        return { localPath, type: "other" as const, filename: att.filename, meta };
       }
+      log?.error(`Failed to download: ${attUrl}`);
+      if (att.content_type?.startsWith("image/")) {
+        return {
+          localPath: null,
+          type: "image-fallback" as const,
+          attUrl,
+          contentType: att.content_type,
+          meta,
+        };
+      }
+      if (isVoice && asrReferText) {
+        log?.info(`Voice attachment download failed, using asr_refer_text fallback`);
+        return {
+          localPath: null,
+          type: "voice-fallback" as const,
+          transcript: asrReferText,
+          meta,
+        };
+      }
+      return {
+        localPath: null,
+        type: "other-fallback" as const,
+        filename: att.filename ?? att.content_type,
+        meta,
+      };
     },
   );
 

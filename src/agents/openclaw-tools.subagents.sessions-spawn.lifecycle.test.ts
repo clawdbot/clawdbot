@@ -9,10 +9,15 @@ import {
   resetSessionsSpawnConfigOverride,
   resetSessionsSpawnHookRunnerOverride,
   setSessionsSpawnHookRunnerOverride,
+  setSessionsSpawnAnnounceFlowOverride,
   setupSessionsSpawnGatewayMock,
   setSessionsSpawnConfigOverride,
   waitForSessionsSpawnEvent,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+import {
+  __testing as bundleMcpRuntimeTesting,
+  getOrCreateSessionMcpRuntime,
+} from "./pi-bundle-mcp-tools.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -151,7 +156,8 @@ async function waitForRunCleanup(childSessionKey: string) {
 }
 
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
     resetSessionsSpawnAnnounceFlowOverride();
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
@@ -182,11 +188,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     callGatewayMock.mockClear();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetSessionsSpawnAnnounceFlowOverride();
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
     resetSubagentRegistryForTests({ persist: false });
+    await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
   });
 
   afterAll(() => {
@@ -260,6 +267,56 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     const sendCalls = ctx.calls.filter((c) => c.method === "send");
     expect(sendCalls.length).toBe(0);
     expect(child.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
+  });
+
+  it("sessions_spawn retires bundle MCP runtime when run-mode cleanup completes", async () => {
+    let resumeAnnounceFlow: ((value: boolean) => void) | undefined;
+    let announceFlowStarted: (() => void) | undefined;
+    const announceFlowStartedPromise = new Promise<void>((resolve) => {
+      announceFlowStarted = resolve;
+    });
+    const announceFlowGate = new Promise<boolean>((resolve) => {
+      resumeAnnounceFlow = resolve;
+    });
+    setSessionsSpawnAnnounceFlowOverride(async () => {
+      announceFlowStarted?.();
+      return await announceFlowGate;
+    });
+    const ctx = setupSessionsSpawnGatewayMock({
+      includeChatHistory: true,
+      agentWaitResult: { status: "ok", startedAt: 3000, endedAt: 4000 },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    await executeSpawnAndExpectAccepted({
+      tool,
+      callId: "call-mcp-retire",
+      cleanup: "keep",
+    });
+
+    await announceFlowStartedPromise;
+    const child = ctx.getChild();
+    if (!child.sessionKey) {
+      throw new Error("missing child sessionKey");
+    }
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "session:subagent:mcp-retire",
+      sessionKey: child.sessionKey,
+      workspaceDir: "/tmp/openclaw-subagent-mcp-retire",
+      cfg: { mcp: { servers: {} } } as Parameters<typeof getOrCreateSessionMcpRuntime>[0]["cfg"],
+    });
+    expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain("session:subagent:mcp-retire");
+
+    resumeAnnounceFlow?.(true);
+    await waitForRunCleanup(child.sessionKey);
+    await waitForSessionsSpawnEvent(
+      "bundle MCP runtime retirement",
+      () => !bundleMcpRuntimeTesting.getCachedSessionIds().includes("session:subagent:mcp-retire"),
+    );
   });
 
   it("sessions_spawn runs cleanup via lifecycle events", async () => {

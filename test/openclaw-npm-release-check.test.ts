@@ -22,13 +22,8 @@ import {
 } from "../scripts/openclaw-npm-release-check.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 
-const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
-] as const;
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 
@@ -344,6 +339,8 @@ describe("collectForbiddenPackedPathErrors", () => {
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
       'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
@@ -351,13 +348,16 @@ describe("collectForbiddenPackedPathErrors", () => {
     ]);
   });
 
-  it("allows legacy update verifier QA runtime sidecars", () => {
+  it("rejects legacy update verifier QA runtime sidecars", () => {
     expect(
       collectForbiddenPackedPathErrors([
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
       ]),
-    ).toEqual([]);
+    ).toEqual([
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
+    ]);
   });
 
   it("rejects root dist chunks that still reference the private qa lab", () => {

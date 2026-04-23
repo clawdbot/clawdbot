@@ -1267,3 +1267,37 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(Object.keys(second).toSorted()).toEqual(Object.keys(first).toSorted());
   });
 });
+
+describe("buildPluginLoaderJitiOptions", () => {
+  it("pre-normalizes and marks alias maps for Jiti", () => {
+    const marker = Symbol.for("pathe:normalizedAlias");
+    const aliasMap = {
+      "openclaw/plugin-sdk/core": "/repo/src/plugin-sdk/core.ts",
+      "openclaw/plugin-sdk": "/repo/src/plugin-sdk/root-alias.cjs",
+      "@openclaw/plugin-sdk": "/repo/src/plugin-sdk/root-alias.cjs",
+    };
+
+    const first = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+    const second = buildPluginLoaderJitiOptions({ ...aliasMap }).alias as Record<string, string>;
+
+    expect(second).toBe(first);
+    expect((first as Record<symbol, unknown>)[marker]).toBe(true);
+    expect(Object.prototype.propertyIsEnumerable.call(first, marker)).toBe(false);
+  });
+
+  it("applies Jiti alias-target normalization before caching", () => {
+    const aliasMap = {
+      alpha: "/repo/alpha",
+      beta: "alpha/sub",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias).not.toBe(aliasMap);
+    expect(alias.beta).toBe("/repo/alpha/sub");
+  });
+
+  it("does not attach an empty alias map", () => {
+    expect(buildPluginLoaderJitiOptions({})).not.toHaveProperty("alias");
+  });
+});

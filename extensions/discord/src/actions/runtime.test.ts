@@ -62,6 +62,7 @@ const {
   createThreadDiscord,
   deleteChannelDiscord,
   editChannelDiscord,
+  fetchReactionsDiscord,
   fetchMessageDiscord,
   kickMemberDiscord,
   listGuildChannelsDiscord,
@@ -95,6 +96,25 @@ function handleMessagingAction(
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
 ) {
   return handleDiscordMessagingAction(action, params, isActionEnabled, options, cfg);
+}
+
+function handleGuildAction(
+  action: string,
+  params: Record<string, unknown>,
+  isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
+  cfg: OpenClawConfig = DISCORD_TEST_CFG,
+  options?: { mediaLocalRoots?: readonly string[] },
+) {
+  return handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);
+}
+
+function handleModerationAction(
+  action: string,
+  params: Record<string, unknown>,
+  isActionEnabled: (key: keyof DiscordActionConfig, defaultValue?: boolean) => boolean,
+  cfg: OpenClawConfig = DISCORD_TEST_CFG,
+) {
+  return handleDiscordModerationAction(action, params, isActionEnabled, cfg);
 }
 
 const disabledActions = (key: keyof DiscordActionConfig) => key !== "reactions";
@@ -177,6 +197,56 @@ describe("handleDiscordMessagingAction", () => {
       "✅",
       expect.objectContaining({ accountId: "work" }),
     );
+  });
+
+  it("resolves Discord DM targets for reaction adds", async () => {
+    const resolveReactionTarget = vi.fn(async () => "DM1");
+    discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId = resolveReactionTarget;
+
+    await handleMessagingAction(
+      "react",
+      {
+        to: "user:U1",
+        messageId: "M1",
+        emoji: "✅",
+      },
+      enableAllActions,
+    );
+
+    expect(resolveReactionTarget).toHaveBeenCalledWith({
+      target: "user:U1",
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
+    expect(reactMessageDiscord).toHaveBeenCalledWith("DM1", "M1", "✅", {
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
+  });
+
+  it("resolves Discord DM targets for reaction listing", async () => {
+    const resolveReactionTarget = vi.fn(async () => "DM1");
+    discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId = resolveReactionTarget;
+
+    await handleMessagingAction(
+      "reactions",
+      {
+        to: "user:U1",
+        messageId: "M1",
+      },
+      enableAllActions,
+    );
+
+    expect(resolveReactionTarget).toHaveBeenCalledWith({
+      target: "user:U1",
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
+    expect(fetchReactionsDiscord).toHaveBeenCalledWith("DM1", "M1", {
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+      limit: undefined,
+    });
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -516,26 +586,28 @@ describe("handleDiscordGuildAction", () => {
       user: { id: "U1" },
     })) as never;
 
-    const result = await handleDiscordGuildAction(
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: {
+            work: { token: "token-work" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const result = await handleGuildAction(
       "memberInfo",
       {
         guildId: "G1",
         userId: "U1",
       },
       enableAllActions,
-      {
-        channels: {
-          discord: {
-            defaultAccount: "work",
-            accounts: {
-              work: { token: "token-work" },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg,
     );
 
     expect(discordGuildActionRuntime.fetchMemberInfoDiscord).toHaveBeenCalledWith("G1", "U1", {
+      cfg,
       accountId: "work",
     });
     expect(result.details).toEqual(
@@ -557,7 +629,7 @@ describe("handleDiscordGuildAction - channel management", () => {
   });
 
   it("creates a channel", async () => {
-    const result = await handleDiscordGuildAction(
+    const result = await handleGuildAction(
       "channelCreate",
       {
         guildId: "G1",
@@ -567,35 +639,37 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
       channelsEnabled,
     );
-    expect(createChannelDiscord).toHaveBeenCalledWith({
-      guildId: "G1",
-      name: "test-channel",
-      type: 0,
-      parentId: undefined,
-      topic: "Test topic",
-      position: undefined,
-      nsfw: undefined,
-    });
+    expect(createChannelDiscord).toHaveBeenCalledWith(
+      {
+        guildId: "G1",
+        name: "test-channel",
+        type: 0,
+        parentId: undefined,
+        topic: "Test topic",
+        position: undefined,
+        nsfw: undefined,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    );
     expect(result.details).toMatchObject({ ok: true });
   });
 
   it("respects channel gating for channelCreate", async () => {
     await expect(
-      handleDiscordGuildAction("channelCreate", { guildId: "G1", name: "test" }, channelsDisabled),
+      handleGuildAction("channelCreate", { guildId: "G1", name: "test" }, channelsDisabled),
     ).rejects.toThrow(/Discord channel management is disabled/);
   });
 
   it("forwards accountId for channelList", async () => {
-    await handleDiscordGuildAction(
-      "channelList",
-      { guildId: "G1", accountId: "ops" },
-      channelInfoEnabled,
-    );
-    expect(listGuildChannelsDiscord).toHaveBeenCalledWith("G1", { accountId: "ops" });
+    await handleGuildAction("channelList", { guildId: "G1", accountId: "ops" }, channelInfoEnabled);
+    expect(listGuildChannelsDiscord).toHaveBeenCalledWith("G1", {
+      cfg: DISCORD_TEST_CFG,
+      accountId: "ops",
+    });
   });
 
   it("edits a channel", async () => {
-    await handleDiscordGuildAction(
+    await handleGuildAction(
       "channelEdit",
       {
         channelId: "C1",
@@ -604,22 +678,25 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
       channelsEnabled,
     );
-    expect(editChannelDiscord).toHaveBeenCalledWith({
-      channelId: "C1",
-      name: "new-name",
-      topic: "new topic",
-      position: undefined,
-      parentId: undefined,
-      nsfw: undefined,
-      rateLimitPerUser: undefined,
-      archived: undefined,
-      locked: undefined,
-      autoArchiveDuration: undefined,
-    });
+    expect(editChannelDiscord).toHaveBeenCalledWith(
+      {
+        channelId: "C1",
+        name: "new-name",
+        topic: "new topic",
+        position: undefined,
+        parentId: undefined,
+        nsfw: undefined,
+        rateLimitPerUser: undefined,
+        archived: undefined,
+        locked: undefined,
+        autoArchiveDuration: undefined,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    );
   });
 
   it("forwards thread edit fields", async () => {
-    await handleDiscordGuildAction(
+    await handleGuildAction(
       "channelEdit",
       {
         channelId: "C1",
@@ -629,25 +706,28 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
       channelsEnabled,
     );
-    expect(editChannelDiscord).toHaveBeenCalledWith({
-      channelId: "C1",
-      name: undefined,
-      topic: undefined,
-      position: undefined,
-      parentId: undefined,
-      nsfw: undefined,
-      rateLimitPerUser: undefined,
-      archived: true,
-      locked: false,
-      autoArchiveDuration: 1440,
-    });
+    expect(editChannelDiscord).toHaveBeenCalledWith(
+      {
+        channelId: "C1",
+        name: undefined,
+        topic: undefined,
+        position: undefined,
+        parentId: undefined,
+        nsfw: undefined,
+        rateLimitPerUser: undefined,
+        archived: true,
+        locked: false,
+        autoArchiveDuration: 1440,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    );
   });
 
   it.each([
     ["parentId is null", { parentId: null }],
     ["clearParent is true", { clearParent: true }],
   ])("clears the channel parent when %s", async (_label, payload) => {
-    await handleDiscordGuildAction(
+    await handleGuildAction(
       "channelEdit",
       {
         channelId: "C1",
@@ -655,27 +735,30 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
       channelsEnabled,
     );
-    expect(editChannelDiscord).toHaveBeenCalledWith({
-      channelId: "C1",
-      name: undefined,
-      topic: undefined,
-      position: undefined,
-      parentId: null,
-      nsfw: undefined,
-      rateLimitPerUser: undefined,
-      archived: undefined,
-      locked: undefined,
-      autoArchiveDuration: undefined,
-    });
+    expect(editChannelDiscord).toHaveBeenCalledWith(
+      {
+        channelId: "C1",
+        name: undefined,
+        topic: undefined,
+        position: undefined,
+        parentId: null,
+        nsfw: undefined,
+        rateLimitPerUser: undefined,
+        archived: undefined,
+        locked: undefined,
+        autoArchiveDuration: undefined,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    );
   });
 
   it("deletes a channel", async () => {
-    await handleDiscordGuildAction("channelDelete", { channelId: "C1" }, channelsEnabled);
-    expect(deleteChannelDiscord).toHaveBeenCalledWith("C1");
+    await handleGuildAction("channelDelete", { channelId: "C1" }, channelsEnabled);
+    expect(deleteChannelDiscord).toHaveBeenCalledWith("C1", { cfg: DISCORD_TEST_CFG });
   });
 
   it("moves a channel", async () => {
-    await handleDiscordGuildAction(
+    await handleGuildAction(
       "channelMove",
       {
         guildId: "G1",
@@ -685,19 +768,22 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
       channelsEnabled,
     );
-    expect(moveChannelDiscord).toHaveBeenCalledWith({
-      guildId: "G1",
-      channelId: "C1",
-      parentId: "P1",
-      position: 5,
-    });
+    expect(moveChannelDiscord).toHaveBeenCalledWith(
+      {
+        guildId: "G1",
+        channelId: "C1",
+        parentId: "P1",
+        position: 5,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    );
   });
 
   it.each([
     ["parentId is null", { parentId: null }],
     ["clearParent is true", { clearParent: true }],
   ])("clears the channel parent on move when %s", async (_label, payload) => {
-    await handleDiscordGuildAction(
+    await handleGuildAction(
       "channelMove",
       {
         guildId: "G1",
@@ -706,44 +792,53 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
       channelsEnabled,
     );
-    expect(moveChannelDiscord).toHaveBeenCalledWith({
-      guildId: "G1",
-      channelId: "C1",
-      parentId: null,
-      position: undefined,
-    });
+    expect(moveChannelDiscord).toHaveBeenCalledWith(
+      {
+        guildId: "G1",
+        channelId: "C1",
+        parentId: null,
+        position: undefined,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    );
   });
 
   it("creates a category with type=4", async () => {
-    await handleDiscordGuildAction(
+    await handleGuildAction(
       "categoryCreate",
       { guildId: "G1", name: "My Category" },
       channelsEnabled,
     );
-    expect(createChannelDiscord).toHaveBeenCalledWith({
-      guildId: "G1",
-      name: "My Category",
-      type: 4,
-      position: undefined,
-    });
+    expect(createChannelDiscord).toHaveBeenCalledWith(
+      {
+        guildId: "G1",
+        name: "My Category",
+        type: 4,
+        position: undefined,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    );
   });
 
   it("edits a category", async () => {
-    await handleDiscordGuildAction(
+    await handleGuildAction(
       "categoryEdit",
       { categoryId: "CAT1", name: "Renamed Category" },
       channelsEnabled,
     );
-    expect(editChannelDiscord).toHaveBeenCalledWith({
-      channelId: "CAT1",
-      name: "Renamed Category",
-      position: undefined,
-    });
+    expect(editChannelDiscord).toHaveBeenCalledWith(
+      {
+        channelId: "CAT1",
+        name: "Renamed Category",
+        position: undefined,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    );
   });
 
   it("deletes a category", async () => {
-    await handleDiscordGuildAction("categoryDelete", { categoryId: "CAT1" }, channelsEnabled);
-    expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1");
+    await handleGuildAction("categoryDelete", { categoryId: "CAT1" }, channelsEnabled);
+    expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1", { cfg: DISCORD_TEST_CFG });
   });
 
   it.each([
@@ -781,23 +876,27 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
     },
   ])("sets channel permissions for $name", async ({ params, expected }) => {
-    await handleDiscordGuildAction("channelPermissionSet", params, channelsEnabled);
-    expect(setChannelPermissionDiscord).toHaveBeenCalledWith(expected);
+    await handleGuildAction("channelPermissionSet", params, channelsEnabled);
+    expect(setChannelPermissionDiscord).toHaveBeenCalledWith(expected, {
+      cfg: DISCORD_TEST_CFG,
+    });
   });
 
   it("removes channel permissions", async () => {
-    await handleDiscordGuildAction(
+    await handleGuildAction(
       "channelPermissionRemove",
       { channelId: "C1", targetId: "R1" },
       channelsEnabled,
     );
-    expect(removeChannelPermissionDiscord).toHaveBeenCalledWith("C1", "R1");
+    expect(removeChannelPermissionDiscord).toHaveBeenCalledWith("C1", "R1", {
+      cfg: DISCORD_TEST_CFG,
+    });
   });
 });
 
 describe("handleDiscordModerationAction", () => {
   it("forwards accountId for timeout", async () => {
-    await handleDiscordModerationAction(
+    await handleModerationAction(
       "timeout",
       {
         guildId: "G1",
@@ -813,7 +912,7 @@ describe("handleDiscordModerationAction", () => {
         userId: "U1",
         durationMinutes: 5,
       }),
-      { accountId: "ops" },
+      { cfg: DISCORD_TEST_CFG, accountId: "ops" },
     );
   });
 });
@@ -836,7 +935,7 @@ describe("handleDiscordAction per-account gating", () => {
     );
     expect(timeoutMemberDiscord).toHaveBeenCalledWith(
       expect.objectContaining({ guildId: "G1", userId: "U1" }),
-      { accountId: "ops" },
+      { cfg, accountId: "ops" },
     );
   });
 
@@ -921,7 +1020,7 @@ describe("handleDiscordAction per-account gating", () => {
 
     expect(createChannelDiscord).toHaveBeenCalledWith(
       expect.objectContaining({ guildId: "G1", name: "alerts" }),
-      { accountId: "ops" },
+      { cfg, accountId: "ops" },
     );
   });
 });

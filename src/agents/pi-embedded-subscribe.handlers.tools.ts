@@ -544,7 +544,7 @@ async function emitToolResultOutput(params: {
     ctx.builtinToolNames,
   );
   const pendingMediaUrls =
-    mediaReply.audioAsVoice || emittedToolOutputMediaUrls.length === 0
+    emittedToolOutputMediaUrls.length === 0
       ? mediaUrls
       : mediaUrls.filter((url) => !emittedToolOutputMediaUrls.includes(url));
   if (pendingMediaUrls.length === 0) {

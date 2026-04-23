@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-{1}', github.workflow, github.ref) || format('{0}-{1}-{2}', github.workflow, github.ref, github.sha)) }}
+  group: ${{ github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)) }}
   cancel-in-progress: true
 
 env:
@@ -251,9 +251,9 @@ jobs:
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
             run_checks_node_core_dist: nodeTestDistShards.length > 0,
             checks_node_core_dist_matrix: createMatrix(nodeTestDistShards),
-            run_extension_fast: hasChangedExtensions,
+            run_extension_fast: hasChangedExtensions && !isPush,
             extension_fast_matrix: createMatrix(
-              hasChangedExtensions
+              hasChangedExtensions && !isPush
                 ? (changedExtensionsMatrix.include ?? []).map((entry) => ({
                     check_name: `extension-fast-${entry.extension}`,
                     extension: entry.extension,
@@ -284,7 +284,6 @@ jobs:
                     { check_name: "android-test-play", task: "test-play" },
                     { check_name: "android-test-third-party", task: "test-third-party" },
                     { check_name: "android-build-play", task: "build-play" },
-                    { check_name: "android-build-third-party", task: "build-third-party" },
                   ]
                 : [],
             ),
@@ -305,7 +304,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -396,7 +395,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -419,8 +418,8 @@ jobs:
   security-fast:
     permissions: {}
     needs: [security-scm-fast, security-dependency-audit]
-    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify fast security jobs
@@ -453,8 +452,12 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
+    outputs:
+      channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
+      core-support-boundary-result: ${{ steps.built_artifact_checks.outputs['core-support-boundary-result'] }}
+      gateway-watch-result: ${{ steps.built_artifact_checks.outputs['gateway-watch-result'] }}
     steps:
       - name: Checkout
         shell: bash
@@ -522,18 +525,26 @@ jobs:
       - name: Build Control UI
         run: pnpm ui:build
 
+      - name: Check Control UI i18n
+        if: needs.preflight.outputs.run_control_ui_i18n == 'true'
+        run: pnpm ui:i18n:check
+
       - name: Cache dist build
         uses: actions/cache@v5
         with:
-          path: dist/
+          path: |
+            dist/
+            dist-runtime/
           key: ${{ runner.os }}-dist-build-${{ github.sha }}
 
-      - name: Upload dist artifact
+      - name: Pack built runtime artifacts
+        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
+
+      - name: Upload built runtime artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: dist-build
-          path: dist/
-          compression-level: 0
+          name: dist-runtime-build
+          path: dist-runtime-build.tar.zst
           retention-days: 1
 
       - name: Upload A2UI bundle artifact
@@ -544,13 +555,106 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
+      - name: Smoke test CLI launcher help
+        run: node openclaw.mjs --help
+
+      - name: Smoke test CLI launcher status json
+        run: node openclaw.mjs status --json --timeout 1
+
+      - name: Smoke test built bundled plugin singleton
+        run: pnpm test:build:singleton
+
+      - name: Smoke test built bundled runtime deps
+        run: pnpm test:build:bundled-runtime-deps
+
+      - name: Check CLI startup memory
+        run: pnpm test:startup:memory
+
+      - name: Run built artifact checks
+        id: built_artifact_checks
+        if: needs.preflight.outputs.run_checks == 'true' || needs.preflight.outputs.run_checks_node_core_dist == 'true' || needs.preflight.outputs.run_check_additional == 'true'
+        env:
+          RUN_CHANNELS: ${{ needs.preflight.outputs.run_checks }}
+          RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
+          RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_check_additional }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          names=()
+          pids=()
+          logs=()
+          declare -A results=(
+            ["channels"]="skipped"
+            ["core-support-boundary"]="skipped"
+            ["gateway-watch"]="skipped"
+          )
+
+          start_check() {
+            local name="$1"
+            shift
+            local log="${RUNNER_TEMP}/${name}.log"
+            names+=("$name")
+            logs+=("$log")
+            echo "starting ${name}: $*"
+            "$@" >"$log" 2>&1 &
+            pids+=("$!")
+          }
+
+          if [ "$RUN_CHANNELS" = "true" ]; then
+            start_check "channels" env \
+              NODE_OPTIONS=--max-old-space-size=6144 \
+              OPENCLAW_VITEST_MAX_WORKERS=1 \
+              pnpm test:channels
+          fi
+
+          if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
+            start_check "core-support-boundary" env \
+              NODE_OPTIONS=--max-old-space-size=6144 \
+              OPENCLAW_VITEST_MAX_WORKERS=2 \
+              node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
+          fi
+
+          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
+            start_check "gateway-watch" node scripts/check-gateway-watch-regression.mjs --skip-build
+          fi
+
+          for index in "${!pids[@]}"; do
+            name="${names[$index]}"
+            log="${logs[$index]}"
+            pid="${pids[$index]}"
+
+            if wait "$pid"; then
+              result="success"
+            else
+              result="failure"
+            fi
+
+            echo "::group::${name} log"
+            cat "$log"
+            echo "::endgroup::"
+            results["$name"]="$result"
+          done
+
+          for name in channels core-support-boundary gateway-watch; do
+            echo "${name}-result=${results[$name]}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Upload gateway watch regression artifacts
+        if: always() && needs.preflight.outputs.run_check_additional == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-watch-regression
+          path: .local/gateway-watch-regression/
+          retention-days: 7
+
   checks-fast-core:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -638,7 +742,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -721,8 +825,8 @@ jobs:
       contents: read
     name: checks-fast-contracts-channels
     needs: [preflight, checks-fast-channel-contracts-shard]
-    if: always() && needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_fast == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify channel contract shards
@@ -744,7 +848,7 @@ jobs:
     name: "checks-fast-protocol"
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -809,7 +913,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -870,6 +974,7 @@ jobs:
 
       - name: Run extension shard
         env:
+          OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
         run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
 
@@ -878,8 +983,8 @@ jobs:
       contents: read
     name: checks-node-extensions
     needs: [preflight, checks-node-extensions-shard]
-    if: always() && needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_fast == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify extension shards
@@ -896,109 +1001,26 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
-    timeout-minutes: 60
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM 30s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
-          }
-
-          for attempt in 1 2; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/2 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 2 attempts" >&2
-          exit 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "${{ matrix.node_version || '24.x' }}"
-          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
-          install-bun: "false"
-
-      - name: Configure Node test resources
-        if: matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels')
+      - name: Verify ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           TASK: ${{ matrix.task }}
-        run: |
-          echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
-          if [ "$TASK" = "test" ]; then
-            echo "OPENCLAW_TEST_PROJECTS_LEAF_SHARDS=1" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD=1" >> "$GITHUB_ENV"
-          fi
-          if [ "$TASK" = "channels" ]; then
-            echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
-          fi
-
-      - name: Download dist artifact
-        if: matrix.task == 'test'
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Download A2UI bundle artifact
-        if: matrix.task == 'test' || matrix.task == 'channels'
-        uses: actions/download-artifact@v8
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
-
-      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        env:
-          TASK: ${{ matrix.task }}
-          NODE_OPTIONS: --max-old-space-size=6144
+          CHANNELS_RESULT: ${{ needs.build-artifacts.outputs['channels-result'] }}
         shell: bash
         run: |
           set -euo pipefail
           case "$TASK" in
-            test)
-              pnpm test
-              ;;
             channels)
-              pnpm test:channels
+              if [ "$CHANNELS_RESULT" != "success" ]; then
+                echo "Channel tests failed in build-artifacts: $CHANNELS_RESULT" >&2
+                exit 1
+              fi
               ;;
             *)
               echo "Unsupported checks task: $TASK" >&2
@@ -1012,7 +1034,7 @@ jobs:
     name: checks-node-compat-node22
     needs: [preflight]
     if: needs.preflight.outputs.run_node == 'true' && github.event_name == 'push'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -1089,7 +1111,10 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    # Keep core shards on GitHub-hosted runners. The Blacksmith pool is already
+    # occupied by build and extension shards; queueing these shards there hides
+    # actual test-speed improvements behind runner wait time.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1158,6 +1183,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "2"
         shell: bash
         run: |
           set -euo pipefail
@@ -1165,7 +1191,6 @@ jobs:
           import { spawnSync } from "node:child_process";
           import { writeFileSync } from "node:fs";
           import { join } from "node:path";
-          import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./scripts/run-vitest.mjs";
 
           const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
           if (!Array.isArray(configs) || configs.length === 0) {
@@ -1183,27 +1208,12 @@ jobs:
             childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
           }
 
-          for (const config of configs) {
-            console.error(`[test] starting ${config}`);
-            const result = spawnSync(
-              "pnpm",
-              [
-                "exec",
-                "node",
-                ...resolveVitestNodeArgs(process.env),
-                resolveVitestCliEntry(),
-                "run",
-                "--config",
-                config,
-              ],
-              {
-                env: childEnv,
-                stdio: "inherit",
-              },
-            );
-            if ((result.status ?? 1) !== 0) {
-              process.exit(result.status ?? 1);
-            }
+          const result = spawnSync("pnpm", ["exec", "node", "scripts/test-projects.mjs", ...configs], {
+            env: childEnv,
+            stdio: "inherit",
+          });
+          if ((result.status ?? 1) !== 0) {
+            process.exit(result.status ?? 1);
           }
           EOF
 
@@ -1212,152 +1222,40 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.run_checks_node_core_dist == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
-    timeout-minutes: 60
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_node_core_dist == 'true' && needs.build-artifacts.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_dist_matrix) }}
     steps:
-      - name: Checkout
-        shell: bash
+      - name: Verify Node test shard
         env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM 30s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
-          }
-
-          for attempt in 1 2; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/2 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 2 attempts" >&2
-          exit 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "${{ matrix.node_version || '24.x' }}"
-          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
-          install-bun: "false"
-
-      - name: Configure Node test resources
-        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
-
-      - name: Restore dist cache
-        id: dist-cache
-        uses: actions/cache@v5
-        with:
-          path: dist/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
-
-      - name: Download dist artifact
-        if: steps.dist-cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Download A2UI bundle artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
-
-      - name: Run Node test shard
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-          OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
-          OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          CORE_SUPPORT_BOUNDARY_RESULT: ${{ needs.build-artifacts.outputs['core-support-boundary-result'] }}
+          SHARD_NAME: ${{ matrix.shard_name }}
         shell: bash
         run: |
           set -euo pipefail
-          node --input-type=module <<'EOF'
-          import { spawnSync } from "node:child_process";
-          import { writeFileSync } from "node:fs";
-          import { join } from "node:path";
-          import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./scripts/run-vitest.mjs";
-
-          const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
-          if (!Array.isArray(configs) || configs.length === 0) {
-            console.error("Missing node test shard configs");
-            process.exit(1);
-          }
-          const includePatterns = JSON.parse(process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null");
-          const childEnv = { ...process.env };
-          if (Array.isArray(includePatterns) && includePatterns.length > 0) {
-            const includeFile = join(
-              process.env.RUNNER_TEMP ?? ".",
-              `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
-            );
-            writeFileSync(includeFile, JSON.stringify(includePatterns), "utf8");
-            childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
-          }
-
-          for (const config of configs) {
-            console.error(`[test] starting ${config}`);
-            const result = spawnSync(
-              "pnpm",
-              [
-                "exec",
-                "node",
-                ...resolveVitestNodeArgs(process.env),
-                resolveVitestCliEntry(),
-                "run",
-                "--config",
-                config,
-              ],
-              {
-                env: childEnv,
-                stdio: "inherit",
-              },
-            );
-            if ((result.status ?? 1) !== 0) {
-              process.exit(result.status ?? 1);
-            }
-          }
-          EOF
+          case "$SHARD_NAME" in
+            core-support-boundary)
+              if [ "$CORE_SUPPORT_BOUNDARY_RESULT" != "success" ]; then
+                echo "Core support boundary shard failed in build-artifacts: $CORE_SUPPORT_BOUNDARY_RESULT" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported built-artifact shard: $SHARD_NAME" >&2
+              exit 1
+              ;;
+          esac
 
   checks-node-core-test:
     permissions:
       contents: read
     name: checks-node-core
     needs: [preflight, checks-node-core-test-nondist-shard, checks-node-core-test-dist-shard]
-    if: always() && needs.preflight.outputs.run_checks == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify node test shards
@@ -1382,7 +1280,7 @@ jobs:
     name: "extension-fast"
     needs: [preflight]
     if: needs.preflight.outputs.run_extension_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1452,8 +1350,8 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
-    if: always() && needs.preflight.outputs.run_check == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && matrix.runner || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1461,16 +1359,22 @@ jobs:
         include:
           - check_name: check-preflight-guards
             task: preflight-guards
+            runner: ubuntu-24.04
           - check_name: check-prod-types
             task: prod-types
+            runner: ubuntu-24.04
           - check_name: check-lint
             task: lint
+            runner: ubuntu-24.04
           - check_name: check-policy-guards
             task: policy-guards
+            runner: ubuntu-24.04
           - check_name: check-test-types
             task: test-types
+            runner: ubuntu-24.04
           - check_name: check-strict-smoke
             task: strict-smoke
+            runner: ubuntu-24.04
     steps:
       - name: Checkout
         shell: bash
@@ -1567,8 +1471,8 @@ jobs:
       contents: read
     name: "check"
     needs: [preflight, check-shard]
-    if: always() && needs.preflight.outputs.run_check == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify check shards
@@ -1585,8 +1489,8 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
-    if: always() && needs.preflight.outputs.run_check_additional == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1598,12 +1502,8 @@ jobs:
             group: extension-channels
           - check_name: check-additional-extension-bundled
             group: extension-bundled
-          - check_name: check-additional-extension-package-boundary-compile
-            group: extension-package-boundary-compile
-          - check_name: check-additional-extension-package-boundary-canary
-            group: extension-package-boundary-canary
-          - check_name: check-additional-runtime-topology-gateway
-            group: runtime-topology-gateway
+          - check_name: check-additional-extension-package-boundary
+            group: extension-package-boundary
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
     steps:
@@ -1662,7 +1562,7 @@ jobs:
 
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
-        if: matrix.group == 'extension-package-boundary-compile'
+        if: matrix.group == 'extension-package-boundary'
         uses: actions/cache@v5
         with:
           path: |
@@ -1675,7 +1575,7 @@ jobs:
             ${{ runner.os }}-extension-package-boundary-v1-
 
       - name: Preserve extension package boundary cache hit
-        if: matrix.group == 'extension-package-boundary-compile' && steps.extension-package-boundary-cache.outputs.cache-hit == 'true'
+        if: matrix.group == 'extension-package-boundary' && steps.extension-package-boundary-cache.outputs.cache-hit == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -1703,6 +1603,7 @@ jobs:
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
+          OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
         shell: bash
         run: |
@@ -1726,24 +1627,7 @@ jobs:
 
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
-              run_check "plugin-extension-boundary" pnpm run lint:plugins:no-extension-imports
-              run_check "lint:tmp:no-random-messaging" pnpm run lint:tmp:no-random-messaging
-              run_check "lint:tmp:channel-agnostic-boundaries" pnpm run lint:tmp:channel-agnostic-boundaries
-              run_check "lint:tmp:tsgo-core-boundary" pnpm run lint:tmp:tsgo-core-boundary
-              run_check "lint:tmp:no-raw-channel-fetch" pnpm run lint:tmp:no-raw-channel-fetch
-              run_check "lint:agent:ingress-owner" pnpm run lint:agent:ingress-owner
-              run_check "lint:plugins:no-register-http-handler" pnpm run lint:plugins:no-register-http-handler
-              run_check "lint:plugins:no-monolithic-plugin-sdk-entry-imports" pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports
-              run_check "lint:plugins:no-extension-src-imports" pnpm run lint:plugins:no-extension-src-imports
-              run_check "lint:plugins:no-extension-test-core-imports" pnpm run lint:plugins:no-extension-test-core-imports
-              run_check "lint:plugins:plugin-sdk-subpaths-exported" pnpm run lint:plugins:plugin-sdk-subpaths-exported
-              run_check "deps:root-ownership:check" pnpm deps:root-ownership:check
-              run_check "web-search-provider-boundary" pnpm run lint:web-search-provider-boundaries
-              run_check "web-fetch-provider-boundary" pnpm run lint:web-fetch-provider-boundaries
-              run_check "extension-src-outside-plugin-sdk-boundary" pnpm run lint:extensions:no-src-outside-plugin-sdk
-              run_check "extension-plugin-sdk-internal-boundary" pnpm run lint:extensions:no-plugin-sdk-internal
-              run_check "extension-relative-outside-package-boundary" pnpm run lint:extensions:no-relative-outside-package
-              run_check "lint:ui:no-raw-window-open" pnpm lint:ui:no-raw-window-open
+              node scripts/run-additional-boundary-checks.mjs
               ;;
             extension-channels)
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels
@@ -1751,17 +1635,9 @@ jobs:
             extension-bundled)
               run_check "lint:extensions:bundled" pnpm run lint:extensions:bundled
               ;;
-            extension-package-boundary-compile)
+            extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile
-              ;;
-            extension-package-boundary-canary)
               run_check "test:extensions:package-boundary:canary" pnpm run test:extensions:package-boundary:canary
-              ;;
-            runtime-topology-gateway)
-              if [ "$RUN_CONTROL_UI_I18N" = "true" ]; then
-                run_check "ui:i18n:check" pnpm ui:i18n:check
-              fi
-              run_check "gateway-watch-regression" pnpm test:gateway:watch-regression
               ;;
             runtime-topology-architecture)
               run_check "check:architecture" pnpm check:architecture
@@ -1774,29 +1650,31 @@ jobs:
 
           exit "$failures"
 
-      - name: Upload gateway watch regression artifacts
-        if: always() && matrix.group == 'runtime-topology-gateway'
-        uses: actions/upload-artifact@v7
-        with:
-          name: gateway-watch-regression
-          path: .local/gateway-watch-regression/
-          retention-days: 7
-
   check-additional:
     permissions:
       contents: read
     name: "check-additional"
-    needs: [preflight, check-additional-shard]
-    if: always() && needs.preflight.outputs.run_check_additional == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    needs: [preflight, check-additional-shard, build-artifacts]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify additional check shards
         env:
           SHARD_RESULT: ${{ needs.check-additional-shard.result }}
+          BUILD_ARTIFACTS_RESULT: ${{ needs.build-artifacts.result }}
+          GATEWAY_RESULT: ${{ needs.build-artifacts.outputs.gateway-watch-result }}
         run: |
           if [ "$SHARD_RESULT" != "success" ]; then
             echo "Additional check shards failed: $SHARD_RESULT" >&2
+            exit 1
+          fi
+          if [ "$BUILD_ARTIFACTS_RESULT" != "success" ]; then
+            echo "Build artifact job failed: $BUILD_ARTIFACTS_RESULT" >&2
+            exit 1
+          fi
+          if [ "$GATEWAY_RESULT" != "success" ]; then
+            echo "Gateway topology check failed: $GATEWAY_RESULT" >&2
             exit 1
           fi
 
@@ -1805,96 +1683,18 @@ jobs:
       contents: read
     name: "build-smoke"
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
-    timeout-minutes: 20
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: Checkout
-        shell: bash
+      - name: Verify build smoke
         env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
-          CHECKOUT_TOKEN: ${{ github.token }}
+          BUILD_ARTIFACTS_RESULT: ${{ needs.build-artifacts.result }}
         run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM 30s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
-          }
-
-          for attempt in 1 2; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/2 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 2 attempts" >&2
-          exit 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Restore dist cache
-        id: build-smoke-dist-cache
-        if: github.event_name == 'push'
-        uses: actions/cache@v5
-        with:
-          path: dist/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
-
-      - name: Download dist artifact
-        if: github.event_name == 'push' && steps.build-smoke-dist-cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Build dist
-        if: github.event_name != 'push'
-        run: pnpm build
-
-      - name: Smoke test CLI launcher help
-        run: node openclaw.mjs --help
-
-      - name: Smoke test CLI launcher status json
-        run: node openclaw.mjs status --json --timeout 1
-
-      - name: Smoke test built bundled plugin singleton
-        run: pnpm test:build:singleton
-
-      - name: Smoke test built bundled runtime deps
-        run: pnpm test:build:bundled-runtime-deps
-
-      - name: Check CLI startup memory
-        run: pnpm test:startup:memory
+          if [ "$BUILD_ARTIFACTS_RESULT" != "success" ]; then
+            echo "Build smoke checks failed in build-artifacts: $BUILD_ARTIFACTS_RESULT" >&2
+            exit 1
+          fi
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
@@ -1902,7 +1702,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1966,7 +1766,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_skills_python_job == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1997,11 +1797,11 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-32vcpu-windows-2025' || 'windows-2025' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-windows-2025' || 'windows-2025' }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=6144
-      # Keep total concurrency predictable on the 32 vCPU runner.
+      # Keep total concurrency predictable on the smaller Windows runner.
       OPENCLAW_VITEST_MAX_WORKERS: 1
       OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
     defaults:
@@ -2098,9 +1898,9 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
-    needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-latest' || 'macos-latest' }}
+    needs: [preflight]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_macos_node == 'true' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-latest' || 'macos-latest' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -2116,18 +1916,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-
-      - name: Download dist artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Download A2UI bundle artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
 
       - name: TS tests (macOS)
         env:
@@ -2251,7 +2039,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -2360,9 +2148,6 @@ jobs:
               ;;
             build-play)
               ./gradlew --no-daemon --build-cache :app:assemblePlayDebug
-              ;;
-            build-third-party)
-              ./gradlew --no-daemon --build-cache :app:assembleThirdPartyDebug
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

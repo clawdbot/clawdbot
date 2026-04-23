@@ -28,6 +28,8 @@ type ReadPackageJson = (manifestPath: string) => PackageJsonWithDependencies | n
 
 type LanceDbRuntimeLoaderDeps = {
   env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  arch: NodeJS.Architecture;
   resolveStateDir: (env?: NodeJS.ProcessEnv, homedir?: () => string) => string;
   runtimeManifest: RuntimeManifest;
   importBundled: () => Promise<LanceDbModule>;
@@ -218,11 +220,31 @@ function buildLoadFailureMessage(prefix: string, error: unknown): string {
   return `memory-lancedb: ${prefix}. ${String(error)}`;
 }
 
+function isUnsupportedNativePlatform(params: {
+  platform: NodeJS.Platform;
+  arch: NodeJS.Architecture;
+}): boolean {
+  return params.platform === "darwin" && params.arch === "x64";
+}
+
+function buildUnsupportedNativePlatformMessage(params: {
+  platform: NodeJS.Platform;
+  arch: NodeJS.Architecture;
+}): string {
+  return [
+    `memory-lancedb: LanceDB runtime is unavailable on ${params.platform}-${params.arch}.`,
+    "The bundled @lancedb/lancedb dependency does not publish a native package for this platform.",
+    "Disable memory-lancedb or switch to a supported memory backend/platform.",
+  ].join(" ");
+}
+
 export function createLanceDbRuntimeLoader(overrides: Partial<LanceDbRuntimeLoaderDeps> = {}): {
   load: (logger?: LanceDbRuntimeLogger) => Promise<LanceDbModule>;
 } {
   const deps: LanceDbRuntimeLoaderDeps = {
     env: overrides.env ?? process.env,
+    platform: overrides.platform ?? process.platform,
+    arch: overrides.arch ?? process.arch,
     resolveStateDir: overrides.resolveStateDir ?? resolveStateDir,
     runtimeManifest: overrides.runtimeManifest ?? MEMORY_LANCEDB_RUNTIME_MANIFEST,
     importBundled: overrides.importBundled ?? (() => import("@lancedb/lancedb")),
@@ -240,6 +262,15 @@ export function createLanceDbRuntimeLoader(overrides: Partial<LanceDbRuntimeLoad
           try {
             return await deps.importBundled();
           } catch (bundledError) {
+            if (isUnsupportedNativePlatform({ platform: deps.platform, arch: deps.arch })) {
+              throw new Error(
+                buildUnsupportedNativePlatformMessage({
+                  platform: deps.platform,
+                  arch: deps.arch,
+                }),
+                { cause: bundledError },
+              );
+            }
             const runtimeDir = resolveRuntimeDir(
               deps.resolveStateDir(deps.env, () =>
                 deps.env.HOME?.trim() ? deps.env.HOME : os.homedir(),

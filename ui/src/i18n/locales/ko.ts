@@ -673,6 +673,7 @@ export const ko: TranslationMap = {
     uk: "우크라이나어 (Ukrainian)",
     id: "Bahasa Indonesia (인도네시아어)",
     pl: "Polski (폴란드어)",
+    th: "ไทย (태국어)",
   },
   cron: {
     summary: {

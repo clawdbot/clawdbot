@@ -914,7 +914,12 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("reuses the transport after a getUpdates conflict", async () => {
+  it("rebuilds the transport after a getUpdates conflict to force a fresh TCP socket", async () => {
+    // Regression for #69787: Telegram-side session termination returns 409
+    // and the previous behavior retried on the same HTTP keep-alive socket,
+    // which Telegram repeatedly terminated as the "old" session — producing
+    // a sustained low-rate 409 loop. The polling session must now mark the
+    // transport dirty on 409 so the next cycle uses a fresh connection.
     const abort = new AbortController();
     const conflictError = Object.assign(
       new Error("Conflict: terminated by other getUpdates request"),
@@ -924,7 +929,10 @@ describe("TelegramPollingSession", () => {
       },
     );
     const transport1 = makeTelegramTransport();
-    const createTelegramTransport = vi.fn(() => makeTelegramTransport());
+    const transport2 = makeTelegramTransport();
+    const createTelegramTransport = vi
+      .fn<() => ReturnType<typeof makeTelegramTransport>>()
+      .mockReturnValueOnce(transport2);
     createTelegramBotMock.mockReturnValueOnce(makeBot()).mockReturnValueOnce(makeBot());
     isRecoverableTelegramNetworkErrorMock.mockReturnValue(false);
     mockRestartAfterPollingError(conflictError, abort);
@@ -937,8 +945,12 @@ describe("TelegramPollingSession", () => {
 
     await session.runUntilAbort();
 
-    expectTelegramBotTransportSequence(transport1, transport1);
-    expect(createTelegramTransport).not.toHaveBeenCalled();
+    expect(createTelegramTransport).toHaveBeenCalledTimes(1);
+    expectTelegramBotTransportSequence(transport1, transport2);
+    // The stale transport is closed by the dirty-rebuild; the new transport
+    // is closed when dispose() fires on session exit.
+    expect(transport1.close).toHaveBeenCalledTimes(1);
+    expect(transport2.close).toHaveBeenCalledTimes(1);
   });
 
   it("closes the transport once when runUntilAbort exits normally", async () => {

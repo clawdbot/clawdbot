@@ -3,7 +3,9 @@ import {
   mergeImplicitMantleProvider,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
+  resolveMantleRuntimeBearerToken,
 } from "./discovery.js";
+import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
 export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
   const providerId = "amazon-bedrock-mantle";
@@ -31,14 +33,21 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
       },
     },
     resolveConfigApiKey: ({ env }) =>
-      resolveMantleBearerToken(env) ? "AWS_BEARER_TOKEN_BEDROCK" : undefined,
+      resolveMantleBearerToken(env) ? "env:AWS_BEARER_TOKEN_BEDROCK" : undefined,
+    prepareRuntimeAuth: async ({ apiKey, env }) =>
+      await resolveMantleRuntimeBearerToken({
+        apiKey,
+        env,
+      }),
+    createStreamFn: ({ model }) =>
+      model.api === "anthropic-messages" ? createMantleAnthropicStreamFn() : undefined,
     matchesContextOverflowError: ({ errorMessage }) =>
       /context_length_exceeded|max.*tokens.*exceeded/i.test(errorMessage),
     classifyFailoverReason: ({ errorMessage }) => {
       if (/rate_limit|too many requests|429/i.test(errorMessage)) {
         return "rate_limit";
       }
-      if (/overloaded|503/i.test(errorMessage)) {
+      if (/overloaded|503|service.*unavailable/i.test(errorMessage)) {
         return "overloaded";
       }
       return undefined;

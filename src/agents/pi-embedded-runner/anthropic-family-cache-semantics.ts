@@ -79,10 +79,21 @@ export function resolveAnthropicCacheRetentionFamily(params: {
   if (
     normalizedProvider === "amazon-bedrock" &&
     params.hasExplicitCacheConfig &&
-    typeof params.modelId === "string" &&
-    isAnthropicBedrockModel(params.modelId)
+    typeof params.modelId === "string"
   ) {
-    return "anthropic-bedrock";
+    if (isAnthropicBedrockModel(params.modelId)) {
+      return "anthropic-bedrock";
+    }
+    // Application inference profiles with opaque IDs (e.g. z27qyso459da) can't
+    // be identified as Claude from the ARN alone. When the user explicitly sets
+    // cacheRetention, honor it — the extension's GetInferenceProfile resolution
+    // handles the actual model detection at runtime.
+    if (
+      BEDROCK_APP_INFERENCE_PROFILE_ARN_RE.test(normalizeLowercaseStringOrEmpty(params.modelId)) &&
+      normalizeLowercaseStringOrEmpty(params.modelId).includes(":application-inference-profile/")
+    ) {
+      return "anthropic-bedrock";
+    }
   }
   if (
     normalizedProvider !== "amazon-bedrock" &&

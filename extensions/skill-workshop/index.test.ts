@@ -51,6 +51,25 @@ function createProposal(
 }
 
 describe("skill-workshop", () => {
+  it("registers inert hooks and a null tool when disabled", () => {
+    const on = vi.fn();
+    let tool: AnyAgentTool | null | undefined;
+    const api = createTestPluginApi({
+      pluginConfig: { enabled: false },
+      on,
+      registerTool(registered) {
+        const resolved = typeof registered === "function" ? registered({}) : registered;
+        tool = Array.isArray(resolved) ? resolved[0] : resolved;
+      },
+    });
+
+    plugin.register(api);
+
+    expect(tool).toBeNull();
+    expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expect(on).toHaveBeenCalledWith("agent_end", expect.any(Function));
+  });
+
   it("detects user corrections and creates an animated GIF proposal", async () => {
     const workspaceDir = await makeTempDir();
     const proposal = createProposalFromMessages({
@@ -174,6 +193,390 @@ describe("skill-workshop", () => {
     );
     expect(skillText).toContain("actually animated");
     expect(logger.info).toHaveBeenCalledWith("skill-workshop: applied animated-gif-workflow");
+  });
+
+  it("emits prompt-build guidance through the registered hook", async () => {
+    const on = vi.fn();
+    const api = createTestPluginApi({
+      pluginConfig: { approvalPolicy: "auto" },
+      on,
+    });
+
+    plugin.register(api);
+
+    const hook = on.mock.calls.find((call) => call[0] === "before_prompt_build")?.[1];
+    expect(hook).toBeTypeOf("function");
+
+    await expect(hook?.({}, {})).resolves.toEqual({
+      prependSystemContext: expect.stringContaining(
+        "Auto mode: apply safe workspace-skill updates",
+      ),
+    });
+    await expect(hook?.({}, {})).resolves.toEqual({
+      prependSystemContext: expect.stringContaining("<skill_workshop>"),
+    });
+  });
+
+  it("uses live runtime config for prompt-build guidance enablement", async () => {
+    let configFile: Record<string, unknown> = {
+      plugins: {
+        entries: {
+          "skill-workshop": {
+            config: {
+              approvalPolicy: "auto",
+            },
+          },
+        },
+      },
+    };
+    const on = vi.fn();
+    const api = createTestPluginApi({
+      pluginConfig: { approvalPolicy: "auto" },
+      runtime: {
+        config: {
+          loadConfig: () => configFile,
+        },
+      } as never,
+      on,
+    });
+
+    plugin.register(api);
+
+    const hook = on.mock.calls.find((call) => call[0] === "before_prompt_build")?.[1];
+    expect(hook).toBeTypeOf("function");
+
+    configFile = {
+      plugins: {
+        entries: {
+          "skill-workshop": {
+            config: {
+              enabled: false,
+            },
+          },
+        },
+      },
+    };
+
+    await expect(hook?.({}, {})).resolves.toBeUndefined();
+  });
+
+  it("uses live runtime config for tool approval policy", async () => {
+    const workspaceDir = await makeTempDir();
+    const stateDir = await makeTempDir();
+    let configFile: Record<string, unknown> = {
+      plugins: {
+        entries: {
+          "skill-workshop": {
+            config: {
+              approvalPolicy: "pending",
+            },
+          },
+        },
+      },
+    };
+    let tool: AnyAgentTool | undefined;
+    let toolFactory:
+      | ((ctx: { workspaceDir?: string }) => AnyAgentTool | AnyAgentTool[] | null | undefined)
+      | undefined;
+    const api = createTestPluginApi({
+      pluginConfig: { approvalPolicy: "pending" },
+      runtime: {
+        agent: {
+          resolveAgentWorkspaceDir: () => workspaceDir,
+        },
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+        config: {
+          loadConfig: () => configFile,
+        },
+      } as never,
+      registerTool(registered) {
+        toolFactory = typeof registered === "function" ? registered : undefined;
+        const resolved =
+          typeof registered === "function" ? registered({ workspaceDir }) : registered;
+        tool = Array.isArray(resolved) ? resolved[0] : (resolved ?? undefined);
+      },
+    });
+
+    plugin.register(api);
+
+    configFile = {
+      plugins: {
+        entries: {
+          "skill-workshop": {
+            config: {
+              approvalPolicy: "auto",
+            },
+          },
+        },
+      },
+    };
+    const refreshedTool = toolFactory?.({ workspaceDir });
+    tool = Array.isArray(refreshedTool) ? refreshedTool[0] : (refreshedTool ?? undefined);
+
+    const result = await tool?.execute?.("call-1", {
+      action: "suggest",
+      skillName: "screenshot-asset-workflow",
+      description: "Screenshot asset workflow",
+      body: "Verify dimensions, optimize the PNG, and run the relevant gate.",
+    });
+
+    expect(result?.details).toMatchObject({ status: "applied" });
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not fall back to startup config when live skill-workshop config is removed", async () => {
+    const workspaceDir = await makeTempDir();
+    const stateDir = await makeTempDir();
+    let configFile: Record<string, unknown> = {};
+    let tool: AnyAgentTool | undefined;
+    let toolFactory:
+      | ((ctx: { workspaceDir?: string }) => AnyAgentTool | AnyAgentTool[] | null | undefined)
+      | undefined;
+    const api = createTestPluginApi({
+      pluginConfig: { approvalPolicy: "auto" },
+      runtime: {
+        agent: {
+          resolveAgentWorkspaceDir: () => workspaceDir,
+        },
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+        config: {
+          loadConfig: () => configFile,
+        },
+      } as never,
+      registerTool(registered) {
+        toolFactory = typeof registered === "function" ? registered : undefined;
+        const resolved =
+          typeof registered === "function" ? registered({ workspaceDir }) : registered;
+        tool = Array.isArray(resolved) ? resolved[0] : (resolved ?? undefined);
+      },
+    });
+
+    plugin.register(api);
+
+    const refreshedTool = toolFactory?.({ workspaceDir });
+    tool = Array.isArray(refreshedTool) ? refreshedTool[0] : (refreshedTool ?? undefined);
+
+    const result = await tool?.execute?.("call-1", {
+      action: "suggest",
+      skillName: "screenshot-asset-workflow",
+      description: "Screenshot asset workflow",
+      body: "Verify dimensions, optimize the PNG, and run the relevant gate.",
+    });
+
+    expect(result?.details).toMatchObject({ status: "pending" });
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("uses live runtime config to enable prompt guidance and capture after startup disable", async () => {
+    const workspaceDir = await makeTempDir();
+    const stateDir = await makeTempDir();
+    let configFile: Record<string, unknown> = {
+      plugins: {
+        entries: {
+          "skill-workshop": {
+            config: {
+              enabled: false,
+              autoCapture: false,
+              reviewMode: "off",
+            },
+          },
+        },
+      },
+    };
+    const on = vi.fn();
+    let toolFactory:
+      | ((ctx: { workspaceDir?: string }) => AnyAgentTool | AnyAgentTool[] | null | undefined)
+      | undefined;
+    const api = createTestPluginApi({
+      pluginConfig: { enabled: false, autoCapture: false, reviewMode: "off" },
+      runtime: {
+        agent: {
+          resolveAgentWorkspaceDir: () => workspaceDir,
+        },
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+        config: {
+          loadConfig: () => configFile,
+        },
+      } as never,
+      on,
+      registerTool(registered) {
+        toolFactory = typeof registered === "function" ? registered : undefined;
+      },
+    });
+
+    plugin.register(api);
+
+    const beforePromptBuild = on.mock.calls.find((call) => call[0] === "before_prompt_build")?.[1];
+    const agentEnd = on.mock.calls.find((call) => call[0] === "agent_end")?.[1];
+    expect(beforePromptBuild).toBeTypeOf("function");
+    expect(agentEnd).toBeTypeOf("function");
+    expect(toolFactory?.({ workspaceDir }) ?? null).toBeNull();
+    await expect(beforePromptBuild?.({}, {})).resolves.toBeUndefined();
+
+    configFile = {
+      plugins: {
+        entries: {
+          "skill-workshop": {
+            config: {
+              enabled: true,
+              autoCapture: true,
+              approvalPolicy: "auto",
+              reviewMode: "heuristic",
+            },
+          },
+        },
+      },
+    };
+
+    const refreshedTool = toolFactory?.({ workspaceDir });
+    const tool = Array.isArray(refreshedTool) ? refreshedTool[0] : refreshedTool;
+    expect(tool?.name).toBe("skill_workshop");
+    await expect(beforePromptBuild?.({}, {})).resolves.toEqual({
+      prependSystemContext: expect.stringContaining("<skill_workshop>"),
+    });
+
+    await agentEnd?.(
+      {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on when asked for animated GIFs, verify the file is actually animated.",
+          },
+        ],
+      },
+      { workspaceDir },
+    );
+
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "animated-gif-workflow", "SKILL.md")),
+    ).resolves.toBeUndefined();
+  });
+
+  it("uses live runtime config to skip capture when review mode turns off", async () => {
+    const workspaceDir = await makeTempDir();
+    const stateDir = await makeTempDir();
+    let configFile: Record<string, unknown> = {
+      plugins: {
+        entries: {
+          "skill-workshop": {
+            config: {
+              approvalPolicy: "auto",
+              reviewMode: "hybrid",
+            },
+          },
+        },
+      },
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const on = vi.fn();
+    const api = createTestPluginApi({
+      pluginConfig: { approvalPolicy: "auto", reviewMode: "hybrid" },
+      logger,
+      runtime: {
+        agent: {
+          resolveAgentWorkspaceDir: () => workspaceDir,
+        },
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+        config: {
+          loadConfig: () => configFile,
+        },
+      } as never,
+      on,
+    });
+
+    plugin.register(api);
+
+    configFile = {
+      plugins: {
+        entries: {
+          "skill-workshop": {
+            config: {
+              approvalPolicy: "auto",
+              reviewMode: "off",
+            },
+          },
+        },
+      },
+    };
+
+    const handler = on.mock.calls.find((call) => call[0] === "agent_end")?.[1];
+    expect(handler).toBeTypeOf("function");
+    await handler?.(
+      {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on when asked for animated GIFs, verify the file is actually animated.",
+          },
+        ],
+      },
+      { workspaceDir },
+    );
+
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "animated-gif-workflow", "SKILL.md")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(logger.info).not.toHaveBeenCalledWith("skill-workshop: applied animated-gif-workflow");
+  });
+
+  it("keeps agent_end registered but inert when auto-capture is disabled", async () => {
+    const on = vi.fn();
+    const api = createTestPluginApi({
+      pluginConfig: { autoCapture: false },
+      on,
+    });
+
+    plugin.register(api);
+
+    const handler = on.mock.calls.find((call) => call[0] === "agent_end")?.[1];
+    expect(handler).toBeTypeOf("function");
+    await expect(
+      handler?.(
+        {
+          success: true,
+          messages: [{ role: "user", content: "remember this animation workflow" }],
+        },
+        {},
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps agent_end registered but inert when review mode is off", async () => {
+    const on = vi.fn();
+    const api = createTestPluginApi({
+      pluginConfig: { reviewMode: "off" },
+      on,
+    });
+
+    plugin.register(api);
+
+    const handler = on.mock.calls.find((call) => call[0] === "agent_end")?.[1];
+    expect(handler).toBeTypeOf("function");
+    await expect(
+      handler?.(
+        {
+          success: true,
+          messages: [{ role: "user", content: "remember this animation workflow" }],
+        },
+        {},
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("lets explicit tool suggestions stay pending in auto mode", async () => {

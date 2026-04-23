@@ -17,6 +17,20 @@ discovery, native thread resume, native compaction, and app-server execution.
 OpenClaw still owns chat channels, session files, model selection, tools,
 approvals, media delivery, and the visible transcript mirror.
 
+Native Codex turns also respect the shared plugin hooks so prompt shims,
+compaction-aware automation, tool middleware, and lifecycle observers stay
+aligned with the PI harness:
+
+- `before_prompt_build`
+- `before_compaction`, `after_compaction`
+- `llm_input`, `llm_output`
+- `tool_result`, `after_tool_call`
+- `before_message_write`
+- `agent_end`
+
+Bundled plugins can also register a Codex app-server extension factory to add
+async `tool_result` middleware.
+
 The harness is off by default. It is selected only when the `codex` plugin is
 enabled and the resolved model is a `codex/*` model, or when you explicitly
 force `embeddedHarness.runtime: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex`.
@@ -263,9 +277,14 @@ By default, the plugin starts Codex locally with:
 codex app-server --listen stdio://
 ```
 
-By default, OpenClaw asks Codex to request native approvals. You can tune that
-policy further, for example by tightening it and routing reviews through the
-guardian:
+By default, OpenClaw starts local Codex harness sessions in YOLO mode:
+`approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
+`sandbox: "danger-full-access"`. This is the trusted local operator posture used
+for autonomous heartbeats: Codex can use shell and network tools without
+stopping on native approval prompts that nobody is around to answer.
+
+To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
+"guardian"`:
 
 ```json5
 {
@@ -275,10 +294,8 @@ guardian:
         enabled: true,
         config: {
           appServer: {
-            approvalPolicy: "untrusted",
-            approvalsReviewer: "guardian_subagent",
-            sandbox: "workspace-write",
-            serviceTier: "priority",
+            mode: "guardian",
+            serviceTier: "fast",
           },
         },
       },
@@ -286,6 +303,45 @@ guardian:
   },
 }
 ```
+
+Guardian mode expands to:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            mode: "guardian",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "guardian_subagent",
+            sandbox: "workspace-write",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Guardian is a native Codex approval reviewer. When Codex asks to leave the
+sandbox, write outside the workspace, or add permissions such as network access,
+Codex routes that approval request to a reviewer subagent instead of a human
+prompt. The reviewer gathers context and applies Codex's risk framework, then
+approves or denies the specific request. Guardian is useful when you want more
+guardrails than YOLO mode but still need unattended agents and heartbeats to
+make progress.
+
+The Docker live harness includes a Guardian probe when
+`OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`. It starts the Codex harness in
+Guardian mode, verifies that a benign escalated shell command is approved, and
+verifies that a fake-secret upload to an untrusted external destination is
+denied so the agent asks back for explicit approval.
+
+The individual policy fields still win over `mode`, so advanced deployments can
+mix the preset with explicit choices.
 
 For an already-running app-server, use WebSocket transport:
 
@@ -311,30 +367,35 @@ For an already-running app-server, use WebSocket transport:
 
 Supported `appServer` fields:
 
-| Field               | Default                                  | Meaning                                                                  |
-| ------------------- | ---------------------------------------- | ------------------------------------------------------------------------ |
-| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                 |
-| `command`           | `"codex"`                                | Executable for stdio transport.                                          |
-| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                           |
-| `url`               | unset                                    | WebSocket app-server URL.                                                |
-| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                    |
-| `headers`           | `{}`                                     | Extra WebSocket headers.                                                 |
-| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                              |
-| `approvalPolicy`    | `"on-request"`                           | Native Codex approval policy sent to thread start/resume/turn.           |
-| `sandbox`           | `"workspace-write"`                      | Native Codex sandbox mode sent to thread start/resume.                   |
-| `approvalsReviewer` | `"user"`                                 | Use `"guardian_subagent"` to let Codex guardian review native approvals. |
-| `serviceTier`       | unset                                    | Optional Codex service tier, for example `"priority"`.                   |
+| Field               | Default                                  | Meaning                                                                                                   |
+| ------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                  |
+| `command`           | `"codex"`                                | Executable for stdio transport.                                                                           |
+| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                            |
+| `url`               | unset                                    | WebSocket app-server URL.                                                                                 |
+| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                     |
+| `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                  |
+| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                               |
+| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                           |
+| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                            |
+| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                    |
+| `approvalsReviewer` | `"user"`                                 | Use `"guardian_subagent"` to let Codex Guardian review prompts.                                           |
+| `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored. |
 
 The older environment variables still work as fallbacks for local testing when
 the matching config field is unset:
 
 - `OPENCLAW_CODEX_APP_SERVER_BIN`
 - `OPENCLAW_CODEX_APP_SERVER_ARGS`
+- `OPENCLAW_CODEX_APP_SERVER_MODE=yolo|guardian`
 - `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
 - `OPENCLAW_CODEX_APP_SERVER_SANDBOX`
-- `OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1`
 
-Config is preferred for repeatable deployments.
+`OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1` was removed. Use
+`plugins.entries.codex.config.appServer.mode: "guardian"` instead, or
+`OPENCLAW_CODEX_APP_SERVER_MODE=guardian` for one-off local testing. Config is
+preferred for repeatable deployments because it keeps the plugin behavior in the
+same reviewed file as the rest of the Codex harness setup.
 
 ## Common recipes
 
@@ -379,6 +440,7 @@ Guardian-reviewed Codex approvals:
         enabled: true,
         config: {
           appServer: {
+            mode: "guardian",
             approvalPolicy: "on-request",
             approvalsReviewer: "guardian_subagent",
             sandbox: "workspace-write",
@@ -453,11 +515,19 @@ OpenClaw still builds the tool list and receives dynamic tool results from the
 harness. Text, images, video, music, TTS, approvals, and messaging-tool output
 continue through the normal OpenClaw delivery path.
 
+Codex MCP tool approval elicitations are routed through OpenClaw's plugin
+approval flow when Codex marks `_meta.codex_approval_kind` as
+`"mcp_tool_call"`; other elicitation and free-form input requests still fail
+closed.
+
 When the selected model uses the Codex harness, native thread compaction is
 delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
 history, search, `/new`, `/reset`, and future model or harness switching. The
 mirror includes the user prompt, final assistant text, and lightweight Codex
-reasoning or plan records when the app-server emits them.
+reasoning or plan records when the app-server emits them. Today, OpenClaw only
+records native compaction start and completion signals. It does not yet expose a
+human-readable compaction summary or an auditable list of which entries Codex
+kept after compaction.
 
 Media generation does not require PI. Image, video, music, PDF, TTS, and media
 understanding continue to use the matching provider/model settings such as

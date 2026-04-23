@@ -15,8 +15,9 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
 // --- Module mocks (must be hoisted before imports) ---
 
-const { countActiveDescendantRunsMock } = vi.hoisted(() => ({
+const { countActiveDescendantRunsMock, retireSessionMcpRuntimeMock } = vi.hoisted(() => ({
   countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
+  retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("../../config/sessions/main-session.js", () => ({
@@ -26,6 +27,10 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
+}));
+
+vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
 vi.mock("./delivery-subagent-registry.runtime.js", () => ({
@@ -71,6 +76,7 @@ vi.mock("./subagent-followup.runtime.js", () => ({
   waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { callGateway } from "../../gateway/call.runtime.js";
@@ -138,6 +144,7 @@ function makeBaseParams(overrides: {
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main",
+    sessionId: "test-session-id",
     runStartedAt,
     runEndedAt: runStartedAt,
     timeoutMs: 30_000,
@@ -171,6 +178,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+    vi.mocked(retireSessionMcpRuntime).mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -530,6 +538,28 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         emitLifecycleHooks: false,
       },
       timeoutMs: 10_000,
+    });
+  });
+
+  it("retires the MCP runtime directly when deleteAfterRun gateway cleanup fails", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway down"));
+
+    const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        delivered: false,
+      }),
+    );
+    expect(retireSessionMcpRuntime).toHaveBeenCalledWith({
+      sessionId: "test-session-id",
+      reason: "cron-delete-after-run-fallback",
     });
   });
 

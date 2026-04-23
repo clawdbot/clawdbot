@@ -10,7 +10,10 @@ import {
   hasTemplateVariables,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
-import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
+import {
+  createStreamingDirectiveAccumulator,
+  splitTrailingDirective,
+} from "./streaming-directives.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
@@ -989,6 +992,15 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToCurrent).toBe(true);
   });
 
+  it("handles reply tags split before the second bracket", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    expect(accumulator.consume("[")).toBeNull();
+
+    const result = accumulator.consume("[reply_to_current]] Yo");
+    expect(result?.text).toBe("Yo");
+    expect(result?.replyToCurrent).toBe(true);
+  });
+
   it("propagates explicit reply ids across current and subsequent chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
@@ -1032,6 +1044,135 @@ describe("createStreamingDirectiveAccumulator", () => {
     const result = accumulator.consume("NO_REPLY: explanation");
 
     expect(result?.text).toBe("NO_REPLY: explanation");
+  });
+
+  it("reassembles MEDIA: directives split between the token and the colon", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const first = accumulator.consume("这次直接发图。\n\nMEDIA");
+    expect(first?.text).toBe("这次直接发图。");
+    expect(first?.mediaUrls).toBeUndefined();
+
+    const second = accumulator.consume(":/tmp/spy-family.png");
+    expect(second).toBeNull();
+
+    const finalResult = accumulator.consume("", { final: true });
+    expect(finalResult?.mediaUrls).toEqual(["/tmp/spy-family.png"]);
+    expect((finalResult?.text ?? "").includes("MEDIA")).toBe(false);
+  });
+
+  it("reassembles MEDIA: directives split inside the URL path", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const first = accumulator.consume("Preview below.\n\nMEDIA:/var/folders/tool-image");
+    expect(first?.text).toBe("Preview below.");
+    expect(first?.mediaUrls).toBeUndefined();
+
+    const second = accumulator.consume("-generation/cover.png");
+    expect(second).toBeNull();
+
+    const finalResult = accumulator.consume("", { final: true });
+    expect(finalResult?.mediaUrls).toEqual(["/var/folders/tool-image-generation/cover.png"]);
+  });
+
+  it("buffers partial MEDIA prefixes (M/ME/MED/MEDI) across chunk boundaries", () => {
+    for (const prefix of ["M", "ME", "MED", "MEDI"]) {
+      const accumulator = createStreamingDirectiveAccumulator();
+      const head = `Here is the file.\n\n${prefix}`;
+      const headResult = accumulator.consume(head);
+      expect(headResult?.text, `prefix=${prefix} head emits text`).toBe("Here is the file.");
+
+      const rest = `MEDIA:/tmp/file.png`.slice(prefix.length);
+      const restResult = accumulator.consume(rest);
+      expect(restResult, `prefix=${prefix} mid returns null`).toBeNull();
+
+      const finalResult = accumulator.consume("", { final: true });
+      expect(finalResult?.mediaUrls, `prefix=${prefix} final mediaUrls`).toEqual(["/tmp/file.png"]);
+    }
+  });
+
+  it("does not buffer a trailing letter that appears mid-line", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    // "I am" ends in "m". The prefix guard only anchors to line-start (`^`
+    // or immediately after `\n`), so ordinary prose whose last character
+    // happens to be an `M|ME|MED|MEDI|MEDIA` letter stays in the emitted
+    // text.
+    const result = accumulator.consume("I am");
+    expect(result?.text).toBe("I am");
+    expect(result?.mediaUrls).toBeUndefined();
+  });
+
+  it("does not buffer prose that merely contains the token MEDIA:", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    // Matches what upstream `splitMediaFromOutput` considers a directive:
+    // only lines whose trimmed start is `MEDIA:`. A line that merely
+    // contains "MEDIA:" mid-sentence is ordinary prose and must flush
+    // immediately — otherwise on a stream-item boundary (which may call
+    // `reset()` without a preceding `consume("", { final: true })`) the
+    // buffered prose would be silently dropped.
+    const result = accumulator.consume("See the MEDIA: section for details");
+    expect(result?.text).toBe("See the MEDIA: section for details");
+    expect(result?.mediaUrls).toBeUndefined();
+  });
+
+  it("still buffers an indented MEDIA directive line that is mid-stream", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    // Upstream parser treats `line.trimStart().startsWith("MEDIA:")` as a
+    // directive, so the guard must also buffer the indented form across
+    // a chunk boundary.
+    const first = accumulator.consume("Preview:\n  MEDIA:/tmp/cover");
+    expect(first?.text).toBe("Preview:");
+    expect(first?.mediaUrls).toBeUndefined();
+
+    const second = accumulator.consume(".png");
+    expect(second).toBeNull();
+
+    const finalResult = accumulator.consume("", { final: true });
+    expect(finalResult?.mediaUrls).toEqual(["/tmp/cover.png"]);
+  });
+
+  it("does not rewrite mid-prose MEDIA into a directive across chunks", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    // A chunk can legitimately end with `MEDIA` mid-sentence (e.g. "this
+    // uses legacy MEDIA"). A later chunk starting with `:` must NOT join
+    // with the buffered token to synthesize a `MEDIA:<rest>` directive —
+    // upstream `MEDIA_TOKEN_RE` captures `[^\n]+`, and treating the rest
+    // of that sentence as a media path would invent a media reply the
+    // agent never authored.
+    const first = accumulator.consume("The legacy pipeline uses MEDIA");
+    expect(first?.text).toBe("The legacy pipeline uses MEDIA");
+    expect(first?.mediaUrls).toBeUndefined();
+
+    const second = accumulator.consume(": kind=disk capacity=1TB");
+    expect(second?.text).toBe(": kind=disk capacity=1TB");
+    expect(second?.mediaUrls).toBeUndefined();
+  });
+
+  it("passes plain text through when there is no incomplete directive tail", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("Hello world.\nThis is a complete block.");
+    expect(result?.text).toBe("Hello world.\nThis is a complete block.");
+    expect(result?.mediaUrls).toBeUndefined();
+  });
+
+  it("keeps MEDIA directives that arrive in a single complete chunk working", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("Here it is.\n\nMEDIA:/tmp/complete.png\n");
+    expect(result?.text.includes("MEDIA")).toBe(false);
+    expect(result?.mediaUrls).toEqual(["/tmp/complete.png"]);
+  });
+
+  it("does not strip a complete final MEDIA line when parsing final text", () => {
+    expect(splitTrailingDirective("Here.\nMEDIA:/tmp/final.png", { final: true })).toEqual({
+      text: "Here.\nMEDIA:/tmp/final.png",
+      tail: "",
+    });
   });
 });
 

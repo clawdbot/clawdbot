@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import {
@@ -201,6 +201,15 @@ describe("client tool name conflict checks", () => {
         tools: [makeClientTool("Weather"), makeClientTool("weather")],
       }),
     ).toEqual(["Weather", "weather"]);
+  });
+
+  it("detects collisions with reserved Pi built-in tool names", () => {
+    expect(
+      findClientToolNameConflicts({
+        tools: [makeClientTool("Bash"), makeClientTool("grep")],
+        existingToolNames: ["bash", "edit", "find", "grep", "ls", "read", "write"],
+      }),
+    ).toEqual(["Bash", "grep"]);
   });
 
   it("wraps conflict errors with a stable prefix", () => {

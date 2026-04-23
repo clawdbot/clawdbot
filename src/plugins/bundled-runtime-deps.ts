@@ -172,7 +172,8 @@ function collectRuntimeDeps(packageJson: JsonObject): Record<string, unknown> {
 
 function isSourceCheckoutRoot(packageRoot: string): boolean {
   return (
-    fs.existsSync(path.join(packageRoot, ".git")) &&
+    (fs.existsSync(path.join(packageRoot, ".git")) ||
+      fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml"))) &&
     fs.existsSync(path.join(packageRoot, "src")) &&
     fs.existsSync(path.join(packageRoot, "extensions"))
   );
@@ -262,12 +263,37 @@ function writeRetainedRuntimeDepsManifest(installRoot: string, specs: readonly s
   );
 }
 
-function isWritableDirectory(dir: string): boolean {
+function removeRetainedRuntimeDepsManifest(installRoot: string): void {
+  fs.rmSync(path.join(installRoot, RETAINED_RUNTIME_DEPS_MANIFEST), { force: true });
+}
+
+function shouldPersistRetainedRuntimeDepsManifest(params: {
+  pluginRoot: string;
+  installRoot: string;
+}): boolean {
+  if (path.resolve(params.installRoot) !== path.resolve(params.pluginRoot)) {
+    return true;
+  }
+  return !resolveSourceCheckoutPackageRoot(params.pluginRoot);
+}
+
+export function isWritableDirectory(dir: string): boolean {
+  let probeDir: string | null = null;
   try {
-    fs.accessSync(dir, fs.constants.W_OK);
+    probeDir = fs.mkdtempSync(path.join(dir, ".openclaw-write-probe-"));
+    fs.writeFileSync(path.join(probeDir, "probe"), "", "utf8");
     return true;
   } catch {
     return false;
+  } finally {
+    if (probeDir) {
+      try {
+        fs.rmSync(probeDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup. A failed cleanup should not turn a writable
+        // probe into a hard runtime-dependency failure.
+      }
+    }
   }
 }
 
@@ -356,7 +382,12 @@ function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
     fs.rmSync(targetDir, { recursive: true, force: true });
     fs.renameSync(stagedDir, targetDir);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // Stale temp dirs are swept at the next runtime-deps pass. Do not fail
+      // a node_modules replacement on a transient cleanup race.
+    }
   }
 }
 
@@ -861,6 +892,13 @@ export function ensureBundledPluginRuntimeDeps(params: {
   const installRoot = resolveBundledRuntimeDependencyInstallRoot(params.pluginRoot, {
     env: params.env,
   });
+  const persistRetainedManifest = shouldPersistRetainedRuntimeDepsManifest({
+    pluginRoot: params.pluginRoot,
+    installRoot,
+  });
+  if (!persistRetainedManifest) {
+    removeRetainedRuntimeDepsManifest(installRoot);
+  }
   const dependencySpecs = deps
     .map((dep) => `${dep.name}@${dep.version}`)
     .toSorted((left, right) => left.localeCompare(right));
@@ -871,7 +909,9 @@ export function ensureBundledPluginRuntimeDeps(params: {
   if (missingSpecs.length === 0) {
     return { installedSpecs: [], retainSpecs: [] };
   }
-  const retainedManifestSpecs = readRetainedRuntimeDepsManifest(installRoot);
+  const retainedManifestSpecs = persistRetainedManifest
+    ? readRetainedRuntimeDepsManifest(installRoot)
+    : [];
   const installSpecs = [
     ...new Set([...(params.retainSpecs ?? []), ...retainedManifestSpecs, ...dependencySpecs]),
   ].toSorted((left, right) => left.localeCompare(right));
@@ -906,7 +946,9 @@ export function ensureBundledPluginRuntimeDeps(params: {
         env: params.env,
       }));
   install({ installRoot, installExecutionRoot, missingSpecs, installSpecs });
-  writeRetainedRuntimeDepsManifest(installRoot, installSpecs);
+  if (persistRetainedManifest) {
+    writeRetainedRuntimeDepsManifest(installRoot, installSpecs);
+  }
   storeSourceCheckoutRuntimeDepsCache({ cacheDir, installRoot });
   return { installedSpecs: missingSpecs, retainSpecs: installSpecs };
 }

@@ -96,7 +96,7 @@ function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
   if (!builtInChannelId) {
     return [];
   }
-  return getChatChannelMeta(builtInChannelId).preferOver ?? [];
+  return getChatChannelMeta(builtInChannelId)?.preferOver ?? [];
 }
 
 function resolvePreferredOverIds(

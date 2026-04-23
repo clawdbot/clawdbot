@@ -19,6 +19,7 @@ import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
 const PiModelRegistryClass = PiCodingAgent.ModelRegistry;
@@ -31,6 +32,10 @@ type ProviderRuntimeModelLike = Model<Api> & {
 
 type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> & {
   api?: string | null;
+};
+
+type DiscoverModelsOptions = {
+  providerFilter?: string;
 };
 
 type InMemoryAuthStorageBackendLike = {
@@ -136,16 +141,24 @@ function createOpenClawModelRegistry(
   authStorage: PiAuthStorage,
   modelsJsonPath: string,
   agentDir: string,
+  options?: DiscoverModelsOptions,
 ): PiModelRegistry {
   const registry = instantiatePiModelRegistry(authStorage, modelsJsonPath);
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);
+  const providerFilter = options?.providerFilter ? normalizeProviderId(options.providerFilter) : "";
+  const matchesProviderFilter = (entry: Model<Api>) =>
+    !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
 
   registry.getAll = () =>
-    getAll().map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
+    getAll()
+      .filter((entry: Model<Api>) => matchesProviderFilter(entry))
+      .map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
   registry.getAvailable = () =>
-    getAvailable().map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
+    getAvailable()
+      .filter((entry: Model<Api>) => matchesProviderFilter(entry))
+      .map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
   registry.find = (provider: string, modelId: string) =>
     normalizeDiscoveredPiModel(find(provider, modelId), agentDir);
 
@@ -299,6 +312,15 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
   return createAuthStorage(PiAuthStorageClass, authPath, credentials);
 }
 
-export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return createOpenClawModelRegistry(authStorage, path.join(agentDir, "models.json"), agentDir);
+export function discoverModels(
+  authStorage: PiAuthStorage,
+  agentDir: string,
+  options?: DiscoverModelsOptions,
+): PiModelRegistry {
+  return createOpenClawModelRegistry(
+    authStorage,
+    path.join(agentDir, "models.json"),
+    agentDir,
+    options,
+  );
 }

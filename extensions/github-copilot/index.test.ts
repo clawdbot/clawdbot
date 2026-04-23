@@ -61,7 +61,17 @@ describe("github-copilot plugin", () => {
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
 
     const result = await provider.catalog.run({
-      config: {},
+      config: {
+        plugins: {
+          entries: {
+            "github-copilot": {
+              config: {
+                discovery: { enabled: false },
+              },
+            },
+          },
+        },
+      },
       agentDir: "/tmp/agent",
       env: { GH_TOKEN: "gh_test_token" },
       resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
@@ -69,5 +79,41 @@ describe("github-copilot plugin", () => {
 
     expect(result).toBeNull();
     expect(resolveCopilotApiTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("uses live plugin config to re-enable discovery after startup disable", async () => {
+    resolveCopilotApiTokenMock.mockResolvedValueOnce({
+      token: "copilot_api_token",
+      baseUrl: "https://api.githubcopilot.live",
+    });
+    const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
+
+    const result = await provider.catalog.run({
+      config: {
+        plugins: {
+          entries: {
+            "github-copilot": {
+              config: {
+                discovery: { enabled: true },
+              },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "gh_test_token" },
+      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+    } as never);
+
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: "gh_test_token",
+      env: { GH_TOKEN: "gh_test_token" },
+    });
+    expect(result).toEqual({
+      provider: {
+        baseUrl: "https://api.githubcopilot.live",
+        models: [],
+      },
+    });
   });
 });

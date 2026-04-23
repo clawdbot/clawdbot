@@ -92,4 +92,24 @@ describe("resolvePluginUpdateSelection", () => {
       pluginIds: ["openclaw-codex-app-server"],
     });
   });
+
+  it("maps a bare scoped npm package update to the tracked plugin id", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          "lossless-claw": createNpmInstall({
+            spec: "@martian-engineering/lossless-claw@0.9.0",
+            installPath: "/tmp/lossless-claw",
+            resolvedName: "@martian-engineering/lossless-claw",
+          }),
+        },
+        rawId: "@martian-engineering/lossless-claw",
+      }),
+    ).toEqual({
+      pluginIds: ["lossless-claw"],
+      specOverrides: {
+        "lossless-claw": "@martian-engineering/lossless-claw",
+      },
+    });
+  });
 });

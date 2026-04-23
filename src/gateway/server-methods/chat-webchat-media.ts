@@ -113,8 +113,7 @@ function mimeTypeForPath(filePath: string): string {
 
 function estimateBase64DecodedBytes(base64: string): number {
   const sanitized = base64.replace(/\s+/g, "");
-  const padding =
-    sanitized.endsWith("==") ? 2 : sanitized.endsWith("=") ? 1 : 0;
+  const padding = sanitized.endsWith("==") ? 2 : sanitized.endsWith("=") ? 1 : 0;
   return Math.floor((sanitized.length * 3) / 4) - padding;
 }
 
@@ -232,7 +231,9 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
       payloadHasImage = true;
     }
     const needsSyntheticText =
-      payloadMediaBlocks.length > 0 && (!text || replyDirectivePrefix) && transcriptTextParts.length === 0;
+      payloadMediaBlocks.length > 0 &&
+      (!text || replyDirectivePrefix) &&
+      transcriptTextParts.length === 0;
     const syntheticText = needsSyntheticText
       ? payloadHasAudio && payloadHasImage
         ? "Media reply"

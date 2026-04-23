@@ -1,35 +1,26 @@
+import { miscExtensionTestRoots } from "./vitest.extension-misc-paths.mjs";
+import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-export default createScopedVitestConfig(
-  [
-    "arcee/**/*.test.ts",
-    "brave/**/*.test.ts",
-    "device-pair/**/*.test.ts",
-    "diagnostics-otel/**/*.test.ts",
-    "duckduckgo/**/*.test.ts",
-    "exa/**/*.test.ts",
-    "firecrawl/**/*.test.ts",
-    "fireworks/**/*.test.ts",
-    "kilocode/**/*.test.ts",
-    "litellm/**/*.test.ts",
-    "llm-task/**/*.test.ts",
-    "lobster/**/*.test.ts",
-    "opencode/**/*.test.ts",
-    "opencode-go/**/*.test.ts",
-    "openshell/**/*.test.ts",
-    "perplexity/**/*.test.ts",
-    "phone-control/**/*.test.ts",
-    "searxng/**/*.test.ts",
-    "synthetic/**/*.test.ts",
-    "tavily/**/*.test.ts",
-    "thread-ownership/**/*.test.ts",
-    "vercel-ai-gateway/**/*.test.ts",
-    "webhooks/**/*.test.ts",
-  ],
-  {
-    dir: "extensions",
-    name: "extension-misc",
-    passWithNoTests: true,
-    setupFiles: ["test/setup.extensions.ts"],
-  },
-);
+export function loadIncludePatternsFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): string[] | null {
+  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+}
+
+export function createExtensionMiscVitestConfig(
+  env: Record<string, string | undefined> = process.env,
+) {
+  return createScopedVitestConfig(
+    loadIncludePatternsFromEnv(env) ?? miscExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
+    {
+      dir: "extensions",
+      env,
+      name: "extension-misc",
+      passWithNoTests: true,
+      setupFiles: ["test/setup.extensions.ts"],
+    },
+  );
+}
+
+export default createExtensionMiscVitestConfig();

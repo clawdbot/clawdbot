@@ -19,6 +19,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
     return { lines, trace };
@@ -48,6 +49,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 
@@ -78,6 +80,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 
@@ -103,6 +106,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 
@@ -147,6 +151,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 

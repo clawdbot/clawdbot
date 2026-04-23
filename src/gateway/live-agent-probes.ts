@@ -49,7 +49,12 @@ export function assertLiveImageProbeReply(text: string): void {
   }
 }
 
-export function createLiveCronProbeSpec(): LiveCronProbeSpec {
+export function createLiveCronProbeSpec(
+  params: {
+    agentId?: string;
+    sessionKey?: string;
+  } = {},
+): LiveCronProbeSpec {
   const nonce = randomBytes(3).toString("hex").toUpperCase();
   const normalizedNonce = normalizeOptionalLowercaseString(nonce) ?? "";
   const name = `live-mcp-${normalizedNonce}`;
@@ -61,7 +66,9 @@ export function createLiveCronProbeSpec(): LiveCronProbeSpec {
       name,
       schedule: { kind: "at", at },
       payload: { kind: "agentTurn", message },
-      sessionTarget: "current",
+      sessionTarget: params.sessionKey ? `session:${params.sessionKey}` : "current",
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       enabled: true,
     },
   });
@@ -77,7 +84,7 @@ export function buildLiveCronProbeMessage(params: {
   const family = normalizeLiveAgentFamily(params.agent);
   if (params.attempt === 0) {
     return (
-      "Use the OpenClaw MCP tool named cron. " +
+      "Use the OpenClaw MCP tool `openclaw-tools/cron` (server `openclaw-tools`, tool `cron`). " +
       `Call it with JSON arguments ${params.argsJson}. ` +
       "Do the actual tool call; I will verify externally with the OpenClaw cron CLI. " +
       `After the cron job is created, reply exactly: ${params.exactReply}`
@@ -85,7 +92,7 @@ export function buildLiveCronProbeMessage(params: {
   }
   if (family === "claude") {
     return (
-      "Retry the OpenClaw MCP tool named `cron` now. " +
+      "Retry the OpenClaw MCP tool `openclaw-tools/cron` now. " +
       `Use these exact JSON arguments: ${params.argsJson}. ` +
       `If the cron job is created, reply exactly: ${params.exactReply}. ` +
       "If the tool call is cancelled, the job is not created, or you cannot confirm creation, " +
@@ -95,7 +102,7 @@ export function buildLiveCronProbeMessage(params: {
   }
   return (
     "Your previous OpenClaw cron MCP tool call was cancelled before the job was created. " +
-    "Retry the OpenClaw MCP tool named cron now. " +
+    "Retry the OpenClaw MCP tool `openclaw-tools/cron` now. " +
     `Use these exact JSON arguments: ${params.argsJson}. ` +
     `If the cron job is created, reply exactly: ${params.exactReply}. ` +
     "If the tool call is cancelled, the job is not created, or you cannot confirm creation, " +

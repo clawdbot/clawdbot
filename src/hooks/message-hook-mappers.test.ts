@@ -143,6 +143,7 @@ describe("message hook mappers", () => {
       from: "demo-chat:user:123",
       content: "commands-body",
       timestamp: 1710000000,
+      threadId: 42,
       metadata: expect.objectContaining({
         messageId: "msg-1",
         senderName: "User One",

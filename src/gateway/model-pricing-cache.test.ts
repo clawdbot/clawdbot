@@ -19,6 +19,7 @@ import {
   collectConfiguredModelPricingRefs,
   getCachedGatewayModelPricing,
   refreshGatewayModelPricingCache,
+  startGatewayModelPricingRefresh,
 } from "./model-pricing-cache.js";
 
 describe("model-pricing-cache", () => {
@@ -519,6 +520,39 @@ describe("model-pricing-cache", () => {
     });
   });
 
+  it("defers bootstrap refresh work until after the starter returns", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("openrouter.ai")) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await vi.dynamicImportSettled();
+    expect(fetchImpl).toHaveBeenCalled();
+    stop();
+  });
+
   it("logs configured timeout seconds when pricing fetches time out", async () => {
     const warnings: string[] = [];
     loggingState.rawConsole = {
@@ -549,10 +583,10 @@ describe("model-pricing-cache", () => {
     expect(warnings).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          "OpenRouter pricing fetch failed (timeout 15s): TimeoutError: The operation was aborted due to timeout",
+          "OpenRouter pricing fetch failed (timeout 30s): TimeoutError: The operation was aborted due to timeout",
         ),
         expect.stringContaining(
-          "LiteLLM pricing fetch failed (timeout 15s): TimeoutError: The operation was aborted due to timeout",
+          "LiteLLM pricing fetch failed (timeout 30s): TimeoutError: The operation was aborted due to timeout",
         ),
       ]),
     );

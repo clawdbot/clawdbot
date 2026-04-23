@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugin-update-e2e" OPENCLAW_PLUGIN_UPDATE_E2E_IMAGE)"
+SKIP_BUILD="${OPENCLAW_PLUGIN_UPDATE_E2E_SKIP_BUILD:-0}"
+
+docker_e2e_build_or_reuse "$IMAGE_NAME" plugin-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
+
+echo "Running unchanged plugin update smoke..."
+docker run --rm \
+  -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e OPENCLAW_SKIP_CHANNELS=1 \
+  -e OPENCLAW_SKIP_PROVIDERS=1 \
+  "$IMAGE_NAME" \
+  bash -lc "set -euo pipefail
+entry=dist/index.mjs
+[ -f \"\$entry\" ] || entry=dist/index.js
+export NPM_CONFIG_REGISTRY=http://127.0.0.1:4873
+
+mkdir -p \"\$HOME/.openclaw/extensions/lossless-claw\"
+cat > \"\$HOME/.openclaw/extensions/lossless-claw/package.json\" <<'JSON'
+{
+  \"name\": \"@example/lossless-claw\",
+  \"version\": \"0.9.0\"
+}
+JSON
+cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
+{
+  \"plugins\": {
+    \"installs\": {
+      \"lossless-claw\": {
+        \"source\": \"npm\",
+        \"spec\": \"@example/lossless-claw@0.9.0\",
+        \"installPath\": \"~/.openclaw/extensions/lossless-claw\",
+        \"resolvedName\": \"@example/lossless-claw\",
+        \"resolvedVersion\": \"0.9.0\",
+        \"resolvedSpec\": \"@example/lossless-claw@0.9.0\",
+        \"integrity\": \"sha512-same\",
+        \"shasum\": \"same\"
+      }
+    }
+  }
+}
+JSON
+
+cat > /tmp/openclaw-e2e-registry.mjs <<'NODE'
+import http from 'node:http';
+
+const metadata = {
+  name: '@example/lossless-claw',
+  'dist-tags': { latest: '0.9.0' },
+  versions: {
+    '0.9.0': {
+      name: '@example/lossless-claw',
+      version: '0.9.0',
+      dist: {
+        integrity: 'sha512-same',
+        shasum: 'same',
+        tarball: 'http://127.0.0.1:4873/@example/lossless-claw/-/lossless-claw-0.9.0.tgz'
+      }
+    }
+  }
+};
+
+const server = http.createServer((req, res) => {
+  if (req.url === '/@example%2flossless-claw' || req.url === '/@example%2Flossless-claw') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(metadata));
+    return;
+  }
+  res.writeHead(404, { 'content-type': 'text/plain' });
+  res.end('not found: ' + req.url);
+});
+
+server.listen(4873, '127.0.0.1');
+NODE
+node /tmp/openclaw-e2e-registry.mjs >/tmp/openclaw-e2e-registry.log 2>&1 &
+registry_pid=\$!
+trap 'kill \"\$registry_pid\" >/dev/null 2>&1 || true' EXIT
+
+registry_ready=0
+for _ in \$(seq 1 50); do
+  if node --input-type=module -e '
+    import http from \"node:http\";
+    const req = http.get(\"http://127.0.0.1:4873/@example%2flossless-claw\", (res) => {
+      process.exit(res.statusCode === 200 ? 0 : 1);
+    });
+    req.on(\"error\", () => process.exit(1));
+    req.setTimeout(200, () => {
+      req.destroy();
+      process.exit(1);
+    });
+  '; then
+    registry_ready=1
+    break
+  fi
+  sleep 0.1
+done
+if [ \"\$registry_ready\" -ne 1 ]; then
+  echo \"Local npm metadata registry failed to start\"
+  cat /tmp/openclaw-e2e-registry.log || true
+  exit 1
+fi
+
+before_hash=\$(node --input-type=module -e '
+  import crypto from \"node:crypto\";
+  import fs from \"node:fs\";
+  import os from \"node:os\";
+  import path from \"node:path\";
+  const file = path.join(os.homedir(), \".openclaw\", \"openclaw.json\");
+  process.stdout.write(crypto.createHash(\"sha256\").update(fs.readFileSync(file)).digest(\"hex\"));
+')
+
+node \"\$entry\" plugins update @example/lossless-claw > /tmp/plugin-update-output.log 2>&1
+
+after_hash=\$(node --input-type=module -e '
+  import crypto from \"node:crypto\";
+  import fs from \"node:fs\";
+  import os from \"node:os\";
+  import path from \"node:path\";
+  const file = path.join(os.homedir(), \".openclaw\", \"openclaw.json\");
+  process.stdout.write(crypto.createHash(\"sha256\").update(fs.readFileSync(file)).digest(\"hex\"));
+')
+
+if [ \"\$before_hash\" != \"\$after_hash\" ]; then
+  echo \"Config changed unexpectedly\"
+  cat /tmp/plugin-update-output.log
+  exit 1
+fi
+if grep -q 'Downloading @example/lossless-claw' /tmp/plugin-update-output.log; then
+  echo \"Unexpected npm download/reinstall path\"
+  cat /tmp/plugin-update-output.log
+  exit 1
+fi
+if ! grep -q 'lossless-claw is up to date (0.9.0).' /tmp/plugin-update-output.log; then
+  echo \"Expected up-to-date output missing\"
+  cat /tmp/plugin-update-output.log
+  exit 1
+fi
+cat /tmp/plugin-update-output.log
+"
+
+echo "Plugin update unchanged Docker E2E passed."

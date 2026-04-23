@@ -1,3 +1,4 @@
+import type { TSchema } from "typebox";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { stripUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
 import { resolveUnsupportedToolSchemaKeywords } from "../plugins/provider-model-compat.js";
@@ -134,11 +135,11 @@ function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
 export function normalizeToolParameterSchema(
   schema: unknown,
   options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
-): unknown {
+): TSchema {
   const schemaRecord =
     schema && typeof schema === "object" ? (schema as Record<string, unknown>) : undefined;
   if (!schemaRecord) {
-    return schema;
+    return schema as TSchema;
   }
 
   // Provider quirks:
@@ -155,14 +156,14 @@ export function normalizeToolParameterSchema(
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 
-  function applyProviderCleaning(s: unknown): unknown {
+  function applyProviderCleaning(s: unknown): TSchema {
     if (isGeminiProvider && !isAnthropicProvider) {
       return cleanSchemaForGemini(s);
     }
     if (unsupportedToolSchemaKeywords.size > 0) {
-      return stripUnsupportedSchemaKeywords(s, unsupportedToolSchemaKeywords);
+      return stripUnsupportedSchemaKeywords(s, unsupportedToolSchemaKeywords) as TSchema;
     }
-    return s;
+    return s as TSchema;
   }
 
   const conditionalKey = getTopLevelConditionalKey(schemaRecord);
@@ -188,9 +189,9 @@ export function normalizeToolParameterSchema(
     if (conditionalKey === "allOf") {
       // Top-level `allOf` is not safely flattenable with the same heuristics we
       // use for unions. Keep it explicit rather than silently rewriting it.
-      return schema;
+      return applyProviderCleaning(schema);
     }
-    return schema;
+    return applyProviderCleaning(schema);
   }
   const variants = schemaRecord[flattenableVariantKey] as unknown[];
   const mergedProperties: Record<string, unknown> = {};

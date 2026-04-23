@@ -1,5 +1,6 @@
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
+const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
@@ -25,6 +26,11 @@ import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts"
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
+import {
+  hasLocalUserIdentity,
+  normalizeLocalUserIdentity,
+  type LocalUserIdentity,
+} from "./user-identity.ts";
 
 export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
 export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
@@ -59,6 +65,8 @@ export type UiSettings = {
   borderRadius: number; // Corner roundness (0–100, default 50)
   locale?: string;
 };
+
+export type { LocalUserIdentity } from "./user-identity.ts";
 
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
@@ -268,6 +276,34 @@ export function loadSettings(): UiSettings {
 
 export function saveSettings(next: UiSettings) {
   persistSettings(next);
+}
+
+export function loadLocalUserIdentity(): LocalUserIdentity {
+  const storage = getSafeLocalStorage();
+  try {
+    const raw = storage?.getItem(LOCAL_USER_IDENTITY_KEY);
+    if (!raw) {
+      return normalizeLocalUserIdentity();
+    }
+    return normalizeLocalUserIdentity(JSON.parse(raw) as Partial<LocalUserIdentity>);
+  } catch {
+    return normalizeLocalUserIdentity();
+  }
+}
+
+export function saveLocalUserIdentity(next: LocalUserIdentity) {
+  const storage = getSafeLocalStorage();
+  const normalized = normalizeLocalUserIdentity(next);
+  try {
+    if (!hasLocalUserIdentity(normalized)) {
+      storage?.removeItem(LOCAL_USER_IDENTITY_KEY);
+      return;
+    }
+    storage?.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
+  } catch {
+    // best-effort — quota exceeded or security restrictions should not
+    // prevent in-memory identity updates from being applied
+  }
 }
 
 function persistSettings(next: UiSettings) {

@@ -72,7 +72,7 @@ export async function handleDiscordAction(
     return await handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);
   }
   if (moderationActions.has(action)) {
-    return await handleDiscordModerationAction(action, params, isActionEnabled);
+    return await handleDiscordModerationAction(action, params, isActionEnabled, cfg);
   }
   if (presenceActions.has(action)) {
     return await handleDiscordPresenceAction(action, params, isActionEnabled);

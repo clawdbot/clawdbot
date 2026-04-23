@@ -3,6 +3,8 @@
   "name": "Codex",
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
+  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
     "onAgentHarnesses": ["codex"]
@@ -34,6 +36,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["yolo", "guardian"],
+            "default": "yolo"
+          },
           "transport": {
             "type": "string",
             "enum": ["stdio", "websocket"],
@@ -66,19 +73,19 @@
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"],
-            "default": "on-request"
+            "default": "never"
           },
           "sandbox": {
             "type": "string",
             "enum": ["read-only", "workspace-write", "danger-full-access"],
-            "default": "workspace-write"
+            "default": "danger-full-access"
           },
           "approvalsReviewer": {
             "type": "string",
             "enum": ["user", "guardian_subagent"],
             "default": "user"
           },
-          "serviceTier": { "type": "string" }
+          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] }
         }
       }
     }
@@ -100,6 +107,11 @@
     "appServer": {
       "label": "App Server",
       "help": "Runtime controls for connecting to Codex app-server.",
+      "advanced": true
+    },
+    "appServer.mode": {
+      "label": "Execution Mode",
+      "help": "Use yolo for unchained local execution or guardian for Codex guardian-reviewed approvals.",
       "advanced": true
     },
     "appServer.transport": {
@@ -155,7 +167,7 @@
     },
     "appServer.serviceTier": {
       "label": "Service Tier",
-      "help": "Optional Codex service tier passed when starting or resuming threads.",
+      "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
       "advanced": true
     }
   }

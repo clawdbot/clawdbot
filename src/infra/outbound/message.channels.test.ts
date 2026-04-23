@@ -310,6 +310,17 @@ describe("gateway url override hardening", () => {
         },
       },
     },
+    {
+      name: "forwards replyToId in gateway send params",
+      params: {
+        replyToId: "wamid.42",
+      },
+      expected: {
+        params: {
+          replyToId: "wamid.42",
+        },
+      },
+    },
   ])("$name", async ({ params, expected }) => {
     expect(await sendThreadChatGatewayMessage(params)).toMatchObject(expected);
   });

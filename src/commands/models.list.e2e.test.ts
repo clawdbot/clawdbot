@@ -17,6 +17,7 @@ const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
+const loadModelCatalog = vi.fn(async () => []);
 const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );
@@ -74,7 +75,7 @@ vi.mock("./models/list.runtime.js", () => {
     resolveEnvApiKey,
     resolveAwsSdkEnvVarName,
     hasUsableCustomProviderApiKey,
-    loadModelCatalog: vi.fn(async () => []),
+    loadModelCatalog,
     loadProviderCatalogModelsForList,
     discoverAuthStorage: () => ({}) as unknown,
     discoverModels: () => new MockModelRegistry() as unknown,
@@ -136,6 +137,8 @@ beforeEach(() => {
   getRuntimeConfig.mockReturnValue({});
   listProfilesForProvider.mockReturnValue([]);
   ensureOpenClawModelsJson.mockClear();
+  loadModelCatalog.mockClear();
+  loadModelCatalog.mockResolvedValue([]);
   loadProviderCatalogModelsForList.mockReset();
   loadProviderCatalogModelsForList.mockResolvedValue([]);
   shouldSuppressBuiltInModel.mockReset();
@@ -359,6 +362,7 @@ describe("models list/status", () => {
     await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
+    expect(loadModelCatalog).toHaveBeenCalledTimes(1);
     expect(payload.models).toEqual([
       expect.objectContaining({
         key: "moonshot/kimi-k2.6",
@@ -367,6 +371,21 @@ describe("models list/status", () => {
         missing: false,
       }),
     ]);
+  });
+
+  it("models list rejects provider display labels", async () => {
+    setDefaultZaiRegistry({ available: false });
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, provider: "Moonshot AI", json: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.',
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 
   it("models list all local skips unauthenticated provider catalog rows", async () => {

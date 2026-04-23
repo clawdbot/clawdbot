@@ -750,6 +750,7 @@ export async function spawnSubagentDirect(
         idempotencyKey: childIdem,
         deliver: deliverInitialChildRunDirectly,
         lane: AGENT_LANE_SUBAGENT,
+        cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,

@@ -2319,6 +2319,112 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("keeps provider-owned CLI sessions on implicit daily reset boundaries", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-cli-implicit-reset-");
+      const sessionKey = "agent:main:telegram:dm:claude-cli-user";
+      const existingSessionId = "provider-owned-session";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+      const cliBinding = {
+        sessionId: "claude-session-1",
+        authProfileId: "anthropic:claude-cli",
+        mcpResumeHash: "mcp-resume-hash",
+      };
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-6",
+          cliSessionBindings: {
+            "claude-cli": cliBinding,
+          },
+          cliSessionIds: {
+            "claude-cli": cliBinding.sessionId,
+          },
+          claudeCliSessionId: cliBinding.sessionId,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          From: "claude-cli-user",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual(cliBinding);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors explicit reset policies for provider-owned CLI sessions", async () => {
+    const storePath = await createStorePath("openclaw-cli-explicit-reset-");
+    const sessionKey = "agent:main:telegram:dm:claude-cli-explicit-user";
+    const existingSessionId = "provider-owned-explicit-session";
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "idle", idleMinutes: 1 },
+      },
+    } as OpenClawConfig;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now() - 5 * 60_000,
+        modelProvider: "claude-cli",
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-session-explicit",
+          },
+        },
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "claude-cli-explicit-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
+  });
+
   it("disposes the previous bundle MCP runtime on session rollover", async () => {
     const storePath = await createStorePath("openclaw-stale-runtime-dispose-");
     const sessionKey = "agent:main:telegram:dm:runtime-stale-user";

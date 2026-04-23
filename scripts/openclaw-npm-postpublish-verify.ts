@@ -44,16 +44,9 @@ type InstalledBundledExtensionManifestRecord = {
 const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
 const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
   "Failed to load legacy context engine runtime.";
-const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
-] as const;
-const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = [
-  ...BUNDLED_RUNTIME_SIDECAR_PATHS.filter((relativePath) =>
-    listBundledPluginPackArtifacts().includes(relativePath),
-  ),
-  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
-] as const;
+const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
+  (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
+);
 
 export type PublishedInstallScenario = {
   name: string;

@@ -17,7 +17,7 @@ const SECRET_TARGET_CALLSITES = [
 
 function hasSupportedTargetIdsWiring(source: string): boolean {
   return (
-    /resolveAgentRuntimeConfig\(/.test(source) ||
+    source.includes("resolveAgentRuntimeConfig(") ||
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
@@ -27,15 +27,15 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
 
 function hasSupportedSecretResolutionWiring(source: string): boolean {
   return (
-    /resolveAgentRuntimeConfig\(/.test(source) ||
-    /resolveCommandConfigWithSecrets\(/.test(source) ||
-    /resolveCommandSecretRefsViaGateway\(/.test(source) ||
-    /collectStatusScanOverview\(/.test(source)
+    source.includes("resolveAgentRuntimeConfig(") ||
+    source.includes("resolveCommandConfigWithSecrets(") ||
+    source.includes("resolveCommandSecretRefsViaGateway(") ||
+    source.includes("collectStatusScanOverview(")
   );
 }
 
 function usesDelegatedStatusOverviewFlow(source: string): boolean {
-  return /collectStatusScanOverview\(/.test(source);
+  return source.includes("collectStatusScanOverview(");
 }
 
 describe("command secret resolution coverage", () => {

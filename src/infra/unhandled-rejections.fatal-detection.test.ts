@@ -7,6 +7,7 @@ vi.mock("../terminal/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
 
+import { resetFatalErrorHooksForTest } from "./fatal-error-hooks.js";
 import { installUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
 describe("installUnhandledRejectionHandler - fatal detection", () => {
@@ -22,6 +23,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   beforeEach(() => {
     exitCalls = [];
+    resetFatalErrorHooksForTest();
 
     vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       if (code !== undefined && code !== null) {

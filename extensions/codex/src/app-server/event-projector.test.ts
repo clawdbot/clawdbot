@@ -1,5 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../../../src/plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
 import {
   CodexAppServerEventProjector,
   type CodexAppServerToolTelemetry,
@@ -8,36 +17,87 @@ import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
 const TURN_ID = "turn-1";
+const tempDirs = new Set<string>();
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
 
-function createParams(): EmbeddedRunAttemptParams {
+function assistantMessage(text: string, timestamp: number) {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    model: "gpt-5.4-codex",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp,
+  };
+}
+
+async function createParams(): Promise<EmbeddedRunAttemptParams> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-projector-"));
+  tempDirs.add(tempDir);
+  const sessionFile = path.join(tempDir, "session.jsonl");
+  SessionManager.open(sessionFile).appendMessage(assistantMessage("history", Date.now()));
   return {
     prompt: "hello",
     sessionId: "session-1",
+    sessionFile,
+    workspaceDir: tempDir,
+    runId: "run-1",
     provider: "openai-codex",
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel(),
     thinkLevel: "medium",
-  } as unknown as EmbeddedRunAttemptParams;
+  } as EmbeddedRunAttemptParams;
 }
 
-function createProjector(params = createParams()): CodexAppServerEventProjector {
-  return new CodexAppServerEventProjector(params, THREAD_ID, TURN_ID);
+async function createProjector(
+  params?: EmbeddedRunAttemptParams,
+): Promise<CodexAppServerEventProjector> {
+  const resolvedParams = params ?? (await createParams());
+  return new CodexAppServerEventProjector(resolvedParams, THREAD_ID, TURN_ID);
 }
 
-function createProjectorWithAssistantHooks() {
+async function createProjectorWithAssistantHooks() {
   const onAssistantMessageStart = vi.fn();
   const onPartialReply = vi.fn();
-  return {
+  const params = await createParams();
+  const projector = await createProjector({
+    ...params,
     onAssistantMessageStart,
     onPartialReply,
-    projector: createProjector({
-      ...createParams(),
-      onAssistantMessageStart,
-      onPartialReply,
-    }),
-  };
+  });
+  return { onAssistantMessageStart, onPartialReply, projector };
+}
+
+afterEach(async () => {
+  resetGlobalHookRunner();
+  vi.restoreAllMocks();
+  for (const tempDir of tempDirs) {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+  tempDirs.clear();
+});
+
+async function createProjectorWithHooks() {
+  const beforeCompaction = vi.fn();
+  const afterCompaction = vi.fn();
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      { hookName: "before_compaction", handler: beforeCompaction },
+      { hookName: "after_compaction", handler: afterCompaction },
+    ]),
+  );
+  const projector = await createProjector();
+  return { projector, beforeCompaction, afterCompaction };
 }
 
 function buildEmptyToolTelemetry(): CodexAppServerToolTelemetry {
@@ -64,15 +124,19 @@ function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNotificati
 }
 
 function turnCompleted(items: unknown[] = []): ProjectorNotification {
-  return forCurrentTurn("turn/completed", {
-    turn: { id: TURN_ID, status: "completed", items },
-  });
+  return {
+    method: "turn/completed",
+    params: {
+      threadId: THREAD_ID,
+      turn: { id: TURN_ID, status: "completed", items },
+    },
+  } as ProjectorNotification;
 }
 
 describe("CodexAppServerEventProjector", () => {
   it("projects assistant deltas and usage into embedded attempt results", async () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
-      createProjectorWithAssistantHooks();
+      await createProjectorWithAssistantHooks();
 
     await projector.handleNotification(agentMessageDelta("hel"));
     await projector.handleNotification(agentMessageDelta("lo"));
@@ -116,7 +180,7 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("does not treat cumulative-only token usage as fresh context usage", async () => {
-    const projector = createProjector();
+    const projector = await createProjector();
 
     await projector.handleNotification(agentMessageDelta("done"));
     await projector.handleNotification(
@@ -145,7 +209,7 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("normalizes snake_case current token usage fields", async () => {
-    const projector = createProjector();
+    const projector = await createProjector();
 
     await projector.handleNotification(agentMessageDelta("done"));
     await projector.handleNotification(
@@ -175,7 +239,7 @@ describe("CodexAppServerEventProjector", () => {
 
   it("keeps intermediate agentMessage items out of the final visible reply", async () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
-      createProjectorWithAssistantHooks();
+      await createProjectorWithAssistantHooks();
 
     await projector.handleNotification(
       agentMessageDelta(
@@ -221,7 +285,7 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("ignores notifications for other turns", async () => {
-    const projector = createProjector();
+    const projector = await createProjector();
 
     await projector.handleNotification({
       method: "item/agentMessage/delta",
@@ -232,12 +296,113 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual([]);
   });
 
+  it("ignores notifications that omit top-level thread and turn ids", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification({
+      method: "turn/completed",
+      params: {
+        turn: {
+          id: TURN_ID,
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-1", text: "wrong turn" }],
+        },
+      },
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+  });
+
   it("preserves sessions_yield detection in attempt results", () => {
-    const projector = createProjector();
+    const projector = new CodexAppServerEventProjector(
+      {
+        prompt: "hello",
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        runId: "run-1",
+        provider: "openai-codex",
+        modelId: "gpt-5.4-codex",
+        model: createCodexTestModel(),
+        thinkLevel: "medium",
+      } as EmbeddedRunAttemptParams,
+      THREAD_ID,
+      TURN_ID,
+    );
 
     const result = projector.buildResult(buildEmptyToolTelemetry(), { yieldDetected: true });
 
     expect(result.yieldDetected).toBe(true);
+  });
+
+  it("projects guardian review lifecycle details into agent events", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/autoApprovalReview/started", {
+        reviewId: "review-1",
+        targetItemId: "cmd-1",
+        review: { status: "inProgress" },
+        action: {
+          type: "execve",
+          source: "shell",
+          program: "/bin/printf",
+          argv: ["printf", "hello"],
+          cwd: "/tmp",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/autoApprovalReview/completed", {
+        reviewId: "review-1",
+        targetItemId: "cmd-1",
+        decisionSource: "agent",
+        review: {
+          status: "approved",
+          riskLevel: "low",
+          userAuthorization: "high",
+          rationale: "Benign local probe.",
+        },
+        action: {
+          type: "execve",
+          source: "shell",
+          program: "/bin/printf",
+          argv: ["printf", "hello"],
+          cwd: "/tmp",
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.guardian",
+      data: expect.objectContaining({
+        phase: "started",
+        reviewId: "review-1",
+        targetItemId: "cmd-1",
+        status: "inProgress",
+        actionType: "execve",
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.guardian",
+      data: expect.objectContaining({
+        phase: "completed",
+        reviewId: "review-1",
+        targetItemId: "cmd-1",
+        decisionSource: "agent",
+        status: "approved",
+        riskLevel: "low",
+        userAuthorization: "high",
+        rationale: "Benign local probe.",
+        actionType: "execve",
+      }),
+    });
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
+    ).toBe(false);
   });
 
   it("projects reasoning end, plan updates, compaction state, and tool metadata", async () => {
@@ -245,12 +410,12 @@ describe("CodexAppServerEventProjector", () => {
     const onReasoningEnd = vi.fn();
     const onAgentEvent = vi.fn();
     const params = {
-      ...createParams(),
+      ...(await createParams()),
       onReasoningStream,
       onReasoningEnd,
       onAgentEvent,
     };
-    const projector = createProjector(params);
+    const projector = await createProjector(params);
 
     await projector.handleNotification(
       forCurrentTurn("item/reasoning/textDelta", { itemId: "reason-1", delta: "thinking" }),
@@ -319,8 +484,8 @@ describe("CodexAppServerEventProjector", () => {
     const onAgentEvent = vi.fn(() => {
       throw new Error("consumer failed");
     });
-    const projector = createProjector({
-      ...createParams(),
+    const projector = await createProjector({
+      ...(await createParams()),
       onAgentEvent,
     });
 
@@ -343,5 +508,43 @@ describe("CodexAppServerEventProjector", () => {
     );
     expect(result.assistantTexts).toEqual(["final answer"]);
     expect(JSON.stringify(result.messagesSnapshot)).toContain("Codex plan");
+  });
+
+  it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {
+    const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "contextCompaction", id: "compact-1" },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "contextCompaction", id: "compact-1" },
+      }),
+    );
+
+    expect(beforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageCount: 1,
+        sessionFile: expect.stringContaining("session.jsonl"),
+        messages: [expect.objectContaining({ role: "assistant" })],
+      }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+      }),
+    );
+    expect(afterCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageCount: 1,
+        compactedCount: -1,
+        sessionFile: expect.stringContaining("session.jsonl"),
+      }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+      }),
+    );
   });
 });

@@ -239,7 +239,7 @@ function recordFailedCandidateAttempt(params: {
   params.attempts.push({
     provider: params.candidate.provider,
     model: params.candidate.model,
-    error: described.message,
+    error: described.rawError ?? described.message,
     reason: described.reason ?? "unknown",
     status: described.status,
     code: described.code,
@@ -255,7 +255,7 @@ function recordFailedCandidateAttempt(params: {
     reason: described.reason,
     status: described.status,
     code: described.code,
-    error: described.message,
+    error: described.rawError ?? described.message,
     nextCandidate: params.nextCandidate,
     isPrimary: params.isPrimary,
     requestedModelMatched: params.requestedModelMatched,

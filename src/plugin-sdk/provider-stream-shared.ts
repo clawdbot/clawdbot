@@ -192,6 +192,8 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
       case "max":
       case "xhigh":
         return "HIGH";
+      case undefined:
+        break;
     }
     if (typeof params.thinkingBudget === "number") {
       return params.thinkingBudget <= 2048 ? "LOW" : "HIGH";
@@ -214,6 +216,8 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     case "max":
     case "xhigh":
       return "HIGH";
+    case undefined:
+      break;
   }
   if (typeof params.thinkingBudget !== "number") {
     return undefined;

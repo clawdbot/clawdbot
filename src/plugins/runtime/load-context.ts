@@ -3,6 +3,7 @@ import { loadConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging.js";
+import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
 import type { PluginLoadOptions } from "../loader.js";
 import type { PluginLogger } from "../types.js";
 
@@ -45,6 +46,10 @@ export function resolvePluginRuntimeLoadContext(
 ): PluginRuntimeLoadContext {
   const env = options?.env ?? process.env;
   const rawConfig = options?.config ?? loadConfig();
+  const activationSourceConfig = resolvePluginActivationSourceConfig({
+    config: rawConfig,
+    activationSourceConfig: options?.activationSourceConfig,
+  });
   const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
   const config = autoEnabled.config;
   const workspaceDir =
@@ -52,7 +57,7 @@ export function resolvePluginRuntimeLoadContext(
   return {
     rawConfig,
     config,
-    activationSourceConfig: options?.activationSourceConfig ?? rawConfig,
+    activationSourceConfig,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     env,

@@ -2,6 +2,7 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatUncaughtError } from "./infra/errors.js";
+import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 
@@ -86,12 +87,18 @@ if (isMain) {
 
   process.on("uncaughtException", (error) => {
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
+      console.error("[openclaw]", message);
+    }
     restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
     process.exit(1);
   });
 
   void runLegacyCliEntry(process.argv).catch((err) => {
     console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+    for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
+      console.error("[openclaw]", message);
+    }
     restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
     process.exit(1);
   });

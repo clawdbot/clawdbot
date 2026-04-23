@@ -2,6 +2,61 @@
    Mobile Layout
    =========================================== */
 
+@media (max-width: 1320px) {
+  .content--chat .content-header {
+    align-items: stretch;
+    gap: 12px;
+    row-gap: 10px;
+    max-height: 180px;
+    overflow: visible;
+  }
+
+  .content--chat .content-header > div:first-child {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .content--chat .page-meta {
+    width: 100%;
+    min-width: 0;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .content--chat .chat-controls {
+    margin-left: auto;
+    justify-content: flex-end;
+    row-gap: 8px;
+  }
+
+  .chat-controls__session-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 10px 12px;
+    width: 100%;
+  }
+
+  .chat-controls__thinking-select {
+    grid-column: 1 / -1;
+  }
+
+  .chat-controls__session,
+  .chat-controls__model,
+  .chat-controls__thinking-select {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .chat-controls__session select,
+  .chat-controls__model select,
+  .chat-controls__thinking-select select {
+    width: 100%;
+    max-width: none;
+  }
+}
+
 /* Tablet and smaller: switch the left nav to a slide-over drawer. */
 @media (max-width: 1100px) {
   .shell,

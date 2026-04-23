@@ -19,7 +19,7 @@ env:
 jobs:
   no-tabs:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -51,7 +51,7 @@ jobs:
 
   actionlint:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -83,7 +83,7 @@ jobs:
 
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6

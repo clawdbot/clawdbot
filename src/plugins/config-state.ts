@@ -21,6 +21,7 @@ import {
 } from "./config-normalization-shared.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { defaultSlotIdForKey } from "./slots.js";
 
 export type { PluginActivationSource };
 export type PluginActivationState = PluginActivationStateLike;
@@ -101,7 +102,10 @@ const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.slots && Object.prototype.hasOwnProperty.call(plugins.slots, "memory"));
 
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
-  Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
+  Boolean(
+    plugins?.entries &&
+    Object.prototype.hasOwnProperty.call(plugins.entries, defaultSlotIdForKey("memory")),
+  );
 
 export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
   hasExplicitPluginConfigShared(plugins);

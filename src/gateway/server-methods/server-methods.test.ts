@@ -263,6 +263,46 @@ describe("injectTimestamp", () => {
 });
 
 describe("sanitizeChatHistoryMessages", () => {
+  it("redacts base64 audio content blocks from chat history", () => {
+    const data = Buffer.from("voice-bytes").toString("base64");
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            source: {
+              type: "base64",
+              media_type: "audio/mp3",
+              data,
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            source: {
+              type: "base64",
+              media_type: "audio/mp3",
+              omitted: true,
+              bytes: Buffer.byteLength(data, "utf8"),
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
     const result = sanitizeChatHistoryMessages([
       {

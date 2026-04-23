@@ -68,8 +68,8 @@ export async function getAudioDuration(filePath: string): Promise<number> {
       "csv=p=0",
       filePath,
     ]);
-    const duration = parseFloat(stdout.trim());
-    if (isNaN(duration)) {
+    const duration = Number.parseFloat(stdout.trim());
+    if (Number.isNaN(duration)) {
       throw new Error("Could not parse duration");
     }
     return Math.round(duration * 100) / 100; // Round to 2 decimal places

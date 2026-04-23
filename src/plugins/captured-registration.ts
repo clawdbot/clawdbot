@@ -1,6 +1,7 @@
 import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
+import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
@@ -37,6 +38,7 @@ export type CapturedPluginRegistration = {
   cliBackends: CliBackendPlugin[];
   textTransforms: PluginTextTransformRegistration[];
   embeddedExtensionFactories: ExtensionFactory[];
+  codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
@@ -60,6 +62,7 @@ export function createCapturedPluginRegistration(params?: {
   const cliBackends: CliBackendPlugin[] = [];
   const textTransforms: PluginTextTransformRegistration[] = [];
   const embeddedExtensionFactories: ExtensionFactory[] = [];
+  const codexAppServerExtensionFactories: CodexAppServerExtensionFactory[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
@@ -85,6 +88,7 @@ export function createCapturedPluginRegistration(params?: {
     cliBackends,
     textTransforms,
     embeddedExtensionFactories,
+    codexAppServerExtensionFactories,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -137,6 +141,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerEmbeddedExtensionFactory(factory: ExtensionFactory) {
           embeddedExtensionFactories.push(factory);
+        },
+        registerCodexAppServerExtensionFactory(factory: CodexAppServerExtensionFactory) {
+          codexAppServerExtensionFactories.push(factory);
         },
         registerCliBackend(backend: CliBackendPlugin) {
           cliBackends.push(backend);

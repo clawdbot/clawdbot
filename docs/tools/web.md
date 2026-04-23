@@ -116,6 +116,10 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 
 ## Auto-detection
 
+## Native OpenAI web search
+
+Direct OpenAI Responses models use OpenAI's hosted `web_search` tool automatically when OpenClaw web search is enabled and no managed provider is pinned. This is provider-owned behavior in the bundled OpenAI plugin and only applies to native OpenAI API traffic, not OpenAI-compatible proxy base URLs or Azure routes. Set `tools.web.search.provider` to another provider such as `brave` to keep the managed `web_search` tool for OpenAI models, or set `tools.web.search.enabled: false` to disable both managed search and native OpenAI search.
+
 ## Native Codex web search
 
 Codex-capable models can optionally use the provider-native Responses `web_search` tool instead of OpenClaw's managed `web_search` function.

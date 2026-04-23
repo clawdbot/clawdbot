@@ -84,9 +84,7 @@ export async function withRetry<T>(
       // Schedule the next retry with the configured backoff.
       if (attempt < policy.maxRetries) {
         const delay =
-          policy.backoff === "exponential"
-            ? policy.baseDelayMs * Math.pow(2, attempt)
-            : policy.baseDelayMs;
+          policy.backoff === "exponential" ? policy.baseDelayMs * 2 ** attempt : policy.baseDelayMs;
 
         logger?.debug?.(
           `[qqbot:retry] Attempt ${attempt + 1} failed, retrying in ${delay}ms: ${lastError.message.slice(0, 100)}`,

@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
@@ -9,6 +8,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 
 type MemoryToolRuntime = typeof import("./tools.runtime.js");
 type MemorySearchManagerResult = Awaited<

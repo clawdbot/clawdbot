@@ -9,6 +9,7 @@ const vectorToBlob = (embedding: number[]): Buffer =>
   Buffer.from(new Float32Array(embedding).buffer);
 const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const SHORT_CJK_TRIGRAM_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u3131-\u3163]/u;
+const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
 
 export type SearchSource = string;
 
@@ -70,6 +71,16 @@ function buildMatchQueryFromTerms(terms: string[]): string | null {
   return quoted.join(" AND ");
 }
 
+function readCount(row: { count?: number | bigint } | undefined): number {
+  if (typeof row?.count === "bigint") {
+    return Number(row.count);
+  }
+  if (typeof row?.count === "number") {
+    return row.count;
+  }
+  return 0;
+}
+
 function planKeywordSearch(params: {
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
@@ -122,31 +133,67 @@ export async function searchVector(params: {
     return [];
   }
   if (await params.ensureVectorReady(params.queryVec.length)) {
-    const rows = params.db
-      .prepare(
-        `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
-          `       c.source,\n` +
-          `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
-          `  FROM ${params.vectorTable} v\n` +
-          `  JOIN chunks c ON c.id = v.id\n` +
-          ` WHERE c.model = ?${params.sourceFilterVec.sql}\n` +
-          ` ORDER BY dist ASC\n` +
-          ` LIMIT ?`,
-      )
-      .all(
-        vectorToBlob(params.queryVec),
-        params.providerModel,
-        ...params.sourceFilterVec.params,
-        params.limit,
-      ) as Array<{
-      id: string;
-      path: string;
-      start_line: number;
-      end_line: number;
-      text: string;
-      source: SearchSource;
-      dist: number;
-    }>;
+    // Use sqlite-vec's native KNN (MATCH ? AND k = ?) for candidate selection,
+    // which runs in ~O(log N + k) via the vec0 index, instead of the previous
+    // full-table scan over vec_distance_cosine(). Keep vec_distance_cosine() in
+    // the SELECT so `score = 1 - dist` stays in the cosine [0, 1] range the
+    // downstream merge/minScore pipeline expects. (chunks_vec is created with
+    // sqlite-vec's default L2 distance, so v.distance cannot be used directly
+    // for scoring.)
+    const qBlob = vectorToBlob(params.queryVec);
+    const runVectorQuery = (candidateLimit: number) =>
+      params.db
+        .prepare(
+          `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
+            `       c.source,\n` +
+            `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
+            `  FROM ${params.vectorTable} v\n` +
+            `  JOIN chunks c ON c.id = v.id\n` +
+            ` WHERE v.embedding MATCH ? AND k = ? AND c.model = ?${params.sourceFilterVec.sql}\n` +
+            ` ORDER BY dist ASC\n` +
+            ` LIMIT ?`,
+        )
+        .all(
+          qBlob,
+          qBlob,
+          candidateLimit,
+          params.providerModel,
+          ...params.sourceFilterVec.params,
+          params.limit,
+        ) as Array<{
+        id: string;
+        path: string;
+        start_line: number;
+        end_line: number;
+        text: string;
+        source: SearchSource;
+        dist: number;
+      }>;
+
+    const candidateLimit = params.limit * VECTOR_KNN_OVERSAMPLE_FACTOR;
+    let rows = runVectorQuery(candidateLimit);
+    if (rows.length < params.limit) {
+      const matchingChunkCount = readCount(
+        params.db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM chunks c WHERE c.model = ?${params.sourceFilterVec.sql}`,
+          )
+          .get(params.providerModel, ...params.sourceFilterVec.params) as
+          | { count?: number | bigint }
+          | undefined,
+      );
+      if (matchingChunkCount > rows.length) {
+        const vectorCount = readCount(
+          params.db.prepare(`SELECT COUNT(*) AS count FROM ${params.vectorTable}`).get() as
+            | { count?: number | bigint }
+            | undefined,
+        );
+        if (vectorCount > candidateLimit) {
+          rows = runVectorQuery(vectorCount);
+        }
+      }
+    }
+
     return rows.map((row) => ({
       id: row.id,
       path: row.path,

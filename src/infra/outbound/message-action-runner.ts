@@ -59,6 +59,7 @@ import {
 } from "./message-action-params.js";
 import {
   prepareOutboundMirrorRoute,
+  resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
@@ -567,7 +568,10 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const bestEffort = readBooleanParam(params, "bestEffort");
   const silent = readBooleanParam(params, "silent");
 
-  const replyToId = readStringParam(params, "replyTo");
+  const replyToId = resolveAndApplyOutboundReplyToId(params, {
+    channel,
+    toolContext: input.toolContext,
+  });
   const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
     cfg,
     channel,

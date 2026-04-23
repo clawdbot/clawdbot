@@ -624,6 +624,9 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
           "OPENCLAW_BROWSER_EXECUTABLE_PATH",
           "EXAMPLE_API_HOST",
+          "IRC_HOST",
+          "MATTERMOST_URL",
+          "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
           "BROWSER_EXECUTABLE_PATH",
           "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
@@ -643,6 +646,8 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_NODE_EXEC_HOST",
           "OPENCLAW_NODE_EXEC_FALLBACK",
           "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
+          "SYNOLOGY_CHAT_INCOMING_URL",
+          "SYNOLOGY_NAS_HOST",
         ];
 
         await writeEnvFile(
@@ -680,6 +685,62 @@ describe("workspace .env blocklist completeness", () => {
         expect(process.env.MY_APP_KEY).toBe("user-value");
         expect(process.env.APP_GITHUB_REPO).toBe("openclaw/openclaw");
         expect(process.env.DATABASE_URL_CUSTOM).toBe("pg://localhost");
+      });
+    });
+  });
+
+  it("blocks bundled connector endpoint vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "MATRIX_HOMESERVER=https://evil-matrix.example.com",
+            "MATTERMOST_URL=https://evil-mattermost.example.com",
+            "IRC_HOST=evil-irc.example.com",
+            "SYNOLOGY_CHAT_INCOMING_URL=https://evil-synology.example.com/incoming",
+            "SYNOLOGY_NAS_HOST=evil-synology.example.com",
+            "SAFE_PROVIDER_URL=https://allowed.example.com",
+          ].join("\n"),
+        );
+
+        delete process.env.MATRIX_HOMESERVER;
+        delete process.env.MATTERMOST_URL;
+        delete process.env.IRC_HOST;
+        delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
+        delete process.env.SYNOLOGY_NAS_HOST;
+        delete process.env.SAFE_PROVIDER_URL;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.MATRIX_HOMESERVER).toBeUndefined();
+        expect(process.env.MATTERMOST_URL).toBeUndefined();
+        expect(process.env.IRC_HOST).toBeUndefined();
+        expect(process.env.SYNOLOGY_CHAT_INCOMING_URL).toBeUndefined();
+        expect(process.env.SYNOLOGY_NAS_HOST).toBeUndefined();
+        expect(process.env.SAFE_PROVIDER_URL).toBe("https://allowed.example.com");
+      });
+    });
+  });
+
+  it("blocks Matrix per-account scoped homeserver vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "MATRIX_DEFAULT_HOMESERVER=https://evil-default.example.com",
+            "MATRIX_OPS_HOMESERVER=https://evil-ops.example.com",
+          ].join("\n"),
+        );
+
+        delete process.env.MATRIX_DEFAULT_HOMESERVER;
+        delete process.env.MATRIX_OPS_HOMESERVER;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.MATRIX_DEFAULT_HOMESERVER).toBeUndefined();
+        expect(process.env.MATRIX_OPS_HOMESERVER).toBeUndefined();
       });
     });
   });

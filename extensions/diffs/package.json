@@ -8,10 +8,10 @@
     "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js"
   },
   "dependencies": {
-    "@pierre/diffs": "1.1.15",
+    "@pierre/diffs": "1.1.16",
     "@pierre/theme": "0.0.29",
-    "@sinclair/typebox": "0.34.49",
-    "playwright-core": "1.59.1"
+    "playwright-core": "1.59.1",
+    "typebox": "1.1.28"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

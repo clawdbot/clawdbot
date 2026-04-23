@@ -17,12 +17,8 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-pa
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
   (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
 );
-const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-] as const;
 const REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS = [
   ...PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS,
-  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
 ] as const;
 
 describe("buildPublishedInstallScenarios", () => {
@@ -170,28 +166,95 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
 
-  function writeSlackWebApiProbePackage(
-    root: string,
-    dependencies: Record<string, string> = {},
-  ): void {
-    writePackageFile(root, "package.json", {
+  function writeSlackWebApiProbePackage(params: {
+    root: string;
+    importerSource?: string;
+    importerPath?: string;
+    rootDependencies?: Record<string, string>;
+    rootOptionalDependencies?: Record<string, string>;
+  }): void {
+    writePackageFile(params.root, "package.json", {
       version: "2026.4.10",
-      dependencies,
+      dependencies: params.rootDependencies,
+      optionalDependencies: params.rootOptionalDependencies,
     });
-    writePackageFile(root, "dist/extensions/slack/package.json", {
+    writePackageFile(params.root, "dist/extensions/slack/package.json", {
       dependencies: {
         "@slack/web-api": "^7.15.0",
       },
     });
-    mkdirSync(join(root, "dist"), { recursive: true });
-    writeFileSync(join(root, "dist", "probe-Cz2PiFtC.js"), 'import("@slack/web-api");\n', "utf8");
+    const importerPath = params.importerPath ?? "dist/probe-Cz2PiFtC.js";
+    mkdirSync(join(params.root, "dist"), { recursive: true });
+    writeFileSync(
+      join(params.root, importerPath),
+      params.importerSource ?? 'import("@slack/web-api");\n',
+      "utf8",
+    );
   }
 
-  it("does not require root mirrors for bundled plugin deps imported by root dist", () => {
+  it("flags bundled plugin deps imported by root dist when root mirrors are missing", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
-      writeSlackWebApiProbePackage(packageRoot);
+      writeSlackWebApiProbePackage({ root: packageRoot });
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing mirrored bundled runtime dependency '@slack/web-api' for dist importers: probe-Cz2PiFtC.js. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/slack/.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows bundled plugin deps imported from their own extension dist without root mirrors", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeSlackWebApiProbePackage({
+        root: packageRoot,
+        importerPath: "dist/extensions/slack/client-Cz2PiFtC.js",
+      });
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows bundled plugin deps imported from root chunks sourced from their extension", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeSlackWebApiProbePackage({
+        root: packageRoot,
+        importerSource: '//#region extensions/slack/client.ts\nimport("@slack/web-api");\n',
+      });
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not require root mirrors for extension-only Matrix crypto deps", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.10",
+        dependencies: {},
+      });
+      writePackageFile(packageRoot, "dist/extensions/matrix/package.json", {
+        dependencies: {
+          "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+          "@matrix-org/matrix-sdk-crypto-wasm": "18.1.0",
+        },
+      });
+      writeFileSync(
+        join(packageRoot, "dist/extensions/matrix/crypto-node.runtime.js"),
+        'require("@matrix-org/matrix-sdk-crypto-nodejs");\n',
+        "utf8",
+      );
 
       expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
@@ -231,8 +294,11 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
-      writeSlackWebApiProbePackage(packageRoot, {
-        "@slack/web-api": "^7.16.0",
+      writeSlackWebApiProbePackage({
+        root: packageRoot,
+        rootDependencies: {
+          "@slack/web-api": "^7.16.0",
+        },
       });
 
       expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);

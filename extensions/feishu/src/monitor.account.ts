@@ -1,4 +1,4 @@
-import * as crypto from "crypto";
+import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
@@ -615,6 +615,7 @@ export type MonitorSingleAccountParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
+  fireAndForget?: boolean;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
@@ -658,7 +659,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       accountId,
       runtime,
       chatHistories,
-      fireAndForget: true,
+      fireAndForget: params.fireAndForget ?? true,
     });
 
     if (connectionMode === "webhook") {

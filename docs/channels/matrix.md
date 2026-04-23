@@ -179,6 +179,8 @@ For example, `-` becomes `_X2D_`, so `ops-prod` maps to `MATRIX_OPS_X2D_PROD_*`.
 
 The interactive wizard only offers the env-var shortcut when those auth env vars are already present and the selected account does not already have Matrix auth saved in config.
 
+`MATRIX_HOMESERVER` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
+
 ## Configuration example
 
 This is a practical baseline config with DM pairing, room allowlist, and E2EE enabled:

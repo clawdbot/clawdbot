@@ -35,6 +35,7 @@ import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skil
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
+import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   resolveBootstrapProfileScopesForRole,
@@ -51,7 +52,7 @@ import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import type { GatewayAuthResult } from "../../auth.js";
-import { isLocalDirectRequest } from "../../auth.js";
+import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import {
   buildCanvasScopedHostUrl,
   CANVAS_CAPABILITY_TTL_MS,
@@ -267,7 +268,7 @@ export function attachGatewayWsMessageHandler(params: {
   // the connection as local. This prevents auth bypass when running behind a reverse
   // proxy without proper configuration - the proxy's loopback connection would otherwise
   // cause all external requests to be treated as trusted local clients.
-  const hasProxyHeaders = Boolean(forwardedFor || realIp);
+  const hasProxyHeaders = hasForwardedRequestHeaders(upgradeReq);
   const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
   const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
   const hostIsLocalish = isLocalishHost(requestHost);
@@ -316,6 +317,12 @@ export function attachGatewayWsMessageHandler(params: {
 
     const preauthPayloadBytes = !getClient() ? getRawDataByteLength(data) : undefined;
     if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
+      logRejectedLargePayload({
+        surface: "gateway.ws.preauth",
+        bytes: preauthPayloadBytes,
+        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+        reason: "preauth_frame_limit",
+      });
       setHandshakeState("failed");
       setCloseCause("preauth-payload-too-large", {
         payloadBytes: preauthPayloadBytes,

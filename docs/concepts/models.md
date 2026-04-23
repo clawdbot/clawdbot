@@ -67,6 +67,24 @@ to `zai/*`.
 Provider configuration examples (including OpenCode) live in
 [/providers/opencode](/providers/opencode).
 
+### Safe allowlist edits
+
+Use additive writes when updating `agents.defaults.models` by hand:
+
+```bash
+openclaw config set agents.defaults.models '{"openai-codex/gpt-5.4":{}}' --strict-json --merge
+```
+
+`openclaw config set` protects model/provider maps from accidental clobbers. A
+plain object assignment to `agents.defaults.models`, `models.providers`, or
+`models.providers.<id>.models` is rejected when it would remove existing
+entries. Use `--merge` for additive changes; use `--replace` only when the
+provided value should become the complete target value.
+
+Interactive provider setup and `openclaw configure --section model` also merge
+provider-scoped selections into the existing allowlist, so adding Codex,
+Ollama, or another provider does not drop unrelated model entries.
+
 ## "Model is not allowed" (and why replies stop)
 
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for
@@ -114,6 +132,9 @@ Notes:
 
 - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
 - On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
+- `/models add` is available by default and can be disabled with `commands.modelsWrite=false`.
+- When enabled, `/models add <provider> <modelId>` is the fastest path; bare `/models add` starts a provider-first guided flow where supported.
+- After `/models add`, the new model becomes available in `/models` and `/model` without restarting the gateway.
 - `/model <#>` selects from that picker.
 - `/model` persists the new session selection immediately.
 - If the agent is idle, the next run uses the new model right away.
@@ -131,6 +152,14 @@ Notes:
      surfacing a stale removed-provider default.
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
+
+Examples:
+
+```text
+/models add
+/models add ollama glm-5.1:cloud
+/models add lmstudio qwen/qwen3.5-9b
+```
 
 ## CLI commands
 
@@ -163,7 +192,8 @@ Shows configured models by default. Useful flags:
 
 - `--all`: full catalog
 - `--local`: local providers only
-- `--provider <name>`: filter by provider
+- `--provider <id>`: filter by provider id, for example `moonshot`; display
+  labels from interactive pickers are not accepted
 - `--plain`: one model per line
 - `--json`: machine‑readable output
 

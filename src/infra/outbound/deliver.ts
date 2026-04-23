@@ -36,7 +36,12 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import {
+  ackDelivery,
+  enqueueDelivery,
+  failDelivery,
+  withActiveDeliveryClaim,
+} from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import {
@@ -567,6 +572,8 @@ async function applyMessageSendingHook(params: {
   to: string;
   channel: Exclude<OutboundChannel, "none">;
   accountId?: string;
+  replyToId?: string | null;
+  threadId?: string | number | null;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
@@ -584,6 +591,8 @@ async function applyMessageSendingHook(params: {
       {
         to: params.to,
         content: params.payloadSummary.text,
+        replyToId: params.payload.replyToId ?? params.replyToId ?? undefined,
+        threadId: params.threadId ?? undefined,
         metadata: {
           channel: params.channel,
           accountId: params.accountId,
@@ -593,6 +602,7 @@ async function applyMessageSendingHook(params: {
       {
         channelId: params.channel,
         accountId: params.accountId ?? undefined,
+        conversationId: params.to,
       },
     );
     if (sendingResult?.cancel) {
@@ -655,6 +665,25 @@ export async function deliverOutboundPayloads(
         gatewayClientScopes: params.gatewayClientScopes,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
+  if (!queueId) {
+    return await deliverOutboundPayloadsWithQueueCleanup(params, null);
+  }
+
+  // Hold the same in-process claim used by recovery/drain while the live send
+  // owns this queue entry.
+  const claimResult = await withActiveDeliveryClaim(queueId, () =>
+    deliverOutboundPayloadsWithQueueCleanup(params, queueId),
+  );
+  if (claimResult.status === "claimed-by-other-owner") {
+    return [];
+  }
+  return claimResult.value;
+}
+
+async function deliverOutboundPayloadsWithQueueCleanup(
+  params: DeliverOutboundPayloadsParams,
+  queueId: string | null,
+): Promise<OutboundDeliveryResult[]> {
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
   // without throwing — so the outer try/catch never fires. We track whether any
@@ -827,6 +856,8 @@ async function deliverOutboundPayloadsCore(
         to,
         channel,
         accountId,
+        replyToId: params.replyToId,
+        threadId: params.threadId,
       });
       if (hookResult.cancelled) {
         continue;

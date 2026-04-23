@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/e2e/lib/parallels-package-common.sh"
+
 VM_NAME="Ubuntu 24.04.3 ARM64"
 VM_NAME_EXPLICIT=0
 SNAPSHOT_HINT="fresh"
@@ -37,6 +40,7 @@ TIMEOUT_VERIFY_S=90
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_AGENT_S=180
 TIMEOUT_GATEWAY_S=240
+PHASE_STALE_WARN_S=60
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -462,16 +466,7 @@ resolve_latest_version() {
 }
 
 current_build_commit() {
-  python3 - <<'PY'
-import json
-import pathlib
-
-path = pathlib.Path("dist/build-info.json")
-if not path.exists():
-    print("")
-else:
-    print(json.loads(path.read_text()).get("commit", ""))
-PY
+  parallels_package_current_build_commit
 }
 
 source_tree_dirty_for_build() {
@@ -479,46 +474,50 @@ source_tree_dirty_for_build() {
 }
 
 acquire_build_lock() {
-  local owner_pid=""
-  while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
-    if [[ -f "$BUILD_LOCK_DIR/pid" ]]; then
-      owner_pid="$(cat "$BUILD_LOCK_DIR/pid" 2>/dev/null || true)"
-      if [[ -n "$owner_pid" ]] && ! kill -0 "$owner_pid" >/dev/null 2>&1; then
-        warn "Removing stale Parallels build lock"
-        rm -rf "$BUILD_LOCK_DIR"
-        continue
-      fi
-    fi
-    sleep 1
-  done
-  printf '%s\n' "$$" >"$BUILD_LOCK_DIR/pid"
+  parallels_package_acquire_build_lock "$BUILD_LOCK_DIR"
 }
 
 release_build_lock() {
-  if [[ -d "$BUILD_LOCK_DIR" ]]; then
-    rm -rf "$BUILD_LOCK_DIR"
-  fi
+  parallels_package_release_build_lock "$BUILD_LOCK_DIR"
 }
 
 ensure_current_build() {
-  local head build_commit
-  acquire_build_lock
+  local head build_commit rc lock_owned
+  lock_owned=0
+  if [[ "${OPENCLAW_PARALLELS_BUILD_LOCK_HELD:-0}" != "1" ]]; then
+    acquire_build_lock
+    lock_owned=1
+  fi
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
   if [[ "$build_commit" == "$head" ]] && ! source_tree_dirty_for_build; then
-    release_build_lock
+    if [[ "$lock_owned" -eq 1 ]]; then
+      release_build_lock
+    fi
     return
   fi
   say "Build dist for current head"
+  set +e
   pnpm build
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    parallels_package_assert_no_generated_drift
+    rc=$?
+  fi
   build_commit="$(current_build_commit)"
-  release_build_lock
-  [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
+  set -e
+  if [[ "$lock_owned" -eq 1 ]]; then
+    release_build_lock
+  fi
+  [[ $rc -eq 0 ]] || return "$rc"
+  if [[ "$build_commit" != "$head" ]]; then
+    warn "dist/build-info.json still does not match HEAD after build"
+    return 1
+  fi
 }
 
 write_package_dist_inventory() {
-  node --import tsx --input-type=module --eval \
-    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
+  parallels_package_write_dist_inventory
 }
 
 extract_package_version_from_tgz() {
@@ -526,7 +525,7 @@ extract_package_version_from_tgz() {
 }
 
 pack_main_tgz() {
-  local short_head pkg packed_commit
+  local short_head pkg packed_commit rc
   if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
     say "Pack target package tgz: $TARGET_PACKAGE_SPEC"
     pkg="$(
@@ -540,13 +539,21 @@ pack_main_tgz() {
     return
   fi
   say "Pack current main tgz"
-  ensure_current_build
-  write_package_dist_inventory
-  short_head="$(git rev-parse --short HEAD)"
-  pkg="$(
-    npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
-      | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
-  )"
+  acquire_build_lock
+  set +e
+  {
+    OPENCLAW_PARALLELS_BUILD_LOCK_HELD=1 ensure_current_build &&
+      write_package_dist_inventory &&
+      short_head="$(git rev-parse --short HEAD)" &&
+      pkg="$(
+        npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
+          | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+      )"
+  }
+  rc=$?
+  set -e
+  release_build_lock
+  [[ $rc -eq 0 ]] || return "$rc"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
   packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
@@ -780,10 +787,11 @@ phase_run() {
   local timeout_s="$2"
   shift 2
 
-  local log_path pid start rc timed_out
+  local log_path pid start rc timed_out next_warn summary
   log_path="$(phase_log_path "$phase_id")"
   say "$phase_id"
   start=$SECONDS
+  next_warn=$((start + PHASE_STALE_WARN_S))
   timed_out=0
 
   (
@@ -792,6 +800,12 @@ phase_run() {
   pid=$!
 
   while kill -0 "$pid" >/dev/null 2>&1; do
+    if (( SECONDS >= next_warn )); then
+      summary="$(parallels_log_progress_extract python3 "$log_path")"
+      [[ -n "$summary" ]] || summary="waiting for first log line"
+      warn "$phase_id still running after $((SECONDS - start))s: $summary"
+      next_warn=$((SECONDS + PHASE_STALE_WARN_S))
+    fi
     if (( SECONDS - start >= timeout_s )); then
       timed_out=1
       kill "$pid" >/dev/null 2>&1 || true

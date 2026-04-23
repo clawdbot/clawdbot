@@ -31,9 +31,6 @@ import {
 } from "./update-global.js";
 
 const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
-const QA_CHANNEL_RUNTIME_API = bundledDistPluginFile("qa-channel", "runtime-api.js");
-const QA_LAB_RUNTIME_API = bundledDistPluginFile("qa-lab", "runtime-api.js");
-
 async function writeGlobalPackageJson(packageRoot: string, version = "1.0.0") {
   await fs.writeFile(
     path.join(packageRoot, "package.json"),
@@ -428,23 +425,12 @@ describe("update global helpers", () => {
     });
   });
 
-  it("falls back to legacy sidecar verification when the inventory is missing", async () => {
+  it("does not require private QA sidecars when the inventory is missing", async () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);
       await writeCompatSidecars(packageRoot);
 
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
-
-      await fs.rm(path.join(packageRoot, QA_CHANNEL_RUNTIME_API));
-      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-        `missing bundled runtime sidecar ${QA_CHANNEL_RUNTIME_API}`,
-      );
-      await fs.writeFile(path.join(packageRoot, QA_CHANNEL_RUNTIME_API), "export {};\n", "utf-8");
-
-      await fs.rm(path.join(packageRoot, QA_LAB_RUNTIME_API));
-      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-        `missing bundled runtime sidecar ${QA_LAB_RUNTIME_API}`,
-      );
     });
   });
 

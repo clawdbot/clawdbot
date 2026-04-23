@@ -79,6 +79,7 @@
   "cli-runtime",
   "cli-backend",
   "agent-harness",
+  "agent-harness-runtime",
   "hook-runtime",
   "host-runtime",
   "process-runtime",

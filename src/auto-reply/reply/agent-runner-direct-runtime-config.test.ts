@@ -20,6 +20,7 @@ const sentinelError = new Error("stop-after-preflight");
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
 const resolveReplyToModeMock = vi.fn();
 const createReplyToModeFilterForChannelMock = vi.fn();
+const createReplyMediaContextMock = vi.fn();
 const createReplyMediaPathNormalizerMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
@@ -37,6 +38,12 @@ vi.mock("./reply-threading.js", () => ({
 }));
 
 vi.mock("./reply-media-paths.js", () => ({
+  createReplyMediaContext: (...args: unknown[]) => {
+    createReplyMediaContextMock(...args);
+    return {
+      normalizePayload: createReplyMediaPathNormalizerMock(...args),
+    };
+  },
   createReplyMediaPathNormalizer: (...args: unknown[]) =>
     createReplyMediaPathNormalizerMock(...args),
 }));
@@ -112,6 +119,7 @@ describe("runReplyAgent runtime config", () => {
     resolveQueuedReplyExecutionConfigMock.mockReset();
     resolveReplyToModeMock.mockReset();
     createReplyToModeFilterForChannelMock.mockReset();
+    createReplyMediaContextMock.mockReset();
     createReplyMediaPathNormalizerMock.mockReset();
     runPreflightCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
@@ -142,7 +150,7 @@ describe("runReplyAgent runtime config", () => {
       }),
     );
     expect(resolveReplyToModeMock).toHaveBeenCalledWith(freshCfg, "telegram", "default", "dm");
-    expect(createReplyMediaPathNormalizerMock).toHaveBeenCalledWith({
+    expect(createReplyMediaContextMock).toHaveBeenCalledWith({
       cfg: freshCfg,
       sessionKey: undefined,
       workspaceDir: "/tmp",
@@ -160,6 +168,35 @@ describe("runReplyAgent runtime config", () => {
       expect.objectContaining({
         cfg: freshCfg,
         followupRun,
+      }),
+    );
+  });
+
+  it("passes the derived runtime-policy key to pre-run maintenance", async () => {
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const runtimePolicySessionKey = "agent:main:telegram:default:direct:test";
+    followupRun.run.sessionKey = "agent:main:main";
+    followupRun.run.runtimePolicySessionKey = runtimePolicySessionKey;
+    replyParams.sessionKey = "agent:main:main";
+    replyParams.runtimePolicySessionKey = runtimePolicySessionKey;
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runMemoryFlushIfNeededMock.mockRejectedValue(sentinelError);
+
+    await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
+
+    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey,
+      }),
+    );
+    expect(runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey,
       }),
     );
   });

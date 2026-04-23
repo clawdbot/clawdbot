@@ -42,6 +42,21 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts missing codex CLI fallback output", () => {
+    const text = [
+      "`codex` is not installed on the shell PATH in this environment.",
+      "",
+      "Command result:",
+      "```text",
+      "/bin/bash: line 1: codex: command not found",
+      "```",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
   it("accepts sandbox escalation rejection for codex models", () => {
     const texts = [
       "I couldn’t list them because `codex models` requires running outside the sandbox here, and that approval was rejected.",

@@ -79,6 +79,11 @@ const PROVIDER_CASES: LiveProviderCase[] = [
     pluginName: "Vydra Provider",
     providerId: "vydra",
   },
+  {
+    pluginId: "xai",
+    pluginName: "xAI Provider",
+    providerId: "xai",
+  },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
   .toSorted((left, right) => left.providerId.localeCompare(right.providerId));

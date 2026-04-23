@@ -7,8 +7,8 @@
   "dependencies": {
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
-    "@sinclair/typebox": "0.34.49",
     "grammy": "^1.42.0",
+    "typebox": "1.1.28",
     "undici": "8.1.0"
   },
   "devDependencies": {

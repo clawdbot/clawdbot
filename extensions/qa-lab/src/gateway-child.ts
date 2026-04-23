@@ -42,6 +42,10 @@ import type { QaTransportAdapter } from "./qa-transport.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
+const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
+  "OPENCLAW_QA_CONVEX_SECRET_CI",
+  "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
+]);
 
 export type QaGatewayChildStateMutationContext = {
   configPath: string;
@@ -216,6 +220,9 @@ export function buildQaRuntimeEnv(params: {
   const normalizedEnv = normalizeQaProviderModeEnv(env, params.providerMode);
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
+  for (const envKey of QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS) {
+    delete normalizedEnv[envKey];
+  }
   return normalizedEnv;
 }
 
@@ -545,7 +552,7 @@ export async function startQaGatewayChild(params: {
   let baseUrl = "";
   let wsUrl = "";
   let child: ReturnType<typeof spawn> | null = null;
-  let cfg: ReturnType<typeof buildQaGatewayConfig> | null = null;
+  let cfg!: OpenClawConfig;
   let rpcClient: Awaited<ReturnType<typeof startQaGatewayRpcClient>> | null = null;
   let stagedBundledPluginsRoot: string | null = null;
   let env: NodeJS.ProcessEnv | null = null;

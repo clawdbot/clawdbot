@@ -8,6 +8,7 @@ import {
 } from "./manifest-owner-policy.js";
 import {
   loadPluginManifestRegistry,
+  resolveManifestContractPluginIds,
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
@@ -115,6 +116,46 @@ export function resolveEnabledProviderPluginIds(params: {
         rootConfig: params.config,
         enabledByDefault: plugin.enabledByDefault,
       }).activated,
+  );
+}
+
+export function resolveExternalAuthProfileProviderPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): string[] {
+  return resolveManifestContractPluginIds({
+    contract: "externalAuthProviders",
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+}
+
+export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  declaredPluginIds?: ReadonlySet<string>;
+}): string[] {
+  // Deprecated compatibility fallback for provider plugins that still implement
+  // resolveExternalOAuthProfiles or omit contracts.externalAuthProviders. Remove
+  // this with the warning path in provider-runtime after the migration window.
+  const declaredPluginIds =
+    params.declaredPluginIds ?? new Set(resolveExternalAuthProfileProviderPluginIds(params));
+  const registry = loadProviderManifestRegistry(params);
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return listManifestPluginIds(
+    registry,
+    (plugin) =>
+      plugin.origin !== "bundled" &&
+      plugin.providers.length > 0 &&
+      !declaredPluginIds.has(plugin.id) &&
+      isProviderPluginEligibleForRuntimeOwnerActivation({
+        plugin,
+        normalizedConfig,
+        rootConfig: params.config,
+      }),
   );
 }
 
@@ -229,6 +270,8 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
 export const __testing = {
   resolveActivatableProviderOwnerPluginIds,
   resolveEnabledProviderPluginIds,
+  resolveExternalAuthProfileCompatFallbackPluginIds,
+  resolveExternalAuthProfileProviderPluginIds,
   resolveDiscoveredProviderPluginIds,
   resolveDiscoverableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,

@@ -165,7 +165,7 @@ export function extractTelegramAllowedEmojiReactions(
     return undefined;
   }
   const availableReactions = chat.available_reactions;
-  if (typeof availableReactions === "undefined") {
+  if (availableReactions === undefined) {
     return undefined;
   }
   if (availableReactions == null) {

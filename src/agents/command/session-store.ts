@@ -5,7 +5,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { setCliSessionBinding, setCliSessionId } from "../cli-session.js";
+import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
@@ -153,4 +153,29 @@ export async function updateSessionStoreAfterAgentRun(params: {
     return merged;
   });
   sessionStore[sessionKey] = persisted;
+}
+
+export async function clearCliSessionInStore(params: {
+  provider: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+}): Promise<SessionEntry | undefined> {
+  const { provider, sessionKey, sessionStore, storePath } = params;
+  const entry = sessionStore[sessionKey];
+  if (!entry) {
+    return undefined;
+  }
+
+  const next = { ...entry };
+  clearCliSession(next, provider);
+  next.updatedAt = Date.now();
+
+  const persisted = await updateSessionStore(storePath, (store) => {
+    const merged = mergeSessionEntry(store[sessionKey], next);
+    store[sessionKey] = merged;
+    return merged;
+  });
+  sessionStore[sessionKey] = persisted;
+  return persisted;
 }

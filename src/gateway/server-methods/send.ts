@@ -393,6 +393,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       channel?: string;
       accountId?: string;
       agentId?: string;
+      replyToId?: string;
       threadId?: string;
       sessionKey?: string;
       idempotencyKey: string;
@@ -430,6 +431,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const { cfg, channel } = resolvedChannel;
     const accountId = normalizeOptionalString(request.accountId);
+    const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
     const outboundChannel = channel;
     const plugin = resolveOutboundChannelPlugin({ channel, cfg });
@@ -485,6 +487,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           target: deliveryTarget,
           currentSessionKey: providedSessionKey,
           resolvedTarget: idLikeTarget,
+          replyToId,
           threadId,
         });
         const providedSessionBaseKey =
@@ -530,6 +533,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           to: deliveryTarget,
           accountId,
           payloads: outboundPayloads,
+          replyToId: replyToId ?? null,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
           threadId: outboundRoute?.threadId ?? threadId ?? null,

@@ -1,6 +1,7 @@
 export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Codex models:",
   "Available Codex models",
+  "Available models, local cache:",
   "Available agent target:",
   "Available agent targets:",
   "opened an interactive trust prompt",
@@ -13,6 +14,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "`codex models` failed in this sandbox",
   "`codex models` could not be run in this sandbox.",
   "`codex models` is not runnable in this sandboxed session.",
+  "`codex` is not installed on the shell PATH in this environment.",
   "`codex models` didn’t return a plain list in this environment",
   "I couldn’t get a direct `codex models` CLI listing because the local sandbox blocked that command.",
   "I couldn’t list all installed/available Codex models from the local CLI because the sandboxed `codex` command failed to start in this environment.",

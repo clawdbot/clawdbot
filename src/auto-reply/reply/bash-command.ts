@@ -16,6 +16,7 @@ import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
 const DEFAULT_FOREGROUND_MS = 2000;
@@ -210,7 +211,11 @@ export async function handleBashChatCommand(params: {
   if (!params.elevated.enabled || !params.elevated.allowed) {
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: params.sessionKey,
+      sessionKey: resolveRuntimePolicySessionKey({
+        cfg: params.cfg,
+        ctx: params.ctx,
+        sessionKey: params.sessionKey,
+      }),
     }).sandboxed;
     return {
       text: formatElevatedUnavailableMessage({

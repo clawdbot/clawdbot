@@ -146,7 +146,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
       const remove = typeof params.remove === "boolean" ? params.remove : undefined;
 
-      const timestamp = parseInt(messageId, 10);
+      const timestamp = Number.parseInt(messageId, 10);
       if (!Number.isFinite(timestamp)) {
         throw new Error(`Invalid messageId: ${messageId}. Expected numeric timestamp.`);
       }

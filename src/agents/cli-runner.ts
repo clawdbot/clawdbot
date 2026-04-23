@@ -72,6 +72,7 @@ export async function runPreparedCliAgent(
                     ? { authProfileId: context.effectiveAuthProfileId }
                     : {}),
                   ...(context.authEpoch ? { authEpoch: context.authEpoch } : {}),
+                  authEpochVersion: context.authEpochVersion,
                   ...(context.extraSystemPromptHash
                     ? { extraSystemPromptHash: context.extraSystemPromptHash }
                     : {}),
@@ -149,6 +150,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     extraSystemPrompt: params.extraSystemPrompt,
+    extraSystemPromptStatic: params.extraSystemPromptStatic,
     ownerNumbers: params.ownerNumbers,
     // Legacy `claudeSessionId` callers predate the shared CLI session contract.
     // Ignore it here so the compatibility wrapper does not accidentally resume

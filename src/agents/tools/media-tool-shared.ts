@@ -402,10 +402,16 @@ export function resolveModelFromRegistry(params: {
   modelId: string;
 }): Model<Api> {
   const resolvedRef = normalizeModelRef(params.provider, params.modelId);
-  const model = params.modelRegistry.find(
+  let model = params.modelRegistry.find(
     resolvedRef.provider,
     resolvedRef.model,
   ) as Model<Api> | null;
+  if (!model && !resolvedRef.model.includes("/")) {
+    model = params.modelRegistry.find(
+      resolvedRef.provider,
+      `${resolvedRef.provider}/${resolvedRef.model}`,
+    ) as Model<Api> | null;
+  }
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }

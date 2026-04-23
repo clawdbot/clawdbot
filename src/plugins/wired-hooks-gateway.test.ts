@@ -31,7 +31,12 @@ async function expectGatewayHookCall(params: {
 }
 
 describe("gateway hook runner methods", () => {
-  const gatewayCtx = { port: 18789 };
+  const gatewayCtx = {
+    port: 18789,
+    config: {} as never,
+    workspaceDir: "/tmp/openclaw-workspace",
+    getCron: () => undefined,
+  };
 
   it.each([
     {

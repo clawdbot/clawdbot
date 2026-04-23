@@ -325,4 +325,4 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 - [Task Flow](/automation/taskflow) — flow orchestration above tasks
 - [Scheduled Tasks](/automation/cron-jobs) — scheduling background work
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
-- [CLI: Tasks](/cli/index#tasks) — CLI command reference
+- [CLI: Tasks](/cli/tasks) — CLI command reference

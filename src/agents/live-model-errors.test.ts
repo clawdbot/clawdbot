@@ -20,6 +20,11 @@ describe("live model error helpers", () => {
     ).toBe(true);
     expect(
       isModelNotFoundErrorMessage(
+        '400 Provider returned error {"code":400,"msg":"model[Alibaba-NLP/Tongyi-DeepResearch-30B-A3B] router not found"}',
+      ),
+    ).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
         "HTTP 400 not_found_error: model: claude-3-5-haiku-20241022 (request_id: req_123)",
       ),
     ).toBe(true);

@@ -15,13 +15,16 @@ import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-pa
 import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
 import { isMatrixExtensionRoot } from "../test/vitest/vitest.extension-matrix-paths.mjs";
 import { isMattermostExtensionRoot } from "../test/vitest/vitest.extension-mattermost-paths.mjs";
+import { isMediaExtensionRoot } from "../test/vitest/vitest.extension-media-paths.mjs";
 import { isMemoryExtensionRoot } from "../test/vitest/vitest.extension-memory-paths.mjs";
 import { isMessagingExtensionRoot } from "../test/vitest/vitest.extension-messaging-paths.mjs";
+import { isMiscExtensionRoot } from "../test/vitest/vitest.extension-misc-paths.mjs";
 import { isMsTeamsExtensionRoot } from "../test/vitest/vitest.extension-msteams-paths.mjs";
 import {
   isProviderExtensionRoot,
   isProviderOpenAiExtensionRoot,
 } from "../test/vitest/vitest.extension-provider-paths.mjs";
+import { isQaExtensionRoot } from "../test/vitest/vitest.extension-qa-paths.mjs";
 import { isTelegramExtensionRoot } from "../test/vitest/vitest.extension-telegram-paths.mjs";
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
@@ -43,7 +46,10 @@ import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
 const ACP_VITEST_CONFIG = "test/vitest/vitest.acp.config.ts";
+const AUTO_REPLY_CORE_VITEST_CONFIG = "test/vitest/vitest.auto-reply-core.config.ts";
 const AUTO_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply.config.ts";
+const AUTO_REPLY_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply-reply.config.ts";
+const AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG = "test/vitest/vitest.auto-reply-top-level.config.ts";
 const BOUNDARY_VITEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 const BUNDLED_VITEST_CONFIG = "test/vitest/vitest.bundled.config.ts";
 const CHANNEL_VITEST_CONFIG = "test/vitest/vitest.channels.config.ts";
@@ -72,13 +78,16 @@ const EXTENSION_IMESSAGE_VITEST_CONFIG = "test/vitest/vitest.extension-imessage.
 const EXTENSION_IRC_VITEST_CONFIG = "test/vitest/vitest.extension-irc.config.ts";
 const EXTENSION_LINE_VITEST_CONFIG = "test/vitest/vitest.extension-line.config.ts";
 const EXTENSION_MATTERMOST_VITEST_CONFIG = "test/vitest/vitest.extension-mattermost.config.ts";
+const EXTENSION_MEDIA_VITEST_CONFIG = "test/vitest/vitest.extension-media.config.ts";
 const EXTENSION_MATRIX_VITEST_CONFIG = "test/vitest/vitest.extension-matrix.config.ts";
 const EXTENSION_MEMORY_VITEST_CONFIG = "test/vitest/vitest.extension-memory.config.ts";
 const EXTENSION_MSTEAMS_VITEST_CONFIG = "test/vitest/vitest.extension-msteams.config.ts";
 const EXTENSION_MESSAGING_VITEST_CONFIG = "test/vitest/vitest.extension-messaging.config.ts";
+const EXTENSION_MISC_VITEST_CONFIG = "test/vitest/vitest.extension-misc.config.ts";
 const EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG =
   "test/vitest/vitest.extension-provider-openai.config.ts";
 const EXTENSION_PROVIDERS_VITEST_CONFIG = "test/vitest/vitest.extension-providers.config.ts";
+const EXTENSION_QA_VITEST_CONFIG = "test/vitest/vitest.extension-qa.config.ts";
 const EXTENSION_SIGNAL_VITEST_CONFIG = "test/vitest/vitest.extension-signal.config.ts";
 const EXTENSION_SLACK_VITEST_CONFIG = "test/vitest/vitest.extension-slack.config.ts";
 const EXTENSION_TELEGRAM_VITEST_CONFIG = "test/vitest/vitest.extension-telegram.config.ts";
@@ -87,6 +96,10 @@ const EXTENSION_WHATSAPP_VITEST_CONFIG = "test/vitest/vitest.extension-whatsapp.
 const EXTENSION_ZALO_VITEST_CONFIG = "test/vitest/vitest.extension-zalo.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.extensions.config.ts";
 const FULL_EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
+const GATEWAY_CLIENT_VITEST_CONFIG = "test/vitest/vitest.gateway-client.config.ts";
+const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
+const GATEWAY_METHODS_VITEST_CONFIG = "test/vitest/vitest.gateway-methods.config.ts";
+const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
 const HOOKS_VITEST_CONFIG = "test/vitest/vitest.hooks.config.ts";
 const INFRA_VITEST_CONFIG = "test/vitest/vitest.infra.config.ts";
@@ -97,6 +110,10 @@ const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.conf
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
+const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
+const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
+const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
+const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const PROCESS_VITEST_CONFIG = "test/vitest/vitest.process.config.ts";
 const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.ts";
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
@@ -113,6 +130,9 @@ const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  autoReplyCore: AUTO_REPLY_CORE_VITEST_CONFIG,
+  autoReplyReply: AUTO_REPLY_REPLY_VITEST_CONFIG,
+  autoReplyTopLevel: AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG,
   autoReply: AUTO_REPLY_VITEST_CONFIG,
   boundary: BOUNDARY_VITEST_CONFIG,
   bundled: BUNDLED_VITEST_CONFIG,
@@ -141,17 +161,24 @@ const VITEST_CONFIG_BY_KIND = {
   extensionLine: EXTENSION_LINE_VITEST_CONFIG,
   extensionMatrix: EXTENSION_MATRIX_VITEST_CONFIG,
   extensionMattermost: EXTENSION_MATTERMOST_VITEST_CONFIG,
+  extensionMedia: EXTENSION_MEDIA_VITEST_CONFIG,
   extensionMemory: EXTENSION_MEMORY_VITEST_CONFIG,
   extensionMessaging: EXTENSION_MESSAGING_VITEST_CONFIG,
+  extensionMisc: EXTENSION_MISC_VITEST_CONFIG,
   extensionMsTeams: EXTENSION_MSTEAMS_VITEST_CONFIG,
   extensionProviderOpenAi: EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG,
   extensionProvider: EXTENSION_PROVIDERS_VITEST_CONFIG,
+  extensionQa: EXTENSION_QA_VITEST_CONFIG,
   extensionSignal: EXTENSION_SIGNAL_VITEST_CONFIG,
   extensionSlack: EXTENSION_SLACK_VITEST_CONFIG,
   extensionTelegram: EXTENSION_TELEGRAM_VITEST_CONFIG,
   extensionVoiceCall: EXTENSION_VOICE_CALL_VITEST_CONFIG,
   extensionWhatsApp: EXTENSION_WHATSAPP_VITEST_CONFIG,
   extensionZalo: EXTENSION_ZALO_VITEST_CONFIG,
+  gatewayClient: GATEWAY_CLIENT_VITEST_CONFIG,
+  gatewayCore: GATEWAY_CORE_VITEST_CONFIG,
+  gatewayMethods: GATEWAY_METHODS_VITEST_CONFIG,
+  gatewayServer: GATEWAY_SERVER_VITEST_CONFIG,
   gateway: GATEWAY_VITEST_CONFIG,
   hooks: HOOKS_VITEST_CONFIG,
   infra: INFRA_VITEST_CONFIG,
@@ -163,6 +190,10 @@ const VITEST_CONFIG_BY_KIND = {
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
+  unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
+  unitSrc: UNIT_SRC_VITEST_CONFIG,
+  unitSupport: UNIT_SUPPORT_VITEST_CONFIG,
+  unitUi: UNIT_UI_VITEST_CONFIG,
   runtimeConfig: RUNTIME_CONFIG_VITEST_CONFIG,
   secrets: SECRETS_VITEST_CONFIG,
   sharedCore: SHARED_CORE_VITEST_CONFIG,
@@ -189,6 +220,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/run-vitest.mjs",
     ["test/scripts/test-projects.test.ts", "test/scripts/vitest-local-scheduling.test.ts"],
   ],
+  ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],
+  ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
+  ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/test-projects.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
@@ -205,6 +239,8 @@ const GENERATED_CHANGED_TEST_TARGETS = new Set([
   "src/canvas-host/a2ui/.bundle.hash",
   "src/canvas-host/a2ui/a2ui.bundle.js",
 ]);
+const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "180000";
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
@@ -454,6 +490,9 @@ function isRoutableChangedTarget(changedPath) {
   if (GENERATED_CHANGED_TEST_TARGETS.has(changedPath)) {
     return false;
   }
+  if (changedPath.endsWith(".live.test.ts")) {
+    return false;
+  }
   return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
 }
 
@@ -534,6 +573,9 @@ function classifyTarget(arg, cwd) {
     if (isProviderOpenAiExtensionRoot(extensionRoot)) {
       return "extensionProviderOpenAi";
     }
+    if (isQaExtensionRoot(extensionRoot)) {
+      return "extensionQa";
+    }
     if (isChannelSurfaceTestFile(relative)) {
       return "extensionChannel";
     }
@@ -570,6 +612,9 @@ function classifyTarget(arg, cwd) {
     if (isMatrixExtensionRoot(extensionRoot)) {
       return "extensionMatrix";
     }
+    if (isMediaExtensionRoot(extensionRoot)) {
+      return "extensionMedia";
+    }
     if (isMemoryExtensionRoot(extensionRoot)) {
       return "extensionMemory";
     }
@@ -578,6 +623,9 @@ function classifyTarget(arg, cwd) {
     }
     if (isMessagingExtensionRoot(extensionRoot)) {
       return "extensionMessaging";
+    }
+    if (isMiscExtensionRoot(extensionRoot)) {
+      return "extensionMisc";
     }
     return isProviderExtensionRoot(extensionRoot) ? "extensionProvider" : "extension";
   }
@@ -788,6 +836,10 @@ export function buildVitestRunPlans(
     "contractsPlugin",
     "bundled",
     "gateway",
+    "gatewayCore",
+    "gatewayClient",
+    "gatewayMethods",
+    "gatewayServer",
     "hooks",
     "infra",
     "runtimeConfig",
@@ -808,9 +860,16 @@ export function buildVitestRunPlans(
     "commandLight",
     "command",
     "autoReply",
+    "autoReplyCore",
+    "autoReplyReply",
+    "autoReplyTopLevel",
     "agent",
     "plugin",
     "ui",
+    "unitSrc",
+    "unitSecurity",
+    "unitSupport",
+    "unitUi",
     "utils",
     "wizard",
     "e2e",
@@ -829,11 +888,14 @@ export function buildVitestRunPlans(
     "extensionWhatsApp",
     "extensionZalo",
     "extensionMatrix",
+    "extensionMedia",
     "extensionMemory",
+    "extensionMisc",
     "extensionMsTeams",
     "extensionMessaging",
     "extensionProviderOpenAi",
     "extensionProvider",
+    "extensionQa",
     "extensionSignal",
     "extensionSlack",
     "extensionFull",
@@ -996,6 +1058,32 @@ export function applyParallelVitestCachePaths(specs, params = {}) {
           ".experimental-vitest-cache",
           cacheSegment,
         ),
+      },
+    };
+  });
+}
+
+export function applyDefaultMultiSpecVitestCachePaths(specs, params = {}) {
+  if (specs.length <= 1 || specs.some((spec) => spec.watchMode)) {
+    return specs;
+  }
+  return applyParallelVitestCachePaths(specs, params);
+}
+
+export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
+  const baseEnv = params.env ?? process.env;
+  if (Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)) {
+    return specs;
+  }
+  return specs.map((spec) => {
+    if (spec.watchMode || Object.hasOwn(spec.env ?? {}, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)) {
+      return spec;
+    }
+    return {
+      ...spec,
+      env: {
+        ...spec.env,
+        [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
       },
     };
   });

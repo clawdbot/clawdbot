@@ -39,7 +39,7 @@ function resolveContractFileWeight(file) {
 
 export function createChannelContractTestShards() {
   const rootDir = "src/channels/plugins/contracts";
-  const suffixes = ["a", "b", "c", "d", "e", "f", "g", "h"];
+  const suffixes = ["a", "b", "c"];
   const groups = Object.fromEntries(
     ["registry", "core"].flatMap((family) =>
       suffixes.map((suffix) => [`checks-fast-contracts-channels-${family}-${suffix}`, []]),

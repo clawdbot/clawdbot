@@ -110,7 +110,7 @@ function redactText(text: string, patterns: RegExp[]): string {
   let next = text;
   for (const pattern of patterns) {
     next = replacePatternBounded(next, pattern, (...args: string[]) =>
-      redactMatch(args[0], args.slice(1, args.length - 2)),
+      redactMatch(args[0], args.slice(1, -2)),
     );
   }
   return next;

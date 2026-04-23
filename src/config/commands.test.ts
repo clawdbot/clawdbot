@@ -3,6 +3,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   isCommandFlagEnabled,
+  isModelsWriteEnabled,
   isRestartEnabled,
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -195,6 +196,24 @@ describe("isRestartEnabled", () => {
     expect(
       isRestartEnabled({
         commands: Object.create({ restart: false }) as Record<string, unknown>,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("isModelsWriteEnabled", () => {
+  it("defaults to enabled unless explicitly false", () => {
+    expect(isModelsWriteEnabled(undefined)).toBe(true);
+    expect(isModelsWriteEnabled({})).toBe(true);
+    expect(isModelsWriteEnabled({ commands: {} })).toBe(true);
+    expect(isModelsWriteEnabled({ commands: { modelsWrite: true } })).toBe(true);
+    expect(isModelsWriteEnabled({ commands: { modelsWrite: false } })).toBe(false);
+  });
+
+  it("ignores inherited modelsWrite flags", () => {
+    expect(
+      isModelsWriteEnabled({
+        commands: Object.create({ modelsWrite: false }) as Record<string, unknown>,
       }),
     ).toBe(true);
   });

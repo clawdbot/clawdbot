@@ -130,7 +130,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "plugins",
-    description: "Manage OpenClaw plugins and extensions",
+    description: "Manage OpenClaw plugins",
     hasSubcommands: true,
   },
   {

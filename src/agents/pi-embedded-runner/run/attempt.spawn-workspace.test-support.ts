@@ -424,6 +424,7 @@ vi.mock("../../pi-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => undefined,
   getOrCreateSessionMcpRuntime: async () => undefined,
   materializeBundleMcpToolsForRun: async () => undefined,
+  retireSessionMcpRuntime: async () => true,
 }));
 
 vi.mock("../../pi-bundle-lsp-runtime.js", () => ({
@@ -596,13 +597,16 @@ vi.mock("../thinking.js", () => ({
   dropThinkingBlocks: <T>(messages: T) => messages,
 }));
 
-vi.mock("../tool-name-allowlist.js", () => ({
-  collectAllowedToolNames: () => undefined,
-}));
+vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
+  return {
+    ...actual,
+    collectAllowedToolNames: () => undefined,
+  };
+});
 
 vi.mock("../tool-split.js", () => ({
   splitSdkTools: ({ tools }: { tools: unknown[] }) => ({
-    builtInTools: [],
     customTools: tools,
   }),
 }));
@@ -660,6 +664,7 @@ export type MutableSession = {
     };
   };
   prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
+  setActiveToolsByName: (toolNames: string[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
@@ -772,6 +777,7 @@ export function createDefaultEmbeddedSession(params?: {
         },
       },
     },
+    setActiveToolsByName: () => {},
     prompt: async (prompt, options) => {
       if (params?.prompt) {
         await params.prompt(session, prompt, options);

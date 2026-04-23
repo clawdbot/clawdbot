@@ -40,6 +40,14 @@ function expectSpawnEnv() {
   return spawnOptions?.env;
 }
 
+function expectSpawnCommand() {
+  return spawnMock.mock.calls[0]?.[0] as string | undefined;
+}
+
+function expectSpawnArgs() {
+  return spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+}
+
 describe("createPtyAdapter", () => {
   let createPtyAdapter: typeof import("./pty.js").createPtyAdapter;
 
@@ -143,16 +151,55 @@ describe("createPtyAdapter", () => {
     await expect(adapter.wait()).resolves.toEqual({ code: 3, signal: null });
   });
 
-  it("keeps inherited env when no override env is provided", async () => {
-    const stub = createStubPty();
-    spawnMock.mockReturnValue(stub);
+  it("keeps inherited env when no override env is provided on non-Linux", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try {
+      const stub = createStubPty();
+      spawnMock.mockReturnValue(stub);
 
-    await createPtyAdapter({
-      shell: "bash",
-      args: ["-lc", "env"],
-    });
+      await createPtyAdapter({
+        shell: "bash",
+        args: ["-lc", "env"],
+      });
 
-    expect(expectSpawnEnv()).toBeUndefined();
+      expect(expectSpawnCommand()).toBe("bash");
+      expect(expectSpawnArgs()).toEqual(["-lc", "env"]);
+      expect(expectSpawnEnv()).toBeUndefined();
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+  });
+
+  it("wraps Linux PTY spawns so shell children inherit higher OOM score", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      const stub = createStubPty();
+      spawnMock.mockReturnValue(stub);
+
+      await createPtyAdapter({
+        shell: "bash",
+        args: ["-lc", "env"],
+        env: { PATH: "/usr/bin", BASH_ENV: "/tmp/bashenv" },
+      });
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+
+    expect(expectSpawnCommand()).toBe("/bin/sh");
+    expect(expectSpawnArgs()).toEqual([
+      "-c",
+      'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+      "bash",
+      "-lc",
+      "env",
+    ]);
+    expect(expectSpawnEnv()).toEqual({ PATH: "/usr/bin" });
   });
 
   it("passes explicit env overrides as strings", async () => {

@@ -113,7 +113,8 @@ describe("boot-md handler", () => {
     await runBootChecklist(makeEvent({ context: { cfg } }));
 
     expect(logWarn).toHaveBeenCalledTimes(1);
-    expect(logWarn).toHaveBeenCalledWith("boot-md failed for agent startup run", {
+    expect(logWarn).toHaveBeenCalledWith("startup task failed", {
+      source: "boot-md",
       agentId: "ops",
       workspaceDir: OPS_WORKSPACE_DIR,
       reason: "agent failed",
@@ -126,7 +127,8 @@ describe("boot-md handler", () => {
 
     await runBootChecklist(makeEvent({ context: { cfg } }));
 
-    expect(logDebug).toHaveBeenCalledWith("boot-md skipped for agent startup run", {
+    expect(logDebug).toHaveBeenCalledWith("startup task skipped", {
+      source: "boot-md",
       agentId: "main",
       workspaceDir: MAIN_WORKSPACE_DIR,
       reason: "missing",

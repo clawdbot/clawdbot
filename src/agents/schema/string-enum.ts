@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 type StringEnumOptions<T extends readonly string[]> = {
   description?: string;

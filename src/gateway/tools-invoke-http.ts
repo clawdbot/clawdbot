@@ -8,6 +8,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
+import { defaultSlotIdForKey } from "../plugins/slots.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -193,7 +194,7 @@ export async function handleToolsInvokeHttpRequest(
           type: "invalid_request",
           message:
             `memory tools are disabled in tests${suffix}. ` +
-            'Enable by setting plugins.slots.memory="memory-core" (and ensure plugins.enabled is not false).',
+            `Enable by setting plugins.slots.memory="${defaultSlotIdForKey("memory")}" (and ensure plugins.enabled is not false).`,
         },
       });
       return true;

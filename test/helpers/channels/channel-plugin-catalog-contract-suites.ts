@@ -203,6 +203,71 @@ export function describeChannelPluginCatalogEntriesContract() {
           };
         },
       },
+      {
+        name: "accepts rich external manifest entries with pinned npm metadata",
+        setup: () => {
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-rich-"));
+          const catalogPath = path.join(dir, "catalog.json");
+          fs.writeFileSync(
+            catalogPath,
+            JSON.stringify({
+              $schema: "./manifest.schema.json",
+              schemaVersion: 1,
+              description:
+                "Extension manifest. Declares plugin packages that OpenClaw can discover during onboarding and install on demand via `openclaw plugins install`.",
+              entries: [
+                {
+                  name: "@wecom/wecom-openclaw-plugin",
+                  description:
+                    "OpenClaw WeCom (企业微信) channel plugin — community maintained, published on npm.",
+                  source: "external",
+                  kind: "channel",
+                  openclaw: {
+                    channel: {
+                      id: "wecom",
+                      label: "WeCom",
+                      selectionLabel: "WeCom (企业微信)",
+                      detailLabel: "WeCom",
+                      docsPath: "/channels/wecom",
+                      docsLabel: "wecom",
+                      blurb: "企业微信 (WeCom) bot & conversation channel.",
+                      aliases: ["qywx", "wework"],
+                      order: 45,
+                    },
+                    install: {
+                      npmSpec: "@wecom/wecom-openclaw-plugin@1.2.3",
+                      defaultChoice: "npm",
+                      minHostVersion: ">=2026.4.10",
+                      expectedIntegrity: "sha512-wecom",
+                    },
+                  },
+                },
+              ],
+            }),
+          );
+          return {
+            channelId: "wecom",
+            catalogPaths: [catalogPath],
+            expected: {
+              id: "wecom",
+              meta: {
+                label: "WeCom",
+                selectionLabel: "WeCom (企业微信)",
+                detailLabel: "WeCom",
+                docsPath: "/channels/wecom",
+                docsLabel: "wecom",
+                blurb: "企业微信 (WeCom) bot & conversation channel.",
+              },
+              install: {
+                npmSpec: "@wecom/wecom-openclaw-plugin@1.2.3",
+                defaultChoice: "npm",
+                minHostVersion: ">=2026.4.10",
+                expectedIntegrity: "sha512-wecom",
+              },
+            },
+          };
+        },
+      },
     ] as const)("$name", ({ setup }) => {
       const setupResult = setup();
       const { channelId, expected } = setupResult;

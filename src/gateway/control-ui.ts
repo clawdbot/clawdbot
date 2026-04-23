@@ -55,6 +55,10 @@ export type ControlUiRequestOptions = {
   config?: OpenClawConfig;
   agentId?: string;
   root?: ControlUiRootState;
+  auth?: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
 };
 
 export type ControlUiRootState =
@@ -617,11 +621,11 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
-export function handleControlUiHttpRequest(
+export async function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts?: ControlUiRequestOptions,
-): boolean {
+): Promise<boolean> {
   const urlRaw = req.url;
   if (!urlRaw) {
     return false;
@@ -657,6 +661,16 @@ export function handleControlUiHttpRequest(
     ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
   if (pathname === bootstrapConfigPath) {
+    if (
+      !(await authorizeControlUiReadRequest(req, res, {
+        auth: opts?.auth,
+        trustedProxies: opts?.trustedProxies,
+        allowRealIpFallback: opts?.allowRealIpFallback,
+        rateLimiter: opts?.rateLimiter,
+      }))
+    ) {
+      return true;
+    }
     const config = opts?.config;
     const identity = config
       ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })

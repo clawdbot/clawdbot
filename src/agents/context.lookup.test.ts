@@ -20,7 +20,7 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => contextTestState.loadConfigImpl(),
 }));
 
-vi.mock("./models-config.js", () => ({
+vi.mock("./models-config.runtime.js", () => ({
   ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
 }));
 
@@ -75,7 +75,9 @@ async function flushAsyncWarmup() {
     await vi.advanceTimersByTimeAsync(0);
     return;
   }
+  await Promise.resolve();
   await new Promise((r) => setTimeout(r, 0));
+  await Promise.resolve();
 }
 
 let contextModule: ContextModule;
@@ -196,40 +198,26 @@ describe("lookupContextTokens", () => {
   });
 
   it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {
-    const argvSnapshot = process.argv;
-    try {
-      for (const scenario of [
-        {
-          argv: ["node", "openclaw", "chat"],
-          expectedCalls: 1,
-        },
-        {
-          argv: ["node", "openclaw", "--profile", "--", "config", "validate"],
-          expectedCalls: 0,
-        },
-        {
-          argv: ["node", "openclaw", "logs", "--limit", "5"],
-          expectedCalls: 0,
-        },
-        {
-          argv: ["node", "openclaw", "status", "--json"],
-          expectedCalls: 0,
-        },
-        {
-          argv: ["node", "scripts/test-built-plugin-singleton.mjs"],
-          expectedCalls: 0,
-        },
-      ]) {
-        const loadConfigMock = vi.fn(() => ({ models: {} }));
-        const { ensureOpenClawModelsJson } = mockContextModuleDeps(loadConfigMock);
-        process.argv = scenario.argv;
-        await importFreshContextModule();
-        expect(loadConfigMock).toHaveBeenCalledTimes(scenario.expectedCalls);
-        expect(ensureOpenClawModelsJson).toHaveBeenCalledTimes(scenario.expectedCalls);
-      }
-    } finally {
-      process.argv = argvSnapshot;
-    }
+    const { shouldEagerWarmContextWindowCache } = await importContextModule();
+
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat"])).toBe(true);
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "node",
+        "openclaw",
+        "--profile",
+        "--",
+        "config",
+        "validate",
+      ]),
+    ).toBe(false);
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "logs", "--limit", "5"])).toBe(
+      false,
+    );
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "status", "--json"])).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache(["node", "scripts/test-built-plugin-singleton.mjs"]),
+    ).toBe(false);
   });
 
   it("retries config loading after backoff when an initial load fails", async () => {
@@ -424,6 +412,21 @@ describe("lookupContextTokens", () => {
       model: "gemini-2.5-pro",
     });
     expect(explicitResult).toBe(2_000_000);
+  });
+
+  it("resolveContextTokensForModel(model-only) does not force 1M for inferred anthropic opus 4.7 ids", async () => {
+    mockDiscoveryDeps([{ id: "anthropic/claude-opus-4.7-20260219", contextWindow: 200_000 }]);
+
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
+    lookupContextTokens("anthropic/claude-opus-4.7-20260219");
+    await flushAsyncWarmup();
+
+    const result = resolveContextTokensForModel({
+      model: "anthropic/claude-opus-4.7-20260219",
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(200_000);
   });
 
   it("resolveContextTokensForModel: qualified key beats bare min when provider is explicit (original #35976 fix)", async () => {

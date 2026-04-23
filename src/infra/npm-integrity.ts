@@ -27,19 +27,26 @@ export type ResolveNpmIntegrityDriftResult<TPayload> = {
   payload?: TPayload;
 };
 
+function normalizeIntegrity(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
 export async function resolveNpmIntegrityDrift<TPayload>(
   params: ResolveNpmIntegrityDriftParams<TPayload>,
 ): Promise<ResolveNpmIntegrityDriftResult<TPayload>> {
-  if (!params.expectedIntegrity || !params.resolution.integrity) {
+  const expectedIntegrity = normalizeIntegrity(params.expectedIntegrity);
+  const actualIntegrity = normalizeIntegrity(params.resolution.integrity);
+  if (!expectedIntegrity || !actualIntegrity) {
     return { proceed: true };
   }
-  if (params.expectedIntegrity === params.resolution.integrity) {
+  if (expectedIntegrity === actualIntegrity) {
     return { proceed: true };
   }
 
   const integrityDrift: NpmIntegrityDrift = {
-    expectedIntegrity: params.expectedIntegrity,
-    actualIntegrity: params.resolution.integrity,
+    expectedIntegrity,
+    actualIntegrity,
   };
   const payload = params.createPayload({
     spec: params.spec,
@@ -48,7 +55,7 @@ export async function resolveNpmIntegrityDrift<TPayload>(
     resolution: params.resolution,
   });
 
-  let proceed = true;
+  let proceed = false;
   if (params.onIntegrityDrift) {
     proceed = await params.onIntegrityDrift(payload);
   } else {

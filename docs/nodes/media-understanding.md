@@ -164,7 +164,7 @@ working option**:
      example through `agents.defaults.imageModel` or
      `openclaw infer image describe --model ollama/<vision-model>`.
    - Bundled fallback order:
-     - Audio: OpenAI → Groq → Deepgram → Google → Mistral
+     - Audio: OpenAI → Groq → xAI → Deepgram → Google → Mistral
      - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
      - Video: Google → Qwen → Moonshot
 
@@ -212,6 +212,7 @@ lists, OpenClaw can infer defaults:
 - `mistral`: **audio**
 - `zai`: **image**
 - `groq`: **audio**
+- `xai`: **audio**
 - `deepgram`: **audio**
 - Any `models.providers.<id>.models[]` catalog with an image-capable model:
   **image**

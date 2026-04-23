@@ -297,9 +297,10 @@ export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioCo
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const childToken = buildMatrixQaToken("MATRIX_QA_SUBAGENT_CHILD");
   const triggerBody = [
-    `${context.sutUserId} Use sessions_spawn for this QA check.`,
-    `task="Reply exactly \`${childToken}\`. This is the marker."`,
-    "label=matrix-thread-subagent thread=true mode=session runTimeoutSeconds=30",
+    `${context.sutUserId} Call sessions_spawn now for this QA check.`,
+    `Use task="Reply exactly \`${childToken}\`. This is the marker."`,
+    "Use label=matrix-thread-subagent thread=true mode=session runTimeoutSeconds=60.",
+    "Do not answer with the marker yourself.",
   ].join(" ");
   const driverEventId = await client.sendTextMessage({
     body: triggerBody,

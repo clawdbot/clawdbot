@@ -7,7 +7,7 @@ export type ReplyDirectiveParseResult = {
   mediaUrls?: string[];
   mediaUrl?: string;
   replyToId?: string;
-  replyToCurrent: boolean;
+  replyToCurrent?: boolean;
   replyToTag: boolean;
   audioAsVoice?: boolean;
   isSilent: boolean;
@@ -41,7 +41,7 @@ export function parseReplyDirectives(
     mediaUrls: split.mediaUrls,
     mediaUrl: split.mediaUrl,
     replyToId: replyParsed.replyToId,
-    replyToCurrent: replyParsed.replyToCurrent,
+    replyToCurrent: replyParsed.replyToCurrent || undefined,
     replyToTag: replyParsed.hasReplyTag,
     audioAsVoice: split.audioAsVoice,
     isSilent,

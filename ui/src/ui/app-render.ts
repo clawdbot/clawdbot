@@ -1011,6 +1011,10 @@ export function renderApp(state: AppViewState) {
             setTheme: (theme, context) => state.setTheme(theme, context),
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
+            userName: state.userName ?? null,
+            userAvatar: state.userAvatar ?? null,
+            onUserNameChange: (name) => state.applyLocalUserIdentity?.({ name }),
+            onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
             configObject: configObj,
             onApplyPreset: (presetId) => {
               void applyQuickSettingsPreset(state, presetId).then(() => requestHostUpdate?.());
@@ -1153,6 +1157,10 @@ export function renderApp(state: AppViewState) {
       case "tools":
         void loadToolsCatalog(state, agentId);
         void refreshVisibleToolsEffectiveForCurrentSession(state);
+        return;
+      case "overview":
+      case "channels":
+      case "cron":
         return;
     }
   };
@@ -2295,6 +2303,8 @@ export function renderApp(state: AppViewState) {
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,
               assistantAvatar: state.assistantAvatar,
+              userName: state.userName ?? null,
+              userAvatar: state.userAvatar ?? null,
               localMediaPreviewRoots: state.localMediaPreviewRoots,
               embedSandboxMode: state.embedSandboxMode,
               allowExternalEmbedUrls: state.allowExternalEmbedUrls,

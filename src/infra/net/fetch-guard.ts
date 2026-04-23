@@ -440,7 +440,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (err instanceof SsrFBlockedError) {
         const context = params.auditContext ?? "url-fetch";
         logWarn(
-          `security: blocked URL fetch (${context}) target=${parsedUrl.origin}${parsedUrl.pathname} reason=${err.message}`,
+          `security: blocked URL fetch (${context}) targetOrigin=${parsedUrl.origin} reason=${err.message}`,
         );
       }
       await release(dispatcher);

@@ -42,10 +42,36 @@ describe("active-memory plugin", () => {
   const runEmbeddedPiAgent = vi.fn();
   let stateDir = "";
   let configFile: Record<string, unknown> = {};
+  let pluginConfig: Record<string, unknown> = {
+    agents: ["main"],
+    logging: true,
+  };
+  const syncRuntimePluginConfig = (nextPluginConfig: Record<string, unknown>) => {
+    pluginConfig = nextPluginConfig;
+    const plugins = configFile.plugins as Record<string, unknown> | undefined;
+    const entries = plugins?.entries as Record<string, unknown> | undefined;
+    const existingEntry = entries?.["active-memory"] as Record<string, unknown> | undefined;
+    configFile = {
+      ...configFile,
+      plugins: {
+        ...plugins,
+        entries: {
+          ...entries,
+          "active-memory": {
+            ...existingEntry,
+            enabled: true,
+            config: nextPluginConfig,
+          },
+        },
+      },
+    };
+  };
   const api: any = {
-    pluginConfig: {
-      agents: ["main"],
-      logging: true,
+    get pluginConfig() {
+      return pluginConfig;
+    },
+    set pluginConfig(nextPluginConfig: Record<string, unknown>) {
+      syncRuntimePluginConfig(nextPluginConfig);
     },
     config: {},
     id: "active-memory",
@@ -93,10 +119,10 @@ describe("active-memory plugin", () => {
         },
       },
     };
-    api.pluginConfig = {
+    syncRuntimePluginConfig({
       agents: ["main"],
       logging: true,
-    };
+    });
     api.config = {
       agents: {
         defaults: {
@@ -308,6 +334,56 @@ describe("active-memory plugin", () => {
     );
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses live runtime config for before_prompt_build enablement", async () => {
+    configFile = {
+      plugins: {
+        entries: {
+          "active-memory": {
+            enabled: true,
+            config: {
+              enabled: false,
+              agents: ["main"],
+            },
+          },
+        },
+      },
+    };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order after a live config disable?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:live-config-disable",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the live active-memory plugin entry is removed", async () => {
+    configFile = {
+      plugins: {
+        entries: {},
+      },
+    };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order after active memory is removed?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:live-config-removed",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
 
   it("does not run for agents that are not explicitly targeted", async () => {

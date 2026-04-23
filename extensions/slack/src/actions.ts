@@ -442,7 +442,7 @@ export async function downloadSlackFile(
   fileId: string,
   opts: SlackActionClientOpts & { maxBytes: number; channelId?: string; threadId?: string },
 ): Promise<SlackMediaResult | null> {
-  const token = resolveToken(opts.token, opts.accountId);
+  const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const client = await getClient(opts);
 
   // Fetch fresh file metadata (includes a current url_private_download).

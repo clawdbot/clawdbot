@@ -13,7 +13,7 @@ export const TEST_SETUP_RELAY_URLS = ["wss://relay.damus.io", "wss://relay.prima
 export const TEST_RESOLVED_PRIVATE_KEY = "resolved-nostr-private-key";
 
 export const TEST_HEX_PRIVATE_KEY_BYTES = new Uint8Array(
-  TEST_HEX_PRIVATE_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16)),
+  TEST_HEX_PRIVATE_KEY.match(/.{2}/g)!.map((byte) => Number.parseInt(byte, 16)),
 );
 
 export function createConfiguredNostrCfg(overrides: Record<string, unknown> = {}): {

@@ -56,6 +56,8 @@ openclaw memory index --agent main --verbose
 - `--fix`: repair stale recall locks and normalize promotion metadata.
 - `--json`: print JSON output.
 
+If `memory status` shows `Dreaming status: blocked`, the managed dreaming cron is enabled but the heartbeat that drives it is not firing for the default agent. See [Dreaming never runs](/concepts/dreaming#dreaming-never-runs-status-shows-blocked) for the two common causes.
+
 `memory index`:
 
 - `--force`: force a full reindex.

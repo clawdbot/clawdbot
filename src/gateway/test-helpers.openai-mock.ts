@@ -218,7 +218,7 @@ export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {
 
     if (isResponsesRequest(url)) {
       const bodyText =
-        typeof (init as { body?: unknown } | undefined)?.body !== "undefined"
+        (init as { body?: unknown } | undefined)?.body !== undefined
           ? decodeBodyText((init as { body?: unknown }).body)
           : input instanceof Request
             ? await input.clone().text()

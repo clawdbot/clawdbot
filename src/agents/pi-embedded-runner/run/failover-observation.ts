@@ -57,6 +57,15 @@ export function createFailoverDecisionLogger(
   const sourceChanged = safeSourceProvider !== safeProvider || safeSourceModel !== safeModel;
   return (decision, extra) => {
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
+    const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
+    const shouldSuppressRawErrorConsoleSuffix =
+      observedError.providerRuntimeFailureKind === "auth_html_403" ||
+      observedError.providerRuntimeFailureKind === "auth_scope" ||
+      observedError.providerRuntimeFailureKind === "auth_refresh";
+    const rawErrorConsoleSuffix =
+      safeRawErrorPreview && !shouldSuppressRawErrorConsoleSuffix
+        ? ` rawError=${safeRawErrorPreview}`
+        : "";
     log.warn("embedded run failover decision", {
       event: "embedded_run_failover_decision",
       tags: ["error_handling", "failover", normalizedBase.stage, decision],
@@ -78,7 +87,7 @@ export function createFailoverDecisionLogger(
       consoleMessage:
         `embedded run failover decision: runId=${safeRunId} stage=${normalizedBase.stage} decision=${decision} ` +
         `reason=${reasonText} from=${safeSourceProvider}/${safeSourceModel}` +
-        `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}`,
+        `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}${rawErrorConsoleSuffix}`,
     });
   };
 }

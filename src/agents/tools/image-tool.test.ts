@@ -708,6 +708,35 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("does not double-prefix custom provider model IDs that already include the provider", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "kimchi:default": { type: "api_key", provider: "kimchi", key: "sk-test" },
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "kimchi/text-1" } } },
+        models: {
+          providers: {
+            kimchi: {
+              baseUrl: "https://example.com",
+              models: [
+                makeModelDefinition("kimchi/text-1", ["text"]),
+                makeModelDefinition("kimchi/vision-1", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "kimchi/vision-1",
+      });
+    });
+  });
+
   it("pairs a provider when config uses an alias key", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {

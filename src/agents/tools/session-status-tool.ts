@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -131,6 +131,33 @@ function resolveStoreScopedRequesterKey(params: {
     return params.requesterKey;
   }
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
+}
+
+function listImplicitDefaultDirectFallbackKeys(params: {
+  keyRaw: string;
+  mainKey: string;
+}): string[] {
+  const parsed = parseAgentSessionKey(params.keyRaw.trim());
+  if (!parsed) {
+    return [];
+  }
+  const parts = parsed.rest.split(":");
+  if (parts.length < 4 || parts[1] !== "default" || parts[2] !== "direct") {
+    return [];
+  }
+  const [channel, , , ...peerParts] = parts;
+  if (!channel || peerParts.length === 0) {
+    return [];
+  }
+  const candidates = [
+    `agent:${parsed.agentId}:${channel}:direct:${peerParts.join(":")}`,
+    buildAgentMainSessionKey({
+      agentId: parsed.agentId,
+      mainKey: params.mainKey,
+    }),
+    params.mainKey,
+  ];
+  return [...new Set(candidates)];
 }
 
 function formatSessionTaskLine(params: {
@@ -295,6 +322,7 @@ export function createSessionStatusTool(opts?: {
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
       const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       let resolvedViaSessionId = false;
+      let resolvedViaImplicitCurrentFallback = false;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
@@ -402,17 +430,39 @@ export function createSessionStatusTool(opts?: {
         });
       }
 
+      if (!resolved && requestedKeyParam === undefined) {
+        for (const fallbackKey of listImplicitDefaultDirectFallbackKeys({
+          keyRaw: requestedKeyRaw,
+          mainKey,
+        })) {
+          resolved = resolveSessionEntry({
+            store,
+            keyRaw: fallbackKey,
+            alias,
+            mainKey,
+            requesterInternalKey: storeScopedRequesterKey,
+            includeAliasFallback: true,
+          });
+          if (resolved) {
+            resolvedViaImplicitCurrentFallback = true;
+            break;
+          }
+        }
+      }
+
       if (!resolved) {
         const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
       // Preserve caller-scoped raw-key/current lookups as "self" for visibility checks.
-      const visibilityTargetKey =
-        !resolvedViaSessionId &&
-        (requestedKeyInput === "current" || resolved.key === requestedKeyInput)
-          ? visibilityRequesterKey
-          : normalizeVisibilityTargetSessionKey(resolved.key, agentId);
+      const shouldTreatVisibilityTargetAsSelf =
+        resolvedViaImplicitCurrentFallback ||
+        (!resolvedViaSessionId &&
+          (requestedKeyInput === "current" || resolved.key === requestedKeyInput));
+      const visibilityTargetKey = shouldTreatVisibilityTargetAsSelf
+        ? visibilityRequesterKey
+        : normalizeVisibilityTargetSessionKey(resolved.key, agentId);
       const access = visibilityGuard.check(visibilityTargetKey);
       if (!access.allowed) {
         throw new Error(access.error);

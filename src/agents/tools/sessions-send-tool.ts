@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";

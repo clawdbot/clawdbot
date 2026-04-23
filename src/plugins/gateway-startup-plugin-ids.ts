@@ -2,6 +2,7 @@ import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtime
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
@@ -49,7 +50,7 @@ function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<str
   if (!dreamingConfig.enabled) {
     return new Set();
   }
-  return new Set(["memory-core", resolveMemoryDreamingPluginId(config)]);
+  return new Set([DEFAULT_MEMORY_DREAMING_PLUGIN_ID, resolveMemoryDreamingPluginId(config)]);
 }
 
 function resolveExplicitMemorySlotStartupPluginId(config: OpenClawConfig): string | undefined {

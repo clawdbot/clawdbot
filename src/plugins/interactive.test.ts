@@ -480,6 +480,61 @@ describe("plugin interactive handlers", () => {
     vi.restoreAllMocks();
   });
 
+  it("hydrates legacy interactive state shapes before clearing handlers", async () => {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const stateKey = Symbol.for("openclaw.pluginInteractiveState");
+    const originalState = globalStore[stateKey];
+
+    globalStore[stateKey] = {
+      interactiveHandlers: new Map(),
+    };
+
+    try {
+      expect(() => clearPluginInteractiveHandlers()).not.toThrow();
+      const hydrated = globalStore[stateKey] as {
+        interactiveHandlers?: Map<string, unknown>;
+        callbackDedupe?: { clear: () => void };
+        inflightCallbackDedupe?: Set<string>;
+      };
+      expect(hydrated.interactiveHandlers).toBeInstanceOf(Map);
+      expect(hydrated.callbackDedupe?.clear).toEqual(expect.any(Function));
+      expect(hydrated.inflightCallbackDedupe).toBeInstanceOf(Set);
+
+      const handler = vi.fn(async () => ({ handled: true }));
+      expect(
+        registerPluginInteractiveHandler("codex-plugin", {
+          channel: "telegram",
+          namespace: "legacy",
+          handler,
+        }),
+      ).toEqual({ ok: true });
+
+      await expect(
+        dispatchInteractive(
+          createTelegramDispatchParams({
+            data: "legacy:resume",
+            callbackId: "legacy-state-cb",
+          }),
+        ),
+      ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
+      await expect(
+        dispatchInteractive(
+          createTelegramDispatchParams({
+            data: "legacy:resume",
+            callbackId: "legacy-state-cb",
+          }),
+        ),
+      ).resolves.toEqual({ matched: true, handled: true, duplicate: true });
+    } finally {
+      if (originalState === undefined) {
+        delete globalStore[stateKey];
+      } else {
+        globalStore[stateKey] = originalState;
+      }
+      clearPluginInteractiveHandlers();
+    }
+  });
+
   it.each([
     {
       name: "routes Telegram callbacks by namespace and dedupes callback ids",

@@ -4,6 +4,7 @@ import {
   isDiagnosticsEnabled,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
 } from "./diagnostic-events.js";
 
 describe("diagnostic-events", () => {
@@ -87,6 +88,23 @@ describe("diagnostic-events", () => {
     expect(seen).toEqual(["webhook.received"]);
   });
 
+  it("skips event enrichment and subscribers when diagnostics are disabled", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    const seen: string[] = [];
+    onDiagnosticEvent((event) => {
+      seen.push(event.type);
+    });
+    setDiagnosticsEnabledForProcess(false);
+
+    emitDiagnosticEvent({
+      type: "webhook.received",
+      channel: "telegram",
+    });
+
+    expect(seen).toEqual([]);
+    expect(nowSpy).not.toHaveBeenCalled();
+  });
+
   it("drops recursive emissions after the guard threshold", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     let calls = 0;
@@ -113,8 +131,10 @@ describe("diagnostic-events", () => {
     );
   });
 
-  it("requires an explicit true diagnostics flag", () => {
-    expect(isDiagnosticsEnabled()).toBe(false);
+  it("enables diagnostics unless explicitly disabled", () => {
+    expect(isDiagnosticsEnabled()).toBe(true);
+    expect(isDiagnosticsEnabled({} as never)).toBe(true);
+    expect(isDiagnosticsEnabled({ diagnostics: {} } as never)).toBe(true);
     expect(isDiagnosticsEnabled({ diagnostics: { enabled: false } } as never)).toBe(false);
     expect(isDiagnosticsEnabled({ diagnostics: { enabled: true } } as never)).toBe(true);
   });

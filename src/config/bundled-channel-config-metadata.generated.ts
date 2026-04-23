@@ -1047,6 +1047,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        thread: {
+          type: "object",
+          properties: {
+            inheritParent: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
+        },
         dmPolicy: {
           type: "string",
           enum: ["pairing", "allowlist", "open", "disabled"],
@@ -2211,6 +2220,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              thread: {
+                type: "object",
+                properties: {
+                  inheritParent: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
               dmPolicy: {
                 type: "string",
                 enum: ["pairing", "allowlist", "open", "disabled"],
@@ -3082,6 +3100,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       maxLinesPerMessage: {
         label: "Discord Max Lines Per Message",
         help: "Soft max line count per Discord message (default: 17).",
+      },
+      "thread.inheritParent": {
+        label: "Discord Thread Parent Inheritance",
+        help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
       },
       "inboundWorker.runTimeoutMs": {
         label: "Discord Inbound Worker Timeout (ms)",
@@ -15205,6 +15227,26 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           minimum: 0,
           maximum: 9007199254740991,
         },
+        replyToMode: {
+          anyOf: [
+            {
+              type: "string",
+              const: "off",
+            },
+            {
+              type: "string",
+              const: "first",
+            },
+            {
+              type: "string",
+              const: "all",
+            },
+            {
+              type: "string",
+              const: "batched",
+            },
+          ],
+        },
         heartbeat: {
           type: "object",
           properties: {
@@ -15472,6 +15514,26 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+              },
+              replyToMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "first",
+                  },
+                  {
+                    type: "string",
+                    const: "all",
+                  },
+                  {
+                    type: "string",
+                    const: "batched",
+                  },
+                ],
               },
               heartbeat: {
                 type: "object",

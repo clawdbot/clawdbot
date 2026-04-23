@@ -361,8 +361,8 @@ Surface different features that extend the above defaults.
       },
       {
         "command": "/models",
-        "description": "List providers or models for a provider",
-        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]"
+        "description": "List providers/models or add a model",
+        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all] | add <provider> <modelId>"
       },
       {
         "command": "/help",
@@ -710,6 +710,8 @@ Manual reply tags are supported:
 
 Note: `replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode. The difference reflects the platform threading models: Slack threads hide messages from the channel, while Telegram replies remain visible in the main chat flow.
 
+Focused Slack thread replies route through their bound ACP session when one exists, instead of preparing the reply against the default agent shell. That keeps `/focus` and `/acp spawn ... --bind here` bindings intact for follow-up messages in the thread.
+
 ## Ack reactions
 
 `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
@@ -744,6 +746,7 @@ Notes:
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits without flushing a temporary draft; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
+- Slack Connect channels that reject a stream before the SDK flushes its local buffer fall back to normal Slack replies, so short replies are not silently dropped or reported as delivered before Slack acknowledges them.
 
 Use draft preview instead of Slack native text streaming:
 
@@ -1032,6 +1035,12 @@ openclaw pairing list slack
     snapshots, the HTTP account is configured but the current runtime could not
     resolve the SecretRef-backed signing secret.
 
+    Registered Request URL webhooks are dispatched through the same shared handler registry used by Slack monitor setup, so HTTP-mode Slack events keep routing through the registered path instead of 404ing after successful route registration.
+
+  </Accordion>
+
+  <Accordion title="File downloads with custom bot tokens">
+    The `downloadFile` helper resolves its bot token from the runtime config when a caller passes `cfg` without an explicit `token` or prebuilt client, preserving cfg-only file downloads outside the action runtime path.
   </Accordion>
 
   <Accordion title="Native/slash commands not firing">

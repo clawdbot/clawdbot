@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import {
   createActionGate,
   readNumberParam,
@@ -13,6 +12,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { Type } from "typebox";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
 import type { CoreConfig } from "./types.js";

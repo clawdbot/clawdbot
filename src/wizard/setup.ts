@@ -489,58 +489,71 @@ export async function runSetupWizard(
 
   const authChoiceFromPrompt = opts.authChoice === undefined;
   let authChoice: AuthChoice | undefined = opts.authChoice;
+  let authStore:
+    | ReturnType<(typeof import("../agents/auth-profiles.runtime.js"))["ensureAuthProfileStore"]>
+    | undefined;
+  let promptAuthChoiceGrouped:
+    | (typeof import("../commands/auth-choice-prompt.js"))["promptAuthChoiceGrouped"]
+    | undefined;
   if (authChoiceFromPrompt) {
     const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
-    const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
-    const authStore = ensureAuthProfileStore(undefined, {
+    ({ promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js"));
+    authStore = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,
     });
-    authChoice = await promptAuthChoiceGrouped({
-      prompter,
-      store: authStore,
-      includeSkip: true,
-      config: nextConfig,
-      workspaceDir,
-    });
   }
-  if (authChoice === undefined) {
-    throw new WizardCancelledError("auth choice is required");
-  }
-
-  if (authChoice === "custom-api-key") {
-    const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
-    const customResult = await promptCustomApiConfig({
-      prompter,
-      runtime,
-      config: nextConfig,
-      secretInputMode: opts.secretInputMode,
-    });
-    nextConfig = customResult.config;
-  } else if (authChoice === "skip") {
-    // Explicit skip should stay cold: do not bootstrap auth/profile machinery
-    // or run model/auth checks when the caller already chose to skip setup.
+  while (true) {
     if (authChoiceFromPrompt) {
-      const { applyPrimaryModel, promptDefaultModel } = await loadModelPickerModule();
-      const modelSelection = await promptDefaultModel({
-        config: nextConfig,
+      authChoice = await promptAuthChoiceGrouped!({
         prompter,
-        allowKeep: true,
-        ignoreAllowlist: true,
-        includeProviderPluginSetups: true,
+        store: authStore!,
+        includeSkip: true,
+        config: nextConfig,
         workspaceDir,
-        runtime,
       });
-      if (modelSelection.config) {
-        nextConfig = modelSelection.config;
-      }
-      if (modelSelection.model) {
-        nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
-      }
-
-      const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
-      await warnIfModelConfigLooksOff(nextConfig, prompter);
     }
-  } else {
+    if (authChoice === undefined) {
+      throw new WizardCancelledError("auth choice is required");
+    }
+
+    if (authChoice === "custom-api-key") {
+      const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
+      const customResult = await promptCustomApiConfig({
+        prompter,
+        runtime,
+        config: nextConfig,
+        secretInputMode: opts.secretInputMode,
+      });
+      nextConfig = customResult.config;
+      break;
+    }
+    if (authChoice === "skip") {
+      // Explicit skip should stay cold: do not bootstrap auth/profile machinery
+      // or run model/auth checks when the caller already chose to skip setup.
+      if (authChoiceFromPrompt) {
+        const { applyPrimaryModel, promptDefaultModel } = await loadModelPickerModule();
+        const modelSelection = await promptDefaultModel({
+          config: nextConfig,
+          prompter,
+          allowKeep: true,
+          ignoreAllowlist: true,
+          includeProviderPluginSetups: true,
+          workspaceDir,
+          runtime,
+        });
+        if (modelSelection.config) {
+          nextConfig = modelSelection.config;
+        }
+        if (modelSelection.model) {
+          nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+        }
+
+        const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
+        await warnIfModelConfigLooksOff(nextConfig, prompter);
+      }
+      break;
+    }
+
     const [
       { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
       { applyPrimaryModel, promptDefaultModel },
@@ -557,6 +570,12 @@ export async function runSetupWizard(
       },
     });
     nextConfig = authResult.config;
+    if (authResult.retrySelection) {
+      if (authChoiceFromPrompt) {
+        continue;
+      }
+      break;
+    }
     if (authResult.agentModelOverride) {
       nextConfig = applyPrimaryModel(nextConfig, authResult.agentModelOverride);
     }
@@ -589,6 +608,7 @@ export async function runSetupWizard(
     }
 
     await warnIfModelConfigLooksOff(nextConfig, prompter);
+    break;
   }
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
@@ -618,6 +638,7 @@ export async function runSetupWizard(
         : [];
     nextConfig = await setupChannels(nextConfig, runtime, prompter, {
       allowSignalInstall: true,
+      deferStatusUntilSelection: flow === "quickstart",
       forceAllowFromChannels: quickstartAllowFromChannels,
       skipDmPolicyPrompt: flow === "quickstart",
       skipConfirm: flow === "quickstart",

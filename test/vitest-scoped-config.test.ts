@@ -20,6 +20,7 @@ import { createCronVitestConfig } from "./vitest/vitest.cron.config.ts";
 import { createDaemonVitestConfig } from "./vitest/vitest.daemon.config.ts";
 import { createExtensionAcpxVitestConfig } from "./vitest/vitest.extension-acpx.config.ts";
 import { createExtensionBlueBubblesVitestConfig } from "./vitest/vitest.extension-bluebubbles.config.ts";
+import { createExtensionBrowserVitestConfig } from "./vitest/vitest.extension-browser.config.ts";
 import { createExtensionChannelsVitestConfig } from "./vitest/vitest.extension-channels.config.ts";
 import { createExtensionDiffsVitestConfig } from "./vitest/vitest.extension-diffs.config.ts";
 import { createExtensionDiscordVitestConfig } from "./vitest/vitest.extension-discord.config.ts";
@@ -29,11 +30,14 @@ import { createExtensionIrcVitestConfig } from "./vitest/vitest.extension-irc.co
 import { createExtensionLineVitestConfig } from "./vitest/vitest.extension-line.config.ts";
 import { createExtensionMatrixVitestConfig } from "./vitest/vitest.extension-matrix.config.ts";
 import { createExtensionMattermostVitestConfig } from "./vitest/vitest.extension-mattermost.config.ts";
+import { createExtensionMediaVitestConfig } from "./vitest/vitest.extension-media.config.ts";
 import { createExtensionMemoryVitestConfig } from "./vitest/vitest.extension-memory.config.ts";
 import { createExtensionMessagingVitestConfig } from "./vitest/vitest.extension-messaging.config.ts";
+import { createExtensionMiscVitestConfig } from "./vitest/vitest.extension-misc.config.ts";
 import { createExtensionMsTeamsVitestConfig } from "./vitest/vitest.extension-msteams.config.ts";
 import { createExtensionProviderOpenAiVitestConfig } from "./vitest/vitest.extension-provider-openai.config.ts";
 import { createExtensionProvidersVitestConfig } from "./vitest/vitest.extension-providers.config.ts";
+import { createExtensionQaVitestConfig } from "./vitest/vitest.extension-qa.config.ts";
 import { createExtensionSignalVitestConfig } from "./vitest/vitest.extension-signal.config.ts";
 import { createExtensionSlackVitestConfig } from "./vitest/vitest.extension-slack.config.ts";
 import { createExtensionTelegramVitestConfig } from "./vitest/vitest.extension-telegram.config.ts";
@@ -55,6 +59,7 @@ import { createRuntimeConfigVitestConfig } from "./vitest/vitest.runtime-config.
 import { createScopedVitestConfig, resolveVitestIsolation } from "./vitest/vitest.scoped-config.ts";
 import { createSecretsVitestConfig } from "./vitest/vitest.secrets.config.ts";
 import { createSharedCoreVitestConfig } from "./vitest/vitest.shared-core.config.ts";
+import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { createTasksVitestConfig } from "./vitest/vitest.tasks.config.ts";
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
@@ -114,6 +119,28 @@ describe("createScopedVitestConfig", () => {
     });
     expect(config.test?.dir).toBe(path.join(process.cwd(), "src"));
     expect(config.test?.include).toEqual(["example.test.ts"]);
+  });
+
+  it("keeps scoped cli directory filters aligned with repo-root include patterns", () => {
+    const config = createScopedVitestConfig(["extensions/slack/**/*.test.ts"], {
+      argv: ["vitest", "run", "extensions/slack"],
+      dir: "extensions",
+      env: {},
+      passWithNoTests: true,
+    });
+
+    expect(config.test?.include).toEqual(["slack/**/*.test.*"]);
+  });
+
+  it("keeps broad scoped cli directory filters aligned with repo-root include patterns", () => {
+    const config = createScopedVitestConfig([BUNDLED_PLUGIN_TEST_GLOB], {
+      argv: ["vitest", "run", "extensions/speech-core"],
+      dir: "extensions",
+      env: {},
+      passWithNoTests: true,
+    });
+
+    expect(config.test?.include).toEqual(["speech-core/**/*.test.*"]);
   });
 
   it("relativizes scoped include and exclude patterns to the configured dir", () => {
@@ -188,6 +215,7 @@ describe("scoped vitest configs", () => {
   const defaultExtensionAcpxConfig = createExtensionAcpxVitestConfig({});
   const defaultExtensionBlueBubblesConfig = createExtensionBlueBubblesVitestConfig({});
   const defaultExtensionChannelsConfig = createExtensionChannelsVitestConfig({});
+  const defaultExtensionBrowserConfig = createExtensionBrowserVitestConfig({});
   const defaultExtensionDiffsConfig = createExtensionDiffsVitestConfig({});
   const defaultExtensionDiscordConfig = createExtensionDiscordVitestConfig({});
   const defaultExtensionFeishuConfig = createExtensionFeishuVitestConfig({});
@@ -196,11 +224,14 @@ describe("scoped vitest configs", () => {
   const defaultExtensionLineConfig = createExtensionLineVitestConfig({});
   const defaultExtensionMatrixConfig = createExtensionMatrixVitestConfig({});
   const defaultExtensionMattermostConfig = createExtensionMattermostVitestConfig({});
+  const defaultExtensionMediaConfig = createExtensionMediaVitestConfig({});
   const defaultExtensionMemoryConfig = createExtensionMemoryVitestConfig({});
+  const defaultExtensionMiscConfig = createExtensionMiscVitestConfig({});
   const defaultExtensionMsTeamsConfig = createExtensionMsTeamsVitestConfig({});
   const defaultExtensionMessagingConfig = createExtensionMessagingVitestConfig({});
   const defaultExtensionProviderOpenAiConfig = createExtensionProviderOpenAiVitestConfig({});
   const defaultExtensionProvidersConfig = createExtensionProvidersVitestConfig({});
+  const defaultExtensionQaConfig = createExtensionQaVitestConfig({});
   const defaultExtensionSignalConfig = createExtensionSignalVitestConfig({});
   const defaultExtensionSlackConfig = createExtensionSlackVitestConfig({});
   const defaultExtensionTelegramConfig = createExtensionTelegramVitestConfig({});
@@ -288,6 +319,10 @@ describe("scoped vitest configs", () => {
     );
     expect(defaultAutoReplyTopLevelConfig.test?.include).toEqual(["reply*.test.ts"]);
     expect(defaultAutoReplyReplyConfig.test?.include).toEqual(["reply/**/*.test.ts"]);
+  });
+
+  it("keeps the broad agents lane on shared file parallelism", () => {
+    expect(defaultAgentsConfig.test?.fileParallelism).toBe(sharedVitestConfig.test.fileParallelism);
   });
 
   it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {
@@ -596,6 +631,22 @@ describe("scoped vitest configs", () => {
     expect(
       extensionExcludes.some((pattern) => path.matchesGlob("diffs/src/render.test.ts", pattern)),
     ).toBe(true);
+  });
+
+  it("keeps broad dedicated extension groups out of the shared extensions lane", () => {
+    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    expect(defaultExtensionBrowserConfig.test?.include).toContain("browser/**/*.test.ts");
+    expect(defaultExtensionMediaConfig.test?.include).toContain("vydra/**/*.test.ts");
+    expect(defaultExtensionMiscConfig.test?.include).toContain("firecrawl/**/*.test.ts");
+    expect(defaultExtensionQaConfig.test?.include).toContain("qa-lab/**/*.test.ts");
+    for (const file of [
+      "browser/src/browser/pw.test.ts",
+      "vydra/src/index.test.ts",
+      "firecrawl/src/index.test.ts",
+      "qa-lab/src/index.test.ts",
+    ]) {
+      expect(extensionExcludes.some((pattern) => path.matchesGlob(file, pattern))).toBe(true);
+    }
   });
 
   it("normalizes gateway include patterns relative to the scoped dir", () => {

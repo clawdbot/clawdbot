@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   LIVE_CACHE_REGRESSION_BASELINE,

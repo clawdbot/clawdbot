@@ -18,6 +18,13 @@ handshake time.
 
 - WebSocket, text frames with JSON payloads.
 - First frame **must** be a `connect` request.
+- Pre-connect frames are capped at 64 KiB. After a successful handshake, clients
+  should follow the `hello-ok.policy.maxPayload` and
+  `hello-ok.policy.maxBufferedBytes` limits. With diagnostics enabled,
+  oversized inbound frames and slow outbound buffers emit `payload.large` events
+  before the gateway closes or drops the affected frame. These events keep
+  sizes, limits, surfaces, and safe reason codes. They do not keep the message
+  body, attachment contents, raw frame body, tokens, cookies, or secret values.
 
 ## Handshake (connect)
 
@@ -265,6 +272,12 @@ implemented in `src/gateway/server-methods/*.ts`.
 ### System and identity
 
 - `health` returns the cached or freshly probed gateway health snapshot.
+- `diagnostics.stability` returns the recent bounded diagnostic stability
+  recorder. It keeps operational metadata such as event names, counts, byte
+  sizes, memory readings, queue/session state, channel/plugin names, and session
+  ids. It does not keep chat text, webhook bodies, tool outputs, raw request or
+  response bodies, tokens, cookies, or secret values. Operator read scope is
+  required.
 - `status` returns the `/status`-style gateway summary; sensitive fields are
   included only for admin-scoped operator clients.
 - `gateway.identity.get` returns the gateway device identity used by relay and

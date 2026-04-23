@@ -11,6 +11,7 @@ import type {
 
 export function buildOpenAICompatibleReplayPolicy(
   modelApi: string | null | undefined,
+  options: { sanitizeToolCallIds?: boolean } = {},
 ): ProviderReplayPolicy | undefined {
   if (
     modelApi !== "openai-completions" &&
@@ -21,9 +22,12 @@ export function buildOpenAICompatibleReplayPolicy(
     return undefined;
   }
 
+  const sanitizeToolCallIds = options.sanitizeToolCallIds ?? true;
+
   return {
-    sanitizeToolCallIds: true,
-    toolCallIdMode: "strict",
+    ...(sanitizeToolCallIds
+      ? { sanitizeToolCallIds: true, toolCallIdMode: "strict" as const }
+      : {}),
     ...(modelApi === "openai-completions"
       ? {
           applyAssistantFirstOrderingFix: true,

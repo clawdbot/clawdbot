@@ -648,6 +648,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "diagnostic.heartbeat":
               recordHeartbeat(evt);
               return;
+            case "tool.loop":
+            case "diagnostic.memory.sample":
+            case "diagnostic.memory.pressure":
+            case "payload.large":
+              return;
           }
         } catch (err) {
           ctx.logger.error(

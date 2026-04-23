@@ -8,10 +8,11 @@
 
 import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
-import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
@@ -40,7 +41,11 @@ type MemorySearchResult = {
   score: number;
 };
 
-type LegacyBeforeAgentStartContext = { prependContext: string } | undefined;
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
 
 // ============================================================================
 // LanceDB Provider
@@ -67,7 +72,10 @@ class MemoryDB {
       return this.initPromise;
     }
 
-    this.initPromise = this.doInitialize();
+    this.initPromise = this.doInitialize().catch((error) => {
+      this.initPromise = null;
+      throw error;
+    });
     return this.initPromise;
   }
 
@@ -298,10 +306,39 @@ export default definePluginEntry({
     const dbPath = cfg.dbPath!;
     const resolvedDbPath = dbPath.includes("://") ? dbPath : api.resolvePath(dbPath);
     const { model, dimensions, apiKey, baseUrl } = cfg.embedding;
+    const disabledHookCfg = { ...cfg, autoCapture: false, autoRecall: false };
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
     const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
+    const resolveCurrentHookConfig = () => {
+      const runtimePluginConfig = resolveLivePluginConfigObject(
+        api.runtime.config?.loadConfig,
+        "memory-lancedb",
+        api.pluginConfig as Record<string, unknown>,
+      );
+      if (!runtimePluginConfig) {
+        return disabledHookCfg;
+      }
+      return memoryConfigSchema.parse({
+        embedding: {
+          apiKey: cfg.embedding.apiKey,
+          model: cfg.embedding.model,
+          ...(cfg.embedding.baseUrl ? { baseUrl: cfg.embedding.baseUrl } : {}),
+          ...(typeof cfg.embedding.dimensions === "number"
+            ? { dimensions: cfg.embedding.dimensions }
+            : {}),
+          ...asRecord(asRecord(runtimePluginConfig)?.embedding),
+        },
+        ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
+        dbPath: cfg.dbPath,
+        autoCapture: cfg.autoCapture,
+        autoRecall: cfg.autoRecall,
+        captureMaxChars: cfg.captureMaxChars,
+        ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
+        ...asRecord(runtimePluginConfig),
+      });
+    };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 
@@ -514,7 +551,7 @@ export default definePluginEntry({
           .option("--limit <n>", "Max results", "5")
           .action(async (query, opts) => {
             const vector = await embeddings.embed(query);
-            const results = await db.search(vector, parseInt(opts.limit), 0.3);
+            const results = await db.search(vector, Number.parseInt(opts.limit, 10), 0.3);
             // Strip vectors for output
             const output = results.map((r) => ({
               id: r.entry.id,
@@ -541,120 +578,124 @@ export default definePluginEntry({
     // Lifecycle Hooks
     // ========================================================================
 
-    // Auto-recall: inject relevant memories before agent starts
-    if (cfg.autoRecall) {
-      api.on("before_agent_start", async (event): Promise<LegacyBeforeAgentStartContext> => {
-        if (!event.prompt || event.prompt.length < 5) {
+    // Auto-recall: inject relevant memories during prompt build
+    api.on("before_prompt_build", async (event) => {
+      const currentCfg = resolveCurrentHookConfig();
+      if (!currentCfg.autoRecall) {
+        return undefined;
+      }
+      if (!event.prompt || event.prompt.length < 5) {
+        return undefined;
+      }
+
+      try {
+        const vector = await embeddings.embed(event.prompt);
+        const results = await db.search(vector, 3, 0.3);
+
+        if (results.length === 0) {
           return undefined;
         }
 
-        try {
-          const vector = await embeddings.embed(event.prompt);
-          const results = await db.search(vector, 3, 0.3);
+        api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
 
-          if (results.length === 0) {
-            return undefined;
-          }
-
-          api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
-
-          return {
-            prependContext: formatRelevantMemoriesContext(
-              results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
-            ),
-          };
-        } catch (err) {
-          api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
-        }
-        return undefined;
-      });
-    }
+        return {
+          prependContext: formatRelevantMemoriesContext(
+            results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
+          ),
+        };
+      } catch (err) {
+        api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
+      }
+      return undefined;
+    });
 
     // Auto-capture: analyze and store important information after agent ends
-    if (cfg.autoCapture) {
-      api.on("agent_end", async (event) => {
-        if (!event.success || !event.messages || event.messages.length === 0) {
-          return;
-        }
+    api.on("agent_end", async (event) => {
+      const currentCfg = resolveCurrentHookConfig();
+      if (!currentCfg.autoCapture) {
+        return;
+      }
+      if (!event.success || !event.messages || event.messages.length === 0) {
+        return;
+      }
 
-        try {
-          // Extract text content from messages (handling unknown[] type)
-          const texts: string[] = [];
-          for (const msg of event.messages) {
-            // Type guard for message object
-            if (!msg || typeof msg !== "object") {
-              continue;
-            }
-            const msgObj = msg as Record<string, unknown>;
+      try {
+        // Extract text content from messages (handling unknown[] type)
+        const texts: string[] = [];
+        for (const msg of event.messages) {
+          // Type guard for message object
+          if (!msg || typeof msg !== "object") {
+            continue;
+          }
+          const msgObj = msg as Record<string, unknown>;
 
-            // Only process user messages to avoid self-poisoning from model output
-            const role = msgObj.role;
-            if (role !== "user") {
-              continue;
-            }
+          // Only process user messages to avoid self-poisoning from model output
+          const role = msgObj.role;
+          if (role !== "user") {
+            continue;
+          }
 
-            const content = msgObj.content;
+          const content = msgObj.content;
 
-            // Handle string content directly
-            if (typeof content === "string") {
-              texts.push(content);
-              continue;
-            }
+          // Handle string content directly
+          if (typeof content === "string") {
+            texts.push(content);
+            continue;
+          }
 
-            // Handle array content (content blocks)
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (
-                  block &&
-                  typeof block === "object" &&
-                  "type" in block &&
-                  (block as Record<string, unknown>).type === "text" &&
-                  "text" in block &&
-                  typeof (block as Record<string, unknown>).text === "string"
-                ) {
-                  texts.push((block as Record<string, unknown>).text as string);
-                }
+          // Handle array content (content blocks)
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (
+                block &&
+                typeof block === "object" &&
+                "type" in block &&
+                (block as Record<string, unknown>).type === "text" &&
+                "text" in block &&
+                typeof (block as Record<string, unknown>).text === "string"
+              ) {
+                texts.push((block as Record<string, unknown>).text as string);
               }
             }
           }
-
-          // Filter for capturable content
-          const toCapture = texts.filter(
-            (text) => text && shouldCapture(text, { maxChars: cfg.captureMaxChars }),
-          );
-          if (toCapture.length === 0) {
-            return;
-          }
-
-          // Store each capturable piece (limit to 3 per conversation)
-          let stored = 0;
-          for (const text of toCapture.slice(0, 3)) {
-            const category = detectCategory(text);
-            const vector = await embeddings.embed(text);
-
-            // Check for duplicates (high similarity threshold)
-            const existing = await db.search(vector, 1, 0.95);
-            if (existing.length > 0) {
-              continue;
-            }
-
-            await db.store({
-              text,
-              vector,
-              importance: 0.7,
-              category,
-            });
-            stored++;
-          }
-
-          if (stored > 0) {
-            api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
-          }
-        } catch (err) {
-          api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
         }
-      });
-    }
+
+        // Filter for capturable content
+        const toCapture = texts.filter(
+          (text) => text && shouldCapture(text, { maxChars: currentCfg.captureMaxChars }),
+        );
+        if (toCapture.length === 0) {
+          return;
+        }
+
+        // Store each capturable piece (limit to 3 per conversation)
+        let stored = 0;
+        for (const text of toCapture.slice(0, 3)) {
+          const category = detectCategory(text);
+          const vector = await embeddings.embed(text);
+
+          // Check for duplicates (high similarity threshold)
+          const existing = await db.search(vector, 1, 0.95);
+          if (existing.length > 0) {
+            continue;
+          }
+
+          await db.store({
+            text,
+            vector,
+            importance: 0.7,
+            category,
+          });
+          stored++;
+        }
+
+        if (stored > 0) {
+          api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
+        }
+      } catch (err) {
+        api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
+      }
+    });
 
     // ========================================================================
     // Service

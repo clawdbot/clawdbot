@@ -11,6 +11,7 @@ function createContext(
   lastAssistant: unknown,
   overrides?: {
     onAgentEvent?: (event: unknown) => void;
+    onBeforeLifecycleTerminal?: () => void | Promise<void>;
     onBlockReplyFlush?: () => void | Promise<void>;
   },
 ): EmbeddedPiSubscribeContext {
@@ -21,6 +22,7 @@ function createContext(
       config: {},
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
+      onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
       onBlockReply,
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
     },
@@ -378,6 +380,90 @@ describe("handleAgentEnd", () => {
 
     resolveChannelFlush?.();
     await endPromise;
+  });
+
+  it("runs the before-lifecycle callback before the lifecycle end event", async () => {
+    const order: string[] = [];
+    const onAgentEvent = vi.fn(() => {
+      order.push("event");
+    });
+    const onBeforeLifecycleTerminal = vi.fn(() => {
+      order.push("before");
+    });
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(order).toEqual(["before", "event"]);
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("runs an async before-lifecycle callback before the lifecycle end event", async () => {
+    const order: string[] = [];
+    const onAgentEvent = vi.fn(() => {
+      order.push("event");
+    });
+    const onBeforeLifecycleTerminal = vi.fn(() =>
+      Promise.resolve().then(() => {
+        order.push("before");
+      }),
+    );
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(order).toEqual(["before", "event"]);
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("still emits lifecycle terminal when sync before-lifecycle callback throws", async () => {
+    const onAgentEvent = vi.fn();
+    const onBeforeLifecycleTerminal = vi.fn(() => {
+      throw new Error("hook exploded");
+    });
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("still emits lifecycle terminal when async before-lifecycle callback rejects", async () => {
+    const onAgentEvent = vi.fn();
+    const onBeforeLifecycleTerminal = vi.fn(() => Promise.reject(new Error("hook failed")));
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
   });
 
   it("emits lifecycle end after async channel flush completes", async () => {

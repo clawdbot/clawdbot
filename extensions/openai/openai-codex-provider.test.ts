@@ -1,32 +1,17 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
-const readOpenAICodexCliOAuthProfileMock = vi.hoisted(() => vi.fn());
-const hasOpenAICodexCliOAuthCredentialMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./openai-codex-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
 }));
 
-vi.mock("./openai-codex-cli-auth.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./openai-codex-cli-auth.js")>();
-  return {
-    ...actual,
-    hasOpenAICodexCliOAuthCredential: hasOpenAICodexCliOAuthCredentialMock,
-    readOpenAICodexCliOAuthProfile: readOpenAICodexCliOAuthProfileMock,
-  };
-});
-
 vi.mock("./openai-codex-device-code.js", () => ({
   loginOpenAICodexDeviceCode: loginOpenAICodexDeviceCodeMock,
 }));
 
 let buildOpenAICodexProviderPlugin: typeof import("./openai-codex-provider.js").buildOpenAICodexProviderPlugin;
-const tempDirs: string[] = [];
 
 function createCodexTemplate(overrides: {
   id?: string;
@@ -67,16 +52,7 @@ describe("openai codex provider", () => {
 
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
-    readOpenAICodexCliOAuthProfileMock.mockReset();
-    hasOpenAICodexCliOAuthCredentialMock.mockReset();
-    hasOpenAICodexCliOAuthCredentialMock.mockReturnValue(false);
     loginOpenAICodexDeviceCodeMock.mockReset();
-  });
-
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
   });
 
   it("falls back to the cached credential when accountId extraction fails", async () => {
@@ -134,6 +110,21 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("exposes grouped model/auth picker labels for Codex auth methods", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const oauth = provider.auth?.find((method) => method.id === "oauth");
+    const deviceCode = provider.auth?.find((method) => method.id === "device-code");
+
+    expect(oauth?.wizard).toMatchObject({
+      choiceLabel: "OpenAI Codex Browser Login",
+      groupHint: "API key or Codex sign-in",
+    });
+    expect(deviceCode?.wizard).toMatchObject({
+      choiceLabel: "OpenAI Codex Device Pairing",
+      groupHint: "API key or Codex sign-in",
+    });
+  });
+
   it("returns deprecated-profile doctor guidance for legacy Codex CLI ids", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
@@ -149,14 +140,21 @@ describe("openai codex provider", () => {
     );
   });
 
-  it("offers OpenAI menu auth methods for login, import, and device pairing", () => {
+  it("declares the legacy default OAuth profile repair", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
-    expect(provider.auth?.map((method) => method.id)).toEqual([
-      "oauth",
-      "device-code",
-      "import-codex-cli",
+    expect(provider.oauthProfileIdRepairs).toEqual([
+      {
+        legacyProfileId: "openai-codex:default",
+        promptLabel: "OpenAI Codex",
+      },
     ]);
+  });
+
+  it("offers OpenAI menu auth methods for browser login and device pairing", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code"]);
     expect(provider.auth?.find((method) => method.id === "oauth")).toMatchObject({
       label: "OpenAI Codex Browser Login",
       hint: "Sign in with OpenAI in your browser",
@@ -176,65 +174,6 @@ describe("openai codex provider", () => {
         assistantPriority: -10,
       },
     });
-    expect(provider.auth?.find((method) => method.id === "import-codex-cli")).toMatchObject({
-      label: "Import Existing Codex Login",
-      hint: "Import an existing ~/.codex login",
-      kind: "oauth",
-      wizard: {
-        choiceId: "openai-codex-import",
-        choiceLabel: "Import Existing Codex Login",
-        assistantPriority: -20,
-        assistantVisibility: "manual-only",
-      },
-    });
-  });
-
-  it("annotates the import option when ~/.codex auth is detected", () => {
-    hasOpenAICodexCliOAuthCredentialMock.mockReturnValueOnce(true);
-
-    const provider = buildOpenAICodexProviderPlugin();
-
-    expect(provider.auth?.find((method) => method.id === "import-codex-cli")).toMatchObject({
-      label: "Import Existing Codex Login (~/.codex detected)",
-      wizard: {
-        choiceLabel: "Import Existing Codex Login (~/.codex detected)",
-        assistantVisibility: "visible",
-      },
-    });
-  });
-
-  it("soft-fails import when no compatible ~/.codex login exists", async () => {
-    const provider = buildOpenAICodexProviderPlugin();
-    const importMethod = provider.auth?.find((method) => method.id === "import-codex-cli");
-    const note = vi.fn(async () => {});
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    readOpenAICodexCliOAuthProfileMock.mockReturnValueOnce(null);
-
-    const result = await importMethod?.run({
-      config: {},
-      env: process.env,
-      prompter: {
-        note,
-        progress: vi.fn(),
-      } as never,
-      runtime: runtime as never,
-      isRemote: false,
-      openUrl: async () => {},
-      oauth: { createVpsAwareHandlers: (() => ({})) as never },
-    });
-
-    expect(result).toEqual({ profiles: [] });
-    expect(runtime.error).toHaveBeenCalledWith(
-      "No compatible ~/.codex ChatGPT login found. Use Browser Login or Device Pairing instead.",
-    );
-    expect(note).toHaveBeenCalledWith(
-      "No compatible ~/.codex ChatGPT login found. Use Browser Login or Device Pairing instead.",
-      "Import Existing Codex Login",
-    );
   });
 
   it("stores device-code logins as OpenAI Codex oauth profiles", async () => {
@@ -341,89 +280,6 @@ describe("openai codex provider", () => {
       expect.stringContaining("Code: CODE-12345"),
       "OpenAI Codex device code",
     );
-  });
-
-  it("exposes Codex CLI auth as a runtime-only external profile", () => {
-    const provider = buildOpenAICodexProviderPlugin();
-    const credential = {
-      type: "oauth" as const,
-      provider: "openai-codex",
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: Date.now() + 60_000,
-      accountId: "acct-123",
-    };
-    readOpenAICodexCliOAuthProfileMock.mockReturnValueOnce({
-      profileId: "openai-codex:default",
-      credential,
-    });
-
-    expect(
-      provider.resolveExternalAuthProfiles?.({
-        env: { CODEX_HOME: "/sandboxed/codex-home" } as NodeJS.ProcessEnv,
-        store: { version: 1, profiles: {} },
-      }),
-    ).toEqual([
-      {
-        profileId: "openai-codex:default",
-        credential,
-        persistence: "runtime-only",
-      },
-    ]);
-    expect(readOpenAICodexCliOAuthProfileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: expect.objectContaining({ CODEX_HOME: "/sandboxed/codex-home" }),
-        store: { version: 1, profiles: {} },
-      }),
-    );
-  });
-
-  it("uses the provider auth context env when importing Codex CLI auth", async () => {
-    const provider = buildOpenAICodexProviderPlugin();
-    const importMethod = provider.auth?.find((method) => method.id === "import-codex-cli");
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-openai-codex-provider-"));
-    tempDirs.push(agentDir);
-    readOpenAICodexCliOAuthProfileMock.mockImplementationOnce(({ env }) => {
-      expect(env).toMatchObject({
-        CODEX_HOME: "/sandboxed/codex-home",
-      });
-      return {
-        profileId: "openai-codex:default",
-        credential: {
-          type: "oauth",
-          provider: "openai-codex",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-          email: "codex@example.com",
-          displayName: "Codex User",
-          accountId: "acct-123",
-        },
-      };
-    });
-
-    await expect(
-      importMethod?.run({
-        config: {},
-        env: { CODEX_HOME: "/sandboxed/codex-home" },
-        agentDir,
-        prompter: {} as never,
-        runtime: {} as never,
-        isRemote: false,
-        openUrl: async () => {},
-        oauth: { createVpsAwareHandlers: (() => ({})) as never },
-      }),
-    ).resolves.toMatchObject({
-      profiles: [
-        {
-          profileId: "openai-codex:default",
-          credential: expect.objectContaining({
-            provider: "openai-codex",
-            access: "access-token",
-          }),
-        },
-      ],
-    });
   });
 
   it("owns native reasoning output mode for Codex responses", () => {

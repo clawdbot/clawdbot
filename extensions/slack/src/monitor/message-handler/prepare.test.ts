@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type SessionBindingAdapter,
+  type SessionBindingRecord,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
@@ -591,6 +597,76 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.SessionKey).toContain(":thread:500.000");
     // MessageThreadId should be set for the reply
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
+  });
+
+  it("routes Slack thread replies through runtime conversation bindings", async () => {
+    const targetSessionKey = "agent:review:acp:session-67739";
+    const binding: SessionBindingRecord = {
+      bindingId: "test-binding",
+      targetSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "100.000",
+        parentConversationId: "C123",
+      },
+      status: "active",
+      boundAt: Date.now(),
+      metadata: {},
+    };
+    const resolveByConversation: SessionBindingAdapter["resolveByConversation"] = vi.fn((ref) =>
+      ref.channel === "slack" &&
+      ref.accountId === "default" &&
+      ref.conversationId === "100.000" &&
+      ref.parentConversationId === "C123"
+        ? binding
+        : null,
+    );
+    const touch: NonNullable<SessionBindingAdapter["touch"]> = vi.fn();
+    const adapter: SessionBindingAdapter = {
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation,
+      touch,
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
+      const replies = vi.fn().mockResolvedValue({
+        messages: [{ text: "starter", user: "U2", ts: "100.000" }],
+        response_metadata: { next_cursor: "" },
+      });
+      const slackCtx = createThreadSlackCtx({
+        cfg: {
+          channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+        } as OpenClawConfig,
+        replies,
+      });
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+      slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+      const prepared = await prepareThreadMessage(slackCtx, {
+        text: "bound reply",
+        ts: "101.000",
+        thread_ts: "100.000",
+      });
+
+      expect(prepared).toBeTruthy();
+      expect(prepared!.route.sessionKey).toBe(targetSessionKey);
+      expect(prepared!.route.agentId).toBe("review");
+      expect(prepared!.ctxPayload.SessionKey).toBe(targetSessionKey);
+      expect(prepared!.ctxPayload.ParentSessionKey).toBeUndefined();
+      expect(resolveByConversation).toHaveBeenCalledWith({
+        channel: "slack",
+        accountId: "default",
+        conversationId: "100.000",
+        parentConversationId: "C123",
+      });
+      expect(touch).toHaveBeenCalledWith("test-binding", undefined);
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+    }
   });
 });
 

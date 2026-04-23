@@ -120,6 +120,7 @@ const mocks = vi.hoisted(() => {
       env: { shellEnv: { enabled: true } },
     }),
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
+    resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
   };
 });
 
@@ -145,6 +146,7 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
 }));
 vi.mock("../../agents/auth-profiles/store.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
 }));
 vi.mock("../../agents/auth-profiles/usage.js", () => ({
   resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
@@ -205,6 +207,9 @@ vi.mock("../../infra/provider-usage.js", () => ({
   formatUsageWindowSummary: vi.fn().mockReturnValue("-"),
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
   resolveUsageProviderId: vi.fn((providerId: string) => providerId),
+}));
+vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
+  resolveRuntimeSyntheticAuthProviderRefs: mocks.resolveRuntimeSyntheticAuthProviderRefs,
 }));
 
 import { modelsStatusCommand } from "./list.status-command.js";
@@ -411,6 +416,69 @@ describe("modelsStatusCommand auth overview", () => {
         mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
       } else {
         mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+    }
+  });
+
+  it("treats plugin-owned synthetic auth as usable for models in use", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    const originalSyntheticImpl =
+      mocks.resolveRuntimeSyntheticAuthProviderRefs.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "codex/gpt-5.4", fallbacks: [] },
+          models: { "codex/gpt-5.4": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: false } },
+    });
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+    mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue(["codex", "unused-synthetic"]);
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const providers = payload.auth.providers as Array<{
+        provider: string;
+        syntheticAuth?: { value: string; source: string };
+        effective?: { kind: string; detail?: string };
+      }>;
+      expect(payload.auth.missingProvidersInUse).toEqual([]);
+      expect(providers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: "codex",
+            syntheticAuth: {
+              value: "plugin-owned",
+              source: "plugin synthetic auth",
+            },
+            effective: {
+              kind: "synthetic",
+              detail: "plugin synthetic auth",
+            },
+          }),
+        ]),
+      );
+      expect(providers.some((entry) => entry.provider === "unused-synthetic")).toBe(false);
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+      if (originalSyntheticImpl) {
+        mocks.resolveRuntimeSyntheticAuthProviderRefs.mockImplementation(originalSyntheticImpl);
+      } else {
+        mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue([]);
       }
     }
   });

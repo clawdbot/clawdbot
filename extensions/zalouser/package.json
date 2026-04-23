@@ -4,7 +4,7 @@
   "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration",
   "type": "module",
   "dependencies": {
-    "@sinclair/typebox": "0.34.49",
+    "typebox": "1.1.28",
     "zca-js": "2.1.2"
   },
   "devDependencies": {
@@ -35,7 +35,13 @@
         "zlu"
       ],
       "order": 85,
-      "quickstartAllowFrom": false
+      "quickstartAllowFrom": false,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "hybrid",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": false
+      }
     },
     "install": {
       "npmSpec": "@openclaw/zalouser",

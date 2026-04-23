@@ -27,6 +27,7 @@ import {
   mimeTypeFromFilePath,
   normalizeMimeType,
 } from "./mime.js";
+import { resolveMediaBufferPath } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -55,6 +56,46 @@ type WebMediaOptions = {
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
 };
+
+async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | null> {
+  if (!mediaUrl.startsWith("media://")) {
+    return null;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(mediaUrl);
+  } catch (err) {
+    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`, {
+      cause: err,
+    });
+  }
+  if (parsed.hostname !== "inbound") {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      `Unsupported media URI location: ${parsed.hostname || "(missing)"}`,
+    );
+  }
+  let id: string;
+  try {
+    id = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  } catch (err) {
+    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`, {
+      cause: err,
+    });
+  }
+  if (!id || id.includes("/")) {
+    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`);
+  }
+  try {
+    return await resolveMediaBufferPath(id, "inbound");
+  } catch (err) {
+    throw new LocalMediaAccessError(
+      "invalid-path",
+      err instanceof Error ? err.message : `Invalid media URI: ${mediaUrl}`,
+      { cause: err },
+    );
+  }
+}
 
 function resolveWebMediaOptions(params: {
   maxBytesOrOptions?: number | WebMediaOptions;
@@ -356,7 +397,10 @@ async function loadWebMediaInternal(
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
-  mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+  if (!/^\s*media:\/\//i.test(mediaUrl)) {
+    mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+  }
+  mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {

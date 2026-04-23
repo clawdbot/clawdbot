@@ -549,7 +549,7 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
-  it("loads bundled setup entries from external staged runtime deps", async () => {
+  it("does not load bundled setup entries through external staged runtime deps during discovery", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-setup-runtime-deps-"));
     const stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-stage-"));
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -620,8 +620,8 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-setup-runtime-deps",
       );
 
-      expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("staged-alpha");
-      expect(testGlobal.__bundledSetupRuntimeDepMarker).toBe("staged-alpha");
+      expect(bundled.getBundledChannelSetupPlugin("alpha")).toBeUndefined();
+      expect(testGlobal.__bundledSetupRuntimeDepMarker).toBeUndefined();
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       if (previousPluginStageDir === undefined) {
@@ -632,6 +632,95 @@ describe("bundled channel entry shape guards", () => {
       fs.rmSync(root, { recursive: true, force: true });
       fs.rmSync(stageRoot, { recursive: true, force: true });
       delete testGlobal.__bundledSetupRuntimeDepMarker;
+    }
+  });
+
+  it("swallows and caches bundled plugin and setup load failures", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-load-failure-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const pluginDir = path.join(root, "dist", "extensions", "alpha");
+    const testGlobal = globalThis as typeof globalThis & {
+      __bundledPluginFailureLoads?: number;
+      __bundledSetupFailureLoads?: number;
+      __bundledSecretsFailureLoads?: number;
+      __bundledSetupSecretsFailureLoads?: number;
+    };
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      [
+        "export default {",
+        "  kind: 'bundled-channel-entry',",
+        "  id: 'alpha',",
+        "  name: 'Alpha',",
+        "  description: 'Alpha',",
+        "  register() {},",
+        "  loadChannelSecrets() {",
+        "    globalThis.__bundledSecretsFailureLoads = (globalThis.__bundledSecretsFailureLoads ?? 0) + 1;",
+        "    throw new Error('missing channel secrets dep');",
+        "  },",
+        "  loadChannelPlugin() {",
+        "    globalThis.__bundledPluginFailureLoads = (globalThis.__bundledPluginFailureLoads ?? 0) + 1;",
+        "    throw new Error('missing channel plugin dep');",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.js"),
+      [
+        "export default {",
+        "  kind: 'bundled-channel-setup-entry',",
+        "  loadSetupSecrets() {",
+        "    globalThis.__bundledSetupSecretsFailureLoads = (globalThis.__bundledSetupSecretsFailureLoads ?? 0) + 1;",
+        "    throw new Error('missing setup secrets dep');",
+        "  },",
+        "  loadSetupPlugin() {",
+        "    globalThis.__bundledSetupFailureLoads = (globalThis.__bundledSetupFailureLoads ?? 0) + 1;",
+        "    throw new Error('missing setup plugin dep');",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    mockAlphaDistExtensionRuntime();
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(root, "dist", "extensions");
+
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-load-failure",
+      );
+
+      expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSetupPlugin("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSetupPlugin("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSecrets("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSecrets("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSetupSecrets("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSetupSecrets("alpha")).toBeUndefined();
+      expect(testGlobal.__bundledPluginFailureLoads).toBe(1);
+      expect(testGlobal.__bundledSetupFailureLoads).toBe(1);
+      expect(testGlobal.__bundledSecretsFailureLoads).toBe(1);
+      expect(testGlobal.__bundledSetupSecretsFailureLoads).toBe(1);
+    } finally {
+      restoreBundledPluginsDir(previousBundledPluginsDir);
+      fs.rmSync(root, { recursive: true, force: true });
+      delete testGlobal.__bundledPluginFailureLoads;
+      delete testGlobal.__bundledSetupFailureLoads;
+      delete testGlobal.__bundledSecretsFailureLoads;
+      delete testGlobal.__bundledSetupSecretsFailureLoads;
     }
   });
 

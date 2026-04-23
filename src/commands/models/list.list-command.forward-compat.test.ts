@@ -66,6 +66,7 @@ const mocks = vi.hoisted(() => {
     printModelTable: vi.fn(),
     listProfilesForProvider: vi.fn(),
     resolveModelWithRegistry: vi.fn(),
+    resolveRuntimeSyntheticAuthProviderRefs: vi.fn(),
   };
 });
 
@@ -100,6 +101,7 @@ function resetMocks() {
   mocks.printModelTable.mockReset();
   mocks.listProfilesForProvider.mockReturnValue([]);
   mocks.resolveModelWithRegistry.mockReturnValue({ ...OPENAI_CODEX_MODEL });
+  mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue([]);
 }
 
 function createRuntime() {
@@ -151,6 +153,10 @@ function installModelsListCommandForwardCompatMocks() {
     resolveAwsSdkEnvVarName: vi.fn().mockReturnValue(undefined),
     hasUsableCustomProviderApiKey: vi.fn().mockReturnValue(false),
   }));
+
+  vi.doMock("../../plugins/synthetic-auth.runtime.js", () => ({
+    resolveRuntimeSyntheticAuthProviderRefs: mocks.resolveRuntimeSyntheticAuthProviderRefs,
+  }));
 }
 
 beforeAll(async () => {
@@ -200,6 +206,19 @@ beforeEach(() => {
 
 describe("modelsListCommand forward-compat", () => {
   describe("configured rows", () => {
+    it("passes provider filters into registry loading before row assembly", async () => {
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true, provider: "moonshot" }, runtime as never);
+
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.objectContaining({
+          providerFilter: "moonshot",
+        }),
+      );
+    });
+
     it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {
       const runtime = createRuntime();
 
@@ -366,6 +385,41 @@ describe("modelsListCommand forward-compat", () => {
   });
 
   describe("--all catalog supplementation", () => {
+    it("uses the provider catalog fast path for Codex provider lists", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
+        {
+          provider: "codex",
+          id: "gpt-5.4",
+          name: "gpt-5.4",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+          input: ["text", "image"],
+          contextWindow: 272_000,
+          maxTokens: 128_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ]);
+      mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValueOnce(["codex"]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "codex", json: true }, runtime as never);
+
+      expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenCalledWith({
+        cfg: mocks.resolvedConfig,
+        agentDir: "/tmp/openclaw-agent",
+        providerFilter: "codex",
+      });
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
+        expect.objectContaining({
+          key: "codex/gpt-5.4",
+          available: true,
+        }),
+      ]);
+    });
+
     it("includes synthetic codex gpt-5.4 in --all output when catalog supports it", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.loadModelRegistry.mockResolvedValueOnce({

@@ -262,7 +262,7 @@ const {
   mockEnsureConfiguredBindingRouteReady: vi.fn(
     async (_params?: unknown): Promise<BindingReadiness> => ({ ok: true }),
   ),
-  mockResolveBoundConversation: vi.fn(() => null as BoundConversation),
+  mockResolveBoundConversation: vi.fn((_ref?: unknown) => null as BoundConversation),
   mockTouchBinding: vi.fn(),
   mockResolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
 }));
@@ -297,6 +297,30 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
     ...actual,
     resolveConfiguredBindingRoute: (params: unknown) =>
       mockResolveConfiguredBindingRoute(params as { route: ResolvedAgentRoute }),
+    resolveRuntimeConversationBindingRoute: (params: {
+      route: ResolvedAgentRoute;
+      conversation: Parameters<
+        ReturnType<typeof actual.getSessionBindingService>["resolveByConversation"]
+      >[0];
+    }) => {
+      const bindingRecord = mockResolveBoundConversation(params.conversation);
+      const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
+      if (!bindingRecord || !boundSessionKey) {
+        return { bindingRecord: null, route: params.route };
+      }
+      mockTouchBinding(bindingRecord.bindingId);
+      return {
+        bindingRecord,
+        boundSessionKey,
+        boundAgentId: params.route.agentId,
+        route: {
+          ...params.route,
+          sessionKey: boundSessionKey,
+          lastRoutePolicy: boundSessionKey === params.route.mainSessionKey ? "main" : "session",
+          matchedBy: "binding.channel",
+        },
+      };
+    },
     ensureConfiguredBindingRouteReady: (params: unknown) =>
       mockEnsureConfiguredBindingRouteReady(params),
     getSessionBindingService: () => ({

@@ -4,6 +4,7 @@ import type {
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
   ProviderResolveDynamicModelContext,
+  ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -44,6 +45,7 @@ const PROVIDER_ID = "anthropic";
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-7";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
+const ANTHROPIC_OPUS_47_CONTEXT_TOKENS = 1_048_576;
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
@@ -282,6 +284,75 @@ function supportsAnthropicAdaptiveThinking(modelId: string): boolean {
   return shouldUseAnthropicAdaptiveThinkingDefault(modelId) || isAnthropicOpus47Model(modelId);
 }
 
+function hasConfiguredModelContextOverride(
+  config: ProviderNormalizeResolvedModelContext["config"],
+  provider: string,
+  modelId: string,
+): boolean {
+  const providers = config?.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return false;
+  }
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (normalizeLowercaseStringOrEmpty(providerId) !== normalizedProvider) {
+      continue;
+    }
+    if (!Array.isArray(providerConfig?.models)) {
+      continue;
+    }
+    for (const model of providerConfig.models) {
+      if (
+        normalizeLowercaseStringOrEmpty(typeof model?.id === "string" ? model.id : "") !==
+        normalizedModelId
+      ) {
+        continue;
+      }
+      if (
+        (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
+        (typeof model?.contextWindow === "number" && model.contextWindow > 0)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function applyAnthropicOpus47ContextWindow(params: {
+  config?: ProviderNormalizeResolvedModelContext["config"];
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel;
+}): ProviderRuntimeModel | undefined {
+  if (!isAnthropicOpus47Model(params.modelId)) {
+    return undefined;
+  }
+  if (hasConfiguredModelContextOverride(params.config, params.provider, params.modelId)) {
+    return undefined;
+  }
+  const nextContextWindow = Math.max(
+    params.model.contextWindow ?? 0,
+    ANTHROPIC_OPUS_47_CONTEXT_TOKENS,
+  );
+  const nextContextTokens =
+    typeof params.model.contextTokens === "number"
+      ? Math.max(params.model.contextTokens, ANTHROPIC_OPUS_47_CONTEXT_TOKENS)
+      : ANTHROPIC_OPUS_47_CONTEXT_TOKENS;
+  if (
+    nextContextWindow === params.model.contextWindow &&
+    nextContextTokens === params.model.contextTokens
+  ) {
+    return undefined;
+  }
+  return {
+    ...params.model,
+    contextWindow: nextContextWindow,
+    contextTokens: nextContextTokens,
+  };
+}
+
 function matchesAnthropicModernModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
@@ -486,7 +557,21 @@ export function buildAnthropicProvider(): ProviderPlugin {
     normalizeConfig: ({ provider, providerConfig }) =>
       normalizeAnthropicProviderConfigForProvider({ provider, providerConfig }),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
-    resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
+    resolveDynamicModel: (ctx) => {
+      const model = resolveAnthropicForwardCompatModel(ctx);
+      if (!model) {
+        return undefined;
+      }
+      return (
+        applyAnthropicOpus47ContextWindow({
+          config: ctx.config,
+          provider: ctx.provider,
+          modelId: ctx.modelId,
+          model,
+        }) ?? model
+      );
+    },
+    normalizeResolvedModel: (ctx) => applyAnthropicOpus47ContextWindow(ctx),
     resolveSyntheticAuth: ({ provider }) =>
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()

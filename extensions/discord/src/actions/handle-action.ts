@@ -19,9 +19,19 @@ import {
 } from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
-import { readDiscordParentIdParam } from "./runtime.shared.js";
 
 const providerId = "discord";
+
+function readCurrentDiscordTarget(
+  toolContext: Pick<ChannelMessageActionContext, "toolContext">["toolContext"],
+): string | undefined {
+  const provider = toolContext?.currentChannelProvider?.trim().toLowerCase();
+  if (provider && provider !== providerId) {
+    return undefined;
+  }
+  const target = toolContext?.currentChannelId?.trim();
+  return target || undefined;
+}
 
 export async function handleDiscordMessageAction(
   ctx: Pick<
@@ -45,10 +55,17 @@ export async function handleDiscordMessageAction(
     mediaReadFile: ctx.mediaReadFile,
   } as const;
 
-  const resolveChannelId = () =>
-    resolveDiscordChannelId(
-      readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true }),
-    );
+  const readTarget = () => {
+    const target =
+      readStringParam(params, "channelId") ??
+      readStringParam(params, "to") ??
+      readCurrentDiscordTarget(ctx.toolContext);
+    if (!target) {
+      throw new Error("Discord channel target is required (use channel:<id>).");
+    }
+    return target;
+  };
+  const resolveChannelId = () => resolveDiscordChannelId(readTarget());
 
   if (action === "send") {
     const to = readStringParam(params, "to", { required: true });
@@ -138,7 +155,7 @@ export async function handleDiscordMessageAction(
       {
         action: "react",
         accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
+        channelId: readTarget(),
         messageId,
         emoji,
         remove,
@@ -155,7 +172,7 @@ export async function handleDiscordMessageAction(
       {
         action: "reactions",
         accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
+        channelId: readTarget(),
         messageId,
         limit,
       },
@@ -300,7 +317,6 @@ export async function handleDiscordMessageAction(
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({
     ctx,
     resolveChannelId,
-    readParentIdParam: readDiscordParentIdParam,
   });
   if (adminResult !== undefined) {
     return adminResult;

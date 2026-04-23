@@ -66,6 +66,8 @@ export type AppViewState = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  userName?: string | null;
+  userAvatar?: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: EmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
@@ -376,6 +378,7 @@ export type AppViewState = {
     setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
     setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
+    applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;
     loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;
     loadAssistantIdentity: () => Promise<void>;
     loadCron: () => Promise<void>;

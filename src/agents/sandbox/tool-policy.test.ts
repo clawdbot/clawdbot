@@ -148,6 +148,48 @@ describe("sandbox/tool-policy", () => {
     expect(runtime.toolPolicy.deny).not.toContain("browser");
   });
 
+  it("treats channel direct sessions as sandboxed in non-main mode", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "non-main", scope: "agent" },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    expect(
+      resolveSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:main",
+      }).sandboxed,
+    ).toBe(false);
+    expect(
+      resolveSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:telegram:default:direct:42",
+      }).sandboxed,
+    ).toBe(true);
+  });
+
+  it("keeps the agent main session sandboxed in all mode", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    expect(
+      resolveSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:main",
+      }).sandboxed,
+    ).toBe(true);
+  });
+
   it("keeps explicit sandbox deny precedence over allow and alsoAllow", () => {
     const cfg: OpenClawConfig = {
       agents: {

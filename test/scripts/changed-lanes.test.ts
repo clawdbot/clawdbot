@@ -160,6 +160,20 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:all");
   });
 
+  it("routes gitignore changes to tooling instead of all lanes", () => {
+    const result = detectChangedLanes([".gitignore"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.runFullTests).toBe(false);
+    expect(plan.runChangedTestsBroad).toBe(false);
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
   it("keeps release metadata commits off the full changed gate", () => {
     const result = detectChangedLanes([
       "CHANGELOG.md",

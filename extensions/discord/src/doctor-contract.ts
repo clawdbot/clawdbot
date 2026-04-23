@@ -28,6 +28,30 @@ function hasLegacyDiscordAccountTtsProviderKeys(value: unknown): boolean {
   });
 }
 
+function hasLegacyDiscordGuildChannelAllowAlias(value: unknown): boolean {
+  const guilds = asObjectRecord(asObjectRecord(value)?.guilds);
+  if (!guilds) {
+    return false;
+  }
+  return Object.values(guilds).some((guildValue) => {
+    const channels = asObjectRecord(asObjectRecord(guildValue)?.channels);
+    if (!channels) {
+      return false;
+    }
+    return Object.values(channels).some((channel) =>
+      Object.prototype.hasOwnProperty.call(asObjectRecord(channel) ?? {}, "allow"),
+    );
+  });
+}
+
+function hasLegacyDiscordAccountGuildChannelAllowAlias(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasLegacyDiscordGuildChannelAllowAlias(account));
+}
+
 function mergeMissing(target: Record<string, unknown>, source: Record<string, unknown>) {
   for (const [key, value] of Object.entries(source)) {
     if (value === undefined) {
@@ -103,6 +127,58 @@ function migrateLegacyTtsConfig(
   return changed;
 }
 
+function normalizeDiscordGuildChannelAllowAliases(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const guilds = asObjectRecord(params.entry.guilds);
+  if (!guilds) {
+    return { entry: params.entry, changed: false };
+  }
+
+  let changed = false;
+  const nextGuilds = { ...guilds };
+  for (const [guildId, guildValue] of Object.entries(guilds)) {
+    const guild = asObjectRecord(guildValue);
+    const channels = asObjectRecord(guild?.channels);
+    if (!guild || !channels) {
+      continue;
+    }
+    let channelsChanged = false;
+    const nextChannels = { ...channels };
+    for (const [channelId, channelValue] of Object.entries(channels)) {
+      const channel = asObjectRecord(channelValue);
+      if (!channel || !Object.prototype.hasOwnProperty.call(channel, "allow")) {
+        continue;
+      }
+      const nextChannel = { ...channel };
+      if (nextChannel.enabled === undefined) {
+        nextChannel.enabled = channel.allow;
+        params.changes.push(
+          `Moved ${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.allow → ${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.enabled.`,
+        );
+      } else {
+        params.changes.push(
+          `Removed ${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.allow (${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.enabled already set).`,
+        );
+      }
+      delete nextChannel.allow;
+      nextChannels[channelId] = nextChannel;
+      channelsChanged = true;
+    }
+    if (!channelsChanged) {
+      continue;
+    }
+    nextGuilds[guildId] = { ...guild, channels: nextChannels };
+    changed = true;
+  }
+
+  return changed
+    ? { entry: { ...params.entry, guilds: nextGuilds }, changed: true }
+    : { entry: params.entry, changed: false };
+}
+
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "discord", "voice", "tts"],
@@ -115,6 +191,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     message:
       'channels.discord.accounts.<id>.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.accounts.<id>.voice.tts.providers.<provider>. Run "openclaw doctor --fix".',
     match: hasLegacyDiscordAccountTtsProviderKeys,
+  },
+  {
+    path: ["channels", "discord"],
+    message:
+      'channels.discord.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.guilds.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
+    match: hasLegacyDiscordGuildChannelAllowAlias,
+  },
+  {
+    path: ["channels", "discord", "accounts"],
+    message:
+      'channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
+    match: hasLegacyDiscordAccountGuildChannelAllowAlias,
   },
 ];
 
@@ -167,6 +255,40 @@ export function normalizeCompatibilityConfig({
   });
   updated = aliases.entry;
   changed = aliases.changed;
+
+  const guildAliases = normalizeDiscordGuildChannelAllowAliases({
+    entry: updated,
+    pathPrefix: "channels.discord",
+    changes,
+  });
+  updated = guildAliases.entry;
+  changed = changed || guildAliases.changed;
+
+  const accounts = asObjectRecord(updated.accounts);
+  if (accounts) {
+    let accountsChanged = false;
+    const nextAccounts = { ...accounts };
+    for (const [accountId, accountValue] of Object.entries(accounts)) {
+      const account = asObjectRecord(accountValue);
+      if (!account) {
+        continue;
+      }
+      const normalized = normalizeDiscordGuildChannelAllowAliases({
+        entry: account,
+        pathPrefix: `channels.discord.accounts.${accountId}`,
+        changes,
+      });
+      if (!normalized.changed) {
+        continue;
+      }
+      nextAccounts[accountId] = normalized.entry;
+      accountsChanged = true;
+    }
+    if (accountsChanged) {
+      updated = { ...updated, accounts: nextAccounts };
+      changed = true;
+    }
+  }
 
   const voice = asObjectRecord(updated.voice);
   if (

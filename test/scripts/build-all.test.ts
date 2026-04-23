@@ -132,7 +132,6 @@ describe("resolveBuildAllSteps", () => {
       "canvas:a2ui:bundle",
       "tsdown",
       "runtime-postbuild",
-      "write-npm-update-compat-sidecars",
       "build-stamp",
       "canvas-a2ui-copy",
       "copy-hook-metadata",
@@ -140,6 +139,14 @@ describe("resolveBuildAllSteps", () => {
       "write-build-info",
       "write-cli-startup-metadata",
       "write-cli-compat",
+    ]);
+  });
+
+  it("uses a minimal built runtime profile for gateway watch regression", () => {
+    expect(resolveBuildAllSteps("gatewayWatch").map((step) => step.label)).toEqual([
+      "tsdown",
+      "runtime-postbuild",
+      "build-stamp",
     ]);
   });
 

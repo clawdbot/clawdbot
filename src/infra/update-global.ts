@@ -239,12 +239,18 @@ async function collectInstalledPathErrors(params: {
         ? actualSet.has(relativePath)
         : await pathExists(path.join(params.packageRoot, relativePath));
     if (!exists) {
+      if (NPM_UPDATE_COMPAT_SIDECAR_PATHS.has(relativePath)) {
+        continue;
+      }
       errors.push(params.missingMessage(relativePath));
     }
   }
   if (actualSet !== null && params.unexpectedMessage) {
     const expectedSet = new Set(params.expectedFiles);
     for (const relativePath of params.actualFiles ?? []) {
+      if (NPM_UPDATE_COMPAT_SIDECAR_PATHS.has(relativePath)) {
+        continue;
+      }
       if (!expectedSet.has(relativePath)) {
         errors.push(params.unexpectedMessage(relativePath));
       }

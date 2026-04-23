@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
@@ -47,6 +48,21 @@ export function resolveVitestSpawnParams(env = process.env, platform = process.p
 
 export function shouldSuppressVitestStderrLine(line) {
   return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => line.includes(pattern));
+}
+
+export function resolveDirectNodeVitestArgs(pnpmArgs) {
+  return pnpmArgs[0] === "exec" && pnpmArgs[1] === "node" ? pnpmArgs.slice(2) : null;
+}
+
+function spawnVitestProcess({ pnpmArgs, spawnParams }) {
+  const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
+  if (directNodeArgs) {
+    return spawn(process.execPath, directNodeArgs, spawnParams);
+  }
+  return spawnPnpmRunner({
+    pnpmArgs,
+    ...spawnParams,
+  });
 }
 
 export function installVitestNoOutputWatchdog(params) {
@@ -165,9 +181,9 @@ export function forwardVitestOutput(stream, target, shouldSuppressLine = () => f
 }
 
 export function spawnWatchedVitestProcess({ pnpmArgs, spawnParams, env, label }) {
-  const child = spawnPnpmRunner({
+  const child = spawnVitestProcess({
     pnpmArgs,
-    ...spawnParams,
+    spawnParams,
   });
   const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
   const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({

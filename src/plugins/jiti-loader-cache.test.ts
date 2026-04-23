@@ -163,4 +163,43 @@ describe("getCachedPluginJitiLoader", () => {
     expect(createJiti).toHaveBeenCalledTimes(1);
     expect(cache.size).toBe(1);
   });
+
+  it("reuses pre-normalized alias options across module-scoped loader filenames", async () => {
+    const { createJiti, getCachedPluginJitiLoader } =
+      await loadCachedPluginJitiLoader("module-filename-aliases");
+
+    const cache = new Map();
+    getCachedPluginJitiLoader({
+      cache,
+      modulePath: "/repo/extensions/demo-a/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      jitiFilename: "/repo/extensions/demo-a/index.ts",
+      aliasMap: {
+        alpha: "/repo/alpha",
+        beta: "alpha/sub",
+      },
+      tryNative: false,
+    });
+    getCachedPluginJitiLoader({
+      cache,
+      modulePath: "/repo/extensions/demo-b/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      jitiFilename: "/repo/extensions/demo-b/index.ts",
+      aliasMap: {
+        beta: "alpha/sub",
+        alpha: "/repo/alpha",
+      },
+      tryNative: false,
+    });
+
+    const marker = Symbol.for("pathe:normalizedAlias");
+    const firstAlias = (createJiti.mock.calls[0]?.[1] as { alias?: Record<string, string> }).alias;
+    const secondAlias = (createJiti.mock.calls[1]?.[1] as { alias?: Record<string, string> }).alias;
+
+    expect(createJiti).toHaveBeenCalledTimes(2);
+    expect(cache.size).toBe(2);
+    expect(secondAlias).toBe(firstAlias);
+    expect(firstAlias?.beta).toBe("/repo/alpha/sub");
+    expect((firstAlias as Record<symbol, unknown>)[marker]).toBe(true);
+  });
 });

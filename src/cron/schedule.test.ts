@@ -210,7 +210,7 @@ describe("coerceFiniteScheduleNumber", () => {
   it("returns undefined for invalid inputs", () => {
     expect(coerceFiniteScheduleNumber("")).toBeUndefined();
     expect(coerceFiniteScheduleNumber("abc")).toBeUndefined();
-    expect(coerceFiniteScheduleNumber(NaN)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(Number.NaN)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Infinity)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(null)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(undefined)).toBeUndefined();

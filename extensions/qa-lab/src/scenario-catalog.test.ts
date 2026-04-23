@@ -149,6 +149,34 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
+  it("includes the OpenAI native web search live scenario", () => {
+    const scenario = readQaScenarioById("openai-native-web-search-live");
+    const config = readQaScenarioExecutionConfig("openai-native-web-search-live") as
+      | {
+          requiredProvider?: string;
+          requiredModel?: string;
+          expectedMarker?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/openai-native-web-search-live.md");
+    expect(scenario.gatewayConfigPatch?.tools).toEqual({
+      web: {
+        search: {
+          enabled: true,
+          provider: null,
+        },
+      },
+    });
+    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.requiredModel).toBe("gpt-5.4");
+    expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "confirms live OpenAI GPT-5.4 web search auto mode",
+      "searches official OpenAI News through the live model",
+    ]);
+  });
+
   it("includes the thinking slash model remap scenario", () => {
     const scenario = readQaScenarioById("thinking-slash-model-remap");
     const config = readQaScenarioExecutionConfig("thinking-slash-model-remap") as

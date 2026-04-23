@@ -1,6 +1,11 @@
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
@@ -147,6 +152,9 @@ describe("gateway pre-auth hardening", () => {
   });
 
   it("rejects oversized pre-auth connect frames before application-level auth responses", async () => {
+    resetDiagnosticEventsForTest();
+    const events: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onDiagnosticEvent((event) => events.push(event));
     const harness = await createGatewaySuiteHarness();
     try {
       const ws = await harness.openWs();
@@ -176,7 +184,18 @@ describe("gateway pre-auth hardening", () => {
 
       const result = await closed;
       expect(result.code).toBe(1009);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "payload.large",
+          surface: "gateway.ws.preauth",
+          action: "rejected",
+          limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+          reason: "preauth_frame_limit",
+        }),
+      );
     } finally {
+      stopDiagnostics();
+      resetDiagnosticEventsForTest();
       await harness.close();
     }
   });

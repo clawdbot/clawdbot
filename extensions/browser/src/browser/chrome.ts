@@ -2,6 +2,7 @@ import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "n
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
@@ -290,13 +291,16 @@ export async function launchOpenClawChrome(
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
     // Cast to ChildProcessWithoutNullStreams so callers can use .stderr safely;
     // the tuple overload resolution varies across @types/node versions.
-    return spawn(exe.path, args, {
-      stdio: ["ignore", "ignore", "pipe"],
+    const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
       env: {
         ...process.env,
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
       },
+    });
+    return spawn(preparedSpawn.command, preparedSpawn.args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      env: preparedSpawn.env,
     }) as unknown as ChildProcessWithoutNullStreams;
   };
 

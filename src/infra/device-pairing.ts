@@ -758,6 +758,11 @@ export async function removePairedDevice(
       return null;
     }
     delete state.pairedByDeviceId[normalized];
+    for (const [requestId, pending] of Object.entries(state.pendingById)) {
+      if (pending.deviceId === normalized) {
+        delete state.pendingById[requestId];
+      }
+    }
     await persistState(state, baseDir);
     return { deviceId: normalized };
   });

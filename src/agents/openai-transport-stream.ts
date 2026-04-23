@@ -362,7 +362,10 @@ function convertResponsesTools(
     type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict),
+    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict) as Record<
+      string,
+      unknown
+    >,
     strict,
   }));
 }
@@ -752,6 +755,49 @@ function resolveOpenAIReasoningEffort(
   ) as OpenAIApiReasoningEffort;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function hasResponsesWebSearchTool(tools: unknown): boolean {
+  if (!Array.isArray(tools)) {
+    return false;
+  }
+  return tools.some((tool) => {
+    if (!isRecord(tool)) {
+      return false;
+    }
+    if (tool.type === "web_search") {
+      return true;
+    }
+    if (tool.type === "function" && tool.name === "web_search") {
+      return true;
+    }
+    const fn = tool.function;
+    return isRecord(fn) && fn.name === "web_search";
+  });
+}
+
+function raiseMinimalReasoningForResponsesWebSearch(params: {
+  model: Model<Api>;
+  effort: OpenAIApiReasoningEffort;
+  tools: unknown;
+}): OpenAIApiReasoningEffort {
+  if (params.effort !== "minimal" || !hasResponsesWebSearchTool(params.tools)) {
+    return params.effort;
+  }
+  for (const effort of ["low", "medium", "high"] as const) {
+    const resolved = resolveOpenAIReasoningEffortForModel({
+      model: params.model,
+      effort,
+    });
+    if (resolved && resolved !== "none" && resolved !== "minimal") {
+      return resolved;
+    }
+  }
+  return params.effort;
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
@@ -798,10 +844,17 @@ export function buildOpenAIResponsesParams(
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
       const requestedReasoningEffort = resolveOpenAIReasoningEffort(options);
-      const reasoningEffort = resolveOpenAIReasoningEffortForModel({
+      const resolvedReasoningEffort = resolveOpenAIReasoningEffortForModel({
         model,
         effort: requestedReasoningEffort,
       });
+      const reasoningEffort = resolvedReasoningEffort
+        ? raiseMinimalReasoningForResponsesWebSearch({
+            model,
+            effort: resolvedReasoningEffort,
+            tools: params.tools,
+          })
+        : undefined;
       if (reasoningEffort) {
         params.reasoning = {
           effort: reasoningEffort,
@@ -963,13 +1016,71 @@ function createOpenAICompletionsClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
 ) {
+  const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
   return new OpenAI({
     apiKey,
-    baseURL: model.baseUrl,
+    baseURL: clientConfig.baseURL,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders),
+    defaultHeaders: clientConfig.defaultHeaders,
+    defaultQuery: clientConfig.defaultQuery,
     fetch: buildGuardedModelFetch(model),
   });
+}
+
+function isAzureOpenAICompatibleHost(hostname: string): boolean {
+  return (
+    hostname.endsWith(".openai.azure.com") ||
+    hostname.endsWith(".services.ai.azure.com") ||
+    hostname.endsWith(".cognitiveservices.azure.com")
+  );
+}
+
+function buildOpenAICompletionsClientConfig(
+  model: Model<Api>,
+  context: Context,
+  optionHeaders?: Record<string, string>,
+): {
+  baseURL: string;
+  defaultHeaders: Record<string, string>;
+  defaultQuery?: Record<string, string>;
+} {
+  const headers = buildOpenAIClientHeaders(model, context, optionHeaders);
+  const defaultQuery: Record<string, string> = {};
+  let baseURL = model.baseUrl;
+  let isAzureHost = false;
+
+  try {
+    const parsed = new URL(model.baseUrl);
+    isAzureHost = isAzureOpenAICompatibleHost(parsed.hostname.toLowerCase());
+    parsed.searchParams.forEach((value, key) => {
+      if (value) {
+        defaultQuery[key] = value;
+      }
+    });
+    parsed.search = "";
+    baseURL = parsed.toString().replace(/\/$/, "");
+  } catch {
+    // Keep the configured base URL unchanged; the OpenAI SDK will surface invalid URLs.
+  }
+
+  if (isAzureHost) {
+    const apiVersionHeader = Object.keys(headers).find(
+      (key) => key.toLowerCase() === "api-version",
+    );
+    if (apiVersionHeader) {
+      const apiVersion = headers[apiVersionHeader]?.trim();
+      delete headers[apiVersionHeader];
+      if (apiVersion && !defaultQuery["api-version"]) {
+        defaultQuery["api-version"] = apiVersion;
+      }
+    }
+  }
+
+  return {
+    baseURL,
+    defaultHeaders: headers,
+    defaultQuery: Object.keys(defaultQuery).length > 0 ? defaultQuery : undefined,
+  };
 }
 
 export function createOpenAICompletionsTransportStreamFn(): StreamFn {
@@ -1577,5 +1688,6 @@ function mapStopReason(reason: string | null) {
 }
 
 export const __testing = {
+  buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
 };

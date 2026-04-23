@@ -27,6 +27,10 @@ const browserLifecycleCleanupMocks = vi.hoisted(() => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
+const bundleMcpRuntimeMocks = vi.hoisted(() => ({
+  retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
+}));
+
 vi.mock("../tasks/detached-task-runtime.js", () => ({
   completeTaskRunByRunId: taskExecutorMocks.completeTaskRunByRunId,
   failTaskRunByRunId: taskExecutorMocks.failTaskRunByRunId,
@@ -40,6 +44,10 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd:
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+}));
+
+vi.mock("./pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -120,6 +128,8 @@ describe("subagent registry lifecycle hardening", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
+    bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockClear();
+    bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
   });
 
   it("does not reject completion when task finalization throws", async () => {
@@ -231,6 +241,54 @@ describe("subagent registry lifecycle hardening", () => {
         childSessionKey: entry.childSessionKey,
       }),
     );
+  });
+
+  it("retires bundle MCP runtimes when run-mode cleanup completes", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: false,
+      spawnMode: "run",
+    });
+
+    const controller = createLifecycleController({ entry });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
+      sessionKey: entry.childSessionKey,
+      reason: "subagent-run-cleanup",
+      onError: expect.any(Function),
+    });
+  });
+
+  it("keeps bundle MCP runtimes warm for persistent session-mode cleanup", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: false,
+      spawnMode: "session",
+    });
+
+    const controller = createLifecycleController({ entry });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
 
   it("enriches registered-run outcomes with persisted timing before cleanup", async () => {

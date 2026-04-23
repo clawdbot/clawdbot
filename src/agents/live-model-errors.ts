@@ -6,6 +6,9 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/no endpoints found for/i.test(msg)) {
     return true;
   }
+  if (/\brouter not found\b/i.test(msg)) {
+    return true;
+  }
   if (/unknown model/i.test(msg)) {
     return true;
   }

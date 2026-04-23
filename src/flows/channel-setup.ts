@@ -509,7 +509,9 @@ export async function setupChannels(
     await refreshStatus(channel);
   };
 
-  const handleChannelChoice = async (channel: ChannelChoice) => {
+  const handleChannelChoice = async (
+    channel: ChannelChoice,
+  ): Promise<"done" | "retry_selection"> => {
     const { catalogById, installedCatalogById } = getChannelEntries();
     const catalogEntry = catalogById.get(channel);
     const installedCatalogEntry = installedCatalogById.get(channel);
@@ -521,7 +523,7 @@ export async function setupChannels(
         `${channel} cannot be configured while ${deferredDisabledHint}. Enable it before setup.`,
         "Channel setup",
       );
-      return;
+      return "done";
     }
     if (catalogEntry) {
       const workspaceDir = resolveWorkspaceDir();
@@ -534,7 +536,7 @@ export async function setupChannels(
       });
       next = result.cfg;
       if (!result.installed) {
-        return;
+        return "retry_selection";
       }
       await loadScopedChannelPlugin(channel, result.pluginId ?? catalogEntry.pluginId);
       await refreshStatus(channel);
@@ -542,13 +544,13 @@ export async function setupChannels(
       const plugin = await loadScopedChannelPlugin(channel, installedCatalogEntry.pluginId);
       if (!plugin) {
         await prompter.note(`${channel} plugin not available.`, "Channel setup");
-        return;
+        return "done";
       }
       await refreshStatus(channel);
     } else {
       const enabled = await enableBundledPluginForSetup(channel);
       if (!enabled) {
-        return;
+        return "done";
       }
     }
 
@@ -570,38 +572,44 @@ export async function setupChannels(
         label,
       });
       if (!(await applyCustomSetupResult(channel, custom))) {
-        return;
+        return "done";
       }
-      return;
+      return "done";
     }
     if (configured) {
       await handleConfiguredChannel(channel, label);
-      return;
+      return "done";
     }
     await configureChannel(channel);
+    return "done";
   };
 
   if (options?.quickstartDefaults) {
-    const { entries } = getChannelEntries();
-    const choice = await prompter.select({
-      message: "Select channel (QuickStart)",
-      options: [
-        ...resolveChannelSetupSelectionContributions({
-          entries,
-          statusByChannel,
-          resolveDisabledHint,
-        }).map((contribution) => contribution.option),
-        {
-          value: "__skip__",
-          label: "Skip for now",
-          hint: `You can add channels later via \`${formatCliCommand("openclaw channels add")}\``,
-        },
-      ],
-      initialValue: quickstartDefault,
-      searchable: true,
-    });
-    if (choice !== "__skip__") {
-      await handleChannelChoice(choice);
+    while (true) {
+      const { entries } = getChannelEntries();
+      const choice = await prompter.select({
+        message: "Select channel (QuickStart)",
+        options: [
+          ...resolveChannelSetupSelectionContributions({
+            entries,
+            statusByChannel,
+            resolveDisabledHint,
+          }).map((contribution) => contribution.option),
+          {
+            value: "__skip__",
+            label: "Skip for now",
+            hint: `You can add channels later via \`${formatCliCommand("openclaw channels add")}\``,
+          },
+        ],
+        initialValue: quickstartDefault,
+        searchable: true,
+      });
+      if (choice === "__skip__") {
+        break;
+      }
+      if ((await handleChannelChoice(choice)) === "done") {
+        break;
+      }
     }
   } else {
     const doneValue = "__done__" as const;

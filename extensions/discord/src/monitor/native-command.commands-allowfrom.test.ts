@@ -5,6 +5,7 @@ import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as pluginCommandsModule from "openclaw/plugin-sdk/plugin-runtime";
 import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { __testing as nativeCommandTesting, createDiscordNativeCommand } from "./native-command.js";
 import {
   createMockCommandInteraction,
@@ -157,15 +158,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
   it("tolerates partial guild channels whose name getter throws", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       mutateInteraction: (currentInteraction) => {
-        Object.defineProperty(currentInteraction.channel, "name", {
-          configurable: true,
-          enumerable: true,
-          get() {
-            throw new Error(
-              "Cannot access rawData on partial Channel. Use fetch() to populate data.",
-            );
-          },
-        });
+        defineThrowingDiscordChannelGetter(currentInteraction.channel, "name");
       },
     });
     expect(interaction.defer).toHaveBeenCalledTimes(1);
@@ -176,15 +169,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
   it("tolerates partial guild channels whose topic getter throws", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       mutateInteraction: (currentInteraction) => {
-        Object.defineProperty(currentInteraction.channel, "topic", {
-          configurable: true,
-          enumerable: true,
-          get() {
-            throw new Error(
-              "Cannot access rawData on partial Channel. Use fetch() to populate data.",
-            );
-          },
-        });
+        defineThrowingDiscordChannelGetter(currentInteraction.channel, "topic");
       },
     });
     expect(interaction.defer).toHaveBeenCalledTimes(1);
@@ -199,15 +184,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
           type: ChannelType.PublicThread,
           id: currentInteraction.channel.id,
         } as MockCommandInteraction["channel"];
-        Object.defineProperty(currentInteraction.channel, "parentId", {
-          configurable: true,
-          enumerable: true,
-          get() {
-            throw new Error(
-              "Cannot access rawData on partial Channel. Use fetch() to populate data.",
-            );
-          },
-        });
+        defineThrowingDiscordChannelGetter(currentInteraction.channel, "parentId");
       },
     });
     expect(interaction.defer).toHaveBeenCalledTimes(1);

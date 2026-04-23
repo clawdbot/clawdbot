@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { listMarketplacePlugins } from "../plugins/marketplace.js";
+import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
 import {
   buildAllPluginInspectReports,
@@ -579,7 +580,7 @@ export function registerPluginsCli(program: Command) {
         preview.push("load path");
       }
       if (cfg.plugins?.slots?.memory === pluginId) {
-        preview.push(`memory slot (will reset to "memory-core")`);
+        preview.push(`memory slot (will reset to "${defaultSlotIdForKey("memory")}")`);
       }
       const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
       const channels = cfg.channels as Record<string, unknown> | undefined;

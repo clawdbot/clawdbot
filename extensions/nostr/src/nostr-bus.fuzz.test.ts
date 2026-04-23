@@ -299,10 +299,10 @@ describe("Metrics fuzz", () => {
   describe("extreme values", () => {
     it("handles NaN value", () => {
       const metrics = createPlainMetrics();
-      expect(() => metrics.emit("event.received", NaN)).not.toThrow();
+      expect(() => metrics.emit("event.received", Number.NaN)).not.toThrow();
 
       const snapshot = metrics.getSnapshot();
-      expect(isNaN(snapshot.eventsReceived)).toBe(true);
+      expect(Number.isNaN(snapshot.eventsReceived)).toBe(true);
     });
 
     it("handles Infinity value", () => {

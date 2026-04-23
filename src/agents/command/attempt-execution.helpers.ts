@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import readline from "node:readline";
 import {
   isSilentReplyPrefixText,
@@ -10,24 +12,27 @@ import {
 
 /** Maximum number of JSONL records to inspect before giving up. */
 const SESSION_FILE_MAX_RECORDS = 500;
+const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
-/**
- * Check whether a session transcript file exists and contains at least one
- * assistant message, indicating that the SessionManager has flushed the
- * initial user+assistant exchange to disk.
- */
-export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
-  if (!sessionFile) {
+function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
+  const trimmed = sessionId?.trim();
+  if (!trimmed || trimmed.includes("\0") || trimmed.includes("/") || trimmed.includes("\\")) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promise<boolean> {
+  if (!filePath) {
     return false;
   }
   try {
-    // Guard against symlink-following (CWE-400 / arbitrary-file-read vector).
-    const stat = await fs.lstat(sessionFile);
-    if (stat.isSymbolicLink()) {
+    const stat = await fs.lstat(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
       return false;
     }
 
-    const fh = await fs.open(sessionFile, "r");
+    const fh = await fs.open(filePath, "r");
     try {
       const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
       let recordCount = 0;
@@ -46,10 +51,7 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
           continue;
         }
         const rec = obj as Record<string, unknown> | null;
-        if (
-          rec?.type === "message" &&
-          (rec.message as Record<string, unknown> | undefined)?.role === "assistant"
-        ) {
+        if ((rec?.message as Record<string, unknown> | undefined)?.role === "assistant") {
           return true;
         }
       }
@@ -60,6 +62,43 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
   } catch {
     return false;
   }
+}
+
+/**
+ * Check whether a session transcript file exists and contains at least one
+ * assistant message, indicating that the SessionManager has flushed the
+ * initial user+assistant exchange to disk.
+ */
+export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
+  return await jsonlFileHasAssistantMessage(sessionFile);
+}
+
+export async function claudeCliSessionTranscriptHasContent(params: {
+  sessionId: string | undefined;
+  homeDir?: string;
+}): Promise<boolean> {
+  const sessionId = normalizeClaudeCliSessionId(params.sessionId);
+  if (!sessionId) {
+    return false;
+  }
+  const homeDir = params.homeDir?.trim() || process.env.HOME || os.homedir();
+  const projectsDir = path.join(homeDir, CLAUDE_PROJECTS_RELATIVE_DIR);
+  let projectEntries: import("node:fs").Dirent[];
+  try {
+    projectEntries = await fs.readdir(projectsDir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of projectEntries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
+    if (await jsonlFileHasAssistantMessage(candidate)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function resolveFallbackRetryPrompt(params: {

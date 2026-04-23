@@ -120,6 +120,7 @@ describe("resolveCronSession", () => {
 
       expect(result.sessionEntry.sessionId).toBe("existing-session-id-123");
       expect(result.isNewSession).toBe(false);
+      expect(result.previousSessionId).toBeUndefined();
       expect(result.systemSent).toBe(true);
       expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
@@ -139,6 +140,7 @@ describe("resolveCronSession", () => {
 
       expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
       expect(result.isNewSession).toBe(true);
+      expect(result.previousSessionId).toBe("old-session-id");
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
@@ -161,6 +163,7 @@ describe("resolveCronSession", () => {
 
       expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
       expect(result.isNewSession).toBe(true);
+      expect(result.previousSessionId).toBe("existing-session-id-456");
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");

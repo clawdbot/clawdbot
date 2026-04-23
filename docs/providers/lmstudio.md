@@ -102,6 +102,22 @@ Interactive setup can prompt for an optional preferred load context length and a
 
 ## Configuration
 
+### Streaming usage compatibility
+
+LM Studio is streaming-usage compatible. When it does not emit an OpenAI-shaped
+`usage` object, OpenClaw recovers token counts from llama.cpp-style
+`timings.prompt_n` / `timings.predicted_n` metadata instead.
+
+Same behavior applies to these OpenAI-compatible local backends:
+
+- vLLM
+- SGLang
+- llama.cpp
+- LocalAI
+- Jan
+- TabbyAPI
+- text-generation-webui
+
 ### Explicit configuration
 
 ```json5

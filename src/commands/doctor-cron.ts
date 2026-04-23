@@ -25,6 +25,12 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
   if (issues.jobId) {
     lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
   }
+  if (issues.missingId) {
+    lines.push(`- ${pluralize(issues.missingId, "job")} is missing a canonical string \`id\``);
+  }
+  if (issues.nonStringId) {
+    lines.push(`- ${pluralize(issues.nonStringId, "job")} stores \`id\` as a non-string value`);
+  }
   if (issues.legacyScheduleString) {
     lines.push(
       `- ${pluralize(issues.legacyScheduleString, "job")} stores schedule as a bare string`,

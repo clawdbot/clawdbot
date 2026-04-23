@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
 export const SessionCompactionCheckpointReasonSchema = Type.Union([

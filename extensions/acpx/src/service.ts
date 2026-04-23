@@ -7,6 +7,7 @@ import type {
   PluginLogger,
 } from "../runtime-api.js";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
+import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import {
   resolveAcpxPluginConfig,
   toAcpMcpServers,
@@ -97,9 +98,14 @@ export function createAcpxRuntimeService(
         return;
       }
 
-      const pluginConfig = resolveAcpxPluginConfig({
+      const basePluginConfig = resolveAcpxPluginConfig({
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
+      });
+      const pluginConfig = await prepareAcpxCodexAuthConfig({
+        pluginConfig: basePluginConfig,
+        stateDir: ctx.stateDir,
+        logger: ctx.logger,
       });
       await fs.mkdir(pluginConfig.stateDir, { recursive: true });
       warnOnIgnoredLegacyCompatibilityConfig({

@@ -229,6 +229,10 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       transitionState(call, "listening");
       break;
 
+    case "call.silence":
+    case "call.dtmf":
+      break;
+
     case "call.ended":
       finalizeCall({
         ctx,

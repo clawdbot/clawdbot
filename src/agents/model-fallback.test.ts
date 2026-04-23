@@ -6,6 +6,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { FailoverError } from "./failover-error.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
@@ -370,6 +371,49 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0].error).toBe("bad request");
     expect(result.attempts[0].reason).toBe("unknown");
+  });
+
+  it("keeps raw provider schema errors in fallback summaries", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["openai/gpt-5.4-mini"],
+          },
+        },
+      },
+    });
+    const rawError =
+      "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.";
+    const run = vi.fn().mockRejectedValue(
+      new FailoverError("LLM request failed: provider rejected the request schema.", {
+        provider: "openai",
+        model: "gpt-5.4",
+        reason: "format",
+        status: 400,
+        rawError,
+      }),
+    );
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toMatchObject({
+      name: "FallbackSummaryError",
+      message: expect.stringContaining(rawError),
+      attempts: expect.arrayContaining([
+        expect.objectContaining({
+          error: rawError,
+          reason: "format",
+          status: 400,
+        }),
+      ]),
+    });
   });
 
   it("passes original unknown errors to onError during fallback", async () => {

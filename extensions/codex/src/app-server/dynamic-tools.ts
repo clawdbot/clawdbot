@@ -1,13 +1,15 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import {
+  createCodexAppServerToolResultExtensionRunner,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   isMessagingTool,
   isMessagingToolSendAction,
+  runAgentHarnessAfterToolCallHook,
   type AnyAgentTool,
   type MessagingToolSend,
-} from "openclaw/plugin-sdk/agent-harness";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type CodexDynamicToolCallOutputContentItem,
   type CodexDynamicToolCallParams,
@@ -33,6 +35,12 @@ export type CodexDynamicToolBridge = {
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   signal: AbortSignal;
+  hookContext?: {
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    runId?: string;
+  };
 }): CodexDynamicToolBridge {
   const toolMap = new Map(params.tools.map((tool) => [tool.name, tool]));
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
@@ -43,6 +51,7 @@ export function createCodexDynamicToolBridge(params: {
     toolMediaUrls: [],
     toolAudioAsVoice: false,
   };
+  const extensionRunner = createCodexAppServerToolResultExtensionRunner(params.hookContext ?? {});
 
   return {
     specs: params.tools.map((tool) => ({
@@ -60,15 +69,35 @@ export function createCodexDynamicToolBridge(params: {
         };
       }
       const args = jsonObjectToRecord(call.arguments);
+      const startedAt = Date.now();
       try {
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
-        const result = await tool.execute(call.callId, preparedArgs, params.signal);
+        const rawResult = await tool.execute(call.callId, preparedArgs, params.signal);
+        const result = await extensionRunner.applyToolResultExtensions({
+          threadId: call.threadId,
+          turnId: call.turnId,
+          toolCallId: call.callId,
+          toolName: tool.name,
+          args,
+          result: rawResult,
+        });
         collectToolTelemetry({
           toolName: tool.name,
           args,
           result,
           telemetry,
           isError: false,
+        });
+        void runAgentHarnessAfterToolCallHook({
+          toolName: tool.name,
+          toolCallId: call.callId,
+          runId: params.hookContext?.runId,
+          agentId: params.hookContext?.agentId,
+          sessionId: params.hookContext?.sessionId,
+          sessionKey: params.hookContext?.sessionKey,
+          startArgs: args,
+          result,
+          startedAt,
         });
         return {
           contentItems: result.content.flatMap(convertToolContent),
@@ -81,6 +110,17 @@ export function createCodexDynamicToolBridge(params: {
           result: undefined,
           telemetry,
           isError: true,
+        });
+        void runAgentHarnessAfterToolCallHook({
+          toolName: tool.name,
+          toolCallId: call.callId,
+          runId: params.hookContext?.runId,
+          agentId: params.hookContext?.agentId,
+          sessionId: params.hookContext?.sessionId,
+          sessionKey: params.hookContext?.sessionKey,
+          startArgs: args,
+          error: error instanceof Error ? error.message : String(error),
+          startedAt,
         });
         return {
           contentItems: [

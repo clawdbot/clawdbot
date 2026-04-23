@@ -79,13 +79,34 @@ export function shouldAllowSilentLocalPairing(params: {
   isWebchat: boolean;
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
-  return (
-    params.locality !== "remote" &&
-    (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
-    (params.reason === "not-paired" ||
-      params.reason === "scope-upgrade" ||
-      params.reason === "role-upgrade")
-  );
+  if (params.locality === "remote") {
+    return false;
+  }
+  if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+    return false;
+  }
+  if (
+    params.reason === "not-paired" ||
+    params.reason === "scope-upgrade" ||
+    params.reason === "role-upgrade"
+  ) {
+    return true;
+  }
+  // metadata-upgrade auto-approves only for shared-secret loopback CLI clients.
+  // On those paths the connection has already proved possession of a token or
+  // password over loopback, so allowing the pinned platform/deviceFamily to be
+  // refreshed on reconnect matches the "Reconnects can update access metadata"
+  // comment in message-handler.ts. Browser / Control-UI clients keep the
+  // existing approval-required flow — metadata pinning there is a real
+  // anti-tampering surface.
+  if (
+    params.reason === "metadata-upgrade" &&
+    (params.locality === "cli_container_local" ||
+      params.locality === "shared_secret_loopback_local")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isCliContainerLocalEquivalent(params: {
