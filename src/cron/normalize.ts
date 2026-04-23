@@ -351,6 +351,20 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("missionId" in base) {
+    const missionId = base.missionId;
+    if (missionId === null) {
+      next.missionId = null;
+    } else if (typeof missionId === "string") {
+      const trimmed = missionId.trim();
+      if (trimmed) {
+        next.missionId = trimmed;
+      } else {
+        delete next.missionId;
+      }
+    }
+  }
+
   if ("enabled" in base) {
     const enabled = base.enabled;
     if (typeof enabled === "boolean") {

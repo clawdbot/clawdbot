@@ -11,7 +11,9 @@ import {
   errorShape,
   formatValidationErrors,
   validateCronAddParams,
+  validateCronListByMissionParams,
   validateCronListParams,
+  validateCronRemoveByMissionParams,
   validateCronRemoveParams,
   validateCronRunParams,
   validateCronRunsParams,
@@ -55,6 +57,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       includeDisabled?: boolean;
+      missionId?: string;
       limit?: number;
       offset?: number;
       query?: string;
@@ -64,6 +67,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     };
     const page = await context.cron.listPage({
       includeDisabled: p.includeDisabled,
+      missionId: p.missionId,
       limit: p.limit,
       offset: p.offset,
       query: p.query,
@@ -194,6 +198,47 @@ export const cronHandlers: GatewayRequestHandlers = {
     const result = await context.cron.remove(jobId);
     if (result.removed) {
       context.logGateway.info("cron: job removed", { jobId });
+    }
+    respond(true, result, undefined);
+  },
+  "cron.listByMission": async ({ params, respond, context }) => {
+    if (!validateCronListByMissionParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.listByMission params: ${formatValidationErrors(validateCronListByMissionParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as { missionId: string };
+    const page = await context.cron.listPage({
+      includeDisabled: true,
+      missionId: p.missionId,
+    });
+    respond(true, page, undefined);
+  },
+  "cron.removeByMission": async ({ params, respond, context }) => {
+    if (!validateCronRemoveByMissionParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.removeByMission params: ${formatValidationErrors(validateCronRemoveByMissionParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as { missionId: string };
+    const result = await context.cron.removeByMission(p.missionId);
+    if (result.removed > 0) {
+      context.logGateway.info("cron: jobs removed by mission", {
+        missionId: p.missionId,
+        removed: result.removed,
+      });
     }
     respond(true, result, undefined);
   },

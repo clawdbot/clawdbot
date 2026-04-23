@@ -31,6 +31,7 @@ type CronSortDir = "asc" | "desc";
 
 export type CronListPageOptions = {
   includeDisabled?: boolean;
+  missionId?: string;
   limit?: number;
   offset?: number;
   query?: string;
@@ -209,6 +210,9 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       if (enabledFilter === "disabled" && job.enabled) {
         return false;
       }
+      if (opts?.missionId && job.missionId !== opts.missionId) {
+        return false;
+      }
       if (!query) {
         return true;
       }
@@ -336,6 +340,34 @@ export async function remove(state: CronServiceState, id: string) {
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed" });
+    }
+    return { ok: true, removed } as const;
+  });
+}
+
+export async function removeByMission(state: CronServiceState, missionId: string) {
+  return await locked(state, async () => {
+    warnIfDisabled(state, "removeByMission");
+    await ensureLoaded(state);
+    if (!state.store) {
+      return { ok: false, removed: 0 } as const;
+    }
+    const before = state.store.jobs.length;
+    const removedIds: string[] = [];
+    state.store.jobs = state.store.jobs.filter((job) => {
+      if (job.missionId === missionId) {
+        removedIds.push(job.id);
+        return false;
+      }
+      return true;
+    });
+    const removed = before - state.store.jobs.length;
+    if (removed > 0) {
+      await persist(state);
+      armTimer(state);
+      for (const jobId of removedIds) {
+        emit(state, { jobId, action: "removed" });
+      }
     }
     return { ok: true, removed } as const;
   });

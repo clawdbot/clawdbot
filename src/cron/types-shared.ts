@@ -3,6 +3,8 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     id: string;
     agentId?: string;
     sessionKey?: string;
+    /** Optional mission identifier for cron jobs created within a mission context. */
+    missionId?: string;
     name: string;
     description?: string;
     enabled: boolean;

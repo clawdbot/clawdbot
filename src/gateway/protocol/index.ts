@@ -82,8 +82,12 @@ import {
   CronAddParamsSchema,
   type CronJob,
   CronJobSchema,
+  type CronListByMissionParams,
+  CronListByMissionParamsSchema,
   type CronListParams,
   CronListParamsSchema,
+  type CronRemoveByMissionParams,
+  CronRemoveByMissionParamsSchema,
   type CronRemoveParams,
   CronRemoveParamsSchema,
   type CronRunLogEntry,
@@ -374,6 +378,12 @@ export const validateCronUpdateParams = ajv.compile<CronUpdateParams>(CronUpdate
 export const validateCronRemoveParams = ajv.compile<CronRemoveParams>(CronRemoveParamsSchema);
 export const validateCronRunParams = ajv.compile<CronRunParams>(CronRunParamsSchema);
 export const validateCronRunsParams = ajv.compile<CronRunsParams>(CronRunsParamsSchema);
+export const validateCronListByMissionParams = ajv.compile<CronListByMissionParams>(
+  CronListByMissionParamsSchema,
+);
+export const validateCronRemoveByMissionParams = ajv.compile<CronRemoveByMissionParams>(
+  CronRemoveByMissionParamsSchema,
+);
 export const validateDevicePairListParams = ajv.compile<DevicePairListParams>(
   DevicePairListParamsSchema,
 );
@@ -549,6 +559,8 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronListByMissionParamsSchema,
+  CronRemoveByMissionParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
   ChatHistoryParamsSchema,
@@ -661,6 +673,8 @@ export type {
   CronRunParams,
   CronRunsParams,
   CronRunLogEntry,
+  CronListByMissionParams,
+  CronRemoveByMissionParams,
   ExecApprovalsGetParams,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,

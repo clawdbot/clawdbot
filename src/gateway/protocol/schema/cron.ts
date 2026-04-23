@@ -73,6 +73,7 @@ const CronFailoverReasonSchema = Type.Union([
 const CronCommonOptionalFields = {
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  missionId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   description: Type.Optional(Type.String()),
   enabled: Type.Optional(Type.Boolean()),
   deleteAfterRun: Type.Optional(Type.Boolean()),
@@ -249,6 +250,7 @@ export const CronJobSchema = Type.Object(
     id: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(NonEmptyString),
+    missionId: Type.Optional(NonEmptyString),
     name: NonEmptyString,
     description: Type.Optional(Type.String()),
     enabled: Type.Boolean(),
@@ -269,12 +271,27 @@ export const CronJobSchema = Type.Object(
 export const CronListParamsSchema = Type.Object(
   {
     includeDisabled: Type.Optional(Type.Boolean()),
+    missionId: Type.Optional(NonEmptyString),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     query: Type.Optional(Type.String()),
     enabled: Type.Optional(CronJobsEnabledFilterSchema),
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const CronListByMissionParamsSchema = Type.Object(
+  {
+    missionId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const CronRemoveByMissionParamsSchema = Type.Object(
+  {
+    missionId: NonEmptyString,
   },
   { additionalProperties: false },
 );

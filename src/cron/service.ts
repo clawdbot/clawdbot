@@ -42,6 +42,10 @@ export class CronService {
     return await ops.remove(this.state, id);
   }
 
+  async removeByMission(missionId: string) {
+    return await ops.removeByMission(this.state, missionId);
+  }
+
   async run(id: string, mode?: "due" | "force") {
     return await ops.run(this.state, id, mode);
   }

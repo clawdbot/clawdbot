@@ -64,7 +64,9 @@ import {
 import {
   CronAddParamsSchema,
   CronJobSchema,
+  CronListByMissionParamsSchema,
   CronListParamsSchema,
+  CronRemoveByMissionParamsSchema,
   CronRemoveParamsSchema,
   CronRunLogEntrySchema,
   CronRunParamsSchema,
@@ -271,6 +273,8 @@ export const ProtocolSchemas = {
   CronRunParams: CronRunParamsSchema,
   CronRunsParams: CronRunsParamsSchema,
   CronRunLogEntry: CronRunLogEntrySchema,
+  CronListByMissionParams: CronListByMissionParamsSchema,
+  CronRemoveByMissionParams: CronRemoveByMissionParamsSchema,
   LogsTailParams: LogsTailParamsSchema,
   LogsTailResult: LogsTailResultSchema,
   ExecApprovalsGetParams: ExecApprovalsGetParamsSchema,
