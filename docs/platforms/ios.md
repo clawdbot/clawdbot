@@ -4,7 +4,7 @@ read_when:
   - Pairing or reconnecting the iOS node
   - Running the iOS app from source
   - Debugging gateway discovery or canvas commands
-title: "iOS App"
+title: "iOS app"
 ---
 
 # iOS App (Node)

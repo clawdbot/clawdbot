@@ -8,7 +8,6 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
@@ -214,9 +213,7 @@ describe("ensureAgentWorkspace", () => {
 
 describe("loadWorkspaceBootstrapFiles", () => {
   const getMemoryEntries = (files: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>) =>
-    files.filter((file) =>
-      [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME].includes(file.name),
-    );
+    files.filter((file) => file.name === DEFAULT_MEMORY_FILENAME);
 
   const expectSingleMemoryEntry = (
     files: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>,
@@ -236,12 +233,12 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expectSingleMemoryEntry(files, "memory");
   });
 
-  it("includes memory.md when MEMORY.md is absent", async () => {
+  it("ignores lowercase memory.md when MEMORY.md is absent", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({ dir: tempDir, name: "memory.md", content: "alt" });
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
-    expectSingleMemoryEntry(files, "alt");
+    expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
   it("omits memory entries when no memory files exist", async () => {

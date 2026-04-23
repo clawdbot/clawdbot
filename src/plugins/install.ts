@@ -8,6 +8,7 @@ import {
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
@@ -31,6 +32,7 @@ type PluginInstallLogger = {
 
 type PackageManifest = PluginPackageManifest & {
   dependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
 };
 
 const MISSING_EXTENSIONS_ERROR =
@@ -608,6 +610,50 @@ async function detectNativePackageInstallSource(packageDir: string): Promise<boo
   }
 }
 
+/**
+ * After the staged plugin tree has been scanned, symlink the host openclaw
+ * package for plugins that declare it as a peer dependency.
+ */
+async function linkOpenClawPeerDependencies(params: {
+  installedDir: string;
+  peerDependencies: Record<string, string>;
+  logger: PluginInstallLogger;
+}): Promise<void> {
+  const peers = Object.keys(params.peerDependencies).filter((name) => name === "openclaw");
+  if (peers.length === 0) {
+    return;
+  }
+
+  const hostRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
+  });
+  if (!hostRoot) {
+    params.logger.warn?.(
+      "Could not locate openclaw package root to symlink peerDependencies; plugin may fail to resolve openclaw at runtime.",
+    );
+    return;
+  }
+
+  const nodeModulesDir = path.join(params.installedDir, "node_modules");
+  await fs.mkdir(nodeModulesDir, { recursive: true });
+
+  for (const peerName of peers) {
+    const linkPath = path.join(nodeModulesDir, peerName);
+
+    try {
+      // Remove any existing entry (broken link or stale directory) before
+      // creating the new symlink so re-installs are idempotent.
+      await fs.rm(linkPath, { recursive: true, force: true });
+      await fs.symlink(hostRoot, linkPath, "junction");
+      params.logger.info?.(`Linked peerDependency "${peerName}" -> ${hostRoot}`);
+    } catch (err) {
+      params.logger.warn?.(`Failed to symlink peerDependency "${peerName}": ${String(err)}`);
+    }
+  }
+}
+
 async function installPluginFromPackageDir(
   params: {
     packageDir: string;
@@ -742,6 +788,7 @@ async function installPluginFromPackageDir(
   }
 
   const deps = manifest.dependencies ?? {};
+  const peerDeps = manifest.peerDependencies ?? {};
   return await installPluginDirectoryIntoExtensions({
     sourceDir: params.packageDir,
     pluginId,
@@ -770,8 +817,14 @@ async function installPluginFromPackageDir(
         }
       }
     },
-    afterInstall: async (installedDir) =>
-      await runInstallSourceScan({
+    afterInstall: async (installedDir) => {
+      // Run the dependency-tree security scan BEFORE linking peer deps.
+      // The scan rejects any node_modules/ symlink whose target resolves
+      // outside the install root — a rule our trusted host-openclaw link
+      // would fail by design. Running the scan first also keeps the check
+      // honest against malicious plugins, because any pre-existing symlink
+      // smuggled in by the source would still be present when we walk.
+      const scanResult = await runInstallSourceScan({
         subject: `Plugin "${pluginId}"`,
         scan: async () =>
           await runtime.scanInstalledPackageDependencyTree({
@@ -779,7 +832,17 @@ async function installPluginFromPackageDir(
             packageDir: installedDir,
             pluginId,
           }),
-      }),
+      });
+      if (scanResult) {
+        return scanResult;
+      }
+      await linkOpenClawPeerDependencies({
+        installedDir,
+        peerDependencies: peerDeps,
+        logger,
+      });
+      return null;
+    },
   });
 }
 

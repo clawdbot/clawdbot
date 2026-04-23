@@ -12,6 +12,7 @@ import type {
   MemoryQmdSearchMode,
 } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { CANONICAL_ROOT_MEMORY_FILENAME } from "../../memory/root-memory-files.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -335,7 +336,7 @@ function resolveDefaultCollections(
     return [];
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
+    { path: workspaceDir, pattern: CANONICAL_ROOT_MEMORY_FILENAME, base: "memory-root" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({

@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set identity)"
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
-title: "agents"
+title: "Agents"
 ---
 
 # `openclaw agents`

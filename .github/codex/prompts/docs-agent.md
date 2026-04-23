@@ -28,4 +28,6 @@ Required workflow:
 4. Run `pnpm check:docs` if dependencies are available.
 5. Leave the worktree clean if no docs need changes.
 
+If `pnpm docs:check-mdx` or `pnpm check:docs` reports MDX parse errors, fix only the syntax needed for the listed existing docs files. Preserve prose meaning, frontmatter, code fences, and links; do not broadly rewrite translated or source content while repairing parser failures.
+
 When uncertain, prefer no edit and explain the uncertainty in the final message.

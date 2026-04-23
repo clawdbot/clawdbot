@@ -9,6 +9,8 @@ const ALLOWED_PLUGIN_SDK_FIXTURE_IMPORTS = new Set([
   // Intentional jiti alias regression test.
   'src/plugins/loader.git-path-regression.test.ts:`import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";',
   'src/plugins/loader.git-path-regression.test.ts:          "openclaw/plugin-sdk/infra-runtime": ${JSON.stringify(copiedChannelRuntimeShim)},',
+  // Intentional packaged bundled-plugin SDK alias regression tests.
+  'src/plugins/loader.test.ts:`import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";`,',
 ]);
 
 const LOADER_FIXTURE_TEST_FILES = [

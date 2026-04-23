@@ -5,7 +5,6 @@ export function createSecretsVitestConfig(env?: Record<string, string | undefine
     dir: "src/secrets",
     env,
     name: "secrets",
-    pool: "forks",
     passWithNoTests: true,
   });
 }

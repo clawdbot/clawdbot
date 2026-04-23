@@ -1,14 +1,12 @@
 ---
-title: "Message Presentation"
 summary: "Semantic message cards, buttons, selects, fallback text, and delivery hints for channel plugins"
+title: "Message presentation"
 read_when:
   - Adding or modifying message card, button, or select rendering
   - Building a channel plugin that supports rich outbound messages
   - Changing message tool presentation or delivery capabilities
   - Debugging provider-specific card/block/component rendering regressions
 ---
-
-# Message Presentation
 
 Message presentation is OpenClaw's shared contract for rich outbound chat UI.
 It lets agents, CLI commands, approval flows, and plugins describe the message

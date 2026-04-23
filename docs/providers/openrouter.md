@@ -6,8 +6,6 @@ read_when:
 title: "OpenRouter"
 ---
 
-# OpenRouter
-
 OpenRouter provides a **unified API** that routes requests to many models behind a single
 endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
@@ -79,7 +77,7 @@ If you repoint the OpenRouter provider at some other proxy or base URL, OpenClaw
 does **not** inject those OpenRouter-specific headers or Anthropic cache markers.
 </Warning>
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Anthropic cache markers">

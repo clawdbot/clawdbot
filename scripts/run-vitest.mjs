@@ -180,7 +180,13 @@ export function forwardVitestOutput(stream, target, shouldSuppressLine = () => f
   });
 }
 
-export function spawnWatchedVitestProcess({ pnpmArgs, spawnParams, env, label }) {
+export function spawnWatchedVitestProcess({
+  pnpmArgs,
+  spawnParams,
+  env,
+  label,
+  onNoOutputTimeout,
+}) {
   const child = spawnVitestProcess({
     pnpmArgs,
     spawnParams,
@@ -194,6 +200,7 @@ export function spawnWatchedVitestProcess({ pnpmArgs, spawnParams, env, label })
       console.error(message);
     },
     onTimeout: () => {
+      onNoOutputTimeout?.();
       forwardSignalToVitestProcessGroup({
         child,
         signal: "SIGTERM",

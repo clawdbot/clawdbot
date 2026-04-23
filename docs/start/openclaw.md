@@ -3,7 +3,7 @@ summary: "End-to-end guide for running OpenClaw as a personal assistant with saf
 read_when:
   - Onboarding a new assistant instance
   - Reviewing safety/permission implications
-title: "Personal Assistant Setup"
+title: "Personal assistant setup"
 ---
 
 # Building a personal assistant with OpenClaw

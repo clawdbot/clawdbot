@@ -89,13 +89,13 @@ describe("listMemoryFiles", () => {
     expect(files.some((file) => file.endsWith("standalone.md"))).toBe(true);
   });
 
-  it("uses lowercase memory.md as the root fallback when MEMORY.md is absent", async () => {
+  it("ignores lowercase root memory.md when canonical MEMORY.md is absent", async () => {
     const tmpDir = getTmpDir();
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
 
-    const files = await listMemoryFiles(tmpDir);
+    const files = await listMemoryFiles(tmpDir, [path.join(tmpDir, "memory.md")]);
 
-    expect(files).toEqual([path.join(tmpDir, "memory.md")]);
+    expect(files).toEqual([]);
   });
 
   it("prefers MEMORY.md when both root files exist", async () => {
@@ -103,9 +103,22 @@ describe("listMemoryFiles", () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
 
-    const files = await listMemoryFiles(tmpDir);
+    const files = await listMemoryFiles(tmpDir, [path.join(tmpDir, "memory.md"), tmpDir]);
 
     expect(files).toEqual([path.join(tmpDir, "MEMORY.md")]);
+  });
+
+  it("skips root-memory repair backups from extra workspace paths", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory", "2026-04-23");
+    await fs.mkdir(repairDir, { recursive: true });
+    await fs.writeFile(path.join(repairDir, "memory.md"), "# Archived legacy memory");
+
+    const files = await listMemoryFiles(tmpDir, [tmpDir]);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toBe(path.join(tmpDir, "MEMORY.md"));
   });
 
   it("handles relative paths in additional paths", async () => {

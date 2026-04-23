@@ -11,6 +11,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../api.js";
+import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { getHeader } from "./http-headers.js";
@@ -131,6 +132,14 @@ function normalizeWebhookResponse(parsed: {
     statusCode: parsed.statusCode ?? 200,
     headers: parsed.providerResponseHeaders,
     body: parsed.providerResponseBody ?? "OK",
+  };
+}
+
+function buildRealtimeRejectedTwiML(): WebhookResponsePayload {
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "text/xml" },
+    body: '<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="rejected" /></Response>',
   };
 }
 
@@ -632,8 +641,13 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
-      if (this.shouldShortCircuitToRealtimeTwiml(ctx)) {
-        return this.realtimeHandler!.buildTwiMLPayload(req, new URLSearchParams(ctx.rawBody));
+      const realtimeParams = this.getRealtimeTwimlParams(ctx);
+      if (realtimeParams) {
+        if (!this.shouldAcceptRealtimeInboundRequest(realtimeParams)) {
+          console.log("[voice-call] Realtime inbound call rejected before stream setup");
+          return buildRealtimeRejectedTwiML();
+        }
+        return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
       }
 
       const parsed = this.provider.parseWebhookEvent(ctx, {
@@ -697,30 +711,46 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private shouldShortCircuitToRealtimeTwiml(ctx: WebhookContext): boolean {
+  private getRealtimeTwimlParams(ctx: WebhookContext): URLSearchParams | null {
     if (!this.realtimeHandler || this.provider.name !== "twilio") {
-      return false;
+      return null;
     }
 
     const params = new URLSearchParams(ctx.rawBody);
     const direction = params.get("Direction");
     const isInbound = !direction || direction === "inbound";
     if (!isInbound) {
-      return false;
+      return null;
     }
 
     if (ctx.query?.type === "status") {
-      return false;
+      return null;
     }
 
     const callStatus = params.get("CallStatus");
     if (callStatus && isProviderStatusTerminal(callStatus)) {
-      return false;
+      return null;
     }
 
     // Replays must return the same TwiML body so Twilio retries reconnect cleanly.
     // The one-time token still changes, but the behavior stays identical.
-    return !params.get("SpeechResult") && !params.get("Digits");
+    return !params.get("SpeechResult") && !params.get("Digits") ? params : null;
+  }
+
+  private shouldAcceptRealtimeInboundRequest(params: URLSearchParams): boolean {
+    switch (this.config.inboundPolicy) {
+      case "open":
+        return true;
+      case "allowlist":
+      case "pairing":
+        return isAllowlistedCaller(
+          normalizePhoneNumber(params.get("From") ?? undefined),
+          this.config.allowFrom,
+        );
+      case "disabled":
+      default:
+        return false;
+    }
   }
 
   private processParsedEvents(events: NormalizedEvent[]): void {

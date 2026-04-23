@@ -9,11 +9,11 @@
         "channel": {
           "id": "wecom",
           "label": "WeCom",
-          "selectionLabel": "WeCom (Enterprise WeChat)",
+          "selectionLabel": "WeCom（企业微信）",
           "detailLabel": "WeCom",
           "docsPath": "/plugins/community#wecom",
           "docsLabel": "wecom",
-          "blurb": "Enterprise WeChat bot and conversation channel.",
+          "blurb": "Enterprise messaging and documents, scheduling, task tools.",
           "aliases": ["qywx", "wework", "enterprise-wechat"],
           "order": 45
         },

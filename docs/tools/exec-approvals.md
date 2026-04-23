@@ -4,35 +4,42 @@ read_when:
   - Configuring exec approvals or allowlists
   - Implementing exec approval UX in the macOS app
   - Reviewing sandbox escape prompts and implications
-title: "Exec Approvals"
+title: "Exec approvals"
 ---
 
-# Exec approvals
+Exec approvals are the **companion app / node host guardrail** for letting a
+sandboxed agent run commands on a real host (`gateway` or `node`). A safety
+interlock: commands are allowed only when policy + allowlist + (optional) user
+approval all agree. Exec approvals stack **on top of** tool policy and elevated
+gating (unless elevated is set to `full`, which skips approvals).
 
-Exec approvals are the **companion app / node host guardrail** for letting a sandboxed agent run
-commands on a real host (`gateway` or `node`). Think of it like a safety interlock:
-commands are allowed only when policy + allowlist + (optional) user approval all agree.
-Exec approvals are **in addition** to tool policy and elevated gating (unless elevated is set to `full`, which skips approvals).
-Effective policy is the **stricter** of `tools.exec.*` and approvals defaults; if an approvals field is omitted, the `tools.exec` value is used.
-Host exec also uses the local approvals state on that machine. A host-local
-`ask: "always"` in `~/.openclaw/exec-approvals.json` keeps prompting even if
-session or config defaults request `ask: "on-miss"`.
-Use `openclaw approvals get`, `openclaw approvals get --gateway`, or
-`openclaw approvals get --node <id|name|ip>` to inspect the requested policy,
-host policy sources, and the effective result.
-For the local machine, `openclaw exec-policy show` exposes the same merged view and
-`openclaw exec-policy set|preset` can synchronize the local requested policy with the
-local host approvals file in one step. When a local scope requests `host=node`,
-`openclaw exec-policy show` reports that scope as node-managed at runtime instead of
-pretending the local approvals file is the effective source of truth.
+<Note>
+Effective policy is the **stricter** of `tools.exec.*` and approvals defaults;
+if an approvals field is omitted, the `tools.exec` value is used. Host exec
+also uses local approvals state on that machine — a host-local `ask: "always"`
+in `~/.openclaw/exec-approvals.json` keeps prompting even if session or config
+defaults request `ask: "on-miss"`.
+</Note>
 
-If the companion app UI is **not available**, any request that requires a prompt is
-resolved by the **ask fallback** (default: deny).
+## Inspecting the effective policy
 
-Native chat approval clients can also expose channel-specific affordances on the
-pending approval message. For example, Matrix can seed reaction shortcuts on the
-approval prompt (`✅` allow once, `❌` deny, and `♾️` allow always when available)
-while still leaving the `/approve ...` commands in the message as a fallback.
+- `openclaw approvals get`, `... --gateway`, `... --node <id|name|ip>` — show requested policy, host policy sources, and the effective result.
+- `openclaw exec-policy show` — local-machine merged view.
+- `openclaw exec-policy set|preset` — synchronize the local requested policy with the local host approvals file in one step.
+
+When a local scope requests `host=node`, `exec-policy show` reports that scope
+as node-managed at runtime instead of pretending the local approvals file is
+the source of truth.
+
+If the companion app UI is **not available**, any request that would normally
+prompt is resolved by the **ask fallback** (default: deny).
+
+<Tip>
+Native chat approval clients can seed channel-specific affordances on the
+pending approval message. For example, Matrix seeds reaction shortcuts (`✅`
+allow once, `❌` deny, `♾️` allow always) while still leaving `/approve ...`
+commands in the message as a fallback.
+</Tip>
 
 ## Where it applies
 
@@ -268,23 +275,41 @@ Important trust notes:
 
 ## Safe bins (stdin-only)
 
-`tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `cut`)
-that can run in allowlist mode **without** explicit allowlist entries. Safe bins reject
-positional file args and path-like tokens, so they can only operate on the incoming stream.
-Treat this as a narrow fast-path for stream filters, not a general trust list.
-Do **not** add interpreter or runtime binaries (for example `python3`, `node`, `ruby`, `bash`, `sh`, `zsh`) to `safeBins`.
-If a command can evaluate code, execute subcommands, or read files by design, prefer explicit allowlist entries and keep approval prompts enabled.
-Custom safe bins must define an explicit profile in `tools.exec.safeBinProfiles.<bin>`.
-Validation is deterministic from argv shape only (no host filesystem existence checks), which
-prevents file-existence oracle behavior from allow/deny differences.
-File-oriented options are denied for default safe bins (for example `sort -o`, `sort --output`,
-`sort --files0-from`, `sort --compress-program`, `sort --random-source`,
-`sort --temporary-directory`/`-T`, `wc --files0-from`, `jq -f/--from-file`,
-`grep -f/--file`).
-Safe bins also enforce explicit per-binary flag policy for options that break stdin-only
-behavior (for example `sort -o/--output/--compress-program` and grep recursive flags).
-Long options are validated fail-closed in safe-bin mode: unknown flags and ambiguous
-abbreviations are rejected.
+`tools.exec.safeBins` defines a small list of **stdin-only** binaries (for
+example `cut`) that can run in allowlist mode **without** explicit allowlist
+entries. Safe bins reject positional file args and path-like tokens, so they
+can only operate on the incoming stream. Treat this as a narrow fast-path for
+stream filters, not a general trust list.
+
+<Warning>
+Do **not** add interpreter or runtime binaries (for example `python3`, `node`,
+`ruby`, `bash`, `sh`, `zsh`) to `safeBins`. If a command can evaluate code,
+execute subcommands, or read files by design, prefer explicit allowlist entries
+and keep approval prompts enabled. Custom safe bins must define an explicit
+profile in `tools.exec.safeBinProfiles.<bin>`.
+</Warning>
+
+Default safe bins:
+
+[//]: # "SAFE_BIN_DEFAULTS:START"
+
+`cut`, `uniq`, `head`, `tail`, `tr`, `wc`
+
+[//]: # "SAFE_BIN_DEFAULTS:END"
+
+`grep` and `sort` are not in the default list. If you opt in, keep explicit
+allowlist entries for their non-stdin workflows. For `grep` in safe-bin mode,
+provide the pattern with `-e`/`--regexp`; positional pattern form is rejected
+so file operands cannot be smuggled as ambiguous positionals.
+
+### Argv validation and denied flags
+
+Validation is deterministic from argv shape only (no host filesystem existence
+checks), which prevents file-existence oracle behavior from allow/deny
+differences. File-oriented options are denied for default safe bins; long
+options are validated fail-closed (unknown flags and ambiguous abbreviations are
+rejected).
+
 Denied flags by safe-bin profile:
 
 [//]: # "SAFE_BIN_DENIED_FLAGS:START"
@@ -296,45 +321,46 @@ Denied flags by safe-bin profile:
 
 [//]: # "SAFE_BIN_DENIED_FLAGS:END"
 
-Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
-and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOME/...` cannot be
-used to smuggle file reads.
-Safe bins must also resolve from trusted binary directories (system defaults plus optional
-`tools.exec.safeBinTrustedDirs`). `PATH` entries are never auto-trusted.
-Default trusted safe-bin directories are intentionally minimal: `/bin`, `/usr/bin`.
-If your safe-bin executable lives in package-manager/user paths (for example
-`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `/snap/bin`), add them explicitly
-to `tools.exec.safeBinTrustedDirs`.
-Shell chaining and redirections are not auto-allowed in allowlist mode.
+Safe bins also force argv tokens to be treated as **literal text** at execution
+time (no globbing and no `$VARS` expansion) for stdin-only segments, so patterns
+like `*` or `$HOME/...` cannot be used to smuggle file reads.
 
-Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfies the allowlist
-(including safe bins or skill auto-allow). Redirections remain unsupported in allowlist mode.
-Command substitution (`$()` / backticks) is rejected during allowlist parsing, including inside
-double quotes; use single quotes if you need literal `$()` text.
-On macOS companion-app approvals, raw shell text containing shell control or expansion syntax
-(`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss unless
-the shell binary itself is allowlisted.
-For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped env overrides are reduced to a
-small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
-For allow-always decisions in allowlist mode, known dispatch wrappers
-(`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper
-paths. Shell multiplexers (`busybox`, `toybox`) are also unwrapped for shell applets (`sh`, `ash`,
-etc.) so inner executables are persisted instead of multiplexer binaries. If a wrapper or
-multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
-If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval. In strict mode, `allow-always` can still persist benign interpreter/script invocations, but inline-eval carriers are not persisted automatically.
+### Trusted binary directories
 
-Default safe bins:
+Safe bins must resolve from trusted binary directories (system defaults plus
+optional `tools.exec.safeBinTrustedDirs`). `PATH` entries are never auto-trusted.
+Default trusted directories are intentionally minimal: `/bin`, `/usr/bin`. If
+your safe-bin executable lives in package-manager/user paths (for example
+`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `/snap/bin`), add them
+explicitly to `tools.exec.safeBinTrustedDirs`.
 
-[//]: # "SAFE_BIN_DEFAULTS:START"
+### Shell chaining, wrappers, and multiplexers
 
-`cut`, `uniq`, `head`, `tail`, `tr`, `wc`
+Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment
+satisfies the allowlist (including safe bins or skill auto-allow). Redirections
+remain unsupported in allowlist mode. Command substitution (`$()` / backticks) is
+rejected during allowlist parsing, including inside double quotes; use single
+quotes if you need literal `$()` text.
 
-[//]: # "SAFE_BIN_DEFAULTS:END"
+On macOS companion-app approvals, raw shell text containing shell control or
+expansion syntax (`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is
+treated as an allowlist miss unless the shell binary itself is allowlisted.
 
-`grep` and `sort` are not in the default list. If you opt in, keep explicit allowlist entries for
-their non-stdin workflows.
-For `grep` in safe-bin mode, provide the pattern with `-e`/`--regexp`; positional pattern form is
-rejected so file operands cannot be smuggled as ambiguous positionals.
+For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped env overrides are
+reduced to a small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`,
+`NO_COLOR`, `FORCE_COLOR`).
+
+For `allow-always` decisions in allowlist mode, known dispatch wrappers (`env`,
+`nice`, `nohup`, `stdbuf`, `timeout`) persist the inner executable path instead
+of the wrapper path. Shell multiplexers (`busybox`, `toybox`) are unwrapped for
+shell applets (`sh`, `ash`, etc.) the same way. If a wrapper or multiplexer
+cannot be safely unwrapped, no allowlist entry is persisted automatically.
+
+If you allowlist interpreters like `python3` or `node`, prefer
+`tools.exec.strictInlineEval=true` so inline eval still requires an explicit
+approval. In strict mode, `allow-always` can still persist benign
+interpreter/script invocations, but inline-eval carriers are not persisted
+automatically.
 
 ### Safe bins versus allowlist
 
@@ -642,20 +668,29 @@ stale results from a prior successful run.
 
 - **full** is powerful; prefer allowlists when possible.
 - **ask** keeps you in the loop while still allowing fast approvals.
-- Per-agent allowlists prevent one agent’s approvals from leaking into others.
+- Per-agent allowlists prevent one agent's approvals from leaking into others.
 - Approvals only apply to host exec requests from **authorized senders**. Unauthorized senders cannot issue `/exec`.
-- `/exec security=full` is a session-level convenience for authorized operators and skips approvals by design.
-  To hard-block host exec, set approvals security to `deny` or deny the `exec` tool via tool policy.
-
-Related:
-
-- [Exec tool](/tools/exec)
-- [Elevated mode](/tools/elevated)
-- [Skills](/tools/skills)
+- `/exec security=full` is a session-level convenience for authorized operators and skips approvals by design. To hard-block host exec, set approvals security to `deny` or deny the `exec` tool via tool policy.
 
 ## Related
 
-- [Exec](/tools/exec) — shell command execution tool
-- [Sandboxing](/gateway/sandboxing) — sandbox modes and workspace access
-- [Security](/gateway/security) — security model and hardening
-- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) — when to use each
+<CardGroup cols={2}>
+  <Card title="Exec tool" href="/tools/exec" icon="terminal">
+    Shell command execution tool.
+  </Card>
+  <Card title="Elevated mode" href="/tools/elevated" icon="shield-exclamation">
+    Break-glass path that also skips approvals.
+  </Card>
+  <Card title="Sandboxing" href="/gateway/sandboxing" icon="box">
+    Sandbox modes and workspace access.
+  </Card>
+  <Card title="Security" href="/gateway/security" icon="lock">
+    Security model and hardening.
+  </Card>
+  <Card title="Sandbox vs tool policy vs elevated" href="/gateway/sandbox-vs-tool-policy-vs-elevated" icon="sliders">
+    When to reach for each control.
+  </Card>
+  <Card title="Skills" href="/tools/skills" icon="sparkles">
+    Skill-backed auto-allow behavior.
+  </Card>
+</CardGroup>

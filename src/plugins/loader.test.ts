@@ -1454,6 +1454,181 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
   });
 
+  it("loads bundled plugins with plugin-sdk imports from an external stage dir", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    const bundledDir = path.join(packageRoot, "dist", "extensions");
+    const pluginRoot = path.join(bundledDir, "telegram");
+    fs.mkdirSync(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.22", type: "module" }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "plugin-sdk", "text-runtime.js"),
+      [
+        `export function normalizeLowercaseStringOrEmpty(value) {`,
+        `  return typeof value === "string" ? value.toLowerCase() : "";`,
+        `}`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.js"),
+      [
+        `import runtimeDep from "external-runtime";`,
+        `import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";`,
+        `export default {`,
+        `  id: "telegram",`,
+        `  register(api) {`,
+        `    api.registerCommand({`,
+        `      name: "external-runtime",`,
+        `      handler: () => normalizeLowercaseStringOrEmpty(runtimeDep.marker),`,
+        `    });`,
+        `  },`,
+        `};`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/telegram",
+          version: "1.0.0",
+          type: "module",
+          dependencies: {
+            "external-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "telegram",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageDir;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot }) => {
+        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({
+            name: "external-runtime",
+            version: "1.0.0",
+            type: "module",
+            exports: "./index.js",
+          }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.js"),
+          "export default { marker: 'SDK-OK' };\n",
+          "utf-8",
+        );
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "telegram")?.status).toBe("loaded");
+  });
+
+  it("loads bundled plugins with plugin-sdk imports from a package dist root", () => {
+    const packageRoot = makeTempDir();
+    const bundledDir = path.join(packageRoot, "dist", "extensions");
+    const pluginRoot = path.join(bundledDir, "discord");
+    fs.mkdirSync(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.22", type: "module" }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "plugin-sdk", "text-runtime.js"),
+      "export const normalizeLowercaseStringOrEmpty = (value) => String(value).toLowerCase();\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.js"),
+      [
+        `import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";`,
+        `export default {`,
+        `  id: "discord",`,
+        `  register(api) {`,
+        `    api.registerCommand({ name: normalizeLowercaseStringOrEmpty("DISCORD"), handler: () => "ok" });`,
+        `  },`,
+        `};`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discord",
+          version: "1.0.0",
+          type: "module",
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "discord",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+  });
+
   it("loads dist-runtime wrappers from an external stage dir", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();

@@ -130,12 +130,27 @@ export function setConsoleTimestampPrefix(enabled: boolean): void {
   loggingState.consoleTimestampPrefix = enabled;
 }
 
-export function shouldLogSubsystemToConsole(subsystem: string): boolean {
+function normalizeConsoleSubsystem(subsystem?: string | null): string | null {
+  if (typeof subsystem !== "string") {
+    return null;
+  }
+  const normalized = subsystem.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+export function shouldLogSubsystemToConsole(subsystem?: string | null): boolean {
   const filter = loggingState.consoleSubsystemFilter;
   if (!filter || filter.length === 0) {
     return true;
   }
-  return filter.some((prefix) => subsystem === prefix || subsystem.startsWith(`${prefix}/`));
+  const normalizedSubsystem = normalizeConsoleSubsystem(subsystem);
+  if (!normalizedSubsystem) {
+    return false;
+  }
+  return filter.some(
+    (prefix) =>
+      normalizedSubsystem === prefix || normalizedSubsystem.startsWith(`${prefix}/`),
+  );
 }
 
 const SUPPRESSED_CONSOLE_PREFIXES = [

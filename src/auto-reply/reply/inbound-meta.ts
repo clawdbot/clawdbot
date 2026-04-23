@@ -59,6 +59,13 @@ function sanitizeUntrustedJsonValue(value: unknown): unknown {
   );
 }
 
+function formatUntrustedStructuredContextLabel(label: unknown): string {
+  const normalized = normalizePromptMetadataString(label);
+  return normalized
+    ? `${normalized} (untrusted metadata):`
+    : "Structured object (untrusted metadata):";
+}
+
 function formatUntrustedJsonBlock(label: string, payload: unknown): string {
   return [
     label,
@@ -66,6 +73,23 @@ function formatUntrustedJsonBlock(label: string, payload: unknown): string {
     JSON.stringify(sanitizeUntrustedJsonValue(payload), null, 2),
     "```",
   ].join("\n");
+}
+
+function buildLocationContextPayload(ctx: TemplateContext): Record<string, unknown> | undefined {
+  const payload = {
+    latitude: typeof ctx.LocationLat === "number" ? ctx.LocationLat : undefined,
+    longitude: typeof ctx.LocationLon === "number" ? ctx.LocationLon : undefined,
+    accuracy_m:
+      typeof ctx.LocationAccuracy === "number" && Number.isFinite(ctx.LocationAccuracy)
+        ? ctx.LocationAccuracy
+        : undefined,
+    source: normalizePromptMetadataString(ctx.LocationSource),
+    is_live: ctx.LocationIsLive === true ? true : undefined,
+    name: sanitizePromptBody(ctx.LocationName),
+    address: sanitizePromptBody(ctx.LocationAddress),
+    caption: sanitizePromptBody(ctx.LocationCaption),
+  };
+  return Object.values(payload).some((value) => value !== undefined) ? payload : undefined;
 }
 
 function formatConversationTimestamp(
@@ -193,6 +217,7 @@ export function buildInboundUserContextPrefix(
     group_subject: normalizePromptMetadataString(ctx.GroupSubject),
     group_channel: normalizePromptMetadataString(ctx.GroupChannel),
     group_space: normalizePromptMetadataString(ctx.GroupSpace),
+    group_members: sanitizePromptBody(ctx.GroupMembers),
     thread_label: normalizePromptMetadataString(ctx.ThreadLabel),
     topic_id:
       ctx.MessageThreadId != null
@@ -265,6 +290,27 @@ export function buildInboundUserContextPrefix(
   if (forwardedFrom) {
     blocks.push(
       formatUntrustedJsonBlock("Forwarded message context (untrusted metadata):", forwardedContext),
+    );
+  }
+
+  const locationContext = buildLocationContextPayload(ctx);
+  if (locationContext) {
+    blocks.push(formatUntrustedJsonBlock("Location (untrusted metadata):", locationContext));
+  }
+
+  const structuredContext = Array.isArray(ctx.UntrustedStructuredContext)
+    ? ctx.UntrustedStructuredContext
+    : [];
+  for (const entry of structuredContext) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    blocks.push(
+      formatUntrustedJsonBlock(formatUntrustedStructuredContextLabel(entry.label), {
+        source: normalizePromptMetadataString(entry.source),
+        type: normalizePromptMetadataString(entry.type),
+        payload: entry.payload,
+      }),
     );
   }
 

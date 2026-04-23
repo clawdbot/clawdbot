@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearBundledProviderPolicySurfaceCache } from "../plugins/provider-public-artifacts.js";
 import type { OpenClawConfig } from "./config.js";
 import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
 
@@ -13,6 +15,19 @@ function applyAnthropicDefaultsForTest(config: OpenClawConfig) {
 }
 
 describe("config pruning defaults", () => {
+  beforeEach(() => {
+    clearBundledProviderPolicySurfaceCache();
+    vi.stubEnv(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(import.meta.dirname, "../../extensions"),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    clearBundledProviderPolicySurfaceCache();
+  });
+
   it("does not enable contextPruning by default", () => {
     const cfg = applyAnthropicDefaultsForTest({ agents: { defaults: {} } });
 

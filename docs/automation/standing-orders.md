@@ -4,10 +4,8 @@ read_when:
   - Setting up autonomous agent workflows that run without per-task prompting
   - Defining what the agent can do independently vs. what needs human approval
   - Structuring multi-program agents with clear boundaries and escalation rules
-title: "Standing Orders"
+title: "Standing orders"
 ---
-
-# Standing Orders
 
 Standing orders grant your agent **permanent operating authority** for defined programs. Instead of giving individual task instructions each time, you define programs with clear scope, triggers, and escalation rules — and the agent executes autonomously within those boundaries.
 

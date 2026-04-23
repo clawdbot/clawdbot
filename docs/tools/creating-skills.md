@@ -1,12 +1,10 @@
 ---
-title: "Creating Skills"
 summary: "Build and test custom workspace skills with SKILL.md"
+title: "Creating skills"
 read_when:
   - You are creating a new custom skill in your workspace
   - You need a quick starter workflow for SKILL.md-based skills
 ---
-
-# Creating Skills
 
 Skills teach the agent how and when to use tools. Each skill is a directory
 containing a `SKILL.md` file with YAML frontmatter and markdown instructions.

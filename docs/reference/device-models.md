@@ -3,7 +3,7 @@ summary: "How OpenClaw vendors Apple device model identifiers for friendly names
 read_when:
   - Updating device model identifier mappings or NOTICE/license files
   - Changing how Instances UI displays device names
-title: "Device Model Database"
+title: "Device model database"
 ---
 
 # Device model database (friendly names)

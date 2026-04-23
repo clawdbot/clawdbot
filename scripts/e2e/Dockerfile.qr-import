@@ -17,7 +17,7 @@ COPY --chown=appuser:appuser package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=appuser:appuser ui/package.json ./ui/package.json
 COPY --chown=appuser:appuser patches ./patches
 
-# This image only exercises the root qrcode-terminal dependency path.
+# This image only exercises the root QR runtime dependency path.
 # Keep the pre-install copy set limited to the manifests needed for root
 # workspace resolution so unrelated extension edits do not bust the layer.
 ARG OPENCLAW_QR_INSTALL_CACHE_BUSTER=stable

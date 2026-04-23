@@ -222,6 +222,12 @@ export type SessionEntry = {
   modelProvider?: string;
   model?: string;
   /**
+   * Embedded agent harness selected for this session id.
+   * Prevents config/env changes from moving an existing transcript between
+   * incompatible runtime harnesses.
+   */
+  agentHarnessId?: string;
+  /**
    * Last selected/runtime model pair for which a fallback notice was emitted.
    * Used to avoid repeating the same fallback notice every turn.
    */

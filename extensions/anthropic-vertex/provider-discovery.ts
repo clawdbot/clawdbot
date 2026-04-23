@@ -4,6 +4,7 @@ import { buildAnthropicVertexProvider } from "./provider-catalog.js";
 import { hasAnthropicVertexAvailableAuth, resolveAnthropicVertexConfigApiKey } from "./region.js";
 
 const PROVIDER_ID = "anthropic-vertex";
+const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 
 type AnthropicVertexProviderPlugin = {
   id: string;
@@ -15,6 +16,13 @@ type AnthropicVertexProviderPlugin = {
     run: (ctx: ProviderCatalogContext) => ReturnType<typeof runAnthropicVertexCatalog>;
   };
   resolveConfigApiKey: (params: { env: NodeJS.ProcessEnv }) => string | undefined;
+  resolveSyntheticAuth: () =>
+    | {
+        apiKey: string;
+        source: string;
+        mode: "api-key";
+      }
+    | undefined;
 };
 
 function mergeImplicitAnthropicVertexProvider(params: {
@@ -69,6 +77,16 @@ export const anthropicVertexProviderDiscovery: AnthropicVertexProviderPlugin = {
     run: runAnthropicVertexCatalog,
   },
   resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
+  resolveSyntheticAuth: () => {
+    if (!hasAnthropicVertexAvailableAuth()) {
+      return undefined;
+    }
+    return {
+      apiKey: GCP_VERTEX_CREDENTIALS_MARKER,
+      source: "gcp-vertex-credentials (ADC)",
+      mode: "api-key",
+    };
+  },
 };
 
 export default anthropicVertexProviderDiscovery;

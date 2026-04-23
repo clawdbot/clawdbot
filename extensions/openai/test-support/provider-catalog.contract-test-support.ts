@@ -1,6 +1,7 @@
 import { beforeEach, describe, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
+  expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
   expectCodexBuiltInSuppression,
   expectCodexMissingAuthHint,
   importProviderRuntimeCatalogModule,
@@ -116,7 +117,10 @@ export function describeOpenAIProviderCatalogContract() {
 
       it("keeps bundled model augmentation wired through the provider runtime", async () => {
         const { augmentModelCatalogWithProviderPlugins } = await contractDepsPromise;
-        await expectAugmentedCodexCatalog(augmentModelCatalogWithProviderPlugins);
+        await expectAugmentedCodexCatalog(
+          augmentModelCatalogWithProviderPlugins,
+          expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
+        );
       });
     },
   );

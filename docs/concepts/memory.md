@@ -1,12 +1,10 @@
 ---
-title: "Memory Overview"
 summary: "How OpenClaw remembers things across sessions"
+title: "Memory overview"
 read_when:
   - You want to understand how memory works
   - You want to know what memory files to write
 ---
-
-# Memory Overview
 
 OpenClaw remembers things by writing **plain Markdown files** in your agent's
 workspace. The model only "remembers" what gets saved to disk -- there is no

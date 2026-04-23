@@ -26,12 +26,33 @@ canonical_sparkle_build() {
   node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
 }
 
+correction_build_from_exact_tag() {
+  local version="$1"
+  local canonical="$2"
+  local tag correction highest
+
+  highest=""
+  while IFS= read -r tag; do
+    if [[ "$tag" =~ ^v${version//./\\.}-([1-9][0-9]*)$ ]]; then
+      correction="${BASH_REMATCH[1]}"
+      if [[ -z "$highest" || "$correction" -gt "$highest" ]]; then
+        highest="$correction"
+      fi
+    fi
+  done < <(git -C "$ROOT_DIR" tag --points-at HEAD 2>/dev/null || true)
+
+  if [[ -n "$highest" ]]; then
+    printf '%s\n' "$((canonical + highest))"
+  fi
+}
+
 # Local fallback releases must not silently fall back to a git-rev-count build number.
 # For correction tags, pass a higher explicit APP_BUILD than the canonical floor.
 if [[ -z "${APP_BUILD:-}" && "$BUILD_CONFIG" == "release" ]]; then
   CANONICAL_APP_BUILD="$(canonical_sparkle_build "$APP_VERSION_INPUT" 2>/dev/null || true)"
   if [[ "$CANONICAL_APP_BUILD" =~ ^[0-9]+$ ]]; then
-    export APP_BUILD="$CANONICAL_APP_BUILD"
+    APP_BUILD="$(correction_build_from_exact_tag "$APP_VERSION_INPUT" "$CANONICAL_APP_BUILD")"
+    export APP_BUILD="${APP_BUILD:-$CANONICAL_APP_BUILD}"
   fi
 fi
 

@@ -445,6 +445,34 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
+    it("owns openai gpt-5.5 forward-compat resolution", () => {
+      const provider = requireProviderContractProvider("openai");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.4"
+              ? createModel({
+                  id,
+                  provider: "openai",
+                  baseUrl: "https://api.openai.com/v1",
+                  input: ["text", "image"],
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.5",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      });
+    });
+
     it("owns openai gpt-5.4 mini forward-compat resolution", () => {
       const provider = requireProviderContractProvider("openai");
       const model = provider.resolveDynamicModel?.({
@@ -538,6 +566,34 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider: "openai-codex",
         api: "openai-codex-responses",
         contextWindow: 1_050_000,
+        maxTokens: 128_000,
+      });
+    });
+
+    it("owns forward-compat codex gpt-5.5 models", () => {
+      const provider = requireProviderContractProvider("openai-codex");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.4"
+              ? createModel({
+                  id,
+                  api: "openai-codex-responses",
+                  provider: "openai-codex",
+                  baseUrl: "https://chatgpt.com/backend-api",
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.5",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        contextWindow: 1_000_000,
+        contextTokens: 272_000,
         maxTokens: 128_000,
       });
     });

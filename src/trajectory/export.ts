@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { FileEntry, SessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -56,6 +55,90 @@ type TrajectoryExportRedaction = SupportRedactionContext & {
 const MAX_TRAJECTORY_RUNTIME_EVENTS = 200_000;
 const MAX_TRAJECTORY_TOTAL_EVENTS = 250_000;
 const MAX_TRAJECTORY_SESSION_FILE_BYTES = 50 * 1024 * 1024;
+
+function parseSessionEntries(content: string): FileEntry[] {
+  return content
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as FileEntry];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function migrateLegacySessionEntries(entries: FileEntry[]): void {
+  const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
+  const version = header?.version ?? 1;
+  if (version < 2) {
+    let previousId: string | null = null;
+    let index = 0;
+    for (const entry of entries) {
+      if (entry.type === "session") {
+        entry.version = 2;
+        continue;
+      }
+      const mutable = entry as unknown as Record<string, unknown>;
+      if (typeof mutable.id !== "string") {
+        mutable.id = `legacy-${index++}`;
+      }
+      mutable.parentId = previousId;
+      const entryId = mutable.id;
+      previousId = typeof entryId === "string" ? entryId : null;
+      if (entry.type === "compaction" && typeof mutable.firstKeptEntryIndex === "number") {
+        const target = entries[mutable.firstKeptEntryIndex];
+        if (target && target.type !== "session") {
+          mutable.firstKeptEntryId = (target as unknown as Record<string, unknown>).id;
+        }
+        delete mutable.firstKeptEntryIndex;
+      }
+    }
+  }
+  if (version < 3) {
+    for (const entry of entries) {
+      if (entry.type === "session") {
+        entry.version = 3;
+        continue;
+      }
+      if (entry.type === "message") {
+        const message = (entry as { message?: { role?: string } }).message;
+        if (message?.role === "hookMessage") {
+          message.role = "custom";
+        }
+      }
+    }
+  }
+}
+
+function readSessionBranch(filePath: string): {
+  header: SessionHeader | null;
+  leafId: string | null;
+  branchEntries: SessionEntry[];
+} {
+  const fileEntries = parseSessionEntries(fs.readFileSync(filePath, "utf8"));
+  migrateLegacySessionEntries(fileEntries);
+  const header =
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = fileEntries.filter(
+    (entry): entry is SessionEntry =>
+      entry.type !== "session" &&
+      typeof (entry as { id?: unknown }).id === "string" &&
+      (typeof (entry as { timestamp?: unknown }).timestamp === "string" ||
+        typeof (entry as { timestamp?: unknown }).timestamp === "number"),
+  );
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const leafId = entries.at(-1)?.id ?? null;
+  const branchEntries: SessionEntry[] = [];
+  let current = leafId ? byId.get(leafId) : undefined;
+  while (current) {
+    branchEntries.unshift(current);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return { header, leafId, branchEntries };
+}
 
 function parseJsonlFile<T>(
   filePath: string,
@@ -748,10 +831,7 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
       `Trajectory session file is too large to export (${sessionStat.size} bytes; limit ${MAX_TRAJECTORY_SESSION_FILE_BYTES})`,
     );
   }
-  const sessionManager = SessionManager.open(params.sessionFile);
-  const header = sessionManager.getHeader();
-  const leafId = sessionManager.getLeafId();
-  const branchEntries = sessionManager.getBranch(leafId ?? undefined);
+  const { header, leafId, branchEntries } = readSessionBranch(params.sessionFile);
   const runtimeFile = resolveTrajectoryRuntimeFile({
     runtimeFile: params.runtimeFile,
     sessionFile: params.sessionFile,

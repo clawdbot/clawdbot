@@ -3,10 +3,8 @@ summary: "Messaging platforms OpenClaw can connect to"
 read_when:
   - You want to choose a chat channel for OpenClaw
   - You need a quick overview of supported messaging platforms
-title: "Chat Channels"
+title: "Chat channels"
 ---
-
-# Chat Channels
 
 OpenClaw can talk to you on any chat app you already use. Each channel connects via the Gateway.
 Text is supported everywhere; media and reactions vary by channel.

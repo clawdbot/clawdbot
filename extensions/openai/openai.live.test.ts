@@ -17,7 +17,7 @@ import { runRealtimeSttLiveTest } from "../../test/helpers/stt-live-audio.js";
 import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.4-nano";
+const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.5";
 const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_OPENAI_IMAGE_MODEL?.trim() || "gpt-image-2";
 const LIVE_VISION_MODEL = process.env.OPENCLAW_LIVE_OPENAI_VISION_MODEL?.trim() || "gpt-4.1-mini";
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
@@ -29,6 +29,8 @@ const ModelRegistryCtor = ModelRegistry as unknown as {
 
 function resolveTemplateModelId(modelId: string) {
   switch (modelId) {
+    case "gpt-5.5":
+      return "gpt-5.4";
     case "gpt-5.4":
       return "gpt-5.2";
     case "gpt-5.4-mini":

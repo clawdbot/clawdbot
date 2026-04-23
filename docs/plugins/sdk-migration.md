@@ -1,15 +1,13 @@
 ---
-title: "Plugin SDK Migration"
-sidebarTitle: "Migrate to SDK"
 summary: "Migrate from the legacy backwards-compatibility layer to the modern plugin SDK"
+title: "Plugin SDK migration"
+sidebarTitle: "Migrate to SDK"
 read_when:
   - You see the OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning
   - You see the OPENCLAW_EXTENSION_API_DEPRECATED warning
   - You are updating a plugin to the modern plugin architecture
   - You maintain an external OpenClaw plugin
 ---
-
-# Plugin SDK Migration
 
 OpenClaw has moved from a broad backwards-compatibility layer to a modern plugin
 architecture with focused, documented imports. If your plugin was built before

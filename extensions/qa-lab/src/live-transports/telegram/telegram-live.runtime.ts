@@ -100,6 +100,11 @@ type TelegramQaScenarioResult = {
   title: string;
   status: "pass" | "fail";
   details: string;
+  rttMs?: number;
+  requestStartedAt?: string;
+  responseObservedAt?: string;
+  sentMessageId?: number;
+  responseMessageId?: number;
 };
 
 type TelegramQaCanaryPhase = "sut_reply_timeout" | "sut_reply_not_threaded" | "sut_reply_empty";
@@ -590,6 +595,7 @@ async function waitForObservedMessage(params: {
       },
       timeoutSeconds * 1000 + 5_000,
     );
+    const batchObservedAtMs = Date.now();
     if (updates.length === 0) {
       continue;
     }
@@ -608,7 +614,7 @@ async function waitForObservedMessage(params: {
       };
       params.observedMessages.push(observedMessage);
       if (matchedScenario) {
-        return { message: observedMessage, nextOffset: offset };
+        return { message: observedMessage, nextOffset: offset, observedAtMs: batchObservedAtMs };
       }
     }
   }
@@ -671,6 +677,9 @@ function renderTelegramQaMarkdown(params: {
     lines.push("");
     lines.push(`- Status: ${scenario.status}`);
     lines.push(`- Details: ${scenario.details}`);
+    if (scenario.rttMs !== undefined) {
+      lines.push(`- RTT: ${scenario.rttMs}ms`);
+    }
     lines.push("");
   }
   if (params.cleanupIssues.length > 0) {
@@ -796,11 +805,13 @@ async function runCanary(params: {
   observedMessages: TelegramObservedMessage[];
 }) {
   const offset = await flushTelegramUpdates(params.driverToken);
+  const requestStartedAtMs = Date.now();
   const driverMessage = await sendGroupMessage(
     params.driverToken,
     params.groupId,
     `/help@${params.sutUsername}`,
   );
+  const requestStartedAt = new Date(requestStartedAtMs).toISOString();
   let firstUnthreadedReply:
     | Pick<TelegramObservedMessage, "messageId" | "replyToMessageId" | "text">
     | undefined;
@@ -871,6 +882,13 @@ async function runCanary(params: {
       },
     );
   }
+  return {
+    requestStartedAt,
+    responseObservedAt: new Date(sutObserved.observedAtMs).toISOString(),
+    rttMs: sutObserved.observedAtMs - requestStartedAtMs,
+    sentMessageId: driverMessage.message_id,
+    responseMessageId: sutObserved.message.messageId,
+  };
 }
 
 function canaryFailureMessage(params: {
@@ -1045,12 +1063,25 @@ export async function runTelegramQaLive(params: {
       assertLeaseHealthy();
       try {
         writeTelegramQaProgress(progressEnabled, "canary start");
-        await runCanary({
+        const canaryTiming = await runCanary({
           driverToken: runtimeEnv.driverToken,
           groupId: runtimeEnv.groupId,
           sutUsername,
           sutBotId: sutIdentity.id,
           observedMessages,
+        });
+        scenarioResults.push({
+          id: "telegram-canary",
+          title: "Telegram canary",
+          status: "pass",
+          details: redactPublicMetadata
+            ? `reply matched in ${canaryTiming.rttMs}ms`
+            : `reply message ${canaryTiming.responseMessageId} matched in ${canaryTiming.rttMs}ms`,
+          rttMs: canaryTiming.rttMs,
+          requestStartedAt: canaryTiming.requestStartedAt,
+          responseObservedAt: canaryTiming.responseObservedAt,
+          sentMessageId: redactPublicMetadata ? undefined : canaryTiming.sentMessageId,
+          responseMessageId: redactPublicMetadata ? undefined : canaryTiming.responseMessageId,
         });
         writeTelegramQaProgress(progressEnabled, "canary pass");
       } catch (error) {
@@ -1087,11 +1118,13 @@ export async function runTelegramQaLive(params: {
           assertLeaseHealthy();
           const scenarioRun = scenario.buildRun(sutUsername);
           try {
+            const requestStartedAtMs = Date.now();
             const sent = await sendGroupMessage(
               runtimeEnv.driverToken,
               runtimeEnv.groupId,
               scenarioRun.input,
             );
+            const requestStartedAt = new Date(requestStartedAtMs).toISOString();
             const matched = await waitForObservedMessage({
               token: runtimeEnv.driverToken,
               initialOffset: driverOffset,
@@ -1116,13 +1149,19 @@ export async function runTelegramQaLive(params: {
               expectedTextIncludes: scenarioRun.expectedTextIncludes,
               message: matched.message,
             });
+            const rttMs = matched.observedAtMs - requestStartedAtMs;
             const result = {
               id: scenario.id,
               title: scenario.title,
               status: "pass",
               details: redactPublicMetadata
-                ? "reply matched"
-                : `reply message ${matched.message.messageId} matched`,
+                ? `reply matched in ${rttMs}ms`
+                : `reply message ${matched.message.messageId} matched in ${rttMs}ms`,
+              rttMs,
+              requestStartedAt,
+              responseObservedAt: new Date(matched.observedAtMs).toISOString(),
+              sentMessageId: redactPublicMetadata ? undefined : sent.message_id,
+              responseMessageId: redactPublicMetadata ? undefined : matched.message.messageId,
             } satisfies TelegramQaScenarioResult;
             scenarioResults.push(result);
             writeTelegramQaProgress(
@@ -1295,4 +1334,5 @@ export const __testing = {
   sanitizeTelegramQaProgressValue,
   shouldLogTelegramQaLiveProgress,
   formatTelegramQaProgressDetails,
+  renderTelegramQaMarkdown,
 };

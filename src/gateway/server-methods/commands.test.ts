@@ -378,29 +378,30 @@ describe("commands.list handler", () => {
     const longToken = "x".repeat(COMMAND_NAME_MAX_LENGTH + 50);
     const aliasBase = "alias".repeat(20);
     const longDescription = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH + 50);
+    const oversizedArgs = Array.from({ length: COMMAND_ARGS_MAX_ITEMS + 5 }, (_, argIndex) => ({
+      name: `${longToken}-${argIndex}`,
+      description: longDescription,
+      type: "string" as const,
+      choices: Array.from({ length: COMMAND_ARG_CHOICES_MAX_ITEMS + 5 }, (_, choiceIndex) => ({
+        value: `${longToken}-${choiceIndex}`,
+        label: `${longToken}-${choiceIndex}`,
+      })),
+    }));
     try {
       mockChatCommands.length = 0;
       for (let index = 0; index < COMMAND_LIST_MAX_ITEMS + 25; index += 1) {
+        const isFirst = index === 0;
         mockChatCommands.push({
-          key: `cmd-${index}`,
-          description: longDescription,
-          textAliases: Array.from(
-            { length: COMMAND_ALIAS_MAX_ITEMS + 5 },
-            (_, aliasIndex) => `/${aliasBase}-${index}-${aliasIndex}`,
-          ),
-          acceptsArgs: true,
-          args: Array.from({ length: COMMAND_ARGS_MAX_ITEMS + 5 }, (_, argIndex) => ({
-            name: `${longToken}-${argIndex}`,
-            description: longDescription,
-            type: "string",
-            choices: Array.from(
-              { length: COMMAND_ARG_CHOICES_MAX_ITEMS + 5 },
-              (_, choiceIndex) => ({
-                value: `${longToken}-${choiceIndex}`,
-                label: `${longToken}-${choiceIndex}`,
-              }),
-            ),
-          })),
+          key: isFirst ? longToken : `cmd-${index}`,
+          description: isFirst ? longDescription : "short",
+          textAliases: isFirst
+            ? Array.from(
+                { length: COMMAND_ALIAS_MAX_ITEMS + 5 },
+                (_, aliasIndex) => `/${aliasBase}-${index}-${aliasIndex}`,
+              )
+            : [`/cmd-${index}`],
+          acceptsArgs: isFirst,
+          args: isFirst ? oversizedArgs : undefined,
           scope: "both",
           category: "tools",
         });

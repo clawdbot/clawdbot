@@ -5,9 +5,7 @@ read_when:
 title: "Telegram"
 ---
 
-# Telegram (Bot API)
-
-Status: production-ready for bot DMs + groups via grammY. Long polling is the default mode; webhook mode is optional.
+Production-ready for bot DMs and groups via grammY. Long polling is the default mode; webhook mode is optional.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -885,76 +883,11 @@ dig +short api.telegram.org AAAA
 
 More help: [Channel troubleshooting](/channels/troubleshooting).
 
-## Telegram config reference pointers
+## Configuration reference
 
-Primary reference:
+Primary reference: [Configuration reference - Telegram](/gateway/configuration-reference#telegram).
 
-- `channels.telegram.enabled`: enable/disable channel startup.
-- `channels.telegram.botToken`: bot token (BotFather).
-- `channels.telegram.tokenFile`: read token from a regular file path. Symlinks are rejected.
-- `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `allowlist` requires at least one sender ID. `open` requires `"*"`. `openclaw doctor --fix` can resolve legacy `@username` entries to IDs and can recover allowlist entries from pairing-store files in allowlist migration flows.
-- `channels.telegram.actions.poll`: enable or disable Telegram poll creation (default: enabled; still requires `sendMessage`).
-- `channels.telegram.defaultTo`: default Telegram target used by CLI `--deliver` when no explicit `--reply-to` is provided.
-- `channels.telegram.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
-- `channels.telegram.groupAllowFrom`: group sender allowlist (numeric Telegram user IDs). `openclaw doctor --fix` can resolve legacy `@username` entries to IDs. Non-numeric entries are ignored at auth time. Group auth does not use DM pairing-store fallback (`2026.2.25+`).
-- Multi-account precedence:
-  - When two or more account IDs are configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit.
-  - If neither is set, OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns.
-  - `channels.telegram.accounts.default.allowFrom` and `channels.telegram.accounts.default.groupAllowFrom` apply only to the `default` account.
-  - Named accounts inherit `channels.telegram.allowFrom` and `channels.telegram.groupAllowFrom` when account-level values are unset.
-  - Named accounts do not inherit `channels.telegram.accounts.default.allowFrom` / `groupAllowFrom`.
-- `channels.telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
-  - `channels.telegram.groups.<id>.groupPolicy`: per-group override for groupPolicy (`open | allowlist | disabled`).
-  - `channels.telegram.groups.<id>.requireMention`: mention gating default.
-  - `channels.telegram.groups.<id>.skills`: skill filter (omit = all skills, empty = none).
-  - `channels.telegram.groups.<id>.allowFrom`: per-group sender allowlist override.
-  - `channels.telegram.groups.<id>.systemPrompt`: extra system prompt for the group.
-  - `channels.telegram.groups.<id>.enabled`: disable the group when `false`.
-  - `channels.telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (group fields + topic-only `agentId`).
-  - `channels.telegram.groups.<id>.topics.<threadId>.agentId`: route this topic to a specific agent (overrides group-level and binding routing).
-- `channels.telegram.groups.<id>.topics.<threadId>.groupPolicy`: per-topic override for groupPolicy (`open | allowlist | disabled`).
-- `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
-- top-level `bindings[]` with `type: "acp"` and canonical topic id `chatId:topic:topicId` in `match.peer.id`: persistent ACP topic binding fields (see [ACP Agents](/tools/acp-agents#channel-specific-settings)).
-- `channels.telegram.direct.<id>.topics.<threadId>.agentId`: route DM topics to a specific agent (same behavior as forum topics).
-- `channels.telegram.execApprovals.enabled`: enable Telegram as a chat-based exec approval client for this account.
-- `channels.telegram.execApprovals.approvers`: Telegram user IDs allowed to approve or deny exec requests. Optional when `channels.telegram.allowFrom` or a direct `channels.telegram.defaultTo` already identifies the owner.
-- `channels.telegram.execApprovals.target`: `dm | channel | both` (default: `dm`). `channel` and `both` preserve the originating Telegram topic when present.
-- `channels.telegram.execApprovals.agentFilter`: optional agent ID filter for forwarded approval prompts.
-- `channels.telegram.execApprovals.sessionFilter`: optional session key filter (substring or regex) for forwarded approval prompts.
-- `channels.telegram.accounts.<account>.execApprovals`: per-account override for Telegram exec approval routing and approver authorization.
-- `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
-- `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
-- `channels.telegram.commands.nativeSkills`: enable/disable Telegram native skills commands.
-- `channels.telegram.replyToMode`: `off | first | all` (default: `off`).
-- `channels.telegram.textChunkLimit`: outbound chunk size (chars).
-- `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
-- `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
-- `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). Telegram preview streaming uses a single preview message that is edited in place.
-- `channels.telegram.streaming.preview.toolProgress`: reuse the live preview message for tool/progress updates when preview streaming is active (default: `true`). Set `false` to keep separate tool/progress messages.
-- `channels.telegram.mediaMaxMb`: inbound/outbound Telegram media cap (MB, default: 100).
-- `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
-- `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
-- `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.
-- `channels.telegram.network.dangerouslyAllowPrivateNetwork`: dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve `api.telegram.org` to private/internal/special-use addresses outside the default RFC 2544 benchmark-range allowance.
-- `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
-- `channels.telegram.webhookUrl`: enable webhook mode (requires `channels.telegram.webhookSecret`).
-- `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
-- `channels.telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
-- `channels.telegram.webhookHost`: local webhook bind host (default `127.0.0.1`).
-- `channels.telegram.webhookPort`: local webhook bind port (default `8787`).
-- `channels.telegram.actions.reactions`: gate Telegram tool reactions.
-- `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
-- `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
-- `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
-- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
-- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
-- `channels.telegram.errorPolicy`: `reply | silent` — control error reply behavior (default: `reply`). Per-account/group/topic overrides supported.
-- `channels.telegram.errorCooldownMs`: minimum ms between error replies to the same chat (default: `60000`). Prevents error spam during outages.
-
-- [Configuration reference - Telegram](/gateway/configuration-reference#telegram)
-
-Telegram-specific high-signal fields:
+<Accordion title="High-signal Telegram fields">
 
 - startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*` (`tokenFile` must point to a regular file; symlinks are rejected)
 - access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
@@ -970,11 +903,31 @@ Telegram-specific high-signal fields:
 - errors: `errorPolicy`, `errorCooldownMs`
 - writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 
+</Accordion>
+
+<Note>
+Multi-account precedence: when two or more account IDs are configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit. Otherwise OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns. Named accounts inherit `channels.telegram.allowFrom` / `groupAllowFrom`, but not `accounts.default.*` values.
+</Note>
+
 ## Related
 
-- [Pairing](/channels/pairing)
-- [Groups](/channels/groups)
-- [Security](/gateway/security)
-- [Channel routing](/channels/channel-routing)
-- [Multi-agent routing](/concepts/multi-agent)
-- [Troubleshooting](/channels/troubleshooting)
+<CardGroup cols={2}>
+  <Card title="Pairing" icon="link" href="/channels/pairing">
+    Pair a Telegram user to the gateway.
+  </Card>
+  <Card title="Groups" icon="users" href="/channels/groups">
+    Group and topic allowlist behavior.
+  </Card>
+  <Card title="Channel routing" icon="route" href="/channels/channel-routing">
+    Route inbound messages to agents.
+  </Card>
+  <Card title="Security" icon="shield" href="/gateway/security">
+    Threat model and hardening.
+  </Card>
+  <Card title="Multi-agent routing" icon="sitemap" href="/concepts/multi-agent">
+    Map groups and topics to agents.
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/channels/troubleshooting">
+    Cross-channel diagnostics.
+  </Card>
+</CardGroup>

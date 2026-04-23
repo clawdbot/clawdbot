@@ -62,9 +62,9 @@ describe("prompt composition invariants", () => {
     const steady = getTurn(groupScenario!, "t2");
     const eventTurn = getTurn(groupScenario!, "t3");
 
-    expect(first.systemPrompt).toContain('You are in the Slack group chat "ops".');
+    expect(first.systemPrompt).toContain("You are in a Slack group chat.");
     expect(first.systemPrompt).toContain("Activation: trigger-only");
-    expect(steady.systemPrompt).toContain('You are in the Slack group chat "ops".');
+    expect(steady.systemPrompt).toContain("You are in a Slack group chat.");
     expect(steady.systemPrompt).not.toContain("Activation: trigger-only");
     expect(first.systemPrompt).not.toBe(steady.systemPrompt);
     expect(steady.systemPrompt).toBe(eventTurn.systemPrompt);

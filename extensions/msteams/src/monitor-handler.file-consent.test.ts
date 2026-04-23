@@ -21,6 +21,14 @@ const fileConsentMockState = vi.hoisted(() => ({
   uploadToConsentUrl: vi.fn(),
 }));
 
+vi.mock("./monitor-handler/message-handler.js", () => ({
+  createMSTeamsMessageHandler: () => async () => {},
+}));
+
+vi.mock("./monitor-handler/reaction-handler.js", () => ({
+  createMSTeamsReactionHandler: () => async () => {},
+}));
+
 vi.mock("./file-consent.js", async () => {
   const actual = await vi.importActual<typeof import("./file-consent.js")>("./file-consent.js");
   return {

@@ -10,9 +10,7 @@ const mocks = vi.hoisted(() => ({
     resolvedConfig: config,
     diagnostics: [] as string[],
   })),
-  qrGenerate: vi.fn((_input: unknown, _opts: unknown, cb: (output: string) => void) => {
-    cb("ASCII-QR");
-  }),
+  renderTerminal: vi.fn(async () => "ASCII-QR"),
 }));
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 const runtimeLog = runtime.log;
@@ -27,6 +25,9 @@ vi.mock("../runtime.js", async () => {
 });
 vi.mock("../config/config.js", () => ({ loadConfig: mocks.loadConfig }));
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
+vi.mock("../media/qr-terminal.ts", () => ({
+  renderQrTerminal: mocks.renderTerminal,
+}));
 vi.mock("./command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
@@ -36,16 +37,10 @@ vi.mock("../infra/device-bootstrap.js", () => ({
     expiresAtMs: 123,
   })),
 }));
-vi.mock("qrcode-terminal", () => ({
-  default: {
-    generate: mocks.qrGenerate,
-  },
-}));
-
 const loadConfig = mocks.loadConfig;
 const runCommandWithTimeout = mocks.runCommandWithTimeout;
 const resolveCommandSecretRefsViaGateway = mocks.resolveCommandSecretRefsViaGateway;
-const qrGenerate = mocks.qrGenerate;
+const renderTerminal = mocks.renderTerminal;
 
 const { registerQrCli } = await import("./qr-cli.js");
 
@@ -196,7 +191,7 @@ describe("registerQrCli", () => {
       bootstrapToken: "bootstrap-123",
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
-    expect(qrGenerate).not.toHaveBeenCalled();
+    expect(renderTerminal).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
@@ -211,7 +206,7 @@ describe("registerQrCli", () => {
 
     await runQr([]);
 
-    expect(qrGenerate).toHaveBeenCalledTimes(1);
+    expect(renderTerminal).toHaveBeenCalledTimes(1);
     const output = runtimeLog.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");
@@ -235,18 +230,18 @@ describe("registerQrCli", () => {
     expect(output).toContain("gateway.tailscale.mode=serve");
   });
 
-  it("allows lan mdns cleartext setup urls", async () => {
+  it("allows private LAN IP cleartext setup urls", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         bind: "custom",
-        customBindHost: "gateway.local",
+        customBindHost: "192.168.1.8",
         auth: { mode: "token", token: "tok" },
       },
     });
 
     await runQr(["--setup-code-only"]);
 
-    expectLoggedSetupCode("ws://gateway.local:18789");
+    expectLoggedSetupCode("ws://192.168.1.8:18789");
   });
 
   it("allows android emulator cleartext override urls", async () => {

@@ -233,6 +233,7 @@ export type FileSecretProviderConfig = {
   mode?: FileSecretProviderMode;
   timeoutMs?: number;
   maxBytes?: number;
+  allowInsecurePath?: boolean;
 };
 
 export type ExecSecretProviderConfig = {

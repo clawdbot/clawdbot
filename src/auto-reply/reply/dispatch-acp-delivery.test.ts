@@ -414,6 +414,32 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     );
   });
 
+  it("mirrors routed ACP replies into the target ACP session", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:main:main",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      sessionKey: "agent:claude:acp:spawned",
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(deliveryMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:claude:acp:spawned",
+        policySessionKey: "agent:main:main",
+      }),
+    );
+  });
+
   it("routes ACP replies when cfg.channels is missing", async () => {
     await expectVisibleChatBlockRoutesToAccount({} as OpenClawConfig, undefined);
   });

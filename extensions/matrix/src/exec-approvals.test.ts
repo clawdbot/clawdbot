@@ -118,13 +118,13 @@ function makeForeignChannelApprovalRequest(params: {
 }
 
 describe("matrix exec approvals", () => {
-  it("auto-enables when approvers resolve and disables only when forced off", () => {
+  it("requires enablement and approvers before enabling the client", () => {
     expect(isMatrixExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isMatrixExecApprovalClientEnabled({
         cfg: buildConfig(undefined, { dm: { allowFrom: ["@owner:example.org"] } }),
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(isMatrixExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
       isMatrixExecApprovalClientEnabled({

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { makeDirectPlugin } from "../test-utils/channel-plugin-test-fixtures.js";
 import { formatConfigChannelsStatusLines } from "./channels/status-config-format.js";
 
 const activeChannelPlugins = vi.hoisted(() => [] as ChannelPlugin[]);
@@ -47,29 +48,6 @@ function registerSingleTestPlugin(_pluginId: string, plugin: ChannelPlugin) {
   activeChannelPlugins.splice(0, activeChannelPlugins.length, plugin);
 }
 
-function makeTestPlugin(params: {
-  id: string;
-  label: string;
-  docsPath: string;
-  config: ChannelPlugin["config"];
-}): ChannelPlugin {
-  return {
-    id: params.id,
-    meta: {
-      id: params.id,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: params.docsPath,
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: params.config,
-    actions: {
-      describeMessageTool: () => ({ actions: ["send"] }),
-    },
-  };
-}
-
 async function formatLocalStatusSummary(
   cfg: unknown,
   options?: {
@@ -105,7 +83,7 @@ function tokenOnlyPluginConfig() {
 }
 
 function makeUnavailableTokenPlugin(): ChannelPlugin {
-  return makeTestPlugin({
+  return makeDirectPlugin({
     id: "token-only",
     label: "TokenOnly",
     docsPath: "/channels/token-only",
@@ -117,7 +95,7 @@ function makeUnavailableTokenPlugin(): ChannelPlugin {
 }
 
 function makeResolvedTokenPlugin(): ChannelPlugin {
-  return makeTestPlugin({
+  return makeDirectPlugin({
     id: "token-only",
     label: "TokenOnly",
     docsPath: "/channels/token-only",
@@ -141,16 +119,10 @@ function makeResolvedTokenPlugin(): ChannelPlugin {
 }
 
 function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
-  return {
+  return makeDirectPlugin({
     id: "token-only",
-    meta: {
-      id: "token-only",
-      label: "TokenOnly",
-      selectionLabel: "TokenOnly",
-      docsPath: "/channels/token-only",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
+    label: "TokenOnly",
+    docsPath: "/channels/token-only",
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
@@ -170,14 +142,11 @@ function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
       isConfigured: () => true,
       isEnabled: () => true,
     },
-    actions: {
-      describeMessageTool: () => ({ actions: ["send"] }),
-    },
-  };
+  });
 }
 
 function makeUnavailableHttpSlackPlugin(): ChannelPlugin {
-  return makeTestPlugin({
+  return makeDirectPlugin({
     id: "slack",
     label: "Slack",
     docsPath: "/channels/slack",

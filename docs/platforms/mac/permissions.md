@@ -4,7 +4,7 @@ read_when:
   - Debugging missing or stuck macOS permission prompts
   - Packaging or signing the macOS app
   - Changing bundle IDs or app install paths
-title: "macOS Permissions"
+title: "macOS permissions"
 ---
 
 # macOS permissions (TCC)

@@ -126,6 +126,18 @@ const ERROR_PATTERNS = {
     // falls through to reason=unknown (#58315).
     /\boperation was aborted\b/i,
     /\bstream (?:was )?(?:closed|aborted)\b/i,
+    // Undici transport-level failures during CDN/provider outages (Cloudflare
+    // 502 served with an empty body, socket reset mid-response, body-stream
+    // aborted). These arrive as bare strings on the outer error and, without
+    // an explicit match, the fallback chain is never attempted (#69368).
+    /^terminated$/i,
+    /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
+    // pi-ai's openai-codex provider surfaces `Request failed` when the HTTP
+    // response has no body and no status text (typical of Cloudflare 502s
+    // from the upstream Codex service). Treat it as a transport failure so
+    // the configured fallback chain runs instead of surfacing the error.
+    /^request failed$/i,
+    /\brequest failed after repeated internal retries\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,

@@ -10,7 +10,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 export type ResponsePrefixContext = {
   /** Short model name (e.g., "gpt-5.4", "claude-opus-4-6") */
   model?: string;
-  /** Full model ID including provider (e.g., "openai-codex/gpt-5.4") */
+  /** Full model ID including provider (e.g., "openai/gpt-5.5") */
   modelFull?: string;
   /** Provider name (e.g., "openai-codex", "anthropic") */
   provider?: string;
@@ -77,7 +77,7 @@ export function resolveResponsePrefixTemplate(
  * - Common version suffixes (e.g., "-latest")
  *
  * @example
- * extractShortModelName("openai-codex/gpt-5.4") // "gpt-5.4"
+ * extractShortModelName("openai/gpt-5.5") // "gpt-5.5"
  * extractShortModelName("claude-opus-4-6-20260205") // "claude-opus-4-6"
  * extractShortModelName("gpt-5.4-latest") // "gpt-5.4"
  */

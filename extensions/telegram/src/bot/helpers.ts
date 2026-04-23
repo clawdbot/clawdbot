@@ -40,6 +40,30 @@ export {
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
+const TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS = 1024;
+const TELEGRAM_FORUM_FLAG_CACHE_TTL_MS = 10 * 60_000;
+const telegramForumFlagByChatId = new Map<string, { expiresAtMs: number; isForum: boolean }>();
+
+export function resetTelegramForumFlagCacheForTest(): void {
+  telegramForumFlagByChatId.clear();
+}
+
+function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs = Date.now()) {
+  const cacheKey = String(chatId);
+  if (
+    !telegramForumFlagByChatId.has(cacheKey) &&
+    telegramForumFlagByChatId.size >= TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS
+  ) {
+    const oldestKey = telegramForumFlagByChatId.keys().next().value;
+    if (oldestKey !== undefined) {
+      telegramForumFlagByChatId.delete(oldestKey);
+    }
+  }
+  telegramForumFlagByChatId.set(cacheKey, {
+    expiresAtMs: nowMs + TELEGRAM_FORUM_FLAG_CACHE_TTL_MS,
+    isForum,
+  });
+}
 
 function hadUnsafeTelegramText(raw: unknown, sanitized: string): boolean {
   return typeof raw === "string" && raw.trim().length > 0 && sanitized.trim().length === 0;
@@ -66,13 +90,27 @@ export async function resolveTelegramForumFlag(params: {
   getChat?: TelegramGetChat;
 }): Promise<boolean> {
   if (typeof params.isForum === "boolean") {
+    if (params.isGroup && params.chatType === "supergroup") {
+      cacheTelegramForumFlag(params.chatId, params.isForum);
+    }
     return params.isForum;
   }
   if (!params.isGroup || params.chatType !== "supergroup" || !params.getChat) {
     return false;
   }
+  const cacheKey = String(params.chatId);
+  const nowMs = Date.now();
+  const cached = telegramForumFlagByChatId.get(cacheKey);
+  if (cached && cached.expiresAtMs > nowMs) {
+    return cached.isForum;
+  }
+  if (cached) {
+    telegramForumFlagByChatId.delete(cacheKey);
+  }
   try {
-    return extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
+    const resolved = extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
+    cacheTelegramForumFlag(params.chatId, resolved, nowMs);
+    return resolved;
   } catch {
     return false;
   }

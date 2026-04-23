@@ -198,6 +198,17 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
     getGlobalHookRunner: () => hoisted.state.hookRunnerOverride,
     loadConfig: () => hoisted.state.configOverride,
+    resolveContextEngine: async () => ({
+      info: { id: "test", name: "Test" },
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+      ingest: async () => ({ ingested: false }),
+    }),
+    resolveParentForkMaxTokens: () => 100_000,
+    forkSessionFromParent: async () => ({
+      sessionId: "forked-session-id",
+      sessionFile: "/tmp/forked-session.jsonl",
+    }),
     updateSessionStore: async (_storePath, mutator) => mutator({}),
   });
   cachedSubagentRegistryTesting.setDepsForTest({

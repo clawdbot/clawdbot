@@ -1,13 +1,11 @@
 ---
-title: "ComfyUI"
 summary: "ComfyUI workflow image, video, and music generation setup in OpenClaw"
+title: "ComfyUI"
 read_when:
   - You want to use local ComfyUI workflows with OpenClaw
   - You want to use Comfy Cloud with image, video, or music workflows
   - You need the bundled comfy plugin config keys
 ---
-
-# ComfyUI
 
 OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs. The plugin is entirely workflow-driven, so OpenClaw does not try to map generic `size`, `aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto your graph.
 
@@ -348,7 +346,7 @@ The `image` and `video` sections also support:
   <Card title="Provider Directory" href="/providers/index" icon="layers">
     Overview of all providers and model refs.
   </Card>
-  <Card title="Configuration Reference" href="/gateway/configuration-reference#agent-defaults" icon="gear">
+  <Card title="Configuration reference" href="/gateway/configuration-reference#agent-defaults" icon="gear">
     Full config reference including agent defaults.
   </Card>
 </CardGroup>

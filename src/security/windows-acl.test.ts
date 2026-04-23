@@ -440,7 +440,7 @@ Successfully processed 1 files`;
       expectInspectSuccess(result, 2);
       // /sid is passed so that account names are printed as SIDs, making the
       // audit locale-independent (fixes #35834).
-      expect(mockExec).toHaveBeenCalledWith("icacls", ["C:\\test\\file.txt", "/sid"]);
+      expect(mockExec).toHaveBeenCalledWith("icacls.exe", ["C:\\test\\file.txt", "/sid"]);
     });
 
     it("classifies *S-1-5-18 (SID form of SYSTEM from /sid) as trusted", async () => {
@@ -485,8 +485,8 @@ Successfully processed 1 files`;
       expectInspectSuccess(result, 2);
       expect(result.trusted).toHaveLength(2);
       expect(result.untrustedGroup).toHaveLength(0);
-      expect(mockExec).toHaveBeenNthCalledWith(1, "icacls", ["C:\\test\\file.txt", "/sid"]);
-      expect(mockExec).toHaveBeenNthCalledWith(2, "whoami", ["/user", "/fo", "csv", "/nh"]);
+      expect(mockExec).toHaveBeenNthCalledWith(1, "icacls.exe", ["C:\\test\\file.txt", "/sid"]);
+      expect(mockExec).toHaveBeenNthCalledWith(2, "whoami.exe", ["/user", "/fo", "csv", "/nh"]);
     });
 
     it("returns error state on exec failure", async () => {
@@ -533,6 +533,36 @@ Successfully processed 1 files`;
       // Unknown SID stays in untrustedGroup (resolveCurrentUserSid returned null)
       expect(result.untrustedGroup).toHaveLength(1);
       expect(mockExec).toHaveBeenCalledTimes(2);
+    });
+
+    it("uses SystemRoot for Windows system commands when available", async () => {
+      const mockExec = vi
+        .fn()
+        .mockResolvedValueOnce({
+          stdout: "C:\\test\\file.txt *S-1-5-21-111-222-333-1001:(F)",
+          stderr: "",
+        })
+        .mockResolvedValueOnce({
+          stdout: '"mock-host\\\\MockUser","S-1-5-21-111-222-333-1001"\r\n',
+          stderr: "",
+        });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        env: { SystemRoot: "C:\\Windows" },
+      });
+
+      expectInspectSuccess(result, 1);
+      expect(mockExec).toHaveBeenNthCalledWith(1, "C:\\Windows\\System32\\icacls.exe", [
+        "C:\\test\\file.txt",
+        "/sid",
+      ]);
+      expect(mockExec).toHaveBeenNthCalledWith(2, "C:\\Windows\\System32\\whoami.exe", [
+        "/user",
+        "/fo",
+        "csv",
+        "/nh",
+      ]);
     });
   });
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { matchesNodeSearch, parseConfigSearchQuery } from "./config-form.node.ts";
 

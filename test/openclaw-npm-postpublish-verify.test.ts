@@ -7,6 +7,7 @@ import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
   collectInstalledContextEngineRuntimeErrors,
+  collectInstalledRootDependencyManifestErrors,
   collectInstalledMirroredRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
@@ -416,6 +417,182 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
       rmSync(outsideManifestRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectInstalledRootDependencyManifestErrors", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-root-deps-"));
+  }
+
+  function writePackageFile(root: string, relativePath: string, value: unknown): void {
+    const fullPath = join(root, relativePath);
+    mkdirSync(dirname(fullPath), { recursive: true });
+    writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  }
+
+  it("flags root dist imports whose declared runtime package name is missing", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
+        'import { Type } from "typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency 'typebox' for dist importers: typebox-CXXonh2u.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts root dist imports when the runtime package name is declared", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {
+          typebox: "1.1.28",
+        },
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
+        'import { Type } from "typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("flags undeclared imports from mjs and cjs root dist files", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "esm-entry.mjs"),
+        'export { value } from "mjs-only";\n',
+        "utf8",
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "cjs-entry.cjs"),
+        'const cjsOnly = require("cjs-only");\nmodule.exports = cjsOnly;\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency 'cjs-only' for dist importers: cjs-entry.cjs. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores import-like text inside comments", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "comment-only.js"),
+        [
+          '// import "fake-package";',
+          '/* require("fake-package-two"); */',
+          "export const ok = true;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores import-like text inside string literals", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "string-only.js"),
+        [
+          'export const help = "run import(\'fake-package\') after setup";',
+          'export const note = "from \\"fake-package-two\\"";',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a structured error when installed package.json is invalid", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), "{not-json\n", "utf8");
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        expect.stringMatching(/^installed package\.json could not be parsed:/u),
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses oversized root dist files", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "oversized.js"),
+        "x".repeat(2 * 1024 * 1024 + 1),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root dist file 'oversized.js' is invalid or exceeds 2097152 bytes.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
     }
   });
 });

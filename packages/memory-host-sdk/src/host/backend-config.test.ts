@@ -91,7 +91,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(rootCollection?.pattern).toBe("MEMORY.md");
   });
 
-  it("uses lowercase memory.md as the root fallback when MEMORY.md is absent", () => {
+  it("keeps uppercase MEMORY.md as the root pattern when only lowercase memory.md exists", () => {
     const workspaceDir = "/workspace/root";
     withMemoryRootEntries([memoryFileEntry("memory.md")], () => {
       const cfg = rootMemoryConfig(workspaceDir);
@@ -99,7 +99,7 @@ describe("resolveMemoryBackendConfig", () => {
       const rootCollection = resolved.qmd?.collections.find(
         (collection) => collection.name === "memory-root-main",
       );
-      expect(rootCollection?.pattern).toBe("memory.md");
+      expect(rootCollection?.pattern).toBe("MEMORY.md");
       expect(collectionNames(resolved).has("memory-alt-main")).toBe(false);
     });
   });

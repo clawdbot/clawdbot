@@ -1,96 +1,148 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import { captureEnv } from "../test-utils/env.js";
-import {
-  connectTestGatewayClient,
-  ensurePairedTestGatewayClientIdentity,
-  getFreeGatewayPort,
-} from "./gateway-cli-backend.live-helpers.js";
-import { startGatewayServer } from "./server.js";
+import { type RawData, WebSocketServer } from "ws";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
+import { PROTOCOL_VERSION } from "./protocol/index.js";
 
-const GATEWAY_CONNECT_TIMEOUT_MS = 90_000;
+const GATEWAY_CONNECT_TIMEOUT_MS = 5_000;
+const tempRoots: string[] = [];
+
+async function createTempDeviceIdentity() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-connect-"));
+  tempRoots.push(tempRoot);
+  return loadOrCreateDeviceIdentity(path.join(tempRoot, "device.json"));
+}
+
+async function startMinimalGatewayServer(params: { token: string }) {
+  const httpServer = createServer();
+  const wss = new WebSocketServer({ server: httpServer });
+  const requests: string[] = [];
+
+  wss.on("connection", (ws) => {
+    ws.send(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "test-nonce" },
+      }),
+    );
+    ws.on("message", (data) => {
+      const frame = JSON.parse(rawWsDataToString(data)) as {
+        type?: string;
+        id?: string;
+        method?: string;
+        params?: { auth?: { token?: string }; device?: { nonce?: string } };
+      };
+      if (frame.type !== "req" || !frame.id) {
+        return;
+      }
+      requests.push(frame.method ?? "");
+      if (frame.method === "connect") {
+        expect(frame.params?.auth?.token).toBe(params.token);
+        expect(frame.params?.device?.nonce).toBe("test-nonce");
+        ws.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              protocol: PROTOCOL_VERSION,
+              server: { version: "test", connId: "conn-1" },
+              features: { methods: ["health"], events: ["connect.challenge"] },
+              snapshot: {
+                presence: [],
+                health: { ok: true },
+                stateVersion: { presence: 0, health: 0 },
+                uptimeMs: 0,
+              },
+              policy: {
+                maxPayload: 1,
+                maxBufferedBytes: 1,
+                tickIntervalMs: 60_000,
+              },
+            },
+          }),
+        );
+        return;
+      }
+      if (frame.method === "health") {
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { ok: true } }));
+      }
+    });
+  });
+
+  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+  const address = httpServer.address() as AddressInfo;
+  return {
+    requests,
+    url: `ws://127.0.0.1:${address.port}`,
+    close: async () => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        wss.close((error) => (error ? reject(error) : resolve()));
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
+}
+
+function rawWsDataToString(data: RawData): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
 
 describe("gateway cli backend connect", () => {
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    clearSessionStoreCacheForTest();
+  afterEach(async () => {
+    await Promise.all(
+      tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+    );
   });
 
   it(
-    "connects a same-process test gateway client in minimal mode",
+    "connects a test gateway client through the live helper",
     async () => {
-      const envSnapshot = captureEnv([
-        "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_PROVIDERS",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_BUNDLED_PLUGINS_DIR",
-        "OPENCLAW_TEST_MINIMAL_GATEWAY",
-      ]);
-
-      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-connect-home-"));
-      const configPath = path.join(tempHome, ".openclaw", "openclaw.json");
-      const bundledPluginsDir = path.join(tempHome, "openclaw-test-no-bundled-extensions");
       const token = `test-${Date.now()}`;
-      process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_PROVIDERS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.mkdir(bundledPluginsDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ gateway: { auth: { mode: "token", token } } }, null, 2)}\n`,
-      );
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      clearSessionStoreCacheForTest();
-
-      const deviceIdentity = await ensurePairedTestGatewayClientIdentity();
-      const port = await getFreeGatewayPort();
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
+      const deviceIdentity = await createTempDeviceIdentity();
+      const server = await startMinimalGatewayServer({ token });
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
 
       try {
         client = await connectTestGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: server.url,
           token,
           deviceIdentity,
+          timeoutMs: 1_000,
+          maxAttemptTimeoutMs: 1_000,
+          requestTimeoutMs: 1_000,
         });
         const health = await client.request("health", undefined, {
-          timeoutMs: 5_000,
+          timeoutMs: 1_000,
         });
         expect(health).toMatchObject({
           ok: true,
         });
+        expect(server.requests).toEqual(["connect", "health"]);
       } finally {
         await client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
-        await server.close({ reason: "gateway connect regression complete" });
-        await fs.rm(tempHome, { recursive: true, force: true });
-        envSnapshot.restore();
+        await server.close();
       }
     },
     GATEWAY_CONNECT_TIMEOUT_MS,

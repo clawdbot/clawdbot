@@ -6,8 +6,6 @@ read_when:
 title: "Quick start"
 ---
 
-# Quick start
-
 <Info>
 Quick start is now part of [Getting Started](/start/getting-started).
 </Info>

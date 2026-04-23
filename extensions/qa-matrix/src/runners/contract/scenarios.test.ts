@@ -995,6 +995,7 @@ describe("matrix live qa scenarios", () => {
     const stateRoot = await mkdtemp(path.join(os.tmpdir(), "matrix-stale-sync-"));
     try {
       const accountDir = path.join(stateRoot, "matrix", "accounts", "sut", "server", "token");
+      const staleSyncRoomId = "!stale-sync:matrix-qa.test";
       const syncStorePath = path.join(accountDir, "bot-storage.json");
       const dedupeStorePath = path.join(accountDir, "inbound-dedupe.json");
       await mkdir(accountDir, { recursive: true });
@@ -1025,7 +1026,7 @@ describe("matrix live qa scenarios", () => {
             version: 1,
             entries: [
               {
-                key: "!restart:matrix-qa.test|$first-trigger",
+                key: `${staleSyncRoomId}|$first-trigger`,
                 ts: Date.now(),
               },
             ],
@@ -1034,7 +1035,7 @@ describe("matrix live qa scenarios", () => {
         return {
           event: {
             kind: "message",
-            roomId: "!restart:matrix-qa.test",
+            roomId: staleSyncRoomId,
             eventId: kind === "fresh" ? "$fresh-reply" : "$first-reply",
             sender: "@sut:matrix-qa.test",
             type: "m.room.message",
@@ -1086,7 +1087,7 @@ describe("matrix live qa scenarios", () => {
             defaultRoomKey: "main",
             rooms: [
               {
-                key: "restart",
+                key: "stale-sync",
                 kind: "group",
                 memberRoles: ["driver", "observer", "sut"],
                 memberUserIds: [
@@ -1094,9 +1095,9 @@ describe("matrix live qa scenarios", () => {
                   "@observer:matrix-qa.test",
                   "@sut:matrix-qa.test",
                 ],
-                name: "Restart room",
+                name: "Stale sync room",
                 requireMention: true,
-                roomId: "!restart:matrix-qa.test",
+                roomId: staleSyncRoomId,
               },
             ],
           },

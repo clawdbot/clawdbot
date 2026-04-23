@@ -492,7 +492,7 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       flagName: "--openai-api-key",
       envVar: "OPENAI_API_KEY",
       promptMessage: "Enter OpenAI API key",
-      defaultModel: "openai/gpt-5.4",
+      defaultModel: "openai/gpt-5.5",
     }),
     await createApiKeyProvider({
       providerId: "opencode",

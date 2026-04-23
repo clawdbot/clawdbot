@@ -27,7 +27,7 @@ import {
   resolveAcpClientSpawnInvocation,
   resolvePermissionRequest,
   shouldStripProviderAuthEnvVarsForAcpServer,
-} from "./client.js";
+} from "./client-helpers.js";
 import {
   extractAttachmentsFromPrompt,
   extractTextFromPrompt,

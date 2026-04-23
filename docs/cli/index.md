@@ -3,10 +3,8 @@ summary: "OpenClaw CLI index: command list, global flags, and links to per-comma
 read_when:
   - Finding the right `openclaw` subcommand
   - Looking up global flags or output styling rules
-title: "CLI Reference"
+title: "CLI reference"
 ---
-
-# CLI reference
 
 `openclaw` is the main CLI entry point. Each core command has either a
 dedicated reference page or is documented with the command it aliases; this

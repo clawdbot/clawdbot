@@ -11,6 +11,7 @@ import {
 } from "../plugins/loader.test-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { channelsStatusCommand } from "./channels/status.js";
+import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -89,17 +90,6 @@ function writeExternalEnvChannelPlugin() {
   return { pluginDir, fullMarker };
 }
 
-function createRuntimeCapture() {
-  const logs: string[] = [];
-  const errors: string[] = [];
-  const runtime = {
-    log: (message: unknown) => logs.push(String(message)),
-    error: (message: unknown) => errors.push(String(message)),
-    exit: (_code?: number) => undefined,
-  };
-  return { runtime, logs, errors };
-}
-
 describe("channelsStatusCommand external env-only channel fallback", () => {
   beforeEach(() => {
     mocks.callGateway.mockReset();
@@ -127,7 +117,7 @@ describe("channelsStatusCommand external env-only channel fallback", () => {
       effectiveConfig: config,
       diagnostics: [],
     });
-    const { runtime, logs } = createRuntimeCapture();
+    const { runtime, logs } = createCapturingTestRuntime();
 
     await withEnvAsync({ EXTERNAL_ENV_CHANNEL_TOKEN: "token" }, async () => {
       await channelsStatusCommand({ json: true, probe: false }, runtime as never);

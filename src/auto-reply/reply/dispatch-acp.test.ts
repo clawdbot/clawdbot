@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { resolveAcpAttachments } from "./dispatch-acp-attachments.js";
+import {
+  resolveAcpAttachments,
+  resolveAcpInlineImageAttachments,
+} from "./dispatch-acp-attachments.js";
 import { tryDispatchAcpReply } from "./dispatch-acp.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -210,6 +213,7 @@ async function runDispatch(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => void;
+  images?: Array<{ data: string; mimeType: string }>;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
 }) {
@@ -225,6 +229,7 @@ async function runDispatch(params: {
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     sessionKey: targetSessionKey,
+    images: params.images,
     inboundAudio: false,
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
@@ -543,6 +548,38 @@ describe("tryDispatchAcpReply", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("forwards chat.send inline image attachments into ACP turns", async () => {
+    setReadyAcpResolution();
+    const image = {
+      mimeType: "image/png",
+      data: Buffer.from("image-bytes").toString("base64"),
+    };
+
+    expect(resolveAcpInlineImageAttachments([image])).toEqual([
+      {
+        mediaType: "image/png",
+        data: image.data,
+      },
+    ]);
+
+    await runDispatch({
+      bodyForAgent: "describe image",
+      images: [image],
+    });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "describe image",
+        attachments: [
+          {
+            mediaType: "image/png",
+            data: image.data,
+          },
+        ],
+      }),
+    );
   });
 
   it("skips ACP attachments outside allowed inbound roots", async () => {

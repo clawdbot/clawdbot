@@ -92,12 +92,7 @@ function isDefaultMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (
-    normalized === "MEMORY.md" ||
-    normalized === "memory.md" ||
-    normalized === "DREAMS.md" ||
-    normalized === "dreams.md"
-  ) {
+  if (normalized === "MEMORY.md" || normalized === "DREAMS.md" || normalized === "dreams.md") {
     return true;
   }
   return normalized.startsWith("memory/");
@@ -894,29 +889,22 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     try {
-      let sawCanonical = false;
-      let sawLegacyFallback = false;
       for (const entry of fsSync.readdirSync(collectionPath, { withFileTypes: true })) {
         if (entry.isSymbolicLink() || !entry.isFile()) {
           continue;
         }
         if (entry.name === "MEMORY.md") {
-          sawCanonical = true;
-        } else if (entry.name === "memory.md") {
-          sawLegacyFallback = true;
+          return true;
         }
       }
-      if (sawCanonical && sawLegacyFallback) {
-        return false;
-      }
-      return sawCanonical || sawLegacyFallback;
+      return false;
     } catch {
       return false;
     }
   }
 
   private isDefaultMemoryRootPattern(pattern: string): boolean {
-    return pattern === "MEMORY.md" || pattern === "memory.md";
+    return pattern === "MEMORY.md";
   }
 
   private pathsMatch(left: string, right: string): boolean {

@@ -19,7 +19,7 @@ const [
   { CURRENT_MESSAGE_MARKER },
   { monitorSlackProvider },
 ] = await Promise.all([
-  import("openclaw/plugin-sdk/reply-runtime"),
+  import("../../../src/auto-reply/reply/inbound-dedupe.js"),
   import("../../../src/auto-reply/reply/history.js"),
   import("../../../src/auto-reply/reply/mentions.js"),
   import("./monitor/provider.js"),

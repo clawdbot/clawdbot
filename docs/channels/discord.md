@@ -5,9 +5,7 @@ read_when:
 title: "Discord"
 ---
 
-# Discord (Bot API)
-
-Status: ready for DMs and guild channels via the official Discord gateway.
+Ready for DMs and guild channels via the official Discord gateway.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -494,60 +492,6 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
   ],
 }
 ```
-
-## Developer Portal setup
-
-<AccordionGroup>
-  <Accordion title="Create app and bot">
-
-    1. Discord Developer Portal -> **Applications** -> **New Application**
-    2. **Bot** -> **Add Bot**
-    3. Copy bot token
-
-  </Accordion>
-
-  <Accordion title="Privileged intents">
-    In **Bot -> Privileged Gateway Intents**, enable:
-
-    - Message Content Intent
-    - Server Members Intent (recommended)
-
-    Presence intent is optional and only required if you want to receive presence updates. Setting bot presence (`setPresence`) does not require enabling presence updates for members.
-
-  </Accordion>
-
-  <Accordion title="OAuth scopes and baseline permissions">
-    OAuth URL generator:
-
-    - scopes: `bot`, `applications.commands`
-
-    Typical baseline permissions:
-
-    **General Permissions**
-      - View Channels
-    **Text Permissions**
-      - Send Messages
-      - Read Message History
-      - Embed Links
-      - Attach Files
-      - Add Reactions (optional)
-
-    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
-    Avoid `Administrator` unless explicitly needed.
-
-  </Accordion>
-
-  <Accordion title="Copy IDs">
-    Enable Discord Developer Mode, then copy:
-
-    - server ID
-    - channel ID
-    - user ID
-
-    Prefer numeric IDs in OpenClaw config for reliable audits and probes.
-
-  </Accordion>
-</AccordionGroup>
 
 ## Native commands and command auth
 
@@ -1188,13 +1132,11 @@ openclaw logs --follow
   </Accordion>
 </AccordionGroup>
 
-## Configuration reference pointers
+## Configuration reference
 
-Primary reference:
+Primary reference: [Configuration reference - Discord](/gateway/configuration-reference#discord).
 
-- [Configuration reference - Discord](/gateway/configuration-reference#discord)
-
-High-signal Discord fields:
+<Accordion title="High-signal Discord fields">
 
 - startup/auth: `enabled`, `token`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
@@ -1204,12 +1146,13 @@ High-signal Discord fields:
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `streaming.preview.toolProgress`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
-- media/retry: `mediaMaxMb`, `retry`
-  - `mediaMaxMb` caps outbound Discord uploads (default: `100MB`)
+- media/retry: `mediaMaxMb` (caps outbound Discord uploads, default `100MB`), `retry`
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
 - UI: `ui.components.accentColor`
 - features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
+
+</Accordion>
 
 ## Safety and operations
 
@@ -1219,10 +1162,23 @@ High-signal Discord fields:
 
 ## Related
 
-- [Pairing](/channels/pairing)
-- [Groups](/channels/groups)
-- [Channel routing](/channels/channel-routing)
-- [Security](/gateway/security)
-- [Multi-agent routing](/concepts/multi-agent)
-- [Troubleshooting](/channels/troubleshooting)
-- [Slash commands](/tools/slash-commands)
+<CardGroup cols={2}>
+  <Card title="Pairing" icon="link" href="/channels/pairing">
+    Pair a Discord user to the gateway.
+  </Card>
+  <Card title="Groups" icon="users" href="/channels/groups">
+    Group chat and allowlist behavior.
+  </Card>
+  <Card title="Channel routing" icon="route" href="/channels/channel-routing">
+    Route inbound messages to agents.
+  </Card>
+  <Card title="Security" icon="shield" href="/gateway/security">
+    Threat model and hardening.
+  </Card>
+  <Card title="Multi-agent routing" icon="sitemap" href="/concepts/multi-agent">
+    Map guilds and channels to agents.
+  </Card>
+  <Card title="Slash commands" icon="terminal" href="/tools/slash-commands">
+    Native command behavior.
+  </Card>
+</CardGroup>

@@ -85,6 +85,7 @@ export const MATRIX_QA_MEDIA_ROOM_KEY = "media";
 export const MATRIX_QA_MEMBERSHIP_ROOM_KEY = "membership";
 export const MATRIX_QA_RESTART_ROOM_KEY = "restart";
 export const MATRIX_QA_SECONDARY_ROOM_KEY = "secondary";
+export const MATRIX_QA_STALE_SYNC_ROOM_KEY = "stale-sync";
 
 const MATRIX_QA_LIVE_MODEL_TIMEOUT_MS = 120_000;
 const MATRIX_QA_IMAGE_GENERATION_TIMEOUT_MS = 180_000;
@@ -191,6 +192,12 @@ const MATRIX_QA_MEDIA_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
 const MATRIX_QA_RESTART_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
   key: MATRIX_QA_RESTART_ROOM_KEY,
   name: "Matrix QA Restart Room",
+  requireMention: true,
+});
+
+const MATRIX_QA_STALE_SYNC_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
+  key: MATRIX_QA_STALE_SYNC_ROOM_KEY,
+  name: "Matrix QA Stale Sync Room",
   requireMention: true,
 });
 
@@ -450,7 +457,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-stale-sync-replay-dedupe",
     timeoutMs: 90_000,
     title: "Matrix stale sync replay is absorbed by inbound dedupe",
-    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
+    topology: MATRIX_QA_STALE_SYNC_ROOM_TOPOLOGY,
   },
   {
     id: "matrix-room-membership-loss",

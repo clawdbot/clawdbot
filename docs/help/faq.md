@@ -6,8 +6,6 @@ read_when:
 title: "FAQ"
 ---
 
-# FAQ
-
 Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS, multi-agent, OAuth/API keys, model failover). For runtime diagnostics, see [Troubleshooting](/gateway/troubleshooting). For the full config reference, see [Configuration](/gateway/configuration).
 
 ## First 60 seconds if something is broken
@@ -630,12 +628,16 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+</AccordionGroup>
+
 <a id="why-am-i-seeing-http-429-ratelimiterror-from-anthropic"></a>
-<Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
-That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
-use **Claude CLI**, wait for the window to reset or upgrade your plan. If you
-use an **Anthropic API key**, check the Anthropic Console
-for usage/billing and raise limits as needed.
+
+<AccordionGroup>
+  <Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
+    That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
+    use **Claude CLI**, wait for the window to reset or upgrade your plan. If you
+    use an **Anthropic API key**, check the Anthropic Console
+    for usage/billing and raise limits as needed.
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
@@ -654,26 +656,27 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="How does Codex auth work?">
-    OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Onboarding can run the OAuth flow and will set the default model to `openai-codex/gpt-5.4` when appropriate. See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
+    OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). New model refs should use the canonical `openai/gpt-5.5` path; `openai-codex/gpt-*` remains a legacy compatibility alias. See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
-  <Accordion title="Why does ChatGPT GPT-5.4 not unlock openai/gpt-5.4 in OpenClaw?">
-    OpenClaw treats the two routes separately:
+  <Accordion title="Why does OpenClaw still mention openai-codex?">
+    `openai-codex` is still the internal auth/profile provider id for ChatGPT/Codex OAuth. The model ref should be canonical OpenAI:
 
-    - `openai-codex/gpt-5.4` = ChatGPT/Codex OAuth
-    - `openai/gpt-5.4` = direct OpenAI Platform API
+    - `openai/gpt-5.5` = canonical GPT-5.5 model ref
+    - `openai-codex/gpt-5.5` = legacy compatibility alias
+    - `openai-codex:...` = auth profile id, not a model ref
 
-    In OpenClaw, ChatGPT/Codex sign-in is wired to the `openai-codex/*` route,
-    not the direct `openai/*` route. If you want the direct API path in
-    OpenClaw, set `OPENAI_API_KEY` (or the equivalent OpenAI provider config).
-    If you want ChatGPT/Codex sign-in in OpenClaw, use `openai-codex/*`.
+    If you want the direct OpenAI Platform billing/limit path, set
+    `OPENAI_API_KEY`. If you want ChatGPT/Codex subscription auth, sign in with
+    `openclaw models auth login --provider openai-codex` and keep model refs on
+    `openai/*` in new configs.
 
   </Accordion>
 
   <Accordion title="Why can Codex OAuth limits differ from ChatGPT web?">
-    `openai-codex/*` uses the Codex OAuth route, and its usable quota windows are
-    OpenAI-managed and plan-dependent. In practice, those limits can differ from
-    the ChatGPT website/app experience, even when both are tied to the same account.
+    Codex OAuth uses OpenAI-managed, plan-dependent quota windows. In practice,
+    those limits can differ from the ChatGPT website/app experience, even when
+    both are tied to the same account.
 
     OpenClaw can show the currently visible provider usage/quota windows in
     `openclaw models status`, but it does not invent or normalize ChatGPT-web
@@ -1410,8 +1413,9 @@ for usage/billing and raise limits as needed.
     These files live in the **agent workspace**, not `~/.openclaw`.
 
     - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
-      `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
-      `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+      `MEMORY.md`, `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+      Lowercase root `memory.md` is legacy repair input only; `openclaw doctor --fix`
+      can merge it into `MEMORY.md` when both files exist.
     - **State dir (`~/.openclaw`)**: config, channel/provider state, auth profiles, sessions, logs,
       and shared skills (`~/.openclaw/skills`).
 
@@ -2214,7 +2218,7 @@ for usage/billing and raise limits as needed.
     agents.defaults.model.primary
     ```
 
-    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
+    Models are referenced as `provider/model` (example: `openai/gpt-5.5`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
 
   </Accordion>
 
@@ -2336,23 +2340,23 @@ for usage/billing and raise limits as needed.
 
   </Accordion>
 
-  <Accordion title="Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding?">
+  <Accordion title="Can I use GPT 5.5 for daily tasks and Codex 5.5 for coding?">
     Yes. Set one as default and switch as needed:
 
-    - **Quick switch (per session):** `/model gpt-5.4` for daily tasks, `/model openai-codex/gpt-5.4` for coding with Codex OAuth.
-    - **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.4`, then switch to `openai-codex/gpt-5.4` when coding (or the other way around).
+    - **Quick switch (per session):** `/model gpt-5.5` for daily tasks, or keep the same model and switch auth/profile as needed.
+    - **Default:** set `agents.defaults.model.primary` to `openai/gpt-5.5`.
     - **Sub-agents:** route coding tasks to sub-agents with a different default model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
 
   </Accordion>
 
-  <Accordion title="How do I configure fast mode for GPT 5.4?">
+  <Accordion title="How do I configure fast mode for GPT 5.5?">
     Use either a session toggle or a config default:
 
-    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.4` or `openai-codex/gpt-5.4`.
-    - **Per model default:** set `agents.defaults.models["openai/gpt-5.4"].params.fastMode` to `true`.
-    - **Codex OAuth too:** if you also use `openai-codex/gpt-5.4`, set the same flag there.
+    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.5`.
+    - **Per model default:** set `agents.defaults.models["openai/gpt-5.5"].params.fastMode` to `true`.
+    - **Legacy aliases:** older `openai-codex/gpt-*` entries can keep their own params, but new configs should put params on `openai/gpt-*`.
 
     Example:
 
@@ -2361,12 +2365,7 @@ for usage/billing and raise limits as needed.
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.4": {
-              params: {
-                fastMode: true,
-              },
-            },
-            "openai-codex/gpt-5.4": {
+            "openai/gpt-5.5": {
               params: {
                 fastMode: true,
               },
@@ -2437,7 +2436,7 @@ for usage/billing and raise limits as needed.
           model: { primary: "minimax/MiniMax-M2.7" },
           models: {
             "minimax/MiniMax-M2.7": { alias: "minimax" },
-            "openai/gpt-5.4": { alias: "gpt" },
+            "openai/gpt-5.5": { alias: "gpt" },
           },
         },
       },
@@ -2465,7 +2464,7 @@ for usage/billing and raise limits as needed.
 
     - `opus` → `anthropic/claude-opus-4-6`
     - `sonnet` → `anthropic/claude-sonnet-4-6`
-    - `gpt` → `openai/gpt-5.4`
+    - `gpt` → `openai/gpt-5.5`
     - `gpt-mini` → `openai/gpt-5.4-mini`
     - `gpt-nano` → `openai/gpt-5.4-nano`
     - `gemini` → `google/gemini-3.1-pro-preview`

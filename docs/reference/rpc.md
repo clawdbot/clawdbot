@@ -3,10 +3,8 @@ summary: "RPC adapters for external CLIs (signal-cli, legacy imsg) and gateway p
 read_when:
   - Adding or changing external CLI integrations
   - Debugging RPC adapters (signal-cli, imsg)
-title: "RPC Adapters"
+title: "RPC adapters"
 ---
-
-# RPC adapters
 
 OpenClaw integrates external CLIs via JSON-RPC. Two patterns are used today.
 

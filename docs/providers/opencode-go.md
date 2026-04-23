@@ -6,8 +6,6 @@ read_when:
 title: "OpenCode Go"
 ---
 
-# OpenCode Go
-
 OpenCode Go is the Go catalog within [OpenCode](/providers/opencode).
 It uses the same `OPENCODE_API_KEY` as the Zen catalog, but keeps the runtime
 provider id `opencode-go` so upstream per-model routing stays correct.
@@ -86,7 +84,7 @@ As of the bundled pi catalog, the provider includes:
 }
 ```
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Routing behavior">

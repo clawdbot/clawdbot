@@ -424,6 +424,36 @@ export async function postJsonRequest(params: {
   );
 }
 
+export async function postMultipartRequest(params: {
+  url: string;
+  headers: Headers;
+  body: BodyInit;
+  timeoutMs?: number;
+  fetchFn: typeof fetch;
+  pinDns?: boolean;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
+  /**
+   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+   */
+  mode?: GuardedFetchMode;
+}) {
+  return fetchWithTimeoutGuarded(
+    params.url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: params.body,
+    },
+    params.timeoutMs,
+    params.fetchFn,
+    resolveGuardedPostRequestOptions(params),
+  );
+}
+
 export async function readErrorResponse(res: Response): Promise<string | undefined> {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {

@@ -712,6 +712,7 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(mode ? { mode } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(maxBytes !== undefined ? { maxBytes } : {}),
+      ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
     };
   } else {
     const command = opts.providerCommand?.trim();
@@ -1599,7 +1600,7 @@ export function registerConfigCli(program: Command) {
     )
     .option(
       "--provider-allow-insecure-path",
-      "Provider builder (exec): bypass strict path permission checks",
+      "Provider builder (file|exec): bypass strict path permission checks",
       false,
     )
     .option(

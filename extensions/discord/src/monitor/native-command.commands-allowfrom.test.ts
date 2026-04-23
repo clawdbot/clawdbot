@@ -230,6 +230,88 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectNotUnauthorizedReply(interaction);
   });
 
+  it("authorizes guild slash commands when channel access restrictions include the member", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ...cfg.commands,
+          allowFrom: undefined,
+        };
+        cfg.channels = {
+          ...cfg.channels,
+          discord: {
+            ...cfg.channels?.discord,
+            guilds: {
+              "345678901234567890": {
+                channels: {
+                  "234567890123456789": {
+                    enabled: true,
+                    requireMention: false,
+                    users: ["user:123456789012345678"],
+                  },
+                },
+              },
+            },
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("rejects guild slash commands when channel access restrictions exclude the member even if channel policy would allow them", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ...cfg.commands,
+          allowFrom: undefined,
+        };
+        cfg.channels = {
+          ...cfg.channels,
+          discord: {
+            ...cfg.channels?.discord,
+            guilds: {
+              "345678901234567890": {
+                channels: {
+                  "234567890123456789": {
+                    enabled: true,
+                    requireMention: false,
+                    users: ["user:123456789012345678"],
+                  },
+                },
+              },
+            },
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectUnauthorizedReply(interaction);
+  });
+
+  it("rejects guild slash commands when owner restrictions are configured and the sender is not allowlisted", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ...cfg.commands,
+          allowFrom: undefined,
+        };
+        cfg.channels = {
+          ...cfg.channels,
+          discord: {
+            ...cfg.channels?.discord,
+            allowFrom: ["user:123456789012345678"],
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectUnauthorizedReply(interaction);
+  });
+
   it("rejects guild slash commands outside the Discord allowlist when commands.useAccessGroups is false and commands.allowFrom is not configured", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       mutateConfig: (cfg) => {

@@ -4,10 +4,8 @@ read_when:
   - Inspecting background work in progress or recently completed
   - Debugging delivery failures for detached agent runs
   - Understanding how background runs relate to sessions, cron, and heartbeat
-title: "Background Tasks"
+title: "Background tasks"
 ---
-
-# Background Tasks
 
 > **Looking for scheduling?** See [Automation & Tasks](/automation) for choosing the right mechanism. This page covers **tracking** background work, not scheduling it.
 

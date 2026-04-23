@@ -17,6 +17,7 @@ export function createExtensionFeishuVitestConfig(
     {
       dir: "extensions",
       env,
+      includeOpenClawRuntimeSetup: false,
       name: "extension-feishu",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],

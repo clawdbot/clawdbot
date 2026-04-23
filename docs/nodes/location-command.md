@@ -3,7 +3,7 @@ summary: "Location command for nodes (location.get), permission modes, and Andro
 read_when:
   - Adding location node support or permissions UI
   - Designing Android location permissions or foreground behavior
-title: "Location Command"
+title: "Location command"
 ---
 
 # Location command (nodes)

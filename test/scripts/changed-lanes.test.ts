@@ -3,21 +3,41 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectChangedLanes } from "../../scripts/changed-lanes.mjs";
-import { createChangedCheckPlan } from "../../scripts/check-changed.mjs";
+import {
+  CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  createChangedCheckPlan,
+  createChangedCheckVitestEnv,
+} from "../../scripts/check-changed.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
+const nestedGitEnvKeys = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_QUARANTINE_PATH",
+  "GIT_WORK_TREE",
+] as const;
+
+function createNestedGitEnv(): NodeJS.ProcessEnv {
+  const env = {
+    ...process.env,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  for (const key of nestedGitEnvKeys) {
+    delete env[key];
+  }
+  return env;
+}
 
 const git = (cwd: string, args: string[]) =>
   execFileSync("git", args, {
     cwd,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    },
+    env: createNestedGitEnv(),
   }).trim();
 
 afterEach(() => {
@@ -50,11 +70,7 @@ describe("scripts/changed-lanes", () => {
       {
         cwd: dir,
         encoding: "utf8",
-        env: {
-          ...process.env,
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_TERMINAL_PROMPT: "0",
-        },
+        env: createNestedGitEnv(),
       },
     );
 
@@ -238,6 +254,7 @@ describe("scripts/changed-lanes", () => {
         [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
         {
           cwd: dir,
+          env: createNestedGitEnv(),
           stdio: "pipe",
         },
       ),
@@ -255,6 +272,7 @@ describe("scripts/changed-lanes", () => {
         [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
         {
           cwd: dir,
+          env: createNestedGitEnv(),
           stdio: "pipe",
         },
       ),
@@ -343,5 +361,23 @@ describe("scripts/changed-lanes", () => {
     ]);
     expect(plan.runChangedTestsBroad).toBe(false);
     expect(plan.runFullTests).toBe(false);
+  });
+
+  it("sets a fail-fast Vitest watchdog for changed checks", () => {
+    expect(createChangedCheckVitestEnv({ PATH: "/usr/bin" })).toMatchObject({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
+      OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
+    });
+
+    expect(
+      createChangedCheckVitestEnv({
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "45000",
+        OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1",
+      }),
+    ).toMatchObject({
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "45000",
+      OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1",
+    });
   });
 });

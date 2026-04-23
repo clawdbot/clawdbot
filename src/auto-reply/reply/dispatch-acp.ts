@@ -23,7 +23,11 @@ import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
-import { loadDispatchAcpMediaRuntime, resolveAcpAttachments } from "./dispatch-acp-attachments.js";
+import {
+  loadDispatchAcpMediaRuntime,
+  resolveAcpAttachments,
+  resolveAcpInlineImageAttachments,
+} from "./dispatch-acp-attachments.js";
 import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
@@ -265,6 +269,7 @@ export async function tryDispatchAcpReply(params: {
   dispatcher: ReplyDispatcher;
   runId?: string;
   sessionKey?: string;
+  images?: Array<{ data: string; mimeType: string }>;
   abortSignal?: AbortSignal;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
@@ -301,6 +306,7 @@ export async function tryDispatchAcpReply(params: {
     ctx: params.ctx,
     dispatcher: params.dispatcher,
     inboundAudio: params.inboundAudio,
+    sessionKey: canonicalSessionKey,
     sessionTtsAuto: params.sessionTtsAuto,
     ttsChannel: params.ttsChannel,
     suppressUserDelivery: params.suppressUserDelivery,
@@ -400,9 +406,13 @@ export async function tryDispatchAcpReply(params: {
     }
 
     const promptText = resolveAcpPromptText(params.ctx);
-    const attachments = hasInboundMedia(params.ctx)
+    const mediaAttachments = hasInboundMedia(params.ctx)
       ? await resolveAcpAttachments({ ctx: params.ctx, cfg: params.cfg })
       : [];
+    const attachments =
+      mediaAttachments.length > 0
+        ? mediaAttachments
+        : resolveAcpInlineImageAttachments(params.images);
     if (!promptText && attachments.length === 0) {
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);

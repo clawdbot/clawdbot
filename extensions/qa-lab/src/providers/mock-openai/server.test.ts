@@ -681,6 +681,32 @@ describe("qa mock openai server", () => {
     expect(body).toContain("QA_SUBAGENT_CHILD_FIXED");
   });
 
+  it("records planned sessions_spawn arguments for forked-context QA assertions", async () => {
+    const server = await startMockServer();
+
+    await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(
+          'Forked subagent context QA check. Use sessions_spawn task="Report the visible code" label=qa-fork-context context=fork mode=run.',
+        ),
+      ],
+    });
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    expect(await debugResponse.json()).toMatchObject({
+      plannedToolName: "sessions_spawn",
+      plannedToolArgs: {
+        task: "Report the visible code",
+        label: "qa-fork-context",
+        context: "fork",
+        mode: "run",
+      },
+    });
+  });
+
   it("surfaces sessions_spawn tool errors instead of echoing child-task markers", async () => {
     const server = await startMockServer();
 

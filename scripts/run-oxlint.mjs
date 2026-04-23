@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mjs";
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
 const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");
 const PREPARE_EXTENSION_BOUNDARY_ARGS = [
@@ -24,7 +24,7 @@ export function shouldPrepareExtensionPackageBoundaryArtifacts(args) {
   return !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg));
 }
 
-function prepareExtensionPackageBoundaryArtifacts(env) {
+async function prepareExtensionPackageBoundaryArtifacts(env) {
   const releaseArtifactsLock = acquireLocalHeavyCheckLockSync({
     cwd: process.cwd(),
     env,
@@ -33,18 +33,15 @@ function prepareExtensionPackageBoundaryArtifacts(env) {
   });
 
   try {
-    const result = spawnSync(process.execPath, PREPARE_EXTENSION_BOUNDARY_ARGS, {
-      stdio: "inherit",
+    const status = await runManagedCommand({
+      bin: process.execPath,
+      args: PREPARE_EXTENSION_BOUNDARY_ARGS,
       env,
     });
 
-    if (result.error) {
-      throw result.error;
-    }
-
-    if ((result.status ?? 1) !== 0) {
+    if (status !== 0) {
       throw new Error(
-        `prepare-extension-package-boundary-artifacts failed with exit code ${result.status ?? 1}`,
+        `prepare-extension-package-boundary-artifacts failed with exit code ${status}`,
       );
     }
   } finally {
@@ -52,7 +49,7 @@ function prepareExtensionPackageBoundaryArtifacts(env) {
   }
 }
 
-export function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
+export async function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
   const { args: finalArgs, env } = applyLocalOxlintPolicy(argv, runtimeEnv);
   const releaseLock =
     env.OPENCLAW_OXLINT_SKIP_LOCK === "1"
@@ -73,25 +70,20 @@ export function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
       env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
       shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs)
     ) {
-      prepareExtensionPackageBoundaryArtifacts(env);
+      await prepareExtensionPackageBoundaryArtifacts(env);
     }
 
-    const result = spawnSync(oxlintPath, finalArgs, {
-      stdio: "inherit",
+    const status = await runManagedCommand({
+      bin: oxlintPath,
+      args: finalArgs,
       env,
-      shell: process.platform === "win32",
     });
-
-    if (result.error) {
-      throw result.error;
-    }
-
-    process.exitCode = result.status ?? 1;
+    process.exitCode = status;
   } finally {
     releaseLock();
   }
 }
 
 if (import.meta.main) {
-  main();
+  await main();
 }

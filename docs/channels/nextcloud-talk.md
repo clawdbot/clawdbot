@@ -5,8 +5,6 @@ read_when:
 title: "Nextcloud Talk"
 ---
 
-# Nextcloud Talk
-
 Status: bundled plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
 
 ## Bundled plugin

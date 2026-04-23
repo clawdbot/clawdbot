@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 
+type MockGatewayTool = {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text: string }> }>;
+};
+
+type MockGatewayScopedTools = {
+  agentId: string;
+  tools: MockGatewayTool[];
+};
+
 const resolveGatewayScopedToolsMock = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn<(...args: unknown[]) => MockGatewayScopedTools>(() => ({
     agentId: "main",
     tools: [
       {
@@ -110,6 +122,43 @@ describe("mcp loopback server", () => {
         surface: "loopback",
       }),
     );
+  });
+
+  it("adds empty properties for object schemas that omit properties", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "schema_probe",
+          description: "exercise no-argument MCP schemas",
+          parameters: { type: "object" },
+          execute: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const payload = (await response.json()) as {
+      result?: { tools?: Array<{ inputSchema?: Record<string, unknown> }> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.result?.tools?.[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {},
+    });
   });
 
   it("derives senderIsOwner from the loopback bearer token", async () => {

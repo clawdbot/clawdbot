@@ -79,6 +79,65 @@ type LoopbackJsonRpcResponse = {
   error?: { message?: string };
 };
 
+type LoopbackToolListEntry = {
+  name?: string;
+  inputSchema?: unknown;
+};
+
+function asLoopbackSchemaRecord(schema: unknown): Record<string, unknown> | null {
+  return schema && typeof schema === "object" && !Array.isArray(schema)
+    ? (schema as Record<string, unknown>)
+    : null;
+}
+
+function assertLoopbackObjectSchemasHaveProperties(params: {
+  tools: LoopbackToolListEntry[];
+  expectedSchemaProbeToolName?: string;
+}): void {
+  const missingProperties = params.tools
+    .filter((tool) => {
+      const schema = asLoopbackSchemaRecord(tool.inputSchema);
+      if (!schema || schema.type !== "object") {
+        return false;
+      }
+      const properties = schema.properties;
+      return (
+        !Object.hasOwn(schema, "properties") ||
+        !properties ||
+        typeof properties !== "object" ||
+        Array.isArray(properties)
+      );
+    })
+    .map((tool) => tool.name)
+    .filter((name): name is string => typeof name === "string" && name.length > 0);
+
+  if (missingProperties.length > 0) {
+    throw new Error(
+      `mcp loopback tools/list exposed object schemas without properties: ${missingProperties.join(
+        ", ",
+      )}`,
+    );
+  }
+
+  const expectedToolName = params.expectedSchemaProbeToolName;
+  if (!expectedToolName) {
+    return;
+  }
+  const tool = params.tools.find((candidate) => candidate.name === expectedToolName);
+  if (!tool) {
+    throw new Error(`mcp loopback tools/list did not expose ${expectedToolName}`);
+  }
+  const schema = asLoopbackSchemaRecord(tool.inputSchema);
+  if (
+    !schema ||
+    schema.type !== "object" ||
+    !Object.hasOwn(schema, "properties") ||
+    !asLoopbackSchemaRecord(schema.properties)
+  ) {
+    throw new Error(`mcp loopback schema probe ${expectedToolName} was not normalized`);
+  }
+}
+
 async function callLoopbackJsonRpc(params: {
   sessionKey: string;
   senderIsOwner: boolean;
@@ -128,6 +187,7 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
   senderIsOwner: boolean;
   messageProvider?: string;
   accountId?: string;
+  expectedSchemaProbeToolName?: string;
 }): Promise<void> {
   const cronProbe = createLiveCronProbeSpec();
   logCliCronProbe("loopback-preflight:start", {
@@ -163,8 +223,12 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     body: { jsonrpc: "2.0", id: "tools-list", method: "tools/list" },
   });
   const tools = Array.isArray((toolsList.result as { tools?: unknown[] } | undefined)?.tools)
-    ? (((toolsList.result as { tools?: unknown[] }).tools ?? []) as Array<{ name?: string }>)
+    ? (((toolsList.result as { tools?: unknown[] }).tools ?? []) as LoopbackToolListEntry[])
     : [];
+  assertLoopbackObjectSchemasHaveProperties({
+    tools,
+    expectedSchemaProbeToolName: params.expectedSchemaProbeToolName,
+  });
   const toolNames = tools
     .map((tool) => (typeof tool.name === "string" ? tool.name : ""))
     .filter(Boolean);
@@ -267,8 +331,7 @@ export async function verifyCliBackendImageProbe(params: {
       // still receives a local file path, but now via the runner code we
       // actually want to validate instead of an ad hoc prompt-only shortcut.
       message:
-        "Best match for the image: lobster, mouse, cat, horse. " +
-        "Reply with one lowercase word only.",
+        "What animal is drawn in the attached image? Reply with only the lowercase animal name.",
       attachments: [
         {
           mimeType: "image/png",

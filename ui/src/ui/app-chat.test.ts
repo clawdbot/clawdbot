@@ -13,11 +13,12 @@ vi.mock("./app-last-active-session.ts", () => ({
 }));
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
+let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 
 async function loadChatHelpers(): Promise<void> {
-  ({ handleSendChat, refreshChatAvatar, clearPendingQueueItemsForRun } =
+  ({ handleSendChat, handleAbortChat, refreshChatAvatar, clearPendingQueueItemsForRun } =
     await import("./app-chat.ts"));
 }
 
@@ -543,6 +544,40 @@ describe("handleSendChat", () => {
         text: "follow up",
       }),
     ]);
+  });
+});
+
+describe("handleAbortChat", () => {
+  beforeAll(async () => {
+    await loadChatHelpers();
+  });
+
+  it("queues the active run abort while disconnected", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: "run-main",
+      chatMessage: "draft",
+      sessionKey: "agent:main",
+    });
+
+    await handleAbortChat(host);
+
+    expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
+    expect(host.chatMessage).toBe("");
+    expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("keeps the draft when disconnected without an active run", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: null,
+      chatMessage: "draft",
+    });
+
+    await handleAbortChat(host);
+
+    expect(host.pendingAbort).toBeUndefined();
+    expect(host.chatMessage).toBe("draft");
   });
 });
 

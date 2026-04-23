@@ -16,7 +16,7 @@ if [[ -n "${OPENAI_BASE_URL:-}" && "${OPENAI_BASE_URL:-}" != "undefined" && "${O
 fi
 
 echo "Running plugins Docker E2E..."
-RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-plugins-run.XXXXXX.log")"
+RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-plugins-run.XXXXXX")"
 if ! docker run --rm "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash -s >"$RUN_LOG" 2>&1 <<'EOF'
 set -euo pipefail
 

@@ -7,8 +7,6 @@ read_when:
 title: "Messages"
 ---
 
-# Messages
-
 This page ties together how OpenClaw handles inbound messages, sessions, queueing,
 streaming, and reasoning visibility.
 

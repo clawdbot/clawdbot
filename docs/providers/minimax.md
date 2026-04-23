@@ -6,8 +6,6 @@ read_when:
 title: "MiniMax"
 ---
 
-# MiniMax
-
 OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 
 MiniMax also provides:

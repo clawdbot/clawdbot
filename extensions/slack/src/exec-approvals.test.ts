@@ -29,7 +29,7 @@ function buildConfig(
 }
 
 describe("slack exec approvals", () => {
-  it("auto-enables when owner approvers resolve and disables only when forced off", () => {
+  it("requires explicit enablement even when owner approvers resolve", () => {
     expect(isSlackExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isSlackExecApprovalClientEnabled({
@@ -40,13 +40,18 @@ describe("slack exec approvals", () => {
       isSlackExecApprovalClientEnabled({
         cfg: buildConfig({ approvers: ["U123"] }),
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isSlackExecApprovalClientEnabled({
         cfg: {
           ...buildConfig(),
           commands: { ownerAllowFrom: ["slack:U123OWNER"] },
         } as OpenClawConfig,
+      }),
+    ).toBe(false);
+    expect(
+      isSlackExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: "auto", approvers: ["U123"] }),
       }),
     ).toBe(true);
     expect(

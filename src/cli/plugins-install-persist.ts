@@ -12,6 +12,20 @@ import {
   logSlotWarnings,
 } from "./plugins-command-helpers.js";
 
+function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
+  const allow = cfg.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0 || allow.includes(pluginId)) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      allow: [...allow, pluginId].toSorted(),
+    },
+  };
+}
+
 export async function persistPluginInstall(params: {
   config: OpenClawConfig;
   baseHash?: string;
@@ -20,7 +34,10 @@ export async function persistPluginInstall(params: {
   successMessage?: string;
   warningMessage?: string;
 }): Promise<OpenClawConfig> {
-  let next = enablePluginInConfig(params.config, params.pluginId).config;
+  let next = enablePluginInConfig(
+    addInstalledPluginToAllowlist(params.config, params.pluginId),
+    params.pluginId,
+  ).config;
   next = recordPluginInstall(next, {
     pluginId: params.pluginId,
     ...params.install,

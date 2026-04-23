@@ -282,6 +282,11 @@ export interface ContextEngine {
   prepareSubagentSpawn?(params: {
     parentSessionKey: string;
     childSessionKey: string;
+    contextMode?: "isolated" | "fork";
+    parentSessionId?: string;
+    parentSessionFile?: string;
+    childSessionId?: string;
+    childSessionFile?: string;
     ttlMs?: number;
   }): Promise<SubagentSpawnPreparation | undefined>;
 

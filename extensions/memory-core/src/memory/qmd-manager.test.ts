@@ -878,7 +878,7 @@ describe("QmdMemoryManager", () => {
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("rebinding"));
   });
 
-  it("rebinds legacy memory-alt when it still owns the root slot for MEMORY.md", async () => {
+  it("adds canonical memory-root without treating legacy memory-alt as equivalent", async () => {
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# canonical root");
     cfg = {
       ...cfg,
@@ -930,15 +930,10 @@ describe("QmdMemoryManager", () => {
         const pathArg = args[2] ?? "";
         const name = args[args.indexOf("--name") + 1] ?? "";
         const pattern = args[args.indexOf("--glob") + 1] ?? args[args.indexOf("--mask") + 1] ?? "";
-        const hasConflict = [...listedCollections.entries()].some(([existingName, info]) => {
-          if (existingName === name || info.path !== pathArg) {
-            return false;
-          }
-          const isRootPatternPair =
-            (info.pattern === "MEMORY.md" || info.pattern === "memory.md") &&
-            (pattern === "MEMORY.md" || pattern === "memory.md");
-          return info.pattern === pattern || isRootPatternPair;
-        });
+        const hasConflict = [...listedCollections.entries()].some(
+          ([existingName, info]) =>
+            existingName !== name && info.path === pathArg && info.pattern === pattern,
+        );
         if (hasConflict) {
           emitAndClose(child, "stderr", "A collection already exists for this path and pattern", 1);
           return child;
@@ -953,10 +948,10 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager({ mode: "full" });
     await manager.close();
 
-    expect(removeCalls).toContain("memory-alt");
+    expect(removeCalls).not.toContain("memory-alt");
     expect(listedCollections.has("memory-root-main")).toBe(true);
-    expect(listedCollections.has("memory-alt")).toBe(false);
-    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("rebinding"));
+    expect(listedCollections.has("memory-alt")).toBe(true);
+    expect(logWarnMock).not.toHaveBeenCalledWith(expect.stringContaining("rebinding"));
   });
 
   it("warns instead of silently succeeding when add conflict metadata is unavailable", async () => {

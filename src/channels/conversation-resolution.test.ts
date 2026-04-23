@@ -77,6 +77,39 @@ describe("conversation resolution", () => {
     });
   });
 
+  it("can skip placement hints for callers that do not consume them", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({
+        id: "discord",
+        label: "Discord",
+      }),
+      conversationBindings: {
+        supportsCurrentConversationBinding: true,
+        defaultTopLevelPlacement: "child",
+      },
+      bindings: {
+        ...createBindingProviderDefaults(),
+        resolveCommandConversation: () => ({ conversationId: "channel:123" }),
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "discord",
+        originatingTo: "discord:channel:123",
+        includePlacementHint: false,
+      }),
+    ).toEqual({
+      canonical: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:123",
+      },
+      source: "command-provider",
+    });
+  });
+
   it("applies provider-owned self-parent defaults in one core path", () => {
     registerChannelPlugin({
       ...createChannelTestPluginBase({ id: "line", label: "LINE" }),

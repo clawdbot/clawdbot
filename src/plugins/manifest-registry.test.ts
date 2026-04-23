@@ -478,6 +478,27 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("falls back providerDiscoverySource from .ts to emitted .js files", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "anthropic-vertex",
+      providers: ["anthropic-vertex"],
+      providerDiscoveryEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(dir, "provider-discovery.js"), "export default {};\n", "utf8");
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "anthropic-vertex",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBe(
+      path.join(dir, "provider-discovery.js"),
+    );
+  });
+
   it("preserves activation and setup descriptors from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

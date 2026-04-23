@@ -223,7 +223,7 @@ describe("runQaCharacterEval", () => {
 
     expect(runSuite).toHaveBeenCalledTimes(8);
     expect(runSuite.mock.calls.map(([params]) => params.primaryModel)).toEqual([
-      "openai/gpt-5.4",
+      "openai/gpt-5.5",
       "openai/gpt-5.2",
       "openai/gpt-5",
       "anthropic/claude-opus-4-6",
@@ -254,7 +254,7 @@ describe("runQaCharacterEval", () => {
     ]);
     expect(runJudge).toHaveBeenCalledTimes(2);
     expect(runJudge.mock.calls.map(([params]) => params.judgeModel)).toEqual([
-      "openai/gpt-5.4",
+      "openai/gpt-5.5",
       "anthropic/claude-opus-4-6",
     ]);
     expect(runJudge.mock.calls.map(([params]) => params.judgeThinkingDefault)).toEqual([

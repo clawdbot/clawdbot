@@ -5,8 +5,6 @@ read_when:
 title: "Network model"
 ---
 
-# Network Model
-
 > This content has been merged into [Network](/network#core-model). See that page for the current guide.
 
 Most operations flow through the Gateway (`openclaw gateway`), a single long-running

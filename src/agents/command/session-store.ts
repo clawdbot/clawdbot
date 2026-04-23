@@ -5,6 +5,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
@@ -60,6 +61,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
+  const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
   const contextTokens =
     typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
       ? params.contextTokensOverride
@@ -85,6 +87,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
     provider: providerUsed,
     model: modelUsed,
   });
+  if (agentHarnessId) {
+    next.agentHarnessId = agentHarnessId;
+  } else if (result.meta.executionTrace?.runner === "cli") {
+    next.agentHarnessId = undefined;
+  }
   if (isCliProvider(providerUsed, cfg)) {
     const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
     if (cliSessionBinding?.sessionId?.trim()) {

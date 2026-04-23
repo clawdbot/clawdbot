@@ -214,4 +214,23 @@ describe("Codex app-server config", () => {
       expect(manifest.uiHints[`appServer.${key}`]).toBeTruthy();
     }
   });
+
+  it("does not schema-default mode-derived policy fields", async () => {
+    const manifest = JSON.parse(
+      await fs.readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as {
+      configSchema: {
+        properties: {
+          appServer: {
+            properties: Record<string, { default?: unknown }>;
+          };
+        };
+      };
+    };
+    const appServerProperties = manifest.configSchema.properties.appServer.properties;
+
+    expect(appServerProperties.approvalPolicy?.default).toBeUndefined();
+    expect(appServerProperties.sandbox?.default).toBeUndefined();
+    expect(appServerProperties.approvalsReviewer?.default).toBeUndefined();
+  });
 });

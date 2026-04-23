@@ -12,7 +12,7 @@ function withFakeCli(versionOutput: string): { root: string; cliPath: string } {
   const escapedOutput = versionOutput.replace(/'/g, "'\\''");
   fs.writeFileSync(
     cliPath,
-    `#!/usr/bin/env bash
+    `#!/bin/sh
 printf '%s\n' '${escapedOutput}'
 `,
     "utf-8",

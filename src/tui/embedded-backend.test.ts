@@ -20,6 +20,97 @@ vi.mock("../infra/agent-events.js", () => ({
   },
 }));
 
+vi.mock("../cli/deps.js", () => ({
+  createDefaultDeps: () => ({}),
+}));
+
+vi.mock("../config/sessions.js", () => ({
+  resolveAgentMainSessionKey: () => "agent:main:main",
+  resolveStorePath: () => "/tmp/openclaw-sessions.json",
+  updateSessionStore: vi.fn(),
+}));
+
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveSessionAgentId: () => "main",
+}));
+
+vi.mock("../agents/defaults.js", () => ({
+  DEFAULT_PROVIDER: "openai",
+}));
+
+vi.mock("../agents/model-selection.js", () => ({
+  buildAllowedModelSet: ({ catalog }: { catalog: unknown[] }) => ({ allowedCatalog: catalog }),
+  resolveThinkingDefault: () => undefined,
+}));
+
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({}),
+}));
+
+vi.mock("../gateway/chat-sanitize.js", () => ({
+  stripEnvelopeFromMessages: (messages: unknown[]) => messages,
+}));
+
+vi.mock("../gateway/cli-session-history.js", () => ({
+  augmentChatHistoryWithCliSessionImports: ({ localMessages }: { localMessages?: unknown[] }) =>
+    localMessages ?? [],
+}));
+
+vi.mock("../gateway/server-constants.js", () => ({
+  getMaxChatHistoryMessagesBytes: () => 100_000,
+}));
+
+vi.mock("../gateway/server-methods/chat.js", () => ({
+  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
+  augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
+  enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
+  replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
+  resolveEffectiveChatHistoryMaxChars: () => 100_000,
+  sanitizeChatHistoryMessages: (messages: unknown[]) => messages,
+}));
+
+vi.mock("../gateway/session-utils.js", () => ({
+  listAgentsForGateway: () => [],
+  listSessionsFromStore: () => ({ sessions: [] }),
+  loadCombinedSessionStoreForGateway: () => ({
+    storePath: "/tmp/openclaw-sessions.json",
+    store: {},
+  }),
+  loadSessionEntry: (sessionKey: string) => ({
+    cfg: {},
+    canonicalKey: sessionKey,
+    entry: {},
+  }),
+  migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({ primaryKey: key }),
+  readSessionMessages: () => [],
+  resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
+    canonicalKey: key,
+    storePath: "/tmp/openclaw-sessions.json",
+  }),
+  resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
+}));
+
+vi.mock("../gateway/server-model-catalog.js", () => ({
+  loadGatewayModelCatalog: () => [],
+}));
+
+vi.mock("../gateway/session-reset-service.js", () => ({
+  performGatewaySessionReset: () => ({ ok: true, key: "agent:main:main", entry: {} }),
+}));
+
+vi.mock("../gateway/session-utils.fs.js", () => ({
+  capArrayByJsonBytes: (items: unknown[]) => ({ items }),
+}));
+
+vi.mock("../gateway/sessions-patch.js", () => ({
+  applySessionsPatchToStore: () => ({ entry: {} }),
+}));
+
+vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
+  injectTimestamp: (message: string) => message,
+  timestampOptsFromConfig: () => ({}),
+}));
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error?: unknown) => void;

@@ -3,10 +3,8 @@ summary: "OpenClaw macOS companion app (menu bar + gateway broker)"
 read_when:
   - Implementing macOS app features
   - Changing gateway lifecycle or node bridging on macOS
-title: "macOS App"
+title: "macOS app"
 ---
-
-# OpenClaw macOS Companion (menu bar + gateway broker)
 
 The macOS app is the **menu‑bar companion** for OpenClaw. It owns permissions,
 manages/attaches to the Gateway locally (launchd or manual), and exposes macOS

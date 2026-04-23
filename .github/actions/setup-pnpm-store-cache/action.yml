@@ -14,9 +14,25 @@ inputs:
     required: false
     default: "true"
   use-actions-cache:
-    description: Whether to restore/save pnpm store with actions/cache.
+    description: Whether to restore pnpm store with actions/cache.
     required: false
     default: "true"
+outputs:
+  cache-enabled:
+    description: Whether actions/cache restore was enabled.
+    value: ${{ steps.pnpm-cache-config.outputs.enabled }}
+  cache-hit:
+    description: Whether the pnpm store cache had an exact key hit.
+    value: ${{ steps.pnpm-cache-restore.outputs.cache-hit }}
+  cache-matched-key:
+    description: Cache key matched by restore, if any.
+    value: ${{ steps.pnpm-cache-restore.outputs.cache-matched-key }}
+  primary-key:
+    description: Primary pnpm store cache key.
+    value: ${{ steps.pnpm-cache-config.outputs.primary-key }}
+  store-path:
+    description: Resolved pnpm store path.
+    value: ${{ steps.pnpm-store.outputs.path }}
 runs:
   using: composite
   steps:
@@ -46,18 +62,29 @@ runs:
       shell: bash
       run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
-    - name: Restore pnpm store cache (exact key only)
-      if: inputs.use-actions-cache == 'true' && inputs.use-restore-keys != 'true'
-      uses: actions/cache@v5
-      with:
-        path: ${{ steps.pnpm-store.outputs.path }}
-        key: ${{ runner.os }}-pnpm-store-${{ inputs.cache-key-suffix }}-${{ hashFiles('pnpm-lock.yaml') }}
+    - name: Resolve pnpm store cache keys
+      id: pnpm-cache-config
+      shell: bash
+      env:
+        CACHE_KEY_SUFFIX: ${{ inputs.cache-key-suffix }}
+        LOCKFILE_HASH: ${{ hashFiles('pnpm-lock.yaml') }}
+        USE_ACTIONS_CACHE: ${{ inputs.use-actions-cache }}
+        USE_RESTORE_KEYS: ${{ inputs.use-restore-keys }}
+      run: |
+        set -euo pipefail
+        echo "enabled=$USE_ACTIONS_CACHE" >> "$GITHUB_OUTPUT"
+        echo "primary-key=${RUNNER_OS}-pnpm-store-${CACHE_KEY_SUFFIX}-${LOCKFILE_HASH}" >> "$GITHUB_OUTPUT"
+        if [ "$USE_RESTORE_KEYS" = "true" ]; then
+          echo "restore-keys=${RUNNER_OS}-pnpm-store-${CACHE_KEY_SUFFIX}-" >> "$GITHUB_OUTPUT"
+        else
+          echo "restore-keys=" >> "$GITHUB_OUTPUT"
+        fi
 
-    - name: Restore pnpm store cache (with fallback keys)
-      if: inputs.use-actions-cache == 'true' && inputs.use-restore-keys == 'true'
-      uses: actions/cache@v5
+    - name: Restore pnpm store cache
+      id: pnpm-cache-restore
+      if: inputs.use-actions-cache == 'true'
+      uses: actions/cache/restore@v5
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
-        key: ${{ runner.os }}-pnpm-store-${{ inputs.cache-key-suffix }}-${{ hashFiles('pnpm-lock.yaml') }}
-        restore-keys: |
-          ${{ runner.os }}-pnpm-store-${{ inputs.cache-key-suffix }}-
+        key: ${{ steps.pnpm-cache-config.outputs.primary-key }}
+        restore-keys: ${{ steps.pnpm-cache-config.outputs.restore-keys }}

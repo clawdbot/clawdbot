@@ -4,10 +4,8 @@ read_when:
   - Verifying SecretRef credential coverage
   - Auditing whether a credential is eligible for `secrets configure` or `secrets apply`
   - Verifying why a credential is outside the supported surface
-title: "SecretRef Credential Surface"
+title: "SecretRef credential surface"
 ---
-
-# SecretRef credential surface
 
 This page defines the canonical SecretRef credential surface.
 

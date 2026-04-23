@@ -1,9 +1,6 @@
 import fs from "node:fs";
-import {
-  readJsonFileWithFallback,
-  withFileLock as withPathLock,
-  writeJsonFileAtomically,
-} from "../runtime-api.js";
+import { withFileLock as withPathLock } from "openclaw/plugin-sdk/file-lock";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 
 const STORE_LOCK_OPTIONS = {
   retries: {

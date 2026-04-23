@@ -55,7 +55,17 @@ jobs:
             exit 0
           fi
 
-          git fetch --no-tags origin main
+          for attempt in 1 2 3 4 5; do
+            if git fetch --no-tags origin main; then
+              break
+            fi
+            if [ "$attempt" = "5" ]; then
+              echo "Failed to fetch main after retries." >&2
+              exit 1
+            fi
+            echo "Fetch attempt ${attempt} failed; retrying."
+            sleep $((attempt * 2))
+          done
           remote_main="$(git rev-parse origin/main)"
           if [ "$remote_main" != "$WORKFLOW_HEAD_SHA" ]; then
             echo "CI run is superseded by ${remote_main}; skipping docs agent for ${WORKFLOW_HEAD_SHA}."
@@ -156,29 +166,26 @@ jobs:
             exit 0
           fi
 
-          git fetch --no-tags origin "${TARGET_BRANCH}"
-          remote_main="$(git rev-parse "origin/${TARGET_BRANCH}")"
-          if [ "$remote_main" != "$BASE_SHA" ]; then
-            echo "main advanced from ${BASE_SHA} to ${remote_main}; skipping stale docs update."
-            exit 0
-          fi
-
           git config user.name "openclaw-docs-agent[bot]"
           git config user.email "openclaw-docs-agent[bot]@users.noreply.github.com"
           git add docs README.md CHANGELOG.md
           git commit --no-verify -m "docs: refresh documentation"
 
           for attempt in 1 2 3 4 5; do
+            if ! git fetch --no-tags origin "${TARGET_BRANCH}"; then
+              echo "Fetch attempt ${attempt} failed; retrying."
+              sleep $((attempt * 2))
+              continue
+            fi
             if git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:"${TARGET_BRANCH}"; then
               exit 0
             fi
-            git fetch --no-tags origin "${TARGET_BRANCH}"
             remote_main="$(git rev-parse "origin/${TARGET_BRANCH}")"
             if [ "$remote_main" != "$BASE_SHA" ]; then
               echo "main advanced from ${BASE_SHA} to ${remote_main}; skipping stale docs update."
               exit 0
             fi
-            echo "Push attempt ${attempt} failed; retrying."
+            echo "Docs update attempt ${attempt} failed; retrying."
             sleep $((attempt * 2))
           done
 

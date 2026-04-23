@@ -6,8 +6,6 @@ read_when:
 title: "Qwen"
 ---
 
-# Qwen
-
 <Warning>
 
 **Qwen OAuth has been removed.** The free-tier OAuth integration
@@ -195,7 +193,7 @@ To use Qwen as the default video provider:
 See [Video Generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
 
-## Advanced
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Image and video understanding">

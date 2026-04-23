@@ -3,10 +3,8 @@ summary: "Skills config schema and examples"
 read_when:
   - Adding or modifying skills config
   - Adjusting bundled allowlist or install behavior
-title: "Skills Config"
+title: "Skills config"
 ---
-
-# Skills Config
 
 Most skills loader/install configuration lives under `skills` in
 `~/.openclaw/openclaw.json`. Agent-specific skill visibility lives under

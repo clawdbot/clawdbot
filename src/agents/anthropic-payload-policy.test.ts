@@ -31,6 +31,21 @@ function boundarySystemPayload(): TestPayload {
   };
 }
 
+function simpleTextPayload(): TestPayload {
+  return {
+    system: [{ type: "text", text: "Follow policy." }],
+    messages: [{ role: "user", content: "Hello" }],
+  };
+}
+
+function expectShortEphemeralTextPayload(payload: TestPayload) {
+  expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral" })]);
+  expect(payload.messages[0]).toEqual({
+    role: "user",
+    content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
+  });
+}
+
 describe("anthropic payload policy", () => {
   it("applies native Anthropic service tier and cache markers without widening cache scope", () => {
     const policy = resolveAnthropicPayloadPolicy({
@@ -95,10 +110,7 @@ describe("anthropic payload policy", () => {
       enableCacheControl: true,
       serviceTier: "auto",
     });
-    const payload: TestPayload = {
-      system: [{ type: "text", text: "Follow policy." }],
-      messages: [{ role: "user", content: "Hello" }],
-    };
+    const payload = simpleTextPayload();
 
     applyAnthropicPayloadPolicyToParams(payload, policy);
 
@@ -120,18 +132,11 @@ describe("anthropic payload policy", () => {
         baseUrl: "https://proxy.example.com/anthropic",
         enableCacheControl: true,
       });
-      const payload: TestPayload = {
-        system: [{ type: "text", text: "Follow policy." }],
-        messages: [{ role: "user", content: "Hello" }],
-      };
+      const payload = simpleTextPayload();
 
       applyAnthropicPayloadPolicyToParams(payload, policy);
 
-      expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral" })]);
-      expect(payload.messages[0]).toEqual({
-        role: "user",
-        content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
-      });
+      expectShortEphemeralTextPayload(payload);
     } finally {
       if (previous === undefined) {
         delete process.env.PI_CACHE_RETENTION;
@@ -149,18 +154,11 @@ describe("anthropic payload policy", () => {
       cacheRetention: "short",
       enableCacheControl: true,
     });
-    const payload: TestPayload = {
-      system: [{ type: "text", text: "Follow policy." }],
-      messages: [{ role: "user", content: "Hello" }],
-    };
+    const payload = simpleTextPayload();
 
     applyAnthropicPayloadPolicyToParams(payload, policy);
 
-    expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral" })]);
-    expect(payload.messages[0]).toEqual({
-      role: "user",
-      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
-    });
+    expectShortEphemeralTextPayload(payload);
   });
 
   it("splits cached stable system content from uncached dynamic content", () => {
@@ -217,10 +215,7 @@ describe("anthropic payload policy", () => {
       cacheRetention: "short",
       enableCacheControl: true,
     });
-    const payload: TestPayload = {
-      system: [{ type: "text", text: "Follow policy." }],
-      messages: [{ role: "user", content: "Hello" }],
-    };
+    const payload = simpleTextPayload();
 
     applyAnthropicPayloadPolicyToParams(payload, policy);
 

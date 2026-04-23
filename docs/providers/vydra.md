@@ -6,8 +6,6 @@ read_when:
 title: "Vydra"
 ---
 
-# Vydra
-
 The bundled Vydra plugin adds:
 
 - Image generation via `vydra/grok-imagine`

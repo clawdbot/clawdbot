@@ -2,30 +2,9 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import {
-  applyProviderConfigWithDefaultModelPreset,
-  type ModelDefinitionConfig,
-  type OpenClawConfig,
-} from "../../src/plugin-sdk/provider-onboard.ts";
+import { applyDockerOpenAiProviderConfig, type OpenClawConfig } from "./docker-openai-seed.ts";
 
 const require = createRequire(import.meta.url);
-
-const DOCKER_OPENAI_MODEL_REF = "openai/gpt-5.4";
-const DOCKER_OPENAI_MODEL: ModelDefinitionConfig = {
-  id: "gpt-5.4",
-  name: "gpt-5.4",
-  api: "openai-responses",
-  reasoning: true,
-  input: ["text", "image"],
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-  },
-  contextWindow: 1_050_000,
-  maxTokens: 128_000,
-};
 
 async function writeProbeServer(params: {
   serverPath: string;
@@ -88,7 +67,7 @@ async function main() {
   await fs.rm(exitPath, { force: true });
   await writeProbeServer({ serverPath, pidPath, pidsPath, exitPath });
 
-  const seededConfig = applyProviderConfigWithDefaultModelPreset(
+  const seededConfig = applyDockerOpenAiProviderConfig(
     {
       gateway: {
         controlUi: {
@@ -123,21 +102,8 @@ async function main() {
         },
       },
     } satisfies OpenClawConfig,
-    {
-      providerId: "openai",
-      api: "openai-responses",
-      baseUrl: "http://127.0.0.1:9/v1",
-      defaultModel: DOCKER_OPENAI_MODEL,
-      defaultModelId: DOCKER_OPENAI_MODEL.id,
-      aliases: [{ modelRef: DOCKER_OPENAI_MODEL_REF, alias: "GPT" }],
-      primaryModelRef: DOCKER_OPENAI_MODEL_REF,
-    },
+    "sk-docker-cron-mcp-cleanup-test",
   );
-  const openAiProvider = seededConfig.models?.providers?.openai;
-  if (!openAiProvider) {
-    throw new Error("failed to seed OpenAI provider config");
-  }
-  openAiProvider.apiKey = "sk-docker-cron-mcp-cleanup-test";
 
   await fs.writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf-8");
 

@@ -5,7 +5,6 @@
   "type": "module",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.61.1",
-    "qrcode-terminal": "^0.12.0",
     "typebox": "1.1.28"
   },
   "devDependencies": {
@@ -13,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.20"
+    "openclaw": ">=2026.4.23"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -41,10 +40,10 @@
     "install": {
       "npmSpec": "@openclaw/feishu",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
+      "minHostVersion": ">=2026.4.23"
     },
     "compat": {
-      "pluginApi": ">=2026.4.20"
+      "pluginApi": ">=2026.4.23"
     },
     "build": {
       "openclawVersion": "2026.4.20"

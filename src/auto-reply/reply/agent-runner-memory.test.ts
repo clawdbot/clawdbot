@@ -181,7 +181,7 @@ describe("runMemoryFlushIfNeeded", () => {
       cfg: { agents: { defaults: { cliBackends: { "codex-cli": { command: "codex" } } } } },
       followupRun: createTestFollowupRun({ provider: "codex-cli" }),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
-      defaultModel: "codex-cli/gpt-5.4",
+      defaultModel: "codex-cli/gpt-5.5",
       agentCfgContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       sessionEntry,

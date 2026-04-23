@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 import { runExec } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
@@ -98,6 +99,15 @@ function buildTrustedPrincipals(env?: NodeJS.ProcessEnv): Set<string> {
     trusted.add(userSid);
   }
   return trusted;
+}
+
+function resolveWindowsSystemCommand(command: string, env?: NodeJS.ProcessEnv): string {
+  const root =
+    env?.SystemRoot?.trim() ||
+    env?.SYSTEMROOT?.trim() ||
+    env?.windir?.trim() ||
+    env?.WINDIR?.trim();
+  return root ? path.win32.join(root, "System32", command) : command;
 }
 
 function classifyPrincipal(
@@ -270,9 +280,17 @@ export function summarizeWindowsAcl(
   return { trusted, untrustedWorld, untrustedGroup };
 }
 
-async function resolveCurrentUserSid(exec: ExecFn): Promise<string | null> {
+async function resolveCurrentUserSid(
+  exec: ExecFn,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | null> {
   try {
-    const { stdout, stderr } = await exec("whoami", ["/user", "/fo", "csv", "/nh"]);
+    const { stdout, stderr } = await exec(resolveWindowsSystemCommand("whoami.exe", env), [
+      "/user",
+      "/fo",
+      "csv",
+      "/nh",
+    ]);
     const match = `${stdout}\n${stderr}`.match(/\*?S-\d+-\d+(?:-\d+)+/i);
     return match ? normalizeSid(match[0]) : null;
   } catch (err) {
@@ -297,7 +315,10 @@ export async function inspectWindowsAcl(
     // Windows (Russian, Chinese, etc.) where icacls prints Cyrillic / CJK
     // characters that may be garbled when Node reads them in the wrong code
     // page.  Fixes #35834.
-    const { stdout, stderr } = await exec("icacls", [targetPath, "/sid"]);
+    const { stdout, stderr } = await exec(resolveWindowsSystemCommand("icacls.exe", opts?.env), [
+      targetPath,
+      "/sid",
+    ]);
     const output = `${stdout}\n${stderr}`.trim();
     const entries = parseIcaclsOutput(output, targetPath);
     let effectiveEnv = opts?.env;
@@ -307,7 +328,7 @@ export async function inspectWindowsAcl(
       !effectiveEnv?.USERSID &&
       untrustedGroup.some((entry) => SID_RE.test(normalize(entry.principal)));
     if (needsUserSidResolution) {
-      const currentUserSid = await resolveCurrentUserSid(exec);
+      const currentUserSid = await resolveCurrentUserSid(exec, effectiveEnv);
       if (currentUserSid) {
         effectiveEnv = { ...effectiveEnv, USERSID: currentUserSid };
         ({ trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, effectiveEnv));

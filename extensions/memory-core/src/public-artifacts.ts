@@ -40,7 +40,7 @@ async function collectWorkspaceArtifacts(params: {
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name),
   );
-  for (const relativePath of ["MEMORY.md", "memory.md"]) {
+  for (const relativePath of ["MEMORY.md"]) {
     if (!workspaceEntries.has(relativePath)) {
       continue;
     }

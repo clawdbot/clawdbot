@@ -41,6 +41,10 @@ const BUILT_IN_PLUGIN_ALIAS_FALLBACKS: ReadonlyArray<readonly [alias: string, pl
   ["minimax-portal", "minimax"],
   ["minimax-portal-auth", "minimax"],
 ] as const;
+const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
+  ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS,
+  ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS.map(([, pluginId]) => [pluginId, pluginId] as const),
+]);
 
 function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
   if (bundledPluginAliasLookupCache) {
@@ -79,6 +83,10 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
 export function normalizePluginId(id: string): string {
   const trimmed = normalizeOptionalString(id) ?? "";
   const normalized = normalizeOptionalLowercaseString(trimmed) ?? "";
+  const builtInAlias = BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized);
+  if (builtInAlias) {
+    return builtInAlias;
+  }
   return getBundledPluginAliasLookup().get(normalized) ?? trimmed;
 }
 

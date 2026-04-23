@@ -4,7 +4,7 @@ read_when:
   - Looking for an overview of media capabilities
   - Deciding which media provider to configure
   - Understanding how async media generation works
-title: "Media Overview"
+title: "Media overview"
 ---
 
 # Media Generation and Understanding

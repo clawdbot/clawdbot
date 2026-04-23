@@ -3,7 +3,7 @@ summary: "Bonjour/mDNS discovery + debugging (Gateway beacons, clients, and comm
 read_when:
   - Debugging Bonjour discovery issues on macOS/iOS
   - Changing mDNS service types, TXT records, or discovery UX
-title: "Bonjour Discovery"
+title: "Bonjour discovery"
 ---
 
 # Bonjour / mDNS discovery

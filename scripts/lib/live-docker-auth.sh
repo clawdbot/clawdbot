@@ -163,6 +163,18 @@ openclaw_live_join_csv() {
   done
 }
 
+openclaw_live_append_array() {
+  local target_array="${1:?target array required}"
+  local source_array="${2:?source array required}"
+  local count
+
+  eval "count=\${#$source_array[@]}"
+  if ((count == 0)); then
+    return 0
+  fi
+  eval "$target_array+=(\"\${$source_array[@]}\")"
+}
+
 openclaw_live_stage_auth_into_home() {
   local dest_home="${1:?destination home directory required}"
   shift

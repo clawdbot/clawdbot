@@ -4,11 +4,9 @@ read_when:
   - You want to run the Gateway on a Linux server or cloud VPS
   - You need a quick map of hosting guides
   - You want generic Linux server tuning for OpenClaw
-title: "Linux Server"
+title: "Linux server"
 sidebarTitle: "Linux Server"
 ---
-
-# Linux Server
 
 Run the OpenClaw Gateway on any Linux server or cloud VPS. This page helps you
 pick a provider, explains how cloud deployments work, and covers generic Linux

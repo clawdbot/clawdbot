@@ -168,7 +168,7 @@ describe("promptAuthConfig", () => {
         agents: {
           defaults: {
             models: {
-              "openai/gpt-5.4": { alias: "GPT" },
+              "openai/gpt-5.5": { alias: "GPT" },
               "anthropic/claude-opus-4-6": { alias: "Opus" },
             },
           },
@@ -193,7 +193,7 @@ describe("promptAuthConfig", () => {
     const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
     expect(result.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.4": { alias: "GPT" },
+      "openai/gpt-5.5": { alias: "GPT" },
       "anthropic/claude-sonnet-4-6": {},
     });
   });

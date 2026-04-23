@@ -370,7 +370,6 @@ export abstract class MemoryManagerSyncOps {
     }
     const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
-      path.join(this.workspaceDir, "memory.md"),
       path.join(this.workspaceDir, "memory"),
     ]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);

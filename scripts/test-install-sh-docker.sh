@@ -166,13 +166,32 @@ BASELINE_TAG_URL=""
 FRESH_TAG_URL=""
 UPDATE_TAG_URL=""
 UPDATE_DOCKER_HOST_ARGS=()
+NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"
+NPM_CACHE_OWNED=0
+NPM_CACHE_DOCKER_ARGS=()
+
+remove_owned_npm_cache() {
+  if [[ "$NPM_CACHE_OWNED" != "1" || -z "$NPM_CACHE_DIR" || ! -d "$NPM_CACHE_DIR" ]]; then
+    return
+  fi
+
+  if rm -rf "$NPM_CACHE_DIR" 2>/dev/null; then
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo -n rm -rf "$NPM_CACHE_DIR" 2>/dev/null; then
+    return
+  fi
+
+  echo "WARN: failed to remove temporary npm cache: $NPM_CACHE_DIR" >&2
+}
 
 cleanup() {
   if [[ -n "$UPDATE_SERVER_PID" ]]; then
     kill "$UPDATE_SERVER_PID" >/dev/null 2>&1 || true
     wait "$UPDATE_SERVER_PID" >/dev/null 2>&1 || true
   fi
-  rm -rf "$LATEST_DIR" "$UPDATE_DIR"
+  remove_owned_npm_cache || true
+  rm -rf "$LATEST_DIR" "$UPDATE_DIR" || true
 }
 
 trap cleanup EXIT
@@ -288,6 +307,20 @@ prepare_update_host_access() {
   fi
 }
 
+prepare_npm_cache() {
+  if [[ -z "$NPM_CACHE_DIR" ]]; then
+    NPM_CACHE_DIR="$(mktemp -d)"
+    NPM_CACHE_OWNED=1
+  fi
+  mkdir -p "$NPM_CACHE_DIR"
+  chmod 0777 "$NPM_CACHE_DIR"
+  NPM_CACHE_DOCKER_ARGS=(
+    -v "${NPM_CACHE_DIR}:/npm-cache"
+    -e npm_config_cache=/npm-cache
+    -e NPM_CONFIG_CACHE=/npm-cache
+  )
+}
+
 start_update_server() {
   if [[ -z "$UPDATE_PORT" ]]; then
     UPDATE_PORT="$(allocate_host_port)"
@@ -326,12 +359,14 @@ if [[ "$SKIP_UPDATE" == "1" ]]; then
 else
   prepare_update_tarball
   prepare_update_host_access
+  prepare_npm_cache
   start_update_server
 
   echo "==> Run installer smoke test (root): $FRESH_TAG_URL"
   docker run --rm -t \
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
+    "${NPM_CACHE_DOCKER_ARGS[@]}" \
     -v "${LATEST_DIR}:/out" \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
@@ -353,6 +388,7 @@ else
   docker run --rm -t \
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
+    "${NPM_CACHE_DOCKER_ARGS[@]}" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_SMOKE_MODE=update \
     -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
@@ -371,6 +407,7 @@ else
     docker run --rm -t \
       --platform "$SMOKE_PLATFORM" \
       ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
+      "${NPM_CACHE_DOCKER_ARGS[@]}" \
       -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
       -e OPENCLAW_INSTALL_SMOKE_MODE=npm-global \
       -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \

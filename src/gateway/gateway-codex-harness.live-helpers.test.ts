@@ -32,6 +32,24 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts the agent-id summary with active Codex model", () => {
+    const text = [
+      "Available agent IDs in this session:",
+      "",
+      "- `dev`",
+      "",
+      "Current active model:",
+      "- `codex/gpt-5.4`",
+      "",
+      "I couldn’t get a fuller model catalog from the local `codex` CLI here.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
   it("accepts sandbox namespace failures with current-session model fallback", () => {
     const text = [
       "I can’t enumerate `/codex models` from this sandbox because the local `codex` CLI fails to start here with a user-namespace restriction (`bwrap: No permissions to create a new namespace`).",
@@ -43,18 +61,67 @@ describe("gateway codex harness live helpers", () => {
   });
 
   it("accepts missing codex CLI fallback output", () => {
+    const texts = [
+      [
+        "`codex` is not installed on the shell PATH in this environment.",
+        "",
+        "Command result:",
+        "```text",
+        "/bin/bash: line 1: codex: command not found",
+        "```",
+      ].join("\n"),
+      [
+        "`codex` is not installed in the shell environment, so `/codex models` could not be executed.",
+        "",
+        "Error:",
+        "```text",
+        "/bin/bash: line 1: codex: command not found",
+        "```",
+      ].join("\n"),
+      [
+        "I can confirm the current session is using `codex/gpt-5.4`.",
+        "",
+        "I can’t list additional local Codex models from this shell because the `codex` CLI isn’t installed here (`codex models` returned `command not found`).",
+      ].join("\n"),
+    ];
+
+    for (const text of texts) {
+      expect(
+        EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+      ).toBe(true);
+    }
+    expect(isExpectedCodexModelsCommandText(texts[1] ?? "")).toBe(true);
+    expect(isExpectedCodexModelsCommandText(texts[2] ?? "")).toBe(true);
+  });
+
+  it("accepts current session model summaries from codex models fallback", () => {
     const text = [
-      "`codex` is not installed on the shell PATH in this environment.",
+      "Available here:",
       "",
-      "Command result:",
-      "```text",
-      "/bin/bash: line 1: codex: command not found",
-      "```",
+      "- `codex/gpt-5.4` (`codex`) - current session model",
+      "- `codex/gpt-5.4-mini` (`codex-mini`)",
     ].join("\n");
 
-    expect(
-      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
-    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
+  it("accepts missing codex shell PATH fallback with current-session model", () => {
+    const texts = [
+      [
+        "I can only confirm the current session model here: `codex/gpt-5.4`.",
+        "",
+        "A direct `codex models` CLI lookup is not available in this environment because `codex` is not installed on the shell path.",
+      ].join("\n"),
+      [
+        "`codex models` is not available in this environment because the `codex` CLI is not installed on `PATH`.",
+        "",
+        "The current session model is `codex/gpt-5.4`.",
+      ].join("\n"),
+    ];
+
+    for (const text of texts) {
+      expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+    }
   });
 
   it("accepts sandbox escalation rejection for codex models", () => {

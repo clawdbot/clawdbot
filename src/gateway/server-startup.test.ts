@@ -122,7 +122,7 @@ describe("gateway startup primary model warmup", () => {
         agents: {
           defaults: {
             model: {
-              primary: "codex-cli/gpt-5.4",
+              primary: "codex-cli/gpt-5.5",
             },
             cliBackends: {
               "codex-cli": {

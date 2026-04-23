@@ -3,10 +3,8 @@ summary: "Agent workspace: location, layout, and backup strategy"
 read_when:
   - You need to explain the agent workspace or its file layout
   - You want to back up or migrate an agent workspace
-title: "Agent Workspace"
+title: "Agent workspace"
 ---
-
-# Agent workspace
 
 The workspace is the agent's home. It is the only working directory used for
 file tools and for workspace context. Keep it private and treat it as memory.

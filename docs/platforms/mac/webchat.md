@@ -5,8 +5,6 @@ read_when:
 title: "WebChat (macOS)"
 ---
 
-# WebChat (macOS app)
-
 The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It
 connects to the Gateway and defaults to the **main session** for the selected
 agent (with a session switcher for other sessions).

@@ -1,30 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  resolveDefaultSessionStorePath,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   exportTrajectoryBundle,
   resolveDefaultTrajectoryExportDir,
 } from "../../trajectory/export.js";
 import type { ReplyPayload } from "../types.js";
+import {
+  isReplyPayload,
+  parseExportCommandOutputPath,
+  resolveExportCommandSessionTarget,
+} from "./commands-export-common.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-
-function parseExportTrajectoryArgs(commandBodyNormalized: string): { outputPath?: string } {
-  const normalized = commandBodyNormalized.trim();
-  if (normalized === "/export-trajectory" || normalized === "/trajectory") {
-    return {};
-  }
-  const args = normalized.replace(/^\/(export-trajectory|trajectory)\s*/, "").trim();
-  const outputPath = args.split(/\s+/).find((part) => !part.startsWith("-"));
-  return { outputPath };
-}
 
 function isPathInsideOrEqual(baseDir: string, candidate: string): boolean {
   const relative = path.relative(baseDir, candidate);
@@ -126,27 +113,16 @@ function resolveTrajectoryCommandOutputDir(params: {
 export async function buildExportTrajectoryReply(
   params: HandleCommandsParams,
 ): Promise<ReplyPayload> {
-  const args = parseExportTrajectoryArgs(params.command.commandBodyNormalized);
-  const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId;
-  const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
-  const store = loadSessionStore(storePath, { skipCache: true });
-  const entry = store[params.sessionKey] as SessionEntry | undefined;
-  if (!entry?.sessionId) {
-    return { text: `❌ Session not found: ${params.sessionKey}` };
+  const args = parseExportCommandOutputPath(params.command.commandBodyNormalized, [
+    "export-trajectory",
+    "trajectory",
+  ]);
+  const sessionTarget = resolveExportCommandSessionTarget(params);
+  if (isReplyPayload(sessionTarget)) {
+    return sessionTarget;
   }
+  const { entry, sessionFile } = sessionTarget;
 
-  let sessionFile: string;
-  try {
-    sessionFile = resolveSessionFilePath(
-      entry.sessionId,
-      entry,
-      resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
-    );
-  } catch (err) {
-    return {
-      text: `❌ Failed to resolve session file: ${formatErrorMessage(err)}`,
-    };
-  }
   if (!fs.existsSync(sessionFile)) {
     return { text: "❌ Session file not found." };
   }

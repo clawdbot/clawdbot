@@ -6,8 +6,6 @@ read_when:
 title: "Help"
 ---
 
-# Help
-
 If you want a quick “get unstuck” flow, start here:
 
 - **Troubleshooting:** [Start here](/help/troubleshooting)

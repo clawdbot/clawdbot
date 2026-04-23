@@ -1,6 +1,6 @@
 ---
-title: "Perplexity"
 summary: "Perplexity web search provider setup (API key, search modes, filtering)"
+title: "Perplexity"
 read_when:
   - You want to configure Perplexity as a web search provider
   - You need the Perplexity API key or OpenRouter proxy setup
@@ -84,7 +84,7 @@ When using the native Perplexity API, searches support the following filters:
 | Domain filters | Allowlist or denylist (max 20 domains) | `example.com`                       |
 | Content budget | Token limits per response / per page   | `max_tokens`, `max_tokens_per_page` |
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Environment variable for daemon processes">

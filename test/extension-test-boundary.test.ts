@@ -8,6 +8,8 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
   GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES,
 );
+const ROOTDIR_BOUNDARY_CANARY_RE =
+  /(^|\/)__rootdir_boundary_canary__\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 
 function walk(dir: string, entries: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -40,7 +42,11 @@ function walkCode(dir: string, entries: string[] = []): string[] {
     if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) {
       continue;
     }
-    entries.push(path.relative(repoRoot, fullPath).replaceAll(path.sep, "/"));
+    const relativePath = path.relative(repoRoot, fullPath).replaceAll(path.sep, "/");
+    if (ROOTDIR_BOUNDARY_CANARY_RE.test(relativePath)) {
+      continue;
+    }
+    entries.push(relativePath);
   }
   return entries;
 }

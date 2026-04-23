@@ -885,6 +885,7 @@ describe("config cli", () => {
         "/tmp/vault.json",
         "--provider-mode",
         "json",
+        "--provider-allow-insecure-path",
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
@@ -893,6 +894,7 @@ describe("config cli", () => {
         source: "file",
         path: "/tmp/vault.json",
         mode: "json",
+        allowInsecurePath: true,
       });
     });
 

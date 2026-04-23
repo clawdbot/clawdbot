@@ -660,12 +660,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("subagents(action=list|steer|kill)");
 
     expect(spawnOnlyPrompt).toContain(
-      "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work.",
+      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; use `subagents(action=list|steer|kill)` to manage already-spawned children.",
+      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` to manage already-spawned children.',
     );
   });
 

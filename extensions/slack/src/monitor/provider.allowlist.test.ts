@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { __testing } from "./provider.js";
+import { formatSlackChannelResolved, formatSlackUserResolved } from "./provider-support.js";
 
 describe("slack allowlist log formatting", () => {
   it("prints channel names alongside ids", () => {
     expect(
-      __testing.formatSlackChannelResolved({
+      formatSlackChannelResolved({
         input: "C0AQXEG6QFJ",
         resolved: true,
         id: "C0AQXEG6QFJ",
@@ -15,7 +15,7 @@ describe("slack allowlist log formatting", () => {
 
   it("prints user names alongside ids", () => {
     expect(
-      __testing.formatSlackUserResolved({
+      formatSlackUserResolved({
         input: "U090HHQ029J",
         resolved: true,
         id: "U090HHQ029J",

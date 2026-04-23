@@ -1156,6 +1156,7 @@ async function processOpenAICompletionsStream(
         name: string;
         arguments: Record<string, unknown>;
         partialArgs: string;
+        thoughtSignature?: string;
       }
     | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
@@ -1320,12 +1321,14 @@ async function processOpenAICompletionsStream(
             currentBlock = null;
             flushPendingPostToolCallDeltas();
           }
+          const initialSig = extractGoogleThoughtSignature(toolCall);
           currentBlock = {
             type: "toolCall",
             id: toolCall.id || "",
             name: toolCall.function?.name || "",
             arguments: {},
             partialArgs: "",
+            ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
           currentToolCallArgumentBytes = 0;
           output.content.push(currentBlock);
@@ -1339,6 +1342,10 @@ async function processOpenAICompletionsStream(
         }
         if (toolCall.function?.name) {
           currentBlock.name = toolCall.function.name;
+        }
+        const deltaSig = extractGoogleThoughtSignature(toolCall);
+        if (deltaSig) {
+          currentBlock.thoughtSignature = deltaSig;
         }
         if (toolCall.function?.arguments) {
           const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
@@ -1574,6 +1581,100 @@ function convertTools(
   }));
 }
 
+function extractGoogleThoughtSignature(toolCall: unknown): string | undefined {
+  const tc = toolCall as Record<string, unknown> | undefined;
+  if (!tc) {
+    return undefined;
+  }
+  const extra = (tc.extra_content as Record<string, unknown> | undefined)?.google as
+    | Record<string, unknown>
+    | undefined;
+  const fromExtra = extra?.thought_signature;
+  if (typeof fromExtra === "string" && fromExtra.length > 0) {
+    return fromExtra;
+  }
+  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
+    ?.thought_signature;
+  return typeof fromFunction === "string" && fromFunction.length > 0 ? fromFunction : undefined;
+}
+
+function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
+  const endpointClass = detectOpenAICompletionsCompat(model as Model<"openai-completions">)
+    .capabilities.endpointClass;
+  return (
+    model.provider === "google" ||
+    endpointClass === "google-generative-ai" ||
+    endpointClass === "google-vertex"
+  );
+}
+
+function injectToolCallThoughtSignatures(
+  outgoingMessages: unknown[],
+  context: Context,
+  model: OpenAIModeModel,
+): void {
+  if (!isGoogleOpenAICompatModel(model)) {
+    return;
+  }
+  const sigById = new Map<string, string>();
+  for (const msg of context.messages ?? []) {
+    if ((msg as { role?: string }).role !== "assistant") {
+      continue;
+    }
+    const source = msg as { api?: string; provider?: string; model?: string; content?: unknown };
+    if (
+      source.api !== model.api ||
+      source.provider !== model.provider ||
+      source.model !== model.id
+    ) {
+      continue;
+    }
+    if (!Array.isArray(source.content)) {
+      continue;
+    }
+    for (const block of source.content as Array<Record<string, unknown>>) {
+      if (block.type !== "toolCall") {
+        continue;
+      }
+      const id = block.id;
+      const sig = block.thoughtSignature;
+      if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
+        sigById.set(id, sig);
+      }
+    }
+  }
+  if (sigById.size === 0) {
+    return;
+  }
+  for (const message of outgoingMessages) {
+    const toolCalls = (message as { tool_calls?: unknown }).tool_calls;
+    if (!Array.isArray(toolCalls)) {
+      continue;
+    }
+    for (const toolCall of toolCalls as Array<Record<string, unknown>>) {
+      const id = toolCall.id;
+      if (typeof id !== "string") {
+        continue;
+      }
+      const sig = sigById.get(id);
+      if (!sig) {
+        continue;
+      }
+      const extra =
+        toolCall.extra_content && typeof toolCall.extra_content === "object"
+          ? (toolCall.extra_content as Record<string, unknown>)
+          : {};
+      toolCall.extra_content = extra;
+      const google =
+        extra.google && typeof extra.google === "object"
+          ? (extra.google as Record<string, unknown>)
+          : {};
+      extra.google = google;
+      google.thought_signature = sig;
+    }
+  }
+}
+
 export function buildOpenAICompletionsParams(
   model: OpenAIModeModel,
   context: Context,
@@ -1587,6 +1688,7 @@ export function buildOpenAICompletionsParams(
       }
     : context;
   const messages = convertMessages(model as never, completionsContext, compat as never);
+  injectToolCallThoughtSignatures(messages as unknown[], context, model);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: compat.requiresStringContent

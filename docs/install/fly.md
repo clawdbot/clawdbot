@@ -1,6 +1,6 @@
 ---
-title: Fly.io
 summary: "Step-by-step Fly.io deployment for OpenClaw with persistent storage and HTTPS"
+title: Fly.io
 read_when:
   - Deploying OpenClaw on Fly.io
   - Setting up Fly volumes, secrets, and first-run config
@@ -156,7 +156,7 @@ read_when:
         "defaults": {
           "model": {
             "primary": "anthropic/claude-opus-4-6",
-            "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]
+            "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"]
           },
           "maxConcurrent": 4
         },

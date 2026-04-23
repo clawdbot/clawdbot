@@ -1,6 +1,6 @@
 ---
-title: "BOOT.md Template"
 summary: "Workspace template for BOOT.md"
+title: "BOOT.md template"
 read_when:
   - Adding a BOOT.md checklist
 ---

@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/provider-auth";
 import { prepareCodexAuthBridge } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { writePrivateSecretFileAtomic } from "openclaw/plugin-sdk/secret-file-runtime";
 import type { PluginLogger } from "../runtime-api.js";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
 
@@ -12,67 +10,6 @@ const DEFAULT_CODEX_AUTH_PROFILE_ID = "openai-codex:default";
 // acpx selects ACP auth methods from the OpenClaw process env before the wrapper
 // launches. Keep those env vars visible to the child so its auth method matches.
 const CODEX_AUTH_ENV_CLEAR_KEYS: string[] = [];
-
-type PreparedAcpxCodexAuth = {
-  codexHome: string;
-  clearEnv: string[];
-};
-
-function resolveSourceCodexHome(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = env.CODEX_HOME?.trim();
-  if (configured) {
-    if (configured === "~") {
-      return os.homedir();
-    }
-    if (configured.startsWith("~/")) {
-      return path.join(os.homedir(), configured.slice(2));
-    }
-    return path.resolve(configured);
-  }
-  return path.join(os.homedir(), ".codex");
-}
-
-async function readOptionalFile(filePath: string): Promise<string | undefined> {
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-async function prepareCopiedCodexHome(params: {
-  agentDir: string;
-  sourceCodexHome: string;
-}): Promise<PreparedAcpxCodexAuth | null> {
-  const authJson = await readOptionalFile(path.join(params.sourceCodexHome, "auth.json"));
-  if (!authJson) {
-    return null;
-  }
-
-  const codexHome = path.join(params.agentDir, "acp-auth", "codex-source");
-  await writePrivateSecretFileAtomic({
-    rootDir: params.agentDir,
-    filePath: path.join(codexHome, "auth.json"),
-    content: authJson,
-  });
-
-  const configToml = await readOptionalFile(path.join(params.sourceCodexHome, "config.toml"));
-  if (configToml) {
-    await writePrivateSecretFileAtomic({
-      rootDir: params.agentDir,
-      filePath: path.join(codexHome, "config.toml"),
-      content: configToml,
-    });
-  }
-
-  return {
-    codexHome,
-    clearEnv: [...CODEX_AUTH_ENV_CLEAR_KEYS],
-  };
-}
 
 function shellArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -125,28 +62,21 @@ export async function prepareAcpxCodexAuthConfig(params: {
   }
 
   const agentDir = resolveOpenClawAgentDir();
-  const sourceCodexHome = resolveSourceCodexHome();
-  const bridge =
-    (await prepareCodexAuthBridge({
-      agentDir,
-      bridgeDir: "acp-auth",
-      profileId: DEFAULT_CODEX_AUTH_PROFILE_ID,
-      sourceCodexHome,
-    })) ??
-    (await prepareCopiedCodexHome({
-      agentDir,
-      sourceCodexHome,
-    }));
+  const bridge = await prepareCodexAuthBridge({
+    agentDir,
+    bridgeDir: "acp-auth",
+    profileId: DEFAULT_CODEX_AUTH_PROFILE_ID,
+  });
 
   if (!bridge) {
-    params.logger?.debug?.("codex ACP auth bridge skipped: no Codex auth source found");
+    params.logger?.debug?.("codex ACP auth bridge skipped: no canonical OpenClaw OAuth found");
     return params.pluginConfig;
   }
 
   const wrapperCommand = await writeCodexAcpWrapper({
     wrapperPath: path.join(params.stateDir, "acpx", "codex-acp-wrapper.mjs"),
     codexHome: bridge.codexHome,
-    clearEnv: bridge.clearEnv,
+    clearEnv: [...CODEX_AUTH_ENV_CLEAR_KEYS],
   });
 
   return {

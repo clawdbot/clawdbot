@@ -3,10 +3,8 @@ summary: "Diagnostics flags for targeted debug logs"
 read_when:
   - You need targeted debug logs without raising global logging levels
   - You need to capture subsystem-specific logs for support
-title: "Diagnostics Flags"
+title: "Diagnostics flags"
 ---
-
-# Diagnostics Flags
 
 Diagnostics flags let you enable targeted debug logs without turning on verbose logging everywhere. Flags are opt-in and have no effect unless a subsystem checks them.
 

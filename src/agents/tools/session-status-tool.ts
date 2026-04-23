@@ -22,16 +22,18 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import type { BuildStatusTextParams } from "../../status/status-text.js";
+import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../model-selection.js";
 import {
   describeSessionStatusTool,
@@ -561,7 +563,32 @@ export function createSessionStatusTool(opts?: {
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
         resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
         resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-        resolveDefaultThinkingLevel: async () => cfg.agents?.defaults?.thinkingDefault,
+        resolveDefaultThinkingLevel: async () => {
+          const configuredCatalog = buildConfiguredModelCatalog({ cfg });
+          const configuredSelectedEntry = configuredCatalog.find(
+            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+          );
+          const shouldHydrateRuntimeCatalog =
+            configuredCatalog.length === 0 ||
+            !configuredSelectedEntry ||
+            configuredSelectedEntry.reasoning === undefined;
+          const runtimeCatalog = shouldHydrateRuntimeCatalog
+            ? await loadModelCatalog({ config: cfg })
+            : undefined;
+          const runtimeSelectedEntry = runtimeCatalog?.find(
+            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+          );
+          const catalog =
+            runtimeSelectedEntry || configuredCatalog.length === 0
+              ? (runtimeCatalog ?? configuredCatalog)
+              : configuredCatalog;
+          return resolveThinkingDefault({
+            cfg,
+            provider: providerForCard,
+            model: defaultModelForCard,
+            catalog,
+          });
+        },
         isGroup,
         defaultGroupActivation: () => "mention",
         taskLineOverride: taskLine,

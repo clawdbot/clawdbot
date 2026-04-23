@@ -1,14 +1,12 @@
 ---
-title: "Plugin Setup and Config"
-sidebarTitle: "Setup and Config"
 summary: "Setup wizards, setup-entry.ts, config schemas, and package.json metadata"
+title: "Plugin setup and config"
+sidebarTitle: "Setup and Config"
 read_when:
   - You are adding a setup wizard to a plugin
   - You need to understand setup-entry.ts vs index.ts
   - You are defining plugin config schemas or package.json openclaw metadata
 ---
-
-# Plugin Setup and Config
 
 Reference for plugin packaging (`package.json` metadata), manifests
 (`openclaw.plugin.json`), setup entries, and config schemas.

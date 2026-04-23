@@ -5,8 +5,6 @@ read_when:
 title: "Tlon"
 ---
 
-# Tlon
-
 Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbit ship and can
 respond to DMs and group chat messages. Group replies require an @ mention by default and can
 be further restricted via allowlists.

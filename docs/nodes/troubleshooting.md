@@ -3,10 +3,8 @@ summary: "Troubleshoot node pairing, foreground requirements, permissions, and t
 read_when:
   - Node is connected but camera/canvas/screen/exec tools fail
   - You need the node pairing versus approvals mental model
-title: "Node Troubleshooting"
+title: "Node troubleshooting"
 ---
-
-# Node troubleshooting
 
 Use this page when a node is visible in status but node tools fail.
 

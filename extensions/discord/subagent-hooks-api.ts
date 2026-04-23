@@ -25,9 +25,3 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi): void {
     return handleDiscordSubagentDeliveryTarget(event);
   });
 }
-
-export {
-  handleDiscordSubagentDeliveryTarget,
-  handleDiscordSubagentEnded,
-  handleDiscordSubagentSpawning,
-} from "./src/subagent-hooks.js";

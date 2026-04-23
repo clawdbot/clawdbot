@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { withFetchPreconnect } from "../../test-support.js";
+import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import type { BrowserServerState } from "./server-context.js";
 import { createBrowserRouteContext } from "./server-context.js";
 
@@ -50,7 +50,7 @@ export function makeUnexpectedFetchMock() {
 
 export function createRemoteRouteHarness(fetchMock?: (url: unknown) => Promise<Response>) {
   const activeFetchMock = fetchMock ?? makeUnexpectedFetchMock();
-  global.fetch = withFetchPreconnect(activeFetchMock);
+  global.fetch = withBrowserFetchPreconnect(activeFetchMock);
   const state = makeState("remote");
   const ctx = createBrowserRouteContext({ getState: () => state });
   return { state, remote: ctx.forProfile("remote"), fetchMock: activeFetchMock };

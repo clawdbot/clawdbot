@@ -8,8 +8,6 @@ read_when:
 title: "Firecrawl"
 ---
 
-# Firecrawl
-
 OpenClaw can use **Firecrawl** in three ways:
 
 - as the `web_search` provider

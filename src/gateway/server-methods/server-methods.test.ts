@@ -1005,6 +1005,7 @@ describe("exec approval handlers", () => {
       respond,
       context,
       params: {
+        timeoutMs: 10,
         host: "gateway",
         nodeId: undefined,
         systemRunPlan: undefined,

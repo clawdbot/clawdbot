@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-{1}', github.workflow, github.run_id) || github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
   cancel-in-progress: true
 
 env:
@@ -34,6 +34,7 @@ jobs:
           submodules: false
 
       - name: Ensure preflight base commit
+        if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
@@ -45,7 +46,7 @@ jobs:
 
       - name: Detect changed smoke scope
         id: changed_scope
-        if: steps.docs_scope.outputs.docs_only != 'true'
+        if: github.event_name != 'workflow_dispatch' && steps.docs_scope.outputs.docs_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -62,12 +63,16 @@ jobs:
         id: manifest
         env:
           OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
+          OPENCLAW_CI_FORCE_INSTALL_SMOKE: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           OPENCLAW_CI_RUN_CHANGED_SMOKE: ${{ steps.changed_scope.outputs.run_changed_smoke || 'false' }}
         run: |
           docs_only="${OPENCLAW_CI_DOCS_ONLY:-false}"
+          force_install_smoke="${OPENCLAW_CI_FORCE_INSTALL_SMOKE:-false}"
           run_changed_smoke="${OPENCLAW_CI_RUN_CHANGED_SMOKE:-false}"
           run_install_smoke=false
-          if [ "$docs_only" != "true" ] && [ "$run_changed_smoke" = "true" ]; then
+          if [ "$force_install_smoke" = "true" ]; then
+            run_install_smoke=true
+          elif [ "$docs_only" != "true" ] && [ "$run_changed_smoke" = "true" ]; then
             run_install_smoke=true
           fi
           {
@@ -192,8 +197,14 @@ jobs:
       - name: Setup Node environment for local pack smoke
         uses: ./.github/actions/setup-node-env
         with:
-          install-bun: "false"
+          install-bun: "true"
           install-deps: "true"
+
+      - name: Run Bun global install image-provider smoke
+        env:
+          OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
+        run: bash scripts/e2e/bun-global-install-smoke.sh
 
       - name: Run installer docker tests
         env:
@@ -204,6 +215,7 @@ jobs:
           OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD: "1"
           OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: ${{ github.event_name == 'pull_request' && '0' || '1' }}
           OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
           OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: openclaw-dockerfile-smoke:local
           OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"

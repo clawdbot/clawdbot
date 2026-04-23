@@ -104,6 +104,7 @@ function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: str
     if (
       /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
       /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+      /\.test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
       /\.test\.[cm]?tsx?$/.test(repoRelativePath)
     ) {
       continue;

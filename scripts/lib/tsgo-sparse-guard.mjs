@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { readFlagValue } from "./arg-utils.mjs";
 
 const CORE_TEST_CONFIGS = new Set([
   "tsconfig.core.test.json",
@@ -72,17 +73,4 @@ function isMetadataOnlyCommand(args) {
   return args.some((arg) =>
     ["--help", "-h", "--version", "-v", "--init", "--showConfig"].includes(arg),
   );
-}
-
-function readFlagValue(args, name) {
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === name) {
-      return args[index + 1];
-    }
-    if (arg.startsWith(`${name}=`)) {
-      return arg.slice(name.length + 1);
-    }
-  }
-  return undefined;
 }

@@ -45,6 +45,17 @@ For each advisory, decide:
 - `keep open`
 - `keep open but narrow`
 
+Default to one advisory at a time when comments/closures are involved:
+
+1. Review exactly one GHSA.
+2. Print the GHSA URL first.
+3. Summarize the decision and evidence for discussion.
+4. Draft one maintainer-ready comment.
+5. Copy only that one comment to the clipboard.
+6. Stop and wait for Peter to post/discuss before moving to the next GHSA.
+
+Do not batch multiple close comments unless Peter explicitly asks for a batch.
+
 Check in this order:
 
 1. Trust model
@@ -60,6 +71,11 @@ Check in this order:
 4. Functional tradeoff
    - If a hardening change would reduce intended user functionality, call that out before proposing it.
    - Prefer fixes that preserve user workflows over deny-by-default regressions unless the boundary demands it.
+5. Hardening follow-up
+   - Even when the GHSA should close, ask whether a narrow hardening change would reduce footguns without changing the documented trust boundary.
+   - Separate hardening from vulnerability status. Phrase it as "not required for GHSA closure, but worth considering".
+   - Bring up hardening only if it is concrete, low-risk, and preserves intended maintainer/operator workflows.
+   - If hardening would require a product/security model change, say that explicitly and do not imply it is a required fix for closure.
 
 ## Response Format
 
@@ -76,9 +92,22 @@ When preparing a maintainer-ready close reply:
 
 Keep tone firm, specific, non-defensive.
 
+## Discussion Mode
+
+When Peter is manually posting GHSA comments, use this flow:
+
+1. Show the URL.
+2. Give a terse verdict (`close`, `keep open`, or `keep open but narrow`).
+3. List the strongest evidence bullets.
+4. State any optional hardening follow-up separately from the close reason.
+5. Copy the proposed comment body with `pbcopy`.
+6. End the reply after the one advisory. Do not continue to the next advisory until Peter says to continue.
+
+If the GitHub API cannot post comments for private advisories, say so once and keep using clipboard/UI paste.
+
 ## Clipboard Step
 
-After drafting the final post body, copy it:
+After drafting the final post body for the current advisory, copy it:
 
 ```bash
 pbcopy <<'EOF'
@@ -86,7 +115,7 @@ pbcopy <<'EOF'
 EOF
 ```
 
-Tell the user that the clipboard now contains the proposed response.
+Tell the user that the clipboard now contains the proposed response for that advisory.
 
 ## Useful Commands
 

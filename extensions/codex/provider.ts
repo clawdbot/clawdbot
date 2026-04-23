@@ -110,7 +110,7 @@ export async function buildCodexProviderCatalog(
   };
 }
 
-function resolveCodexDynamicModel(modelId: string): ProviderRuntimeModel | undefined {
+function resolveCodexDynamicModel(modelId: string) {
   const id = modelId.trim();
   if (!id) {
     return undefined;
@@ -191,5 +191,7 @@ function isKnownXHighCodexModel(modelId: string): boolean {
 
 function isModernCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
-  return lower === "gpt-5.4" || lower === "gpt-5.4-mini" || lower === "gpt-5.2";
+  return (
+    lower === "gpt-5.5" || lower === "gpt-5.4" || lower === "gpt-5.4-mini" || lower === "gpt-5.2"
+  );
 }

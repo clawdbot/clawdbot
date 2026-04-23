@@ -6,8 +6,6 @@ read_when:
 title: "Xiaomi MiMo"
 ---
 
-# Xiaomi MiMo
-
 Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw uses the Xiaomi
 OpenAI-compatible endpoint with API-key authentication.
 
@@ -136,7 +134,7 @@ The default model ref is `xiaomi/mimo-v2-flash`. The provider is injected automa
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
   </Card>
-  <Card title="Configuration reference" href="/gateway/configuration" icon="gear">
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full OpenClaw configuration reference.
   </Card>
   <Card title="Xiaomi MiMo console" href="https://platform.xiaomimimo.com" icon="arrow-up-right-from-square">

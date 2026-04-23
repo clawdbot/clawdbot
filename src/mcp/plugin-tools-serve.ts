@@ -8,16 +8,12 @@
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { routeLogsToStderr } from "../logging/console.js";
 import { resolvePluginTools } from "../plugins/tools.js";
-import { VERSION } from "../version.js";
-import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
+import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
 function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
   return resolvePluginTools({
@@ -34,26 +30,10 @@ export function createPluginToolsMcpServer(
 ): Server {
   const cfg = params.config ?? loadConfig();
   const tools = params.tools ?? resolveTools(cfg);
-  const handlers = createPluginToolsMcpHandlers(tools);
-
-  const server = new Server(
-    { name: "openclaw-plugin-tools", version: VERSION },
-    { capabilities: { tools: {} } },
-  );
-
-  server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
-
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    return await handlers.callTool(request.params);
-  });
-
-  return server;
+  return createToolsMcpServer({ name: "openclaw-plugin-tools", tools });
 }
 
 export async function servePluginToolsMcp(): Promise<void> {
-  // MCP stdio requires stdout to stay protocol-only.
-  routeLogsToStderr();
-
   const config = loadConfig();
   const tools = resolveTools(config);
   const server = createPluginToolsMcpServer({ config, tools });
@@ -61,27 +41,7 @@ export async function servePluginToolsMcp(): Promise<void> {
     process.stderr.write("plugin-tools-serve: no plugin tools found\n");
   }
 
-  const transport = new StdioServerTransport();
-
-  let shuttingDown = false;
-  const shutdown = () => {
-    if (shuttingDown) {
-      return;
-    }
-    shuttingDown = true;
-    process.stdin.off("end", shutdown);
-    process.stdin.off("close", shutdown);
-    process.off("SIGINT", shutdown);
-    process.off("SIGTERM", shutdown);
-    void server.close();
-  };
-
-  process.stdin.once("end", shutdown);
-  process.stdin.once("close", shutdown);
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-
-  await server.connect(transport);
+  await connectToolsMcpServerToStdio(server);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

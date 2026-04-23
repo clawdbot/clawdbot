@@ -108,7 +108,7 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun resolveTlsParamsForEndpoint_manualPrivateLanCanStayCleartextWhenToggleIsOff() {
+  fun resolveTlsParamsForEndpoint_manualPrivateLanForcesTlsWhenToggleIsOff() {
     val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
 
     val params =
@@ -118,7 +118,9 @@ class ConnectionManagerTest {
         manualTlsEnabled = false,
       )
 
-    assertNull(params)
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
   }
 
   @Test
@@ -146,7 +148,7 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun resolveTlsParamsForEndpoint_discoveryPrivateLanWithoutHintsCanStayCleartext() {
+  fun resolveTlsParamsForEndpoint_discoveryPrivateLanWithoutHintsStillRequiresTls() {
     val endpoint =
       GatewayEndpoint(
         stableId = "_openclaw-gw._tcp.|local.|Test",
@@ -164,7 +166,9 @@ class ConnectionManagerTest {
         manualTlsEnabled = false,
       )
 
-    assertNull(params)
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
   }
 
   @Test
@@ -240,9 +244,9 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun isPrivateLanGatewayHost_acceptsLanHostsButRejectsTailnetHosts() {
+  fun isPrivateLanGatewayHost_acceptsLanIpsButRejectsMdnsAndTailnetHosts() {
     assertTrue(isPrivateLanGatewayHost("192.168.1.20"))
-    assertTrue(isPrivateLanGatewayHost("gateway.local"))
+    assertFalse(isPrivateLanGatewayHost("gateway.local"))
     assertFalse(isPrivateLanGatewayHost("100.64.0.9"))
     assertFalse(isPrivateLanGatewayHost("gateway.tailnet.ts.net"))
   }

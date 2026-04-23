@@ -200,6 +200,49 @@ function fillTriangle(params: {
   }
 }
 
+function drawBlockCatLabel(params: {
+  buf: Buffer;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  color: { r: number; g: number; b: number; a?: number };
+}) {
+  const t = 12;
+  const h = 78;
+  const w = 58;
+  const gap = 20;
+  const cX = params.x;
+  const aX = cX + w + gap;
+  const tX = aX + w + gap;
+
+  fillRect({ ...params, x: cX, y: params.y, w, h: t, color: params.color });
+  fillRect({ ...params, x: cX, y: params.y, w: t, h, color: params.color });
+  fillRect({ ...params, x: cX, y: params.y + h - t, w, h: t, color: params.color });
+
+  fillRect({ ...params, x: aX, y: params.y, w, h: t, color: params.color });
+  fillRect({ ...params, x: aX, y: params.y, w: t, h, color: params.color });
+  fillRect({ ...params, x: aX + w - t, y: params.y, w: t, h, color: params.color });
+  fillRect({
+    ...params,
+    x: aX,
+    y: params.y + Math.floor((h - t) / 2),
+    w,
+    h: t,
+    color: params.color,
+  });
+
+  fillRect({ ...params, x: tX, y: params.y, w, h: t, color: params.color });
+  fillRect({
+    ...params,
+    x: tX + Math.floor((w - t) / 2),
+    y: params.y,
+    w: t,
+    h,
+    color: params.color,
+  });
+}
+
 export function renderCatNoncePngBase64(nonce: string): string {
   const top = "CAT";
   const bottom = nonce.toUpperCase();
@@ -242,7 +285,7 @@ export function renderCatNoncePngBase64(nonce: string): string {
 
 export function renderCatFacePngBase64(): string {
   const width = 256;
-  const height = 256;
+  const height = 288;
   const buf = Buffer.alloc(width * height * 4, 255);
   const outline = { r: 40, g: 40, b: 40 };
   const innerEar = { r: 245, g: 182, b: 193 };
@@ -253,36 +296,36 @@ export function renderCatFacePngBase64(): string {
     buf,
     width,
     height,
-    a: { x: 62, y: 86 },
-    b: { x: 106, y: 18 },
-    c: { x: 136, y: 104 },
+    a: { x: 62, y: 74 },
+    b: { x: 106, y: 12 },
+    c: { x: 134, y: 88 },
     color: outline,
   });
   fillTriangle({
     buf,
     width,
     height,
-    a: { x: 194, y: 86 },
-    b: { x: 150, y: 18 },
-    c: { x: 120, y: 104 },
+    a: { x: 194, y: 74 },
+    b: { x: 150, y: 12 },
+    c: { x: 122, y: 88 },
     color: outline,
   });
   fillTriangle({
     buf,
     width,
     height,
-    a: { x: 78, y: 82 },
-    b: { x: 106, y: 38 },
-    c: { x: 122, y: 92 },
+    a: { x: 80, y: 70 },
+    b: { x: 106, y: 34 },
+    c: { x: 122, y: 80 },
     color: innerEar,
   });
   fillTriangle({
     buf,
     width,
     height,
-    a: { x: 178, y: 82 },
-    b: { x: 150, y: 38 },
-    c: { x: 134, y: 92 },
+    a: { x: 176, y: 70 },
+    b: { x: 150, y: 34 },
+    c: { x: 134, y: 80 },
     color: innerEar,
   });
   fillEllipse({
@@ -290,9 +333,9 @@ export function renderCatFacePngBase64(): string {
     width,
     height,
     cx: 128,
-    cy: 142,
-    rx: 82,
-    ry: 78,
+    cy: 112,
+    rx: 78,
+    ry: 66,
     color: outline,
   });
   fillEllipse({
@@ -300,7 +343,7 @@ export function renderCatFacePngBase64(): string {
     width,
     height,
     cx: 98,
-    cy: 126,
+    cy: 100,
     rx: 9,
     ry: 12,
     color: { r: 255, g: 255, b: 255 },
@@ -310,7 +353,7 @@ export function renderCatFacePngBase64(): string {
     width,
     height,
     cx: 158,
-    cy: 126,
+    cy: 100,
     rx: 9,
     ry: 12,
     color: { r: 255, g: 255, b: 255 },
@@ -320,34 +363,31 @@ export function renderCatFacePngBase64(): string {
     width,
     height,
     cx: 128,
-    cy: 158,
+    cy: 130,
     rx: 22,
-    ry: 18,
+    ry: 17,
     color: { r: 255, g: 255, b: 255 },
   });
   fillTriangle({
     buf,
     width,
     height,
-    a: { x: 128, y: 150 },
-    b: { x: 118, y: 164 },
-    c: { x: 138, y: 164 },
+    a: { x: 128, y: 122 },
+    b: { x: 118, y: 136 },
+    c: { x: 138, y: 136 },
     color: nose,
   });
-  fillRect({ buf, width, height, x: 127, y: 164, w: 2, h: 16, color: whisker });
-  fillRect({ buf, width, height, x: 74, y: 161, w: 42, h: 2, color: whisker });
-  fillRect({ buf, width, height, x: 140, y: 161, w: 42, h: 2, color: whisker });
-  fillRect({ buf, width, height, x: 76, y: 173, w: 38, h: 2, color: whisker });
-  fillRect({ buf, width, height, x: 142, y: 173, w: 38, h: 2, color: whisker });
-  fillRect({ buf, width, height, x: 85, y: 185, w: 30, h: 2, color: whisker });
-  fillRect({ buf, width, height, x: 141, y: 185, w: 30, h: 2, color: whisker });
-  drawText({
+  fillRect({ buf, width, height, x: 127, y: 136, w: 2, h: 15, color: whisker });
+  fillRect({ buf, width, height, x: 74, y: 134, w: 42, h: 2, color: whisker });
+  fillRect({ buf, width, height, x: 140, y: 134, w: 42, h: 2, color: whisker });
+  fillRect({ buf, width, height, x: 80, y: 146, w: 34, h: 2, color: whisker });
+  fillRect({ buf, width, height, x: 142, y: 146, w: 34, h: 2, color: whisker });
+  drawBlockCatLabel({
     buf,
     width,
-    x: Math.floor((width - measureTextWidthPx("CAT", 10)) / 2),
-    y: 212,
-    text: "CAT",
-    scale: 10,
+    height,
+    x: 21,
+    y: 190,
     color: outline,
   });
 

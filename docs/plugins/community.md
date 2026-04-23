@@ -3,10 +3,8 @@ summary: "Community-maintained OpenClaw plugins: browse, install, and submit you
 read_when:
   - You want to find third-party OpenClaw plugins
   - You want to publish or list your own plugin
-title: "Community Plugins"
+title: "Community plugins"
 ---
-
-# Community Plugins
 
 Community plugins are third-party packages that extend OpenClaw with new
 channels, tools, providers, or other capabilities. They are built and maintained

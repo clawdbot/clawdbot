@@ -43,7 +43,7 @@ jobs:
   # so this public workflow can stay focused on OIDC publish only.
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only }}
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
@@ -252,7 +252,7 @@ jobs:
 
   validate_publish_request:
     if: ${{ !inputs.preflight_only }}
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:

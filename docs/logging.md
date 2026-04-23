@@ -4,7 +4,7 @@ read_when:
   - You need a beginner-friendly overview of logging
   - You want to configure log levels or formats
   - You are troubleshooting and need to find logs quickly
-title: "Logging Overview"
+title: "Logging overview"
 ---
 
 # Logging

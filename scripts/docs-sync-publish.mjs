@@ -9,6 +9,16 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
+const SYNC_SUPPORT_FILES = [
+  {
+    source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
+    target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),
+  },
+  {
+    source: path.join(ROOT, ".github", "codex", "prompts", "docs-mdx-repair.md"),
+    target: path.join(".openclaw-sync", "docs-mdx-repair.md"),
+  },
+];
 const GENERATED_LOCALES = [
   {
     language: "zh-Hans",
@@ -107,6 +117,7 @@ const GENERATED_LOCALES = [
     navFile: "th-navigation.json",
     tmFile: "th.tm.jsonl",
     navMode: "clone-en",
+    navigation: false,
   },
 ];
 
@@ -154,6 +165,28 @@ function run(command, args, options = {}) {
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function walkMarkdownFiles(entryPath, out = []) {
+  if (!fs.existsSync(entryPath)) {
+    return out;
+  }
+
+  const stat = fs.statSync(entryPath);
+  if (stat.isFile()) {
+    if (/\.mdx?$/i.test(entryPath)) {
+      out.push(entryPath);
+    }
+    return out;
+  }
+
+  for (const entry of fs.readdirSync(entryPath, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".git") {
+      continue;
+    }
+    walkMarkdownFiles(path.join(entryPath, entry.name), out);
+  }
+  return out;
 }
 
 function readJson(filePath) {
@@ -228,10 +261,14 @@ function composeDocsConfig() {
   }
 
   const englishNav = languages.find((entry) => entry?.language === "en");
-  const generatedLanguageSet = new Set(GENERATED_LOCALES.map((entry) => entry.language));
+  const generatedLanguageSet = new Set(
+    GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) => entry.language),
+  );
   const withoutGenerated = languages.filter((entry) => !generatedLanguageSet.has(entry?.language));
   const enIndex = withoutGenerated.findIndex((entry) => entry?.language === "en");
-  const generated = GENERATED_LOCALES.map((entry) => composeLocaleNav(entry, englishNav));
+  const generated = GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) =>
+    composeLocaleNav(entry, englishNav),
+  );
   if (enIndex === -1) {
     withoutGenerated.push(...generated);
   } else {
@@ -245,6 +282,75 @@ function composeDocsConfig() {
       languages: withoutGenerated,
     },
   };
+}
+
+function repairMintlifyAccordionIndentation(raw) {
+  const lines = raw.split(/\r?\n/u);
+  const accordionStack = [];
+  let inCodeFence = false;
+  let changed = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*(```|~~~)/u.test(line)) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence) {
+      continue;
+    }
+
+    const openAccordion = line.match(/^(\s*)<Accordion\b/u);
+    if (openAccordion) {
+      accordionStack.push({
+        indent: openAccordion[1].length,
+        hasOutdentedListItem: false,
+      });
+      continue;
+    }
+
+    const listItem = line.match(/^(\s*)[-*+]\s+/u);
+    if (listItem) {
+      for (const accordion of accordionStack) {
+        if (listItem[1].length < accordion.indent) {
+          accordion.hasOutdentedListItem = true;
+        }
+      }
+    }
+
+    const closeAccordion = line.match(/^(\s*)<\/Accordion>/u);
+    if (!closeAccordion) {
+      continue;
+    }
+
+    const opening = accordionStack.pop();
+    if (opening && opening.hasOutdentedListItem && closeAccordion[1].length > opening.indent) {
+      lines[index] = `${" ".repeat(opening.indent)}${line.slice(closeAccordion[1].length)}`;
+      changed = true;
+    }
+  }
+
+  return changed ? lines.join("\n") : raw;
+}
+
+function repairGeneratedLocaleDocs(targetDocsDir) {
+  let repaired = 0;
+  for (const locale of GENERATED_LOCALES) {
+    const localeDir = path.join(targetDocsDir, locale.dir);
+    for (const filePath of walkMarkdownFiles(localeDir)) {
+      const raw = fs.readFileSync(filePath, "utf8");
+      const repairedRaw = repairMintlifyAccordionIndentation(raw);
+      if (repairedRaw === raw) {
+        continue;
+      }
+      fs.writeFileSync(filePath, repairedRaw);
+      repaired += 1;
+    }
+  }
+
+  if (repaired > 0) {
+    console.log(`Repaired Mintlify accordion indentation in ${repaired} generated locale doc(s).`);
+  }
 }
 
 function syncDocsTree(targetRoot) {
@@ -283,6 +389,7 @@ function syncDocsTree(targetRoot) {
     }
   }
 
+  repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
 }
 
@@ -295,6 +402,14 @@ function writeSyncMetadata(targetRoot, args) {
   writeJson(path.join(targetRoot, ".openclaw-sync", "source.json"), metadata);
 }
 
+function syncSupportFiles(targetRoot) {
+  for (const entry of SYNC_SUPPORT_FILES) {
+    const targetPath = path.join(targetRoot, entry.target);
+    ensureDir(path.dirname(targetPath));
+    fs.copyFileSync(entry.source, targetPath);
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetRoot = path.resolve(args.target);
@@ -304,6 +419,7 @@ function main() {
   }
 
   syncDocsTree(targetRoot);
+  syncSupportFiles(targetRoot);
   writeSyncMetadata(targetRoot, args);
 }
 

@@ -4,10 +4,8 @@ read_when:
   - You want to use Ollama for web_search
   - You want a key-free web_search provider
   - You need Ollama Web Search setup guidance
-title: "Ollama Web Search"
+title: "Ollama web search"
 ---
-
-# Ollama Web Search
 
 OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider.
 It uses Ollama's experimental web-search API and returns structured results

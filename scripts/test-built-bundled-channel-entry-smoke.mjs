@@ -144,7 +144,15 @@ function assertEntryFileExists(entry) {
 
 async function smokeChannelEntry(entryFile) {
   assertEntryFileExists(entryFile);
-  const entry = (await importBuiltModule(entryFile.path)).default;
+  let entry;
+  try {
+    entry = (await importBuiltModule(entryFile.path)).default;
+  } catch (error) {
+    throw new Error(
+      `${entryFile.id} ${entryFile.kind} entry failed to import ${entryFile.path}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
   assert.equal(entry.kind, "bundled-channel-entry", `${entryFile.id} channel entry kind mismatch`);
   assert.equal(
     typeof entry.loadChannelPlugin,
@@ -163,7 +171,15 @@ async function smokeChannelEntry(entryFile) {
 
 async function smokeSetupEntry(entryFile) {
   assertEntryFileExists(entryFile);
-  const entry = (await importBuiltModule(entryFile.path)).default;
+  let entry;
+  try {
+    entry = (await importBuiltModule(entryFile.path)).default;
+  } catch (error) {
+    throw new Error(
+      `${entryFile.id} ${entryFile.kind} entry failed to import ${entryFile.path}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
   if (entry?.kind !== "bundled-channel-setup-entry") {
     return false;
   }

@@ -6,8 +6,6 @@ read_when:
 title: "Doctor"
 ---
 
-# Doctor
-
 `openclaw doctor` is the repair + migration tool for OpenClaw. It fixes stale
 config/state, checks health, and provides actionable repair steps.
 

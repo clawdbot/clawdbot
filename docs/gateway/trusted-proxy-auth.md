@@ -1,14 +1,12 @@
 ---
-title: "Trusted Proxy Auth"
 summary: "Delegate gateway authentication to a trusted reverse proxy (Pomerium, Caddy, nginx + OAuth)"
+title: "Trusted proxy auth"
 read_when:
   - Running OpenClaw behind an identity-aware proxy
   - Setting up Pomerium, Caddy, or nginx with OAuth in front of OpenClaw
   - Fixing WebSocket 1008 unauthorized errors with reverse proxy setups
   - Deciding where to set HSTS and other HTTP hardening headers
 ---
-
-# Trusted Proxy Auth
 
 > ⚠️ **Security-sensitive feature.** This mode delegates authentication entirely to your reverse proxy. Misconfiguration can expose your Gateway to unauthorized access. Read this page carefully before enabling.
 

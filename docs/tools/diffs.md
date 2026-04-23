@@ -1,13 +1,11 @@
 ---
-title: "Diffs"
 summary: "Read-only diff viewer and file renderer for agents (optional plugin tool)"
+title: "Diffs"
 read_when:
   - You want agents to show code or markdown edits as diffs
   - You want a canvas-ready viewer URL or a rendered diff file
   - You need controlled, temporary diff artifacts with secure defaults
 ---
-
-# Diffs
 
 `diffs` is an optional plugin tool with short built-in system guidance and a companion skill that turns change content into a read-only diff artifact for agents.
 

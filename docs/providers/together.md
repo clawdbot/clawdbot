@@ -1,12 +1,10 @@
 ---
-title: "Together AI"
 summary: "Together AI setup (auth + model selection)"
+title: "Together AI"
 read_when:
   - You want to use Together AI with OpenClaw
   - You need the API key env var or CLI auth choice
 ---
-
-# Together AI
 
 [Together AI](https://together.ai) provides access to leading open-source
 models including Llama, DeepSeek, Kimi, and more through a unified API.
@@ -127,7 +125,7 @@ provider selection, and failover behavior.
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
+  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Provider rules, model refs, and failover behavior.
   </Card>
   <Card title="Video generation" href="/tools/video-generation" icon="video">

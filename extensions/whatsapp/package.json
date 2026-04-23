@@ -6,7 +6,6 @@
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "jimp": "^1.6.1",
-    "qrcode-terminal": "^0.12.0",
     "typebox": "1.1.28",
     "undici": "8.1.0"
   },
@@ -15,7 +14,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.20"
+    "openclaw": ">=2026.4.23"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -54,10 +53,10 @@
     "install": {
       "npmSpec": "@openclaw/whatsapp",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
+      "minHostVersion": ">=2026.4.23"
     },
     "compat": {
-      "pluginApi": ">=2026.4.20"
+      "pluginApi": ">=2026.4.23"
     },
     "bundle": {
       "stageRuntimeDependencies": true

@@ -1,14 +1,12 @@
 ---
-title: "Plugin Runtime Helpers"
-sidebarTitle: "Runtime Helpers"
 summary: "api.runtime -- the injected runtime helpers available to plugins"
+title: "Plugin runtime helpers"
+sidebarTitle: "Runtime Helpers"
 read_when:
   - You need to call core helpers from a plugin (TTS, STT, image gen, web search, subagent)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
 ---
-
-# Plugin Runtime Helpers
 
 Reference for the `api.runtime` object injected into every plugin during
 registration. Use these helpers instead of importing host internals directly.
@@ -258,6 +256,11 @@ const kind = api.runtime.media.mediaKindFromMime("image/jpeg"); // "image"
 const isVoice = api.runtime.media.isVoiceCompatibleAudio(filePath);
 const metadata = await api.runtime.media.getImageMetadata(filePath);
 const resized = await api.runtime.media.resizeToJpeg(buffer, { maxWidth: 800 });
+const terminalQr = await api.runtime.media.renderQrTerminal("https://openclaw.ai");
+const pngQr = await api.runtime.media.renderQrPngBase64("https://openclaw.ai", {
+  scale: 6, // 1-12
+  marginModules: 4, // 0-16
+});
 ```
 
 ### `api.runtime.config`

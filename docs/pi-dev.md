@@ -1,12 +1,10 @@
 ---
-title: "Pi Development Workflow"
 summary: "Developer workflow for Pi integration: build, test, and live validation"
+title: "Pi development workflow"
 read_when:
   - Working on Pi integration code or tests
   - Running Pi-specific lint, typecheck, and live test flows
 ---
-
-# Pi Development Workflow
 
 This guide summarizes a sane workflow for working on the pi integration in OpenClaw.
 

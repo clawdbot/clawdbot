@@ -3,10 +3,8 @@ summary: "Apply multi-file patches with the apply_patch tool"
 read_when:
   - You need structured file edits across multiple files
   - You want to document or debug patch-based edits
-title: "apply_patch Tool"
+title: "apply_patch tool"
 ---
-
-# apply_patch tool
 
 Apply file changes using a structured patch format. This is ideal for multi-file
 or multi-hunk edits where a single `edit` call would be brittle.

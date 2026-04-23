@@ -7,6 +7,19 @@ export function readEnvNumber(name, env = process.env) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+export function readFlagValue(args, name) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === name) {
+      return args[index + 1];
+    }
+    if (arg.startsWith(`${name}=`)) {
+      return arg.slice(name.length + 1);
+    }
+  }
+  return undefined;
+}
+
 export function consumeStringFlag(argv, index, flag, currentValue) {
   if (argv[index] !== flag) {
     return null;

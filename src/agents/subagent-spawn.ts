@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import path from "node:path";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -41,6 +44,7 @@ import {
   buildSubagentSystemPrompt,
   callGateway,
   emitSessionLifecycleEvent,
+  forkSessionFromParent,
   getGlobalHookRunner,
   loadConfig,
   mergeSessionEntry,
@@ -48,37 +52,55 @@ import {
   normalizeDeliveryContext,
   pruneLegacyStoreKeys,
   resolveAgentConfig,
+  resolveContextEngine,
   resolveDisplaySessionKey,
   resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
+  resolveParentForkMaxTokens,
   resolveSandboxRuntimeStatus,
   updateSessionStore,
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
 import {
+  SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
   SUBAGENT_SPAWN_SANDBOX_MODES,
+  type SpawnSubagentContextMode,
   type SpawnSubagentMode,
   type SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
 
-export { SUBAGENT_SPAWN_MODES, SUBAGENT_SPAWN_SANDBOX_MODES } from "./subagent-spawn.types.js";
-export type { SpawnSubagentMode, SpawnSubagentSandboxMode } from "./subagent-spawn.types.js";
+export {
+  SUBAGENT_SPAWN_CONTEXT_MODES,
+  SUBAGENT_SPAWN_MODES,
+  SUBAGENT_SPAWN_SANDBOX_MODES,
+} from "./subagent-spawn.types.js";
+export type {
+  SpawnSubagentContextMode,
+  SpawnSubagentMode,
+  SpawnSubagentSandboxMode,
+} from "./subagent-spawn.types.js";
 
 export { decodeStrictBase64 };
 
 type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
+  forkSessionFromParent: typeof forkSessionFromParent;
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
   loadConfig: typeof loadConfig;
+  resolveContextEngine: typeof resolveContextEngine;
+  resolveParentForkMaxTokens: typeof resolveParentForkMaxTokens;
   updateSessionStore: typeof updateSessionStore;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,
+  forkSessionFromParent,
   getGlobalHookRunner,
   loadConfig,
+  resolveContextEngine,
+  resolveParentForkMaxTokens,
   updateSessionStore,
 };
 
@@ -95,6 +117,7 @@ export type SpawnSubagentParams = {
   mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
+  context?: SpawnSubagentContextMode;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
   attachments?: Array<{
@@ -206,6 +229,171 @@ async function persistInitialChildSessionRuntimeModel(params: {
     return undefined;
   } catch (err) {
     return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+  }
+}
+
+function resolveStoreEntryByKeys(
+  store: Record<string, SessionEntry>,
+  keys: readonly string[],
+): SessionEntry | undefined {
+  for (const key of keys) {
+    const entry = store[key];
+    if (entry) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+type PreparedSpawnContext =
+  | { status: "ok"; mode: "isolated"; parentEntry?: SessionEntry; childEntry?: SessionEntry }
+  | {
+      status: "ok";
+      mode: "fork";
+      parentEntry: SessionEntry;
+      childEntry?: SessionEntry;
+      forked: { sessionId: string; sessionFile: string };
+    }
+  | { status: "error"; error: string };
+
+async function prepareSubagentSessionContext(params: {
+  cfg: OpenClawConfig;
+  contextMode: SpawnSubagentContextMode;
+  requesterAgentId: string;
+  targetAgentId: string;
+  requesterInternalKey: string;
+  childSessionKey: string;
+}): Promise<PreparedSpawnContext> {
+  if (params.contextMode === "isolated") {
+    return { status: "ok", mode: "isolated" };
+  }
+  const childTarget = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.childSessionKey,
+  });
+  const parentTarget = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.requesterInternalKey,
+  });
+
+  let parentEntry: SessionEntry | undefined;
+  let childEntry: SessionEntry | undefined;
+  const forkMaxTokens = subagentSpawnDeps.resolveParentForkMaxTokens(params.cfg);
+  const sessionsDir = path.dirname(parentTarget.storePath);
+
+  try {
+    const forked = (await updateSubagentSessionStore(childTarget.storePath, async (store) => {
+      parentEntry = resolveStoreEntryByKeys(store, parentTarget.storeKeys);
+      childEntry = resolveStoreEntryByKeys(store, childTarget.storeKeys);
+
+      if (params.targetAgentId !== params.requesterAgentId) {
+        throw new Error(
+          'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
+        );
+      }
+      if (!parentEntry?.sessionId) {
+        throw new Error(
+          'context="fork" requested but the requester session transcript is not available.',
+        );
+      }
+      const parentTokens =
+        typeof parentEntry.totalTokens === "number" && Number.isFinite(parentEntry.totalTokens)
+          ? parentEntry.totalTokens
+          : 0;
+      if (forkMaxTokens > 0 && parentTokens > forkMaxTokens) {
+        throw new Error(
+          `context="fork" requested but requester context is too large to fork (${parentTokens}/${forkMaxTokens} tokens). Use context="isolated" or compact first.`,
+        );
+      }
+
+      const fork = await subagentSpawnDeps.forkSessionFromParent({
+        parentEntry,
+        agentId: params.requesterAgentId,
+        sessionsDir,
+      });
+      if (!fork) {
+        throw new Error(
+          'context="fork" requested but OpenClaw could not fork the requester transcript.',
+        );
+      }
+      pruneLegacyStoreKeys({
+        store,
+        canonicalKey: childTarget.canonicalKey,
+        candidates: childTarget.storeKeys,
+      });
+      store[childTarget.canonicalKey] = mergeSessionEntry(store[childTarget.canonicalKey], {
+        sessionId: fork.sessionId,
+        sessionFile: fork.sessionFile,
+        forkedFromParent: true,
+      });
+      childEntry = store[childTarget.canonicalKey];
+      return fork;
+    })) as { sessionId: string; sessionFile: string } | null;
+
+    if (params.contextMode === "fork") {
+      if (!parentEntry || !forked) {
+        return {
+          status: "error",
+          error: 'context="fork" requested but OpenClaw could not prepare forked context.',
+        };
+      }
+      return {
+        status: "ok",
+        mode: "fork",
+        parentEntry,
+        childEntry,
+        forked,
+      };
+    }
+    return { status: "ok", mode: "isolated", parentEntry, childEntry };
+  } catch (err) {
+    return { status: "error", error: summarizeError(err) };
+  }
+}
+
+async function prepareContextEngineSubagentSpawn(params: {
+  cfg: OpenClawConfig;
+  context: PreparedSpawnContext & { status: "ok" };
+  requesterInternalKey: string;
+  childSessionKey: string;
+  runTimeoutSeconds: number;
+}): Promise<
+  { status: "ok"; preparation?: SubagentSpawnPreparation } | { status: "error"; error: string }
+> {
+  try {
+    const engine = await subagentSpawnDeps.resolveContextEngine(params.cfg);
+    const preparation = await engine.prepareSubagentSpawn?.({
+      parentSessionKey: params.requesterInternalKey,
+      childSessionKey: params.childSessionKey,
+      contextMode: params.context.mode,
+      parentSessionId: params.context.parentEntry?.sessionId,
+      parentSessionFile: params.context.parentEntry?.sessionFile,
+      childSessionId:
+        params.context.mode === "fork"
+          ? params.context.forked.sessionId
+          : params.context.childEntry?.sessionId,
+      childSessionFile:
+        params.context.mode === "fork"
+          ? params.context.forked.sessionFile
+          : params.context.childEntry?.sessionFile,
+      ttlMs: params.runTimeoutSeconds > 0 ? params.runTimeoutSeconds * 1000 : undefined,
+    });
+    return { status: "ok", preparation };
+  } catch (err) {
+    return {
+      status: "error",
+      error: `Context engine subagent preparation failed: ${summarizeError(err)}`,
+    };
+  }
+}
+
+async function rollbackPreparedContextEngine(
+  preparation?: SubagentSpawnPreparation,
+): Promise<void> {
+  try {
+    await preparation?.rollback();
+  } catch {
+    // Best-effort cleanup only.
   }
 }
 
@@ -382,6 +570,7 @@ export async function spawnSubagentDirect(
   const thinkingOverrideRaw = params.thinking;
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
+  const contextMode: SpawnSubagentContextMode = params.context === "fork" ? "fork" : "isolated";
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
@@ -566,6 +755,25 @@ export async function spawnSubagentDirect(
       childSessionKey,
     };
   }
+  const preparedSpawnContext = await prepareSubagentSessionContext({
+    cfg,
+    contextMode,
+    requesterAgentId,
+    targetAgentId,
+    requesterInternalKey,
+    childSessionKey,
+  });
+  if (preparedSpawnContext.status === "error") {
+    await cleanupProvisionalSession(childSessionKey, {
+      emitLifecycleHooks: false,
+      deleteTranscript: true,
+    });
+    return {
+      status: "error",
+      error: preparedSpawnContext.error,
+      childSessionKey,
+    };
+  }
   if (resolvedModel) {
     const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
       cfg,
@@ -723,6 +931,27 @@ export async function spawnSubagentDirect(
       childSessionKey,
     };
   }
+  const contextEnginePrepareResult = await prepareContextEngineSubagentSpawn({
+    cfg,
+    context: preparedSpawnContext,
+    requesterInternalKey,
+    childSessionKey,
+    runTimeoutSeconds,
+  });
+  if (contextEnginePrepareResult.status === "error") {
+    await cleanupFailedSpawnBeforeAgentStart({
+      childSessionKey,
+      attachmentAbsDir,
+      emitLifecycleHooks: threadBindingReady,
+      deleteTranscript: true,
+    });
+    return {
+      status: "error",
+      error: contextEnginePrepareResult.error,
+      childSessionKey,
+    };
+  }
+  const contextEnginePreparation = contextEnginePrepareResult.preparation;
 
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
@@ -770,6 +999,7 @@ export async function spawnSubagentDirect(
       childRunId = runId;
     }
   } catch (err) {
+    await rollbackPreparedContextEngine(contextEnginePreparation);
     if (attachmentAbsDir) {
       try {
         await fs.rm(attachmentAbsDir, { recursive: true, force: true });
@@ -852,6 +1082,7 @@ export async function spawnSubagentDirect(
       retainAttachmentsOnKeep: retainOnSessionKeep,
     });
   } catch (err) {
+    await rollbackPreparedContextEngine(contextEnginePreparation);
     if (attachmentAbsDir) {
       try {
         await fs.rm(attachmentAbsDir, { recursive: true, force: true });

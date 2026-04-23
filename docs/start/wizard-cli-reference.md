@@ -3,11 +3,9 @@ summary: "Complete reference for CLI setup flow, auth/model setup, outputs, and 
 read_when:
   - You need detailed behavior for openclaw onboard
   - You are debugging onboarding results or integrating onboarding clients
-title: "CLI Setup Reference"
+title: "CLI setup reference"
 sidebarTitle: "CLI reference"
 ---
-
-# CLI Setup Reference
 
 This page is the full reference for `openclaw onboard`.
 For the short guide, see [Onboarding (CLI)](/start/wizard).
@@ -132,19 +130,19 @@ What you set:
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
 
-    Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
+    Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset or already OpenAI-family.
 
   </Accordion>
   <Accordion title="OpenAI Code subscription (device pairing)">
     Browser pairing flow with a short-lived device code.
 
-    Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
+    Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset or already OpenAI-family.
 
   </Accordion>
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.4` when model is unset, `openai/*`, or `openai-codex/*`.
+    Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or `openai-codex/*`.
 
   </Accordion>
   <Accordion title="xAI (Grok) API key">

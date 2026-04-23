@@ -4,7 +4,7 @@ read_when:
   - You want to understand which features may call paid APIs
   - You need to audit keys, costs, and usage visibility
   - You’re explaining /status or /usage cost reporting
-title: "API Usage and Costs"
+title: "API usage and costs"
 ---
 
 # API usage & costs

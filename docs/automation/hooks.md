@@ -6,8 +6,6 @@ read_when:
 title: "Hooks"
 ---
 
-# Hooks
-
 Hooks are small scripts that run when something happens inside the Gateway. They can be discovered from directories and inspected with `openclaw hooks`. The Gateway loads internal hooks only after you enable hooks or configure at least one hook entry, hook pack, legacy handler, or extra hook directory.
 
 There are two kinds of hooks in OpenClaw:

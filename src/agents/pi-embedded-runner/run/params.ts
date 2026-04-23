@@ -86,6 +86,8 @@ export type RunEmbeddedPiAgentParams = {
   disableTools?: boolean;
   provider?: string;
   model?: string;
+  /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
+  agentHarnessId?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;

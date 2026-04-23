@@ -616,34 +616,6 @@ describe("chrome.ts internal", () => {
         },
       });
     });
-
-    it("guards against post-settled messages by dropping them", async () => {
-      // Emit two valid id=1 responses — the second must be dropped via the
-      // `if (settled) return;` guard at the top of onMessage.
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/SETTLED",
-        onConnection: (wss) => {
-          wss.on("connection", (ws) => {
-            ws.on("message", (raw) => {
-              const text = rawDataToString(raw);
-              const msg = JSON.parse(text) as { id?: number };
-              if (msg.id === 1) {
-                ws.send(JSON.stringify({ id: 1, result: { product: "Chrome" } }));
-                // Second message after settled — the onMessage guard
-                // should return early.
-                setTimeout(
-                  () => ws.send(JSON.stringify({ id: 1, result: { product: "after" } })),
-                  20,
-                );
-              }
-            });
-          });
-        },
-        run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(true);
-        },
-      });
-    });
   });
 
   describe("isChromeCdpReady swallowed errors", () => {

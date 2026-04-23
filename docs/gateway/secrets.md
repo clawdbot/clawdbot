@@ -4,10 +4,8 @@ read_when:
   - Configuring SecretRefs for provider credentials and `auth-profiles.json` refs
   - Operating secrets reload, audit, configure, and apply safely in production
   - Understanding startup fail-fast, inactive-surface filtering, and last-known-good behavior
-title: "Secrets Management"
+title: "Secrets management"
 ---
-
-# Secrets management
 
 OpenClaw supports additive SecretRefs so supported credentials do not need to be stored as plaintext in configuration.
 

@@ -6,8 +6,6 @@ read_when:
 title: "Matrix"
 ---
 
-# Matrix
-
 Matrix is a bundled channel plugin for OpenClaw.
 It uses the official `matrix-js-sdk` and supports DMs, rooms, threads, media, reactions, polls, location, and E2EE.
 
@@ -259,161 +257,7 @@ If you need stock Matrix notifications without custom push rules, use `streaming
 
 ### Self-hosted push rules for quiet finalized previews
 
-If you run your own Matrix infrastructure and want quiet previews to notify only when a block or
-final reply is done, set `streaming: "quiet"` and add a per-user push rule for finalized preview edits.
-
-This is usually a recipient-user setup, not a homeserver-global config change:
-
-Quick map before you start:
-
-- recipient user = the person who should receive the notification
-- bot user = the OpenClaw Matrix account that sends the reply
-- use the recipient user's access token for the API calls below
-- match `sender` in the push rule against the bot user's full MXID
-
-1. Configure OpenClaw to use quiet previews:
-
-```json5
-{
-  channels: {
-    matrix: {
-      streaming: "quiet",
-    },
-  },
-}
-```
-
-2. Make sure the recipient account already receives normal Matrix push notifications. Quiet preview
-   rules only work if that user already has working pushers/devices.
-
-3. Get the recipient user's access token.
-   - Use the receiving user's token, not the bot's token.
-   - Reusing an existing client session token is usually easiest.
-   - If you need to mint a fresh token, you can log in through the standard Matrix Client-Server API:
-
-```bash
-curl -sS -X POST \
-  "https://matrix.example.org/_matrix/client/v3/login" \
-  -H "Content-Type: application/json" \
-  --data '{
-    "type": "m.login.password",
-    "identifier": {
-      "type": "m.id.user",
-      "user": "@alice:example.org"
-    },
-    "password": "REDACTED"
-  }'
-```
-
-4. Verify the recipient account already has pushers:
-
-```bash
-curl -sS \
-  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
-  "https://matrix.example.org/_matrix/client/v3/pushers"
-```
-
-If this returns no active pushers/devices, fix normal Matrix notifications first before adding the
-OpenClaw rule below.
-
-OpenClaw marks finalized text-only preview edits with:
-
-```json
-{
-  "com.openclaw.finalized_preview": true
-}
-```
-
-5. Create an override push rule for each recipient account which should receive these notifications:
-
-```bash
-curl -sS -X PUT \
-  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname" \
-  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data '{
-    "conditions": [
-      { "kind": "event_match", "key": "type", "pattern": "m.room.message" },
-      {
-        "kind": "event_property_is",
-        "key": "content.m\\.relates_to.rel_type",
-        "value": "m.replace"
-      },
-      {
-        "kind": "event_property_is",
-        "key": "content.com\\.openclaw\\.finalized_preview",
-        "value": true
-      },
-      { "kind": "event_match", "key": "sender", "pattern": "@bot:example.org" }
-    ],
-    "actions": [
-      "notify",
-      { "set_tweak": "sound", "value": "default" },
-      { "set_tweak": "highlight", "value": false }
-    ]
-  }'
-```
-
-Replace these values before you run the command:
-
-- `https://matrix.example.org`: your homeserver base URL
-- `$USER_ACCESS_TOKEN`: the receiving user's access token
-- `openclaw-finalized-preview-botname`: a rule ID unique to this bot for this receiving user
-- `@bot:example.org`: your OpenClaw Matrix bot MXID, not the receiving user's MXID
-
-Important for multi-bot setups:
-
-- Push rules are keyed by `ruleId`. Re-running `PUT` against the same rule ID updates that one rule.
-- If one receiving user should notify for multiple OpenClaw Matrix bot accounts, create one rule per bot with a unique rule ID for each sender match.
-- A simple pattern is `openclaw-finalized-preview-<botname>`, such as `openclaw-finalized-preview-ops` or `openclaw-finalized-preview-support`.
-
-The rule is evaluated against the event sender:
-
-- authenticate with the receiving user's token
-- match `sender` against the OpenClaw bot MXID
-
-6. Verify the rule exists:
-
-```bash
-curl -sS \
-  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
-  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname"
-```
-
-7. Test a streamed reply. In quiet mode, the room should show a quiet draft preview and the final
-   in-place edit should notify once the block or turn finishes.
-
-If you need to remove the rule later, delete that same rule ID with the receiving user's token:
-
-```bash
-curl -sS -X DELETE \
-  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
-  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname"
-```
-
-Notes:
-
-- Create the rule with the receiving user's access token, not the bot's.
-- New user-defined `override` rules are inserted ahead of default suppress rules, so no extra ordering parameter is needed.
-- This only affects text-only preview edits that OpenClaw can safely finalize in place. Media fallbacks and stale-preview fallbacks still use normal Matrix delivery.
-- If `GET /_matrix/client/v3/pushers` shows no pushers, the user does not yet have working Matrix push delivery for this account/device.
-
-#### Synapse
-
-For Synapse, the setup above is usually enough by itself:
-
-- No special `homeserver.yaml` change is required for finalized OpenClaw preview notifications.
-- If your Synapse deployment already sends normal Matrix push notifications, the user token + `pushrules` call above is the main setup step.
-- If you run Synapse behind a reverse proxy or workers, make sure `/_matrix/client/.../pushrules/` reaches Synapse correctly.
-- If you run Synapse workers, make sure pushers are healthy. Push delivery is handled by the main process or `synapse.app.pusher` / configured pusher workers.
-
-#### Tuwunel
-
-For Tuwunel, use the same setup flow and push-rule API call shown above:
-
-- No Tuwunel-specific config is required for the finalized preview marker itself.
-- If normal Matrix notifications already work for that user, the user token + `pushrules` call above is the main setup step.
-- If notifications seem to disappear while the user is active on another device, check whether `suppress_push_when_active` is enabled. Tuwunel added this option in Tuwunel 1.4.2 on September 12, 2025, and it can intentionally suppress pushes to other devices while one device is active.
+Quiet streaming (`streaming: "quiet"`) only notifies recipients once a block or turn is finalized — a per-user push rule has to match the finalized preview marker. See [Matrix push rules for quiet previews](/channels/matrix-push-rules) for the full setup (recipient token, pusher check, rule install, per-homeserver notes).
 
 ## Bot-to-bot rooms
 
@@ -464,88 +308,18 @@ Enable encryption:
 }
 ```
 
-Check verification status:
+Verification commands (all take `--verbose` for diagnostics and `--json` for machine-readable output):
 
-```bash
-openclaw matrix verify status
-```
-
-Verbose status (full diagnostics):
-
-```bash
-openclaw matrix verify status --verbose
-```
-
-Include the stored recovery key in machine-readable output:
-
-```bash
-openclaw matrix verify status --include-recovery-key --json
-```
-
-Bootstrap cross-signing and verification state:
-
-```bash
-openclaw matrix verify bootstrap
-```
-
-Verbose bootstrap diagnostics:
-
-```bash
-openclaw matrix verify bootstrap --verbose
-```
-
-Force a fresh cross-signing identity reset before bootstrapping:
-
-```bash
-openclaw matrix verify bootstrap --force-reset-cross-signing
-```
-
-Verify this device with a recovery key:
-
-```bash
-openclaw matrix verify device "<your-recovery-key>"
-```
-
-Verbose device verification details:
-
-```bash
-openclaw matrix verify device "<your-recovery-key>" --verbose
-```
-
-Check room-key backup health:
-
-```bash
-openclaw matrix verify backup status
-```
-
-Verbose backup health diagnostics:
-
-```bash
-openclaw matrix verify backup status --verbose
-```
-
-Restore room keys from server backup:
-
-```bash
-openclaw matrix verify backup restore
-```
-
-Verbose restore diagnostics:
-
-```bash
-openclaw matrix verify backup restore --verbose
-```
-
-Delete the current server backup and create a fresh backup baseline. If the stored
-backup key cannot be loaded cleanly, this reset can also recreate secret storage so
-future cold starts can load the new backup key:
-
-```bash
-openclaw matrix verify backup reset --yes
-```
-
-All `verify` commands are concise by default (including quiet internal SDK logging) and show detailed diagnostics only with `--verbose`.
-Use `--json` for full machine-readable output when scripting.
+| Command                                                        | Purpose                                                                             |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `openclaw matrix verify status`                                | Check cross-signing and device verification state                                   |
+| `openclaw matrix verify status --include-recovery-key --json`  | Include the stored recovery key                                                     |
+| `openclaw matrix verify bootstrap`                             | Bootstrap cross-signing and verification (see below)                                |
+| `openclaw matrix verify bootstrap --force-reset-cross-signing` | Discard the current cross-signing identity and create a new one                     |
+| `openclaw matrix verify device "<recovery-key>"`               | Verify this device with a recovery key                                              |
+| `openclaw matrix verify backup status`                         | Check room-key backup health                                                        |
+| `openclaw matrix verify backup restore`                        | Restore room keys from server backup                                                |
+| `openclaw matrix verify backup reset --yes`                    | Delete the current backup and create a fresh baseline (may recreate secret storage) |
 
 In multi-account setups, Matrix CLI commands use the implicit Matrix default account unless you pass `--account <id>`.
 If you configure multiple named accounts, set `channels.matrix.defaultAccount` first or those implicit CLI operations will stop and ask you to choose an account explicitly.
@@ -559,41 +333,32 @@ openclaw matrix devices list --account assistant
 
 When encryption is disabled or unavailable for a named account, Matrix warnings and verification errors point at that account's config key, for example `channels.matrix.accounts.assistant.encryption`.
 
-### What "verified" means
+<AccordionGroup>
+  <Accordion title="What verified means">
+    OpenClaw treats a device as verified only when your own cross-signing identity signs it. `verify status --verbose` exposes three trust signals:
 
-OpenClaw treats this Matrix device as verified only when it is verified by your own cross-signing identity.
-In practice, `openclaw matrix verify status --verbose` exposes three trust signals:
+    - `Locally trusted`: trusted by this client only
+    - `Cross-signing verified`: the SDK reports verification via cross-signing
+    - `Signed by owner`: signed by your own self-signing key
 
-- `Locally trusted`: this device is trusted by the current client only
-- `Cross-signing verified`: the SDK reports the device as verified through cross-signing
-- `Signed by owner`: the device is signed by your own self-signing key
+    `Verified by owner` becomes `yes` only when cross-signing or owner-signing is present. Local trust alone is not enough.
 
-`Verified by owner` becomes `yes` only when cross-signing verification or owner-signing is present.
-Local trust by itself is not enough for OpenClaw to treat the device as fully verified.
+  </Accordion>
 
-### What bootstrap does
+  <Accordion title="What bootstrap does">
+    `verify bootstrap` is the repair and setup command for encrypted accounts. In order, it:
 
-`openclaw matrix verify bootstrap` is the repair and setup command for encrypted Matrix accounts.
-It does all of the following in order:
+    - bootstraps secret storage, reusing an existing recovery key when possible
+    - bootstraps cross-signing and uploads missing public cross-signing keys
+    - marks and cross-signs the current device
+    - creates a server-side room-key backup if one does not already exist
 
-- bootstraps secret storage, reusing an existing recovery key when possible
-- bootstraps cross-signing and uploads missing public cross-signing keys
-- attempts to mark and cross-sign the current device
-- creates a new server-side room-key backup if one does not already exist
+    If the homeserver requires UIA to upload cross-signing keys, OpenClaw tries no-auth first, then `m.login.dummy`, then `m.login.password` (requires `channels.matrix.password`). Use `--force-reset-cross-signing` only when intentionally discarding the current identity.
 
-If the homeserver requires interactive auth to upload cross-signing keys, OpenClaw tries the upload without auth first, then with `m.login.dummy`, then with `m.login.password` when `channels.matrix.password` is configured.
+  </Accordion>
 
-Use `--force-reset-cross-signing` only when you intentionally want to discard the current cross-signing identity and create a new one.
-
-If you intentionally want to discard the current room-key backup and start a new
-backup baseline for future messages, use `openclaw matrix verify backup reset --yes`.
-Do this only when you accept that unrecoverable old encrypted history will stay
-unavailable and that OpenClaw may recreate secret storage if the current backup
-secret cannot be loaded safely.
-
-### Fresh backup baseline
-
-If you want to keep future encrypted messages working and accept losing unrecoverable old history, run these commands in order:
+  <Accordion title="Fresh backup baseline">
+    If you want to keep future encrypted messages working and accept losing unrecoverable old history:
 
 ```bash
 openclaw matrix verify backup reset --yes
@@ -601,72 +366,45 @@ openclaw matrix verify backup status --verbose
 openclaw matrix verify status
 ```
 
-Add `--account <id>` to each command when you want to target a named Matrix account explicitly.
+    Add `--account <id>` to target a named account. This can also recreate secret storage if the current backup secret cannot be loaded safely.
 
-### Startup behavior
+  </Accordion>
 
-When `encryption: true`, Matrix defaults `startupVerification` to `"if-unverified"`.
-On startup, if this device is still unverified, Matrix will request self-verification in another Matrix client,
-skip duplicate requests while one is already pending, and apply a local cooldown before retrying after restarts.
-Failed request attempts retry sooner than successful request creation by default.
-Set `startupVerification: "off"` to disable automatic startup requests, or tune `startupVerificationCooldownHours`
-if you want a shorter or longer retry window.
+  <Accordion title="Startup behavior">
+    With `encryption: true`, `startupVerification` defaults to `"if-unverified"`. On startup an unverified device requests self-verification in another Matrix client, skipping duplicates and applying a cooldown. Tune with `startupVerificationCooldownHours` or disable with `startupVerification: "off"`.
 
-Startup also performs a conservative crypto bootstrap pass automatically.
-That pass tries to reuse the current secret storage and cross-signing identity first, and avoids resetting cross-signing unless you run an explicit bootstrap repair flow.
+    Startup also runs a conservative crypto bootstrap pass that reuses the current secret storage and cross-signing identity. If bootstrap state is broken, OpenClaw attempts a guarded repair even without `channels.matrix.password`; if the homeserver requires password UIA, startup logs a warning and stays non-fatal. Already-owner-signed devices are preserved.
 
-If startup still finds broken bootstrap state, OpenClaw can attempt a guarded repair path even when `channels.matrix.password` is not configured.
-If the homeserver requires password-based UIA for that repair, OpenClaw logs a warning and keeps startup non-fatal instead of aborting the bot.
-If the current device is already owner-signed, OpenClaw preserves that identity instead of resetting it automatically.
+    See [Matrix migration](/install/migrating-matrix) for the full upgrade flow.
 
-See [Matrix migration](/install/migrating-matrix) for the full upgrade flow, limits, recovery commands, and common migration messages.
+  </Accordion>
 
-### Verification notices
+  <Accordion title="Verification notices">
+    Matrix posts verification lifecycle notices into the strict DM verification room as `m.notice` messages: request, ready (with "Verify by emoji" guidance), start/completion, and SAS (emoji/decimal) details when available.
 
-Matrix posts verification lifecycle notices directly into the strict DM verification room as `m.notice` messages.
-That includes:
+    Incoming requests from another Matrix client are tracked and auto-accepted. For self-verification, OpenClaw starts the SAS flow automatically and confirms its own side once emoji verification is available — you still need to compare and confirm "They match" in your Matrix client.
 
-- verification request notices
-- verification ready notices (with explicit "Verify by emoji" guidance)
-- verification start and completion notices
-- SAS details (emoji and decimal) when available
+    Verification system notices are not forwarded to the agent chat pipeline.
 
-Incoming verification requests from another Matrix client are tracked and auto-accepted by OpenClaw.
-For self-verification flows, OpenClaw also starts the SAS flow automatically when emoji verification becomes available and confirms its own side.
-For verification requests from another Matrix user/device, OpenClaw auto-accepts the request and then waits for the SAS flow to proceed normally.
-You still need to compare the emoji or decimal SAS in your Matrix client and confirm "They match" there to complete the verification.
+  </Accordion>
 
-OpenClaw does not auto-accept self-initiated duplicate flows blindly. Startup skips creating a new request when a self-verification request is already pending.
-
-Verification protocol/system notices are not forwarded to the agent chat pipeline, so they do not produce `NO_REPLY`.
-
-### Device hygiene
-
-Old OpenClaw-managed Matrix devices can accumulate on the account and make encrypted-room trust harder to reason about.
-List them with:
+  <Accordion title="Device hygiene">
+    Old OpenClaw-managed devices can accumulate. List and prune:
 
 ```bash
 openclaw matrix devices list
-```
-
-Remove stale OpenClaw-managed devices with:
-
-```bash
 openclaw matrix devices prune-stale
 ```
 
-### Crypto store
+  </Accordion>
 
-Matrix E2EE uses the official `matrix-js-sdk` Rust crypto path in Node, with `fake-indexeddb` as the IndexedDB shim. Crypto state is persisted to a snapshot file (`crypto-idb-snapshot.json`) and restored on startup. The snapshot file is sensitive runtime state stored with restrictive file permissions.
+  <Accordion title="Crypto store">
+    Matrix E2EE uses the official `matrix-js-sdk` Rust crypto path with `fake-indexeddb` as the IndexedDB shim. Crypto state persists to `crypto-idb-snapshot.json` (restrictive file permissions).
 
-Encrypted runtime state lives under per-account, per-user token-hash roots in
-`~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/`.
-That directory contains the sync store (`bot-storage.json`), crypto store (`crypto/`),
-recovery key file (`recovery-key.json`), IndexedDB snapshot (`crypto-idb-snapshot.json`),
-thread bindings (`thread-bindings.json`), and startup verification state (`startup-verification.json`).
-When the token changes but the account identity stays the same, OpenClaw reuses the best existing
-root for that account/homeserver/user tuple so prior sync state, crypto state, thread bindings,
-and startup verification state remain visible.
+    Encrypted runtime state lives under `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/` and includes the sync store, crypto store, recovery key, IDB snapshot, thread bindings, and startup verification state. When the token changes but the account identity stays the same, OpenClaw reuses the best existing root so prior state remains visible.
+
+  </Accordion>
+</AccordionGroup>
 
 ## Profile management
 

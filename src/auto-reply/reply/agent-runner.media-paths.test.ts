@@ -68,6 +68,54 @@ vi.mock("./reply-media-paths.runtime.js", async (importOriginal) => {
 
 let runReplyAgent: typeof import("./agent-runner.js").runReplyAgent;
 
+function makeRunReplyAgentParams(
+  overrides: Partial<Parameters<typeof runReplyAgent>[0]> & {
+    provider?: string;
+    prompt?: string;
+    workspaceDir?: string;
+  } = {},
+): Parameters<typeof runReplyAgent>[0] {
+  const provider = overrides.provider ?? "whatsapp";
+  const prompt = overrides.prompt ?? "generate chart";
+  const workspaceDir = overrides.workspaceDir ?? "/tmp/workspace";
+
+  return {
+    commandBody: prompt,
+    followupRun: createMockFollowupRun({
+      prompt,
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        messageProvider: provider,
+        workspaceDir,
+      },
+    }) as unknown as FollowupRun,
+    queueKey: "main",
+    resolvedQueue: { mode: "interrupt" } as QueueSettings,
+    shouldSteer: false,
+    shouldFollowup: false,
+    isActive: false,
+    isStreaming: false,
+    typing: createMockTypingController(),
+    sessionCtx: {
+      Provider: provider,
+      Surface: provider,
+      To: "chat-1",
+      OriginatingTo: "chat-1",
+      AccountId: "default",
+      MessageSid: "msg-1",
+    } as unknown as TemplateContext,
+    defaultModel: "anthropic/claude",
+    resolvedVerboseLevel: "off",
+    isNewSession: false,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    shouldInjectGroupIntro: false,
+    typingMode: "instant",
+    ...overrides,
+  };
+}
+
 describe("runReplyAgent media path normalization", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -126,40 +174,12 @@ describe("runReplyAgent media path normalization", () => {
       },
     });
 
-    const result = await runReplyAgent({
-      commandBody: "generate",
-      followupRun: createMockFollowupRun({
+    const result = await runReplyAgent(
+      makeRunReplyAgentParams({
+        provider: "telegram",
         prompt: "generate",
-        run: {
-          agentId: "main",
-          agentDir: "/tmp/agent",
-          messageProvider: "telegram",
-          workspaceDir: "/tmp/workspace",
-        },
-      }) as unknown as FollowupRun,
-      queueKey: "main",
-      resolvedQueue: { mode: "interrupt" } as QueueSettings,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing: createMockTypingController(),
-      sessionCtx: {
-        Provider: "telegram",
-        Surface: "telegram",
-        To: "chat-1",
-        OriginatingTo: "chat-1",
-        AccountId: "default",
-        MessageSid: "msg-1",
-      } as unknown as TemplateContext,
-      defaultModel: "anthropic/claude",
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
+      }),
+    );
 
     expect(result).toMatchObject({
       mediaUrl: "/tmp/outbound-media/generated.png",
@@ -205,43 +225,13 @@ describe("runReplyAgent media path normalization", () => {
       },
     );
 
-    const result = await runReplyAgent({
-      commandBody: "generate chart",
-      followupRun: createMockFollowupRun({
-        prompt: "generate chart",
-        run: {
-          agentId: "main",
-          agentDir: "/tmp/agent",
-          messageProvider: "whatsapp",
-          workspaceDir: "/tmp/workspace",
+    const result = await runReplyAgent(
+      makeRunReplyAgentParams({
+        opts: {
+          onBlockReply,
         },
-      }) as unknown as FollowupRun,
-      queueKey: "main",
-      resolvedQueue: { mode: "interrupt" } as QueueSettings,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing: createMockTypingController(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        Surface: "whatsapp",
-        To: "chat-1",
-        OriginatingTo: "chat-1",
-        AccountId: "default",
-        MessageSid: "msg-1",
-      } as unknown as TemplateContext,
-      defaultModel: "anthropic/claude",
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-      opts: {
-        onBlockReply,
-      },
-    });
+      }),
+    );
 
     expect(result).toBeUndefined();
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
@@ -276,43 +266,13 @@ describe("runReplyAgent media path normalization", () => {
       },
     });
 
-    await runReplyAgent({
-      commandBody: "generate chart",
-      followupRun: createMockFollowupRun({
-        prompt: "generate chart",
-        run: {
-          agentId: "main",
-          agentDir: "/tmp/agent",
-          messageProvider: "whatsapp",
-          workspaceDir: "/tmp/workspace",
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        opts: {
+          onBlockReply: vi.fn(),
         },
-      }) as unknown as FollowupRun,
-      queueKey: "main",
-      resolvedQueue: { mode: "interrupt" } as QueueSettings,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing: createMockTypingController(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        Surface: "whatsapp",
-        To: "chat-1",
-        OriginatingTo: "chat-1",
-        AccountId: "default",
-        MessageSid: "msg-1",
-      } as unknown as TemplateContext,
-      defaultModel: "anthropic/claude",
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-      opts: {
-        onBlockReply: vi.fn(),
-      },
-    });
+      }),
+    );
 
     // The .runtime import is only used by agent-runner-execution.ts. After the fix,
     // runAgentTurnWithFallback receives the context from the caller and never

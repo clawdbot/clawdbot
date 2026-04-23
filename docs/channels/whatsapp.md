@@ -5,8 +5,6 @@ read_when:
 title: "WhatsApp"
 ---
 
-# WhatsApp (Web channel)
-
 Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session(s).
 
 ## Install (on demand)
@@ -250,7 +248,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - `<media:document>`
     - `<media:sticker>`
 
-    Location and contact payloads are normalized into textual context before routing.
+    Location bodies use terse coordinate text. Location labels/comments and contact/vCard details are rendered as fenced untrusted metadata, not inline prompt text.
 
   </Accordion>
 

@@ -4,10 +4,8 @@ read_when:
   - Learning how to configure OpenClaw
   - Looking for configuration examples
   - Setting up OpenClaw for the first time
-title: "Configuration Examples"
+title: "Configuration examples"
 ---
-
-# Configuration Examples
 
 Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
@@ -236,7 +234,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       userTimezone: "America/Chicago",
       model: {
         primary: "anthropic/claude-sonnet-4-6",
-        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.4"],
+        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.5"],
       },
       imageModel: {
         primary: "openrouter/anthropic/claude-sonnet-4-6",
@@ -244,7 +242,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-        "openai/gpt-5.4": { alias: "gpt" },
+        "openai/gpt-5.5": { alias: "gpt" },
       },
       skills: ["github", "weather"], // inherited by agents that omit list[].skills
       thinkingDefault: "low",

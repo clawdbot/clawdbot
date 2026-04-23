@@ -2138,15 +2138,10 @@ if ! declare -F extract_openclaw_semver >/dev/null 2>&1; then
 # Inline fallback when version-parse.sh could not be sourced (for example, stdin install).
 extract_openclaw_semver() {
     local raw="${1:-}"
-    local parsed=""
-    parsed="$(
-        printf '%s\n' "$raw" \
-            | tr -d '\r' \
-            | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?' \
-            | head -n 1 \
-            || true
-    )"
-    printf '%s' "${parsed#v}"
+    raw="${raw//$'\r'/}"
+    if [[ "$raw" =~ v?([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?) ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    fi
 }
 fi
 
@@ -2158,7 +2153,9 @@ resolve_openclaw_version() {
         claw="$(command -v openclaw)"
     fi
     if [[ -n "$claw" ]]; then
-        raw_version_output=$("$claw" --version 2>/dev/null | head -n 1 | tr -d '\r')
+        raw_version_output=$("$claw" --version 2>/dev/null || true)
+        raw_version_output="${raw_version_output%%$'\n'*}"
+        raw_version_output="${raw_version_output//$'\r'/}"
         version="$(extract_openclaw_semver "$raw_version_output")"
         if [[ -z "$version" ]]; then
             version="$raw_version_output"

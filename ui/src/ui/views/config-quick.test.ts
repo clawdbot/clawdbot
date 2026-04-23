@@ -6,7 +6,7 @@ import { renderQuickSettings, type QuickSettingsProps } from "./config-quick.ts"
 
 function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettingsProps {
   return {
-    currentModel: "gpt-5.4",
+    currentModel: "gpt-5.5",
     thinkingLevel: "off",
     fastMode: false,
     onModelChange: vi.fn(),

@@ -2,7 +2,7 @@
 summary: "Setup guide for developers working on the OpenClaw macOS app"
 read_when:
   - Setting up the macOS development environment
-title: "macOS Dev Setup"
+title: "macOS dev setup"
 ---
 
 # macOS Developer Setup

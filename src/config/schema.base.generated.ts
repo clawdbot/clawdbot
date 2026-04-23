@@ -824,6 +824,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       exclusiveMinimum: 0,
                       maximum: 20971520,
                     },
+                    allowInsecurePath: {
+                      type: "boolean",
+                    },
                   },
                   required: ["source", "path"],
                   additionalProperties: false,
@@ -27728,6 +27731,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.22",
+  version: "2026.4.23",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

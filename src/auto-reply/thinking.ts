@@ -230,7 +230,11 @@ export function resolveThinkingDefaultForModel(params: {
   if (profile.defaultLevel) {
     return profile.defaultLevel;
   }
-  return resolveThinkingDefaultForModelFallback(params);
+  const fallback = resolveThinkingDefaultForModelFallback(params);
+  if (fallback === "off") {
+    return "off";
+  }
+  return resolveSupportedThinkingLevelFromProfile(profile, "medium");
 }
 
 export function resolveLargestSupportedThinkingLevel(
@@ -252,20 +256,27 @@ export function isThinkingLevelSupported(params: {
   return supportsThinkingLevel(params.provider, params.model, params.level);
 }
 
+function resolveSupportedThinkingLevelFromProfile(
+  profile: ResolvedThinkingProfile,
+  level: ThinkLevel,
+): ThinkLevel {
+  if (profile.levels.some((entry) => entry.id === level)) {
+    return level;
+  }
+  const requestedRank = THINKING_LEVEL_RANKS[level];
+  const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
+  return (
+    ranked.find((entry) => entry.id !== "off" && entry.rank <= requestedRank)?.id ??
+    ranked.find((entry) => entry.id !== "off")?.id ??
+    "off"
+  );
+}
+
 export function resolveSupportedThinkingLevel(params: {
   provider?: string | null;
   model?: string | null;
   level: ThinkLevel;
 }): ThinkLevel {
   const profile = resolveThinkingProfile({ provider: params.provider, model: params.model });
-  if (profile.levels.some((entry) => entry.id === params.level)) {
-    return params.level;
-  }
-  const requestedRank = THINKING_LEVEL_RANKS[params.level];
-  const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
-  return (
-    ranked.find((level) => level.id !== "off" && level.rank <= requestedRank)?.id ??
-    ranked.find((level) => level.id !== "off")?.id ??
-    "off"
-  );
+  return resolveSupportedThinkingLevelFromProfile(profile, params.level);
 }

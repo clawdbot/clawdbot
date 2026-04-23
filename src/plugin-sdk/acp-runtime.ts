@@ -94,6 +94,7 @@ export async function tryDispatchAcpReplyHook(
     dispatcher: ctx.dispatcher,
     runId: event.runId,
     sessionKey: event.sessionKey,
+    images: event.images,
     abortSignal: ctx.abortSignal,
     inboundAudio: event.inboundAudio,
     sessionTtsAuto: event.sessionTtsAuto,

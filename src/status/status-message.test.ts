@@ -1,29 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { normalizeTestText } from "../../test/helpers/normalize-text.js";
-import { buildStatusMessage } from "./status-message.js";
+import { formatFastModeLabel } from "./status-labels.js";
 
-const buildFastStatus = (model: string, fastMode: boolean) =>
-  normalizeTestText(
-    buildStatusMessage({
-      modelAuth: "api-key",
-      activeModelAuth: "api-key",
-      agent: { model },
-      sessionEntry: {
-        sessionId: "fast-status",
-        updatedAt: 0,
-        fastMode,
-      },
-      sessionKey: "agent:main:main",
-      queue: { mode: "collect", depth: 0 },
-    }),
-  );
-
-describe("buildStatusMessage fast mode labels", () => {
+describe("formatFastModeLabel", () => {
   it("shows fast mode when enabled", () => {
-    expect(buildFastStatus("openai/gpt-5.4", true)).toContain("Fast");
+    expect(formatFastModeLabel(true)).toBe("Fast");
   });
 
   it("hides fast mode when disabled", () => {
-    expect(buildFastStatus("anthropic/claude-opus-4-6", false)).not.toContain("Fast");
+    expect(formatFastModeLabel(false)).toBeNull();
   });
 });

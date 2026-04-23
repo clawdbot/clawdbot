@@ -431,6 +431,22 @@ describe("runCliAgent spawn path", () => {
     expect(params.senderIsOwner).toBe(false);
   });
 
+  it("forwards channel context through the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      timeoutMs: 1_000,
+      runId: "run-claude-channel-wrapper",
+      messageChannel: "telegram",
+      messageProvider: "acp",
+    });
+
+    expect(params.messageChannel).toBe("telegram");
+    expect(params.messageProvider).toBe("acp");
+  });
+
   it("forwards static extra system prompt through the compat wrapper", () => {
     const params = buildRunClaudeCliAgentParams({
       sessionId: "openclaw-session",

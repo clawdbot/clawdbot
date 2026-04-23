@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 
@@ -18,15 +19,6 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
-
-let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
-let ensureAuthProfileStore: typeof import("./auth-profiles.js").ensureAuthProfileStore;
-
-async function loadFreshAuthProfilesModuleForTest() {
-  vi.resetModules();
-  ({ clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } =
-    await import("./auth-profiles.js"));
-}
 
 async function withAgentDirEnv(prefix: string, run: (agentDir: string) => void | Promise<void>) {
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -75,14 +67,15 @@ function writeAuthStore(agentDir: string, key: string) {
 }
 
 describe("auth profile store cache", () => {
-  beforeEach(async () => {
-    await loadFreshAuthProfilesModuleForTest();
+  beforeEach(() => {
+    clearRuntimeAuthProfileStoreSnapshots();
+    mocks.resolveExternalCliAuthProfiles.mockReset();
+    mocks.resolveExternalCliAuthProfiles.mockReturnValue([]);
   });
 
   afterEach(() => {
     vi.useRealTimers();
     clearRuntimeAuthProfileStoreSnapshots();
-    vi.clearAllMocks();
   });
 
   function createRuntimeOnlyOverlay(access: string): RuntimeOnlyOverlay {

@@ -434,21 +434,6 @@ describe("pairing setup code", () => {
         urlSource: "gateway.bind=custom",
       },
     },
-    {
-      name: "allows mdns hostname cleartext setup urls",
-      config: {
-        gateway: {
-          bind: "custom",
-          customBindHost: "gateway.local",
-          auth: { mode: "token", token: "tok_123" },
-        },
-      } satisfies ResolveSetupConfig,
-      expected: {
-        authLabel: "token",
-        url: "ws://gateway.local:18789",
-        urlSource: "gateway.bind=custom",
-      },
-    },
   ] as const)("$name", async ({ config, options, expected }) => {
     await expectResolvedSetupSuccessCase({
       config,
@@ -468,6 +453,17 @@ describe("pairing setup code", () => {
         },
       } satisfies ResolveSetupConfig,
       expectedError: "Tailscale and public mobile pairing require a secure gateway URL",
+    },
+    {
+      name: "rejects mdns hostname cleartext setup urls",
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      expectedError: "private LAN IP address",
     },
     {
       name: "rejects tailnet bind remote ws setup urls for mobile pairing",

@@ -410,7 +410,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     provider: "openai",
     api: "openai-responses",
     envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-    preferredModelIds: ["gpt-5.4-mini", "gpt-5.4", "gpt-5.2"],
+    preferredModelIds: ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4", "gpt-5.2"],
   });
   const anthropic = await resolveLiveDirectModel({
     provider: "anthropic",

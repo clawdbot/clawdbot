@@ -2,15 +2,10 @@
 
 extract_openclaw_semver() {
   local raw="${1:-}"
-  local parsed=""
-  parsed="$(
-    printf '%s\n' "$raw" \
-      | tr -d '\r' \
-      | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?' \
-      | head -n 1 \
-      || true
-  )"
-  printf '%s' "${parsed#v}"
+  raw="${raw//$'\r'/}"
+  if [[ "$raw" =~ v?([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?) ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
 }
 
 quiet_npm() {

@@ -21,6 +21,8 @@ const auditDreamingArtifacts = vi.hoisted(() => vi.fn());
 const auditShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
 const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
 const repairShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
+const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
+const maybeRepairWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -83,9 +85,18 @@ vi.mock("../plugin-sdk/memory-core-engine-runtime.js", () => ({
   ]),
 }));
 
+vi.mock("./doctor-workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-workspace.js")>();
+  return {
+    ...actual,
+    noteWorkspaceMemoryHealth,
+    maybeRepairWorkspaceMemoryHealth,
+  };
+});
+
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } from "./doctor-memory-search.js";
-import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
+import { detectLegacyWorkspaceDirs, formatRootMemoryFilesWarning } from "./doctor-workspace.js";
 
 function resetMemoryRecallMocks() {
   auditShortTermPromotionArtifacts.mockReset();
@@ -126,6 +137,8 @@ function resetMemoryRecallMocks() {
     rewroteStore: false,
     removedStaleLock: false,
   });
+  noteWorkspaceMemoryHealth.mockClear();
+  maybeRepairWorkspaceMemoryHealth.mockClear();
 }
 
 describe("noteMemorySearchHealth", () => {
@@ -534,6 +547,21 @@ describe("noteMemorySearchHealth", () => {
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain("OPENAI_API_KEY");
   });
+
+  it("does not warn when only lowercase memory.md exists", async () => {
+    resolveAgentWorkspaceDir.mockReturnValue("/tmp/agent-default/workspace");
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(noteWorkspaceMemoryHealth).toHaveBeenCalledWith(cfg);
+    const workspaceNote = note.mock.calls.find(([, title]) => title === "Workspace memory");
+    expect(workspaceNote).toBeUndefined();
+  });
 });
 
 describe("memory recall doctor integration", () => {
@@ -632,6 +660,7 @@ describe("memory recall doctor integration", () => {
 
     await maybeRepairMemoryRecallHealth({ cfg, prompter });
 
+    expect(maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({ cfg, prompter });
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalled();
     expect(repairShortTermPromotionArtifacts).toHaveBeenCalledWith({
       workspaceDir: "/tmp/agent-default/workspace",
@@ -674,6 +703,7 @@ describe("memory recall doctor integration", () => {
 
     await maybeRepairMemoryRecallHealth({ cfg, prompter });
 
+    expect(maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({ cfg, prompter });
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalled();
     expect(repairDreamingArtifacts).toHaveBeenCalledWith({
       workspaceDir: "/tmp/agent-default/workspace",
@@ -691,5 +721,22 @@ describe("detectLegacyWorkspaceDirs", () => {
     const detection = detectLegacyWorkspaceDirs({ workspaceDir });
     expect(detection.activeWorkspace).toBe(path.resolve(workspaceDir));
     expect(detection.legacyDirs).toEqual([]);
+  });
+});
+
+describe("formatRootMemoryFilesWarning", () => {
+  it("explains split-brain when both root memory files exist", () => {
+    const message = formatRootMemoryFilesWarning({
+      workspaceDir: "/workspace",
+      canonicalPath: "/workspace/MEMORY.md",
+      legacyPath: "/workspace/memory.md",
+      canonicalExists: true,
+      legacyExists: true,
+      canonicalBytes: 12,
+      legacyBytes: 34,
+    });
+    expect(message).toContain("Split root durable memory files detected");
+    expect(message).toContain("shadowed");
+    expect(message).toContain("doctor --fix");
   });
 });

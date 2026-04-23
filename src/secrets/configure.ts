@@ -446,6 +446,13 @@ async function promptFileProvider(
     initialValue: base?.maxBytes,
     max: 20 * 1024 * 1024,
   });
+  const allowInsecurePath = assertNoCancel(
+    await confirm({
+      message: "Allow insecure file path checks?",
+      initialValue: base?.allowInsecurePath ?? false,
+    }),
+    "Secrets configure cancelled.",
+  );
 
   return {
     source: "file",
@@ -453,6 +460,7 @@ async function promptFileProvider(
     mode,
     ...(timeoutMs ? { timeoutMs } : {}),
     ...(maxBytes ? { maxBytes } : {}),
+    ...(allowInsecurePath ? { allowInsecurePath: true } : {}),
   };
 }
 

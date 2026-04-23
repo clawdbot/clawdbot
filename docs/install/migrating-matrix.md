@@ -6,8 +6,6 @@ read_when:
 title: "Matrix migration"
 ---
 
-# Matrix migration
-
 This page covers upgrades from the previous public `matrix` plugin to the current implementation.
 
 For most users, the upgrade is in place:

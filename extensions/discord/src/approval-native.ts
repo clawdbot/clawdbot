@@ -180,7 +180,7 @@ export function createDiscordApprovalCapability(configOverride?: DiscordExecAppr
         accountId && accountId !== "default"
           ? `channels.discord.accounts.${accountId}`
           : "channels.discord";
-      return `Approve it from the Web UI or terminal UI for now. Discord supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+      return `Approve it from the Web UI or terminal UI for now. Discord supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${prefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`;
     },
     listAccountIds: listDiscordAccountIds,
     hasApprovers: ({ cfg, accountId }) =>

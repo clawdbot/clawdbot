@@ -6,7 +6,11 @@ import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
-import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
+import {
+  SUBAGENT_SPAWN_CONTEXT_MODES,
+  SUBAGENT_SPAWN_MODES,
+  spawnSubagentDirect,
+} from "../subagent-spawn.js";
 import {
   describeSessionsSpawnTool,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
@@ -114,6 +118,10 @@ const SessionsSpawnToolSchema = Type.Object({
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
+  context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
+    description:
+      'Native subagent context mode. Omit or use "isolated" for a clean child session; use "fork" only when the child needs the requester transcript context.',
+  }),
   streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
   lightContext: Type.Optional(
     Type.Boolean({
@@ -185,10 +193,15 @@ export function createSessionsSpawnTool(
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const expectsCompletionMessage = params.expectsCompletionMessage !== false;
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
+      const context =
+        params.context === "fork" || params.context === "isolated" ? params.context : undefined;
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       if (runtime === "acp" && lightContext) {
         throw new Error("lightContext is only supported for runtime='subagent'.");
+      }
+      if (runtime === "acp" && context === "fork") {
+        throw new Error('context="fork" is only supported for runtime="subagent".');
       }
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
@@ -339,6 +352,7 @@ export function createSessionsSpawnTool(
           mode,
           cleanup,
           sandbox,
+          context,
           lightContext,
           expectsCompletionMessage,
           attachments,

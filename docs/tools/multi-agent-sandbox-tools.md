@@ -1,6 +1,6 @@
 ---
 summary: “Per-agent sandbox + tool restrictions, precedence, and examples”
-title: Multi-Agent Sandbox & Tools
+title: Multi-agent sandbox & tools
 read_when: “You want per-agent sandboxing or per-agent tool allow/deny policies in a multi-agent gateway.”
 status: active
 ---
@@ -205,7 +205,7 @@ The filtering order is:
 Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
 If `agents.list[].tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
 If `agents.list[].tools.profile` is set, it overrides `tools.profile` for that agent.
-Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
+Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.5`).
 
 Tool policies support `group:*` shorthands that expand to multiple tools. See [Tool groups](/gateway/sandbox-vs-tool-policy-vs-elevated#tool-groups-shorthands) for the full list.
 

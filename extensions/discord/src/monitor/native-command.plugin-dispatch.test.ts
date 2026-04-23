@@ -543,12 +543,12 @@ describe("Discord native plugin command dispatch", () => {
                 "thread-123": {
                   enabled: true,
                   requireMention: false,
-                  users: ["owner"],
+                  users: ["user:owner"],
                 },
                 "parent-456": {
                   enabled: true,
                   requireMention: false,
-                  users: ["owner"],
+                  users: ["user:owner"],
                 },
               },
             },
@@ -613,12 +613,12 @@ describe("Discord native plugin command dispatch", () => {
                 "partial-thread-123": {
                   enabled: true,
                   requireMention: false,
-                  users: ["owner"],
+                  users: ["user:owner"],
                 },
                 "partial-parent-456": {
                   enabled: true,
                   requireMention: false,
-                  users: ["owner"],
+                  users: ["user:owner"],
                 },
               },
             },

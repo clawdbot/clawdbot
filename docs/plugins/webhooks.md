@@ -3,7 +3,7 @@ summary: "Webhooks plugin: authenticated TaskFlow ingress for trusted external a
 read_when:
   - You want to trigger or drive TaskFlows from an external system
   - You are configuring the bundled webhooks plugin
-title: "Webhooks Plugin"
+title: "Webhooks plugin"
 ---
 
 # Webhooks (plugin)

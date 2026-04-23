@@ -1,11 +1,9 @@
 ---
-title: Sandbox vs Tool Policy vs Elevated
 summary: "Why a tool is blocked: sandbox runtime, tool allow/deny policy, and elevated exec gates"
+title: Sandbox vs tool policy vs elevated
 read_when: "You hit 'sandbox jail' or see a tool/elevated refusal and want the exact config key to change."
 status: active
 ---
-
-# Sandbox vs Tool Policy vs Elevated
 
 OpenClaw has three related (but different) controls:
 
@@ -67,7 +65,7 @@ Rules of thumb:
 - If `allow` is non-empty, everything else is treated as blocked.
 - Tool policy is the hard stop: `/exec` cannot override a denied `exec` tool.
 - `/exec` only changes session defaults for authorized senders; it does not grant tool access.
-  Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
+  Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.5`).
 
 ### Tool groups (shorthands)
 

@@ -4,7 +4,7 @@ read_when:
   - Setting up OpenClaw on a Raspberry Pi
   - Running OpenClaw on ARM devices
   - Building a cheap always-on personal AI
-title: "Raspberry Pi (Platform)"
+title: "Raspberry Pi (platform)"
 ---
 
 # OpenClaw on Raspberry Pi

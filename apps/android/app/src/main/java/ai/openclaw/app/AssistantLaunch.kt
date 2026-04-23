@@ -34,7 +34,7 @@ fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
       AssistantLaunchRequest(
         source = "app_action",
         prompt = prompt,
-        autoSend = prompt != null,
+        autoSend = false,
       )
     }
 

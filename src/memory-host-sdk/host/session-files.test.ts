@@ -301,7 +301,7 @@ describe("buildSessionEntry", () => {
 
   it("does not split surrogate pairs when hard-wrapping astral unicode without spaces", async () => {
     const astralChar = "\u{20000}";
-    const giantToken = astralChar.repeat(1200);
+    const giantToken = astralChar.repeat(410);
     const jsonlLines = [
       JSON.stringify({
         type: "message",

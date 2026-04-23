@@ -224,7 +224,7 @@ describe("openai codex provider", () => {
           },
         },
       ],
-      defaultModel: "openai-codex/gpt-5.4",
+      defaultModel: "openai/gpt-5.5",
     });
     expect(result?.profiles[0]?.credential).not.toHaveProperty("idToken");
     expect(result?.profiles[0]?.credential).not.toHaveProperty("accountId");
@@ -329,6 +329,40 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("resolves gpt-5.5 and gpt-5.5-pro with launch pricing and codex-sized runtime cap", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      modelRegistry: createSingleModelRegistry(createCodexTemplate({ id: "gpt-5.4" })) as never,
+    });
+    const pro = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.5-pro",
+      modelRegistry: createSingleModelRegistry(createCodexTemplate({ id: "gpt-5.4-pro" })) as never,
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.5",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      cost: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 },
+    });
+    expect(pro).toMatchObject({
+      id: "gpt-5.5-pro",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
   it("resolves gpt-5.4-pro from a gpt-5.4 runtime template when legacy codex rows are absent", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
@@ -398,7 +432,7 @@ describe("openai codex provider", () => {
     expect(model).not.toHaveProperty("contextTokens");
   });
 
-  it("augments catalog with gpt-5.4 native contextWindow and runtime cap", () => {
+  it("augments catalog with gpt-5.5 and gpt-5.4 native metadata", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     const entries = provider.augmentModelCatalog?.({
@@ -415,6 +449,22 @@ describe("openai codex provider", () => {
       ],
     } as never);
 
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        id: "gpt-5.5",
+        contextWindow: 1_000_000,
+        contextTokens: 272_000,
+        cost: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 },
+      }),
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        id: "gpt-5.5-pro",
+        contextWindow: 1_000_000,
+        contextTokens: 272_000,
+        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+      }),
+    );
     expect(entries).toContainEqual(
       expect.objectContaining({
         id: "gpt-5.4",

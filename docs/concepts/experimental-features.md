@@ -1,13 +1,11 @@
 ---
-title: "Experimental Features"
 summary: "What experimental flags mean in OpenClaw and which ones are currently documented"
+title: "Experimental features"
 read_when:
   - You see an `.experimental` config key and want to know whether it is stable
   - You want to try preview runtime features without confusing them with normal defaults
   - You want one place to find the currently documented experimental flags
 ---
-
-# Experimental features
 
 Experimental features in OpenClaw are **opt-in preview surfaces**. They are
 behind explicit flags because they still need real-world mileage before they

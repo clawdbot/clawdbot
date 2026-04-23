@@ -2,7 +2,7 @@
 summary: "Redirect: flow commands live under `openclaw tasks flow`"
 read_when:
   - You encounter openclaw flows in older docs or release notes
-title: "flows (redirect)"
+title: "Flows (redirect)"
 ---
 
 # `openclaw tasks flow`

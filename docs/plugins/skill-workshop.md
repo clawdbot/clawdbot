@@ -1,14 +1,12 @@
 ---
-title: "Skill Workshop Plugin"
 summary: "Experimental capture of reusable procedures as workspace skills with review, approval, quarantine, and hot skill refresh"
+title: "Skill workshop plugin"
 read_when:
   - You want agents to turn corrections or reusable procedures into workspace skills
   - You are configuring procedural skill memory
   - You are debugging skill_workshop tool behavior
   - You are deciding whether to enable automatic skill creation
 ---
-
-# Skill Workshop Plugin
 
 Skill Workshop is **experimental**. It is disabled by default, its capture
 heuristics and reviewer prompts may change between releases, and automatic
@@ -46,7 +44,7 @@ It is not intended for:
 - secrets, credentials, or hidden prompt text
 - one-off instructions that will not repeat
 
-## Default State
+## Default state
 
 The bundled plugin is **experimental** and **disabled by default** unless it is
 explicitly enabled in `plugins.entries.skill-workshop`.
@@ -165,18 +163,18 @@ Recommended profiles:
 }
 ```
 
-## Capture Paths
+## Capture paths
 
 Skill Workshop has three capture paths.
 
-### Tool Suggestions
+### Tool suggestions
 
 The model can call `skill_workshop` directly when it sees a reusable procedure
 or when the user asks it to save/update a skill.
 
 This is the most explicit path and works even with `autoCapture: false`.
 
-### Heuristic Capture
+### Heuristic capture
 
 When `autoCapture` is enabled and `reviewMode` is `heuristic` or `hybrid`, the
 plugin scans successful turns for explicit user correction phrases:
@@ -201,7 +199,7 @@ uses topic hints to choose skill names for common workflows:
 Heuristic capture is intentionally narrow. It is for clear corrections and
 repeatable process notes, not for general transcript summarization.
 
-### LLM Reviewer
+### LLM reviewer
 
 When `autoCapture` is enabled and `reviewMode` is `llm` or `hybrid`, the plugin
 runs a compact embedded reviewer after thresholds are reached.
@@ -219,13 +217,9 @@ The reviewer has no tools:
 - `toolsAllow: []`
 - `disableMessageTool: true`
 
-It can return:
+The reviewer returns either `{ "action": "none" }` or one proposal. The `action` field is `create`, `append`, or `replace` — prefer `append`/`replace` when a relevant skill already exists; use `create` only when no existing skill fits.
 
-```json
-{ "action": "none" }
-```
-
-or one skill proposal:
+Example `create`:
 
 ```json
 {
@@ -238,37 +232,9 @@ or one skill proposal:
 }
 ```
 
-It can also append to an existing skill:
+`append` adds `section` + `body`. `replace` swaps `oldText` for `newText` in the named skill.
 
-```json
-{
-  "action": "append",
-  "skillName": "qa-scenario-workflow",
-  "title": "QA Scenario Workflow",
-  "reason": "Animated media QA needs reusable checks",
-  "description": "QA scenario workflow.",
-  "section": "Workflow",
-  "body": "- For animated GIF tasks, verify frame count and attribution before passing."
-}
-```
-
-Or replace exact text in an existing skill:
-
-```json
-{
-  "action": "replace",
-  "skillName": "screenshot-asset-workflow",
-  "title": "Screenshot Asset Workflow",
-  "reason": "Old validation missed image optimization",
-  "oldText": "- Replace the screenshot asset.",
-  "newText": "- Replace the screenshot asset, preserve dimensions, optimize the PNG, and run the relevant validation gate."
-}
-```
-
-Prefer `append` or `replace` when a relevant skill already exists. Use `create`
-only when no existing skill fits.
-
-## Proposal Lifecycle
+## Proposal lifecycle
 
 Every generated update becomes a proposal with:
 
@@ -304,7 +270,7 @@ Pending and quarantined proposals are deduplicated by skill name and change
 payload. The store keeps the newest pending/quarantined proposals up to
 `maxPending`.
 
-## Tool Reference
+## Tool reference
 
 The plugin registers one agent tool:
 
@@ -377,7 +343,7 @@ Fetch a proposal by id.
 
 ### `suggest`
 
-Create a proposal. With `approvalPolicy: "pending"`, this queues by default.
+Create a proposal. With `approvalPolicy: "pending"` (default), this queues instead of writing.
 
 ```json
 {
@@ -390,7 +356,8 @@ Create a proposal. With `approvalPolicy: "pending"`, this queues by default.
 }
 ```
 
-Force a safe write:
+<AccordionGroup>
+  <Accordion title="Force a safe write (apply: true)">
 
 ```json
 {
@@ -402,7 +369,9 @@ Force a safe write:
 }
 ```
 
-Force pending even in `approvalPolicy: "auto"`:
+  </Accordion>
+
+  <Accordion title="Force pending under auto policy (apply: false)">
 
 ```json
 {
@@ -414,7 +383,9 @@ Force pending even in `approvalPolicy: "auto"`:
 }
 ```
 
-Append to a section:
+  </Accordion>
+
+  <Accordion title="Append to a named section">
 
 ```json
 {
@@ -426,7 +397,9 @@ Append to a section:
 }
 ```
 
-Replace exact text:
+  </Accordion>
+
+  <Accordion title="Replace exact text">
 
 ```json
 {
@@ -436,6 +409,9 @@ Replace exact text:
   "newText": "- Check unresolved review threads, CI status, linked issues, and changed files before deciding."
 }
 ```
+
+  </Accordion>
+</AccordionGroup>
 
 ### `apply`
 
@@ -490,7 +466,7 @@ Example:
 Support files are workspace-scoped, path-checked, byte-limited by
 `maxSkillBytes`, scanned, and written atomically.
 
-## Skill Writes
+## Skill writes
 
 Skill Workshop writes only under:
 
@@ -525,7 +501,7 @@ For `replace`:
 All writes are atomic and refresh the in-memory skills snapshot immediately, so
 the new or updated skill can become visible without a Gateway restart.
 
-## Safety Model
+## Safety model
 
 Skill Workshop has a safety scanner on generated `SKILL.md` content and support
 files.
@@ -557,7 +533,7 @@ Quarantined proposals:
 To recover from a quarantined proposal, create a new safe proposal with the
 unsafe content removed. Do not edit the store JSON by hand.
 
-## Prompt Guidance
+## Prompt guidance
 
 When enabled, Skill Workshop injects a short prompt section that tells the agent
 to use `skill_workshop` for durable procedural memory.
@@ -578,7 +554,7 @@ The write mode text changes with `approvalPolicy`:
 - pending mode: queue suggestions; apply only after explicit approval
 - auto mode: apply safe workspace-skill updates when clearly reusable
 
-## Costs and Runtime Behavior
+## Costs and runtime behavior
 
 Heuristic capture does not call a model.
 
@@ -599,7 +575,7 @@ The reviewer:
 If the reviewer fails, times out, or returns invalid JSON, the plugin logs a
 warning/debug message and skips that review pass.
 
-## Operating Patterns
+## Operating patterns
 
 Use Skill Workshop when the user says:
 
@@ -683,7 +659,7 @@ Relevant logs:
 - `skill-workshop: reviewer skipped: ...`
 - `skill-workshop: reviewer found no update`
 
-## QA Scenarios
+## QA scenarios
 
 Repo-backed QA scenarios:
 
@@ -711,7 +687,7 @@ pnpm openclaw qa suite \
 The reviewer scenario is intentionally separate because it enables
 `reviewMode: "llm"` and exercises the embedded reviewer pass.
 
-## When Not To Enable Auto Apply
+## When not to enable auto apply
 
 Avoid `approvalPolicy: "auto"` when:
 
@@ -724,7 +700,7 @@ Avoid `approvalPolicy: "auto"` when:
 Use pending mode first. Switch to auto mode only after reviewing the kind of
 skills the agent proposes in that workspace.
 
-## Related Docs
+## Related docs
 
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)

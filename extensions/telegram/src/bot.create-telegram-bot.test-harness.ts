@@ -1,10 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  createReplyDispatcher,
-  resetInboundDedupe,
-  type GetReplyOptions,
-  type MsgContext,
-} from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -29,12 +24,6 @@ type ReplyPayloadLike = {
   mediaUrl?: string;
   mediaUrls?: string[];
   replyToId?: string;
-};
-
-const _EMPTY_REPLY_COUNTS: DispatchReplyWithBufferedBlockDispatcherResult["counts"] = {
-  block: 0,
-  final: 0,
-  tool: 0,
 };
 
 const { sessionStorePath } = vi.hoisted(() => ({
@@ -133,29 +122,22 @@ async function dispatchHarnessReplies(
   const reply = await runReply(params);
   const payloads: ReplyPayloadLike[] =
     reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
-  const dispatcher = createReplyDispatcher({
-    deliver: async (payload, info) => {
-      await params.dispatcherOptions.deliver?.(payload, info);
-    },
-    responsePrefix: params.dispatcherOptions.responsePrefix,
-    responsePrefixContextProvider: params.dispatcherOptions.responsePrefixContextProvider,
-    responsePrefixContext: params.dispatcherOptions.responsePrefixContext,
-    onHeartbeatStrip: params.dispatcherOptions.onHeartbeatStrip,
-    onSkip: (payload, info) => {
-      params.dispatcherOptions.onSkip?.(payload, info);
-    },
-    onError: (err, info) => {
-      params.dispatcherOptions.onError?.(err, info);
-    },
-  });
   let finalCount = 0;
   for (const payload of payloads) {
-    if (dispatcher.sendFinalReply(payload)) {
+    const text =
+      typeof payload.text === "string" &&
+      params.dispatcherOptions.responsePrefix &&
+      !payload.text.startsWith(params.dispatcherOptions.responsePrefix)
+        ? `${params.dispatcherOptions.responsePrefix} ${payload.text}`
+        : payload.text;
+    const finalPayload = text === payload.text ? payload : { ...payload, text };
+    try {
+      await params.dispatcherOptions.deliver?.(finalPayload, { kind: "final" });
       finalCount += 1;
+    } catch (err) {
+      params.dispatcherOptions.onError?.(err, { kind: "final" });
     }
   }
-  dispatcher.markComplete();
-  await dispatcher.waitForIdle();
   return {
     queuedFinal: finalCount > 0,
     counts: {
@@ -472,7 +454,6 @@ export function makeForumGroupMessageCtx(params?: {
 }
 
 beforeEach(() => {
-  resetInboundDedupe();
   loadConfig.mockReset();
   loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};

@@ -10,6 +10,7 @@ import {
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
@@ -27,8 +28,8 @@ import { resolveSlackWebClientOptions } from "../client.js";
 import { isSlackExecApprovalClientEnabled } from "../exec-approvals.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
-import { resolveSlackChannelAllowlist, type SlackChannelResolution } from "../resolve-channels.js";
-import { resolveSlackUserAllowlist, type SlackUserResolution } from "../resolve-users.js";
+import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
+import { resolveSlackUserAllowlist } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
@@ -43,99 +44,27 @@ import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import {
+  createSlackBoltApp,
+  createSlackSocketDisconnectWaiter,
+  formatSlackChannelResolved,
+  formatSlackUserResolved,
+  gracefulStopSlackApp,
+  publishSlackConnectedStatus,
+  publishSlackDisconnectedStatus,
+  resolveSlackBoltInterop,
+  resolveSlackSocketShutdownClient,
+  startSlackSocketAndWaitForDisconnect,
+  type SlackBoltResolvedExports,
+} from "./provider-support.js";
+import {
   formatUnknownError,
   getSocketEmitter,
   isNonRecoverableSlackAuthError,
   SLACK_SOCKET_RECONNECT_POLICY,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
-import { resolveTextChunkLimit } from "./reply.runtime.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
-
-type SlackAppConstructor = typeof import("@slack/bolt").App;
-type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
-type SlackSocketModeReceiverConstructor = typeof import("@slack/bolt").SocketModeReceiver;
-type SlackBoltResolvedExports = {
-  App: SlackAppConstructor;
-  HTTPReceiver: SlackHttpReceiverConstructor;
-  SocketModeReceiver: SlackSocketModeReceiverConstructor;
-};
-type SlackSocketShutdownClient = {
-  shuttingDown?: boolean;
-};
-type Constructor = abstract new (...args: never[]) => unknown;
-
-function isConstructorFunction<
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Constructor guard preserves the requested concrete Slack constructor type.
-  T extends Constructor,
->(value: unknown): value is T {
-  return typeof value === "function";
-}
-
-function resolveSlackBoltModule(value: unknown): SlackBoltResolvedExports | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const app = Reflect.get(value, "App");
-  const httpReceiver = Reflect.get(value, "HTTPReceiver");
-  const socketModeReceiver = Reflect.get(value, "SocketModeReceiver");
-  if (
-    !isConstructorFunction<SlackAppConstructor>(app) ||
-    !isConstructorFunction<SlackHttpReceiverConstructor>(httpReceiver) ||
-    !isConstructorFunction<SlackSocketModeReceiverConstructor>(socketModeReceiver)
-  ) {
-    return null;
-  }
-  return {
-    App: app,
-    HTTPReceiver: httpReceiver,
-    SocketModeReceiver: socketModeReceiver,
-  };
-}
-
-function resolveSlackBoltInterop(params: {
-  defaultImport: unknown;
-  namespaceImport: unknown;
-}): SlackBoltResolvedExports {
-  const { defaultImport, namespaceImport } = params;
-  const nestedDefault =
-    defaultImport && typeof defaultImport === "object"
-      ? Reflect.get(defaultImport, "default")
-      : undefined;
-  const namespaceDefault =
-    namespaceImport && typeof namespaceImport === "object"
-      ? Reflect.get(namespaceImport, "default")
-      : undefined;
-  const namespaceReceiver =
-    namespaceImport && typeof namespaceImport === "object"
-      ? Reflect.get(namespaceImport, "HTTPReceiver")
-      : undefined;
-  const namespaceSocketModeReceiver =
-    namespaceImport && typeof namespaceImport === "object"
-      ? Reflect.get(namespaceImport, "SocketModeReceiver")
-      : undefined;
-  const directModule =
-    resolveSlackBoltModule(defaultImport) ??
-    resolveSlackBoltModule(nestedDefault) ??
-    resolveSlackBoltModule(namespaceDefault) ??
-    resolveSlackBoltModule(namespaceImport);
-  if (directModule) {
-    return directModule;
-  }
-  if (
-    isConstructorFunction<SlackAppConstructor>(defaultImport) &&
-    isConstructorFunction<SlackHttpReceiverConstructor>(namespaceReceiver) &&
-    isConstructorFunction<SlackSocketModeReceiverConstructor>(namespaceSocketModeReceiver)
-  ) {
-    return {
-      App: defaultImport,
-      HTTPReceiver: namespaceReceiver,
-      SocketModeReceiver: namespaceSocketModeReceiver,
-    };
-  }
-  throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
-}
 
 let slackBoltInterop: SlackBoltResolvedExports | undefined;
 
@@ -161,158 +90,6 @@ function parseApiAppIdFromAppToken(raw?: string) {
   return match?.[1]?.toUpperCase();
 }
 
-function publishSlackConnectedStatus(setStatus?: (next: Record<string, unknown>) => void) {
-  if (!setStatus) {
-    return;
-  }
-  const now = Date.now();
-  setStatus({
-    connected: true,
-    lastConnectedAt: now,
-    healthState: "healthy",
-    lastError: null,
-  });
-}
-
-function publishSlackDisconnectedStatus(
-  setStatus?: (next: Record<string, unknown>) => void,
-  error?: unknown,
-) {
-  if (!setStatus) {
-    return;
-  }
-  const at = Date.now();
-  const message = error ? formatUnknownError(error) : undefined;
-  setStatus({
-    connected: false,
-    healthState: "disconnected",
-    lastDisconnect: message ? { at, error: message } : { at },
-    lastError: message ?? null,
-  });
-}
-
-function createSlackBoltApp(params: {
-  interop: SlackBoltResolvedExports;
-  slackMode: "socket" | "http";
-  botToken: string;
-  appToken?: string;
-  signingSecret?: string;
-  slackWebhookPath: string;
-  clientOptions: Record<string, unknown>;
-}) {
-  const receiver =
-    params.slackMode === "socket"
-      ? new params.interop.SocketModeReceiver({
-          appToken: params.appToken ?? "",
-          autoReconnectEnabled: false,
-          installerOptions: {
-            clientOptions: params.clientOptions,
-          },
-        })
-      : new params.interop.HTTPReceiver({
-          signingSecret: params.signingSecret ?? "",
-          endpoints: params.slackWebhookPath,
-        });
-  const app = new params.interop.App({
-    token: params.botToken,
-    receiver,
-    clientOptions: params.clientOptions,
-  });
-  return { app, receiver };
-}
-
-function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
-  const waiterAbortController = new AbortController();
-  const relayAbort = () => waiterAbortController.abort();
-  abortSignal?.addEventListener("abort", relayAbort, { once: true });
-  return {
-    promise: waitForSlackSocketDisconnect(app, waiterAbortController.signal),
-    cancel: () => {
-      waiterAbortController.abort();
-      abortSignal?.removeEventListener("abort", relayAbort);
-    },
-    complete: () => {
-      abortSignal?.removeEventListener("abort", relayAbort);
-    },
-  };
-}
-
-async function startSlackSocketAndWaitForDisconnect(params: {
-  app: { start: () => unknown };
-  abortSignal?: AbortSignal;
-  onStarted?: () => void;
-}) {
-  const disconnectWaiter = createSlackSocketDisconnectWaiter(params.app, params.abortSignal);
-  try {
-    await Promise.resolve(params.app.start());
-    if (params.abortSignal?.aborted) {
-      disconnectWaiter.cancel();
-      return null;
-    }
-    params.onStarted?.();
-    const disconnect = await disconnectWaiter.promise;
-    disconnectWaiter.complete();
-    return disconnect;
-  } catch (err) {
-    disconnectWaiter.cancel();
-    throw err;
-  }
-}
-
-function resolveSlackSocketShutdownClient(app: unknown): SlackSocketShutdownClient | undefined {
-  if (!app || typeof app !== "object") {
-    return undefined;
-  }
-  const receiver = Reflect.get(app, "receiver");
-  if (!receiver || typeof receiver !== "object") {
-    return undefined;
-  }
-  const client = Reflect.get(receiver, "client");
-  if (!client || typeof client !== "object") {
-    return undefined;
-  }
-  return client as SlackSocketShutdownClient;
-}
-
-async function gracefulStopSlackApp(app: { stop: () => unknown }) {
-  const socketClient = resolveSlackSocketShutdownClient(app);
-  if (socketClient) {
-    socketClient.shuttingDown = true;
-  }
-  await Promise.resolve(app.stop()).catch(() => undefined);
-}
-
-function formatSlackResolvedLabel(params: {
-  input: string;
-  id: string;
-  name?: string;
-  extra?: string[];
-}): string {
-  const extras = params.extra?.filter(Boolean) ?? [];
-  const suffix =
-    extras.length > 0 ? ` (id:${params.id}, ${extras.join(", ")})` : ` (id:${params.id})`;
-  return `${params.input}→${params.name ?? params.id}${suffix}`;
-}
-
-function formatSlackChannelResolved(entry: SlackChannelResolution): string {
-  const id = entry.id ?? entry.input;
-  return formatSlackResolvedLabel({
-    input: entry.input,
-    id,
-    name: entry.name,
-    extra: entry.archived ? ["archived"] : [],
-  });
-}
-
-function formatSlackUserResolved(entry: SlackUserResolution): string {
-  const id = entry.id ?? entry.input;
-  return formatSlackResolvedLabel({
-    input: entry.input,
-    id,
-    name: entry.name,
-    extra: entry.note ? [entry.note] : [],
-  });
-}
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? loadConfig();
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
@@ -428,7 +205,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const slackHttpHandler =
     slackMode === "http" && receiver
       ? async (req: IncomingMessage, res: ServerResponse) => {
-          const httpReceiver = receiver as InstanceType<SlackHttpReceiverConstructor>;
+          const httpReceiver = receiver as {
+            requestListener: (req: IncomingMessage, res: ServerResponse) => unknown;
+          };
           const guard = installRequestBodyLimitGuard(req, res, {
             maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
             timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,

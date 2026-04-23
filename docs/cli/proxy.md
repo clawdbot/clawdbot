@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw proxy`, the local debug proxy and capture 
 read_when:
   - You need to capture OpenClaw transport traffic locally for debugging
   - You want to inspect debug proxy sessions, blobs, or built-in query presets
-title: "proxy"
+title: "Proxy"
 ---
 
 # `openclaw proxy`

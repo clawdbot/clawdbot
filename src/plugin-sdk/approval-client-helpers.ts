@@ -44,7 +44,7 @@ export function isChannelExecApprovalClientEnabledFromConfig(params: {
   if (params.approverCount <= 0) {
     return false;
   }
-  return params.enabled !== false;
+  return params.enabled === true || params.enabled === "auto";
 }
 
 export function isChannelExecApprovalTargetRecipient(params: {

@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw channels` (accounts, status, login/logout,
 read_when:
   - You want to add/remove channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Matrix)
   - You want to check channel status or tail channel logs
-title: "channels"
+title: "Channels"
 ---
 
 # `openclaw channels`

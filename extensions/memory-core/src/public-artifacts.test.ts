@@ -87,7 +87,7 @@ describe("listMemoryCorePublicArtifacts", () => {
     ]);
   });
 
-  it("lists lowercase memory root when only the legacy filename exists", async () => {
+  it("ignores lowercase memory root when only the legacy filename exists", async () => {
     const workspaceDir = path.join(fixtureRoot, "workspace-lowercase-root");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "memory.md"), "# Legacy Durable Memory\n", "utf8");
@@ -98,15 +98,6 @@ describe("listMemoryCorePublicArtifacts", () => {
       },
     };
 
-    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toEqual([
-      {
-        kind: "memory-root",
-        workspaceDir,
-        relativePath: "memory.md",
-        absolutePath: path.join(workspaceDir, "memory.md"),
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-    ]);
+    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toEqual([]);
   });
 });

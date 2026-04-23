@@ -6,8 +6,6 @@ read_when:
 title: "`openclaw tasks`"
 ---
 
-# `openclaw tasks`
-
 Inspect durable background tasks and Task Flow state. With no subcommand,
 `openclaw tasks` is equivalent to `openclaw tasks list`.
 

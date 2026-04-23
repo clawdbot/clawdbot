@@ -4,7 +4,7 @@ read_when:
   - Scheduling background jobs or wakeups
   - Wiring external triggers (webhooks, Gmail) into OpenClaw
   - Deciding between heartbeat and cron for scheduled tasks
-title: "Scheduled Tasks"
+title: "Scheduled tasks"
 ---
 
 # Scheduled Tasks (Cron)
@@ -235,7 +235,7 @@ Run an isolated agent turn:
 curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4-mini"}'
+  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.5"}'
 ```
 
 Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.

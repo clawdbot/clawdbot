@@ -6,8 +6,6 @@ read_when:
 title: "SGLang"
 ---
 
-# SGLang
-
 SGLang can serve open-source models via an **OpenAI-compatible** HTTP API.
 OpenClaw can connect to SGLang using the `openai-completions` API.
 

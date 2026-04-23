@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTelegramRoutingTarget,
   buildTelegramThreadParams,
@@ -12,6 +12,7 @@ import {
   resolveTelegramDirectPeerId,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
+  resetTelegramForumFlagCacheForTest,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -34,6 +35,10 @@ describe("resolveTelegramForumThreadId", () => {
 });
 
 describe("resolveTelegramForumFlag", () => {
+  beforeEach(() => {
+    resetTelegramForumFlagCacheForTest();
+  });
+
   it("keeps explicit forum metadata when Telegram already provides it", async () => {
     const getChat = vi.fn(async () => ({ is_forum: false }));
     await expect(
@@ -52,13 +57,40 @@ describe("resolveTelegramForumFlag", () => {
     const getChat = vi.fn(async () => ({ is_forum: true }));
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100123,
+        chatId: -100789,
         chatType: "supergroup",
         isGroup: true,
         getChat,
       }),
     ).resolves.toBe(true);
-    expect(getChat).toHaveBeenCalledWith(-100123);
+    expect(getChat).toHaveBeenCalledWith(-100789);
+  });
+
+  it("reuses resolved forum metadata for later supergroup updates", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100456,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes cached forum metadata from explicit Telegram updates", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100654,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag({ ...params, isForum: false })).resolves.toBe(false);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(false);
+    expect(getChat).toHaveBeenCalledTimes(1);
   });
 
   it("returns false when forum lookup is unavailable", async () => {
@@ -67,7 +99,7 @@ describe("resolveTelegramForumFlag", () => {
     });
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100123,
+        chatId: -100999,
         chatType: "supergroup",
         isGroup: true,
         getChat,

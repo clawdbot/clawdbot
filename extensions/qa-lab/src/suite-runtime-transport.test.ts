@@ -35,7 +35,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
+      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
     });
@@ -117,7 +117,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
+      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
     });
@@ -164,7 +164,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
+      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
     });

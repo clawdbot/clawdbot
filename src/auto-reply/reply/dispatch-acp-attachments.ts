@@ -75,3 +75,17 @@ export async function resolveAcpAttachments(params: {
   }
   return results;
 }
+
+export function resolveAcpInlineImageAttachments(
+  images: Array<{ data: string; mimeType: string }> | undefined,
+): AcpTurnAttachment[] {
+  if (!Array.isArray(images)) {
+    return [];
+  }
+  return images
+    .map((image) => ({
+      mediaType: image.mimeType,
+      data: image.data,
+    }))
+    .filter((image) => image.mediaType.startsWith("image/") && image.data.trim().length > 0);
+}

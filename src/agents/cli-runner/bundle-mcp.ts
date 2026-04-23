@@ -141,9 +141,23 @@ function applyCommonServerConfig(
   }
 }
 
-function normalizeCodexServerConfig(server: BundleMcpServerConfig): Record<string, unknown> {
+function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig): boolean {
+  return (
+    name === "openclaw" &&
+    typeof server.url === "string" &&
+    /^https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/mcp(?:[?#].*)?$/.test(server.url)
+  );
+}
+
+function normalizeCodexServerConfig(
+  name: string,
+  server: BundleMcpServerConfig,
+): Record<string, unknown> {
   const next: Record<string, unknown> = {};
   applyCommonServerConfig(next, server);
+  if (isOpenClawLoopbackMcpServer(name, server)) {
+    next.default_tools_approval_mode = "approve";
+  }
   const httpHeaders = normalizeStringRecord(server.headers);
   if (httpHeaders) {
     const staticHeaders: Record<string, string> = {};
@@ -211,7 +225,7 @@ function injectCodexMcpConfigArgs(args: string[] | undefined, config: BundleMcpC
     Object.fromEntries(
       Object.entries(config.mcpServers).map(([name, server]) => [
         name,
-        normalizeCodexServerConfig(server),
+        normalizeCodexServerConfig(name, server),
       ]),
     ),
   );

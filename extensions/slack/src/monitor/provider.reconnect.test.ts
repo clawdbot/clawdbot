@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { __testing } from "./provider.js";
+import {
+  gracefulStopSlackApp,
+  publishSlackConnectedStatus,
+  publishSlackDisconnectedStatus,
+  startSlackSocketAndWaitForDisconnect,
+} from "./provider-support.js";
+import { waitForSlackSocketDisconnect } from "./reconnect-policy.js";
 
 class FakeEmitter {
   private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
@@ -29,7 +35,7 @@ describe("slack socket reconnect helpers", () => {
   it("marks socket mode healthy without seeding event liveness on connect", () => {
     const setStatus = vi.fn();
 
-    __testing.publishSlackConnectedStatus(setStatus);
+    publishSlackConnectedStatus(setStatus);
 
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(setStatus).toHaveBeenCalledWith(
@@ -49,7 +55,7 @@ describe("slack socket reconnect helpers", () => {
     const setStatus = vi.fn();
     const err = new Error("dns down");
 
-    __testing.publishSlackDisconnectedStatus(setStatus, err);
+    publishSlackDisconnectedStatus(setStatus, err);
 
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(setStatus).toHaveBeenCalledWith({
@@ -66,7 +72,7 @@ describe("slack socket reconnect helpers", () => {
   it("marks socket mode disconnected without error when the socket closes cleanly", () => {
     const setStatus = vi.fn();
 
-    __testing.publishSlackDisconnectedStatus(setStatus);
+    publishSlackDisconnectedStatus(setStatus);
 
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(setStatus).toHaveBeenCalledWith({
@@ -83,7 +89,7 @@ describe("slack socket reconnect helpers", () => {
     const client = new FakeEmitter();
     const app = { receiver: { client } };
 
-    const waiter = __testing.waitForSlackSocketDisconnect(app as never);
+    const waiter = waitForSlackSocketDisconnect(app as never);
     client.emit("disconnected");
 
     await expect(waiter).resolves.toEqual({ event: "disconnect" });
@@ -94,7 +100,7 @@ describe("slack socket reconnect helpers", () => {
     const app = { receiver: { client } };
     const err = new Error("dns down");
 
-    const waiter = __testing.waitForSlackSocketDisconnect(app as never);
+    const waiter = waitForSlackSocketDisconnect(app as never);
     client.emit("error", err);
 
     await expect(waiter).resolves.toEqual({ event: "error", error: err });
@@ -111,7 +117,7 @@ describe("slack socket reconnect helpers", () => {
     const onStarted = vi.fn();
 
     await expect(
-      __testing.startSlackSocketAndWaitForDisconnect({
+      startSlackSocketAndWaitForDisconnect({
         app: app as never,
         onStarted,
       }),
@@ -130,7 +136,7 @@ describe("slack socket reconnect helpers", () => {
     const err = new Error("status sink failed");
 
     await expect(
-      __testing.startSlackSocketAndWaitForDisconnect({
+      startSlackSocketAndWaitForDisconnect({
         app: app as never,
         onStarted: () => {
           throw err;
@@ -148,7 +154,7 @@ describe("slack socket reconnect helpers", () => {
     const app = { receiver: { client } };
     const err = new Error("invalid_auth");
 
-    const waiter = __testing.waitForSlackSocketDisconnect(app as never);
+    const waiter = waitForSlackSocketDisconnect(app as never);
     client.emit("unable_to_socket_mode_start", err);
 
     await expect(waiter).resolves.toEqual({
@@ -165,7 +171,7 @@ describe("slack socket reconnect helpers", () => {
       }),
     };
 
-    await __testing.gracefulStopSlackApp(app);
+    await gracefulStopSlackApp(app);
 
     expect(app.stop).toHaveBeenCalledTimes(1);
     expect(app.receiver.client.shuttingDown).toBe(true);

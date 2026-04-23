@@ -44,6 +44,7 @@ describe("startBrowserBridgeServer auth", () => {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       ...authConfig,
+      skipRouteRegistrationForTest: true,
     });
     servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
 
@@ -87,6 +88,7 @@ describe("startBrowserBridgeServer auth", () => {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       authToken: "secret-token",
+      skipRouteRegistrationForTest: true,
       resolveSandboxNoVncToken: (token) => {
         resolveCalls += 1;
         if (token !== "valid-token") {

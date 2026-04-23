@@ -1,12 +1,10 @@
 ---
-title: "Configuration Reference"
 summary: "Gateway config reference for core OpenClaw keys, defaults, and links to dedicated subsystem references"
+title: "Configuration reference"
 read_when:
   - You need exact field-level config semantics or defaults
   - You are validating channel, model, gateway, or tool config blocks
 ---
-
-# Configuration Reference
 
 Core config reference for `~/.openclaw/openclaw.json`. For a task-oriented overview, see [Configuration](/gateway/configuration).
 
@@ -1236,7 +1234,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
-- `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
+- `model.primary`: format `provider/model` (e.g. `openai/gpt-5.5`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
   - Safe edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing allowlist entries unless you pass `--replace`.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
@@ -1257,7 +1255,7 @@ Codex app-server harness.
 {
   agents: {
     defaults: {
-      model: "codex/gpt-5.4",
+      model: "openai/gpt-5.5",
       embeddedHarness: {
         runtime: "codex",
         fallback: "none",
@@ -1270,7 +1268,8 @@ Codex app-server harness.
 - `runtime`: `"auto"`, `"pi"`, or a registered plugin harness id. The bundled Codex plugin registers `codex`.
 - `fallback`: `"pi"` or `"none"`. `"pi"` keeps the built-in PI harness as the compatibility fallback when no plugin harness is selected. `"none"` makes missing or unsupported plugin harness selection fail instead of silently using PI. Selected plugin harness failures always surface directly.
 - Environment overrides: `OPENCLAW_AGENT_RUNTIME=<id|auto|pi>` overrides `runtime`; `OPENCLAW_AGENT_HARNESS_FALLBACK=none` disables PI fallback for that process.
-- For Codex-only deployments, set `model: "codex/gpt-5.4"`, `embeddedHarness.runtime: "codex"`, and `embeddedHarness.fallback: "none"`.
+- For Codex-only deployments, set `model: "openai/gpt-5.5"`, `embeddedHarness.runtime: "codex"`, and `embeddedHarness.fallback: "none"`.
+- Harness choice is pinned per session id after the first embedded run. Config/env changes affect new or reset sessions, not an existing transcript. Legacy sessions with transcript history but no recorded pin are treated as PI-pinned. `/status` shows non-PI harness ids such as `codex` next to `Fast`.
 - This only controls the embedded chat harness. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
@@ -1279,7 +1278,7 @@ Codex app-server harness.
 | ------------------- | -------------------------------------- |
 | `opus`              | `anthropic/claude-opus-4-6`            |
 | `sonnet`            | `anthropic/claude-sonnet-4-6`          |
-| `gpt`               | `openai/gpt-5.4`                       |
+| `gpt`               | `openai/gpt-5.5`                       |
 | `gpt-mini`          | `openai/gpt-5.4-mini`                  |
 | `gpt-nano`          | `openai/gpt-5.4-nano`                  |
 | `gemini`            | `google/gemini-3.1-pro-preview`        |
@@ -2252,7 +2251,7 @@ Further restrict tools for specific providers or models. Order: base profile →
     profile: "coding",
     byProvider: {
       "google-antigravity": { profile: "minimal" },
-      "openai/gpt-5.4": { allow: ["group:fs", "sessions_list"] },
+      "openai/gpt-5.5": { allow: ["group:fs", "sessions_list"] },
     },
   },
 }
@@ -2293,7 +2292,7 @@ Controls elevated exec access outside the sandbox:
       notifyOnExitEmptySuccess: false,
       applyPatch: {
         enabled: false,
-        allowModels: ["gpt-5.4"],
+        allowModels: ["gpt-5.5"],
       },
     },
   },
@@ -3472,6 +3471,7 @@ Validation:
 Notes:
 
 - `file` provider supports `mode: "json"` and `mode: "singleValue"` (`id` must be `"value"` in singleValue mode).
+- File and exec provider paths fail closed when Windows ACL verification is unavailable. Set `allowInsecurePath: true` only for trusted paths that cannot be verified.
 - `exec` provider requires an absolute `command` path and uses protocol payloads on stdin/stdout.
 - By default, symlink command paths are rejected. Set `allowSymlinkCommand: true` to allow symlink paths while validating the resolved target path.
 - If `trustedDirs` is configured, the trusted-dir check applies to the resolved target path.

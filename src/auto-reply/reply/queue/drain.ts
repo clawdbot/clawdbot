@@ -116,6 +116,15 @@ function renderCollectItem(item: FollowupRun, idx: number): string {
   return `---\nQueued #${idx + 1}${senderSuffix}\n${item.prompt}`.trim();
 }
 
+function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" | "imageOrder"> {
+  const images = items.flatMap((item) => item.images ?? []);
+  const imageOrder = items.flatMap((item) => item.imageOrder ?? []);
+  return {
+    ...(images.length > 0 ? { images } : {}),
+    ...(imageOrder.length > 0 ? { imageOrder } : {}),
+  };
+}
+
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
@@ -172,6 +181,7 @@ export function scheduleFollowupDrain(
                 prompt: summaryOnlyPrompt,
                 run,
                 enqueuedAt: Date.now(),
+                ...collectQueuedImages(queue.items),
               });
               clearQueueSummaryState(queue);
               continue;
@@ -218,6 +228,7 @@ export function scheduleFollowupDrain(
               run,
               enqueuedAt: Date.now(),
               ...routing,
+              ...collectQueuedImages(groupItems),
             });
             queue.items.splice(0, groupItems.length);
             if (pendingSummary) {
@@ -244,6 +255,7 @@ export function scheduleFollowupDrain(
                 originatingTo: item.originatingTo,
                 originatingAccountId: item.originatingAccountId,
                 originatingThreadId: item.originatingThreadId,
+                ...collectQueuedImages([item]),
               });
             }))
           ) {

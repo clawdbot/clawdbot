@@ -429,8 +429,8 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.loadConfig.mockReturnValue({
       agents: {
         defaults: {
-          model: { primary: "codex/gpt-5.4", fallbacks: [] },
-          models: { "codex/gpt-5.4": {} },
+          model: { primary: "codex/gpt-5.5", fallbacks: [] },
+          models: { "codex/gpt-5.5": {} },
         },
       },
       models: { providers: {} },

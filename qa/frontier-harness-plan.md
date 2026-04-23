@@ -37,8 +37,8 @@ GPT baseline:
 ```bash
 pnpm openclaw qa suite \
   --provider-mode live-frontier \
-  --model openai/gpt-5.4 \
-  --alt-model openai/gpt-5.4 \
+  --model openai/gpt-5.5 \
+  --alt-model openai/gpt-5.5 \
   --fast \
   --scenario approval-turn-tool-followthrough \
   --scenario model-switch-tool-continuity \
@@ -104,8 +104,8 @@ GPT manual lane:
 ```bash
 pnpm openclaw qa manual \
   --provider-mode live-frontier \
-  --model openai/gpt-5.4 \
-  --alt-model openai/gpt-5.4 \
+  --model openai/gpt-5.5 \
+  --alt-model openai/gpt-5.5 \
   --fast \
   --message "read QA_KICKOFF_TASK.md, tell me what feels half-baked about this qa mission, and keep it to two short sentences"
 ```

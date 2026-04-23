@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/ca
 read_when:
   - You’re managing paired nodes (cameras, screen, canvas)
   - You need to approve requests or invoke node commands
-title: "nodes"
+title: "Nodes"
 ---
 
 # `openclaw nodes`

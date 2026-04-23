@@ -5,7 +5,7 @@ import { resolveMarkdownTableMode as resolveMarkdownTableModeRuntime } from "../
 import { resolveSessionStoreEntry as resolveSessionStoreEntryRuntime } from "../../../src/config/sessions/store.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots as getAgentScopedMediaLocalRootsRuntime } from "../../../src/media/local-roots.js";
-import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label.js";
+import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createSequencedTestDraftStream,

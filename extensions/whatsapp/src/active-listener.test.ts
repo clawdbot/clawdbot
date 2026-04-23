@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getActiveWebListener, resolveWebAccountId } from "./active-listener.js";
 
 vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   loadConfig: () => ({
@@ -6,17 +7,18 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   }),
 }));
 
+const registryMocks = vi.hoisted(() => ({
+  getRegisteredWhatsAppConnectionController: vi.fn(),
+}));
+
+vi.mock("./connection-controller-registry.js", () => ({
+  getRegisteredWhatsAppConnectionController:
+    registryMocks.getRegisteredWhatsAppConnectionController,
+}));
+
 const WHATSAPP_ACTIVE_LISTENER_TEST_CFG = {
   channels: { whatsapp: { accounts: { work: { enabled: true } }, defaultAccount: "work" } },
 };
-
-type ActiveListenerModule = typeof import("./active-listener.js");
-
-const activeListenerModuleUrl = new URL("./active-listener.ts", import.meta.url).href;
-
-async function importActiveListenerModule(cacheBust: string): Promise<ActiveListenerModule> {
-  return (await import(`${activeListenerModuleUrl}?t=${cacheBust}`)) as ActiveListenerModule;
-}
 
 function makeListener() {
   return {
@@ -27,53 +29,43 @@ function makeListener() {
   };
 }
 
-afterEach(() => {
-  vi.doUnmock("./connection-controller-registry.js");
+beforeEach(() => {
+  registryMocks.getRegisteredWhatsAppConnectionController.mockReset();
 });
 
 describe("active WhatsApp listener view", () => {
-  it("reads controller-backed state across duplicate module instances", async () => {
+  it("reads controller-backed state", () => {
     const listener = makeListener();
-    vi.doMock("./connection-controller-registry.js", () => ({
-      getRegisteredWhatsAppConnectionController: (accountId: string) =>
+    registryMocks.getRegisteredWhatsAppConnectionController.mockImplementation(
+      (accountId: string) =>
         accountId === "work"
           ? {
               getActiveListener: () => listener,
             }
           : null,
-    }));
+    );
 
-    const first = await importActiveListenerModule(`first-${Date.now()}`);
-    const second = await importActiveListenerModule(`second-${Date.now()}`);
-
-    expect(first.getActiveWebListener("work")).toBe(listener);
-    expect(second.getActiveWebListener("work")).toBe(listener);
+    expect(getActiveWebListener("work")).toBe(listener);
   });
 
-  it("resolves the configured default account when accountId is omitted", async () => {
+  it("resolves the configured default account when accountId is omitted", () => {
     const listener = makeListener();
-    vi.doMock("./connection-controller-registry.js", () => ({
-      getRegisteredWhatsAppConnectionController: (accountId: string) =>
+    registryMocks.getRegisteredWhatsAppConnectionController.mockImplementation(
+      (accountId: string) =>
         accountId === "work"
           ? {
               getActiveListener: () => listener,
             }
           : null,
-    }));
+    );
 
-    const mod = await importActiveListenerModule(`default-${Date.now()}`);
-
-    expect(mod.resolveWebAccountId({ cfg: WHATSAPP_ACTIVE_LISTENER_TEST_CFG })).toBe("work");
-    expect(mod.getActiveWebListener("work")).toBe(listener);
+    expect(resolveWebAccountId({ cfg: WHATSAPP_ACTIVE_LISTENER_TEST_CFG })).toBe("work");
+    expect(getActiveWebListener("work")).toBe(listener);
   });
 
-  it("returns null when the controller has no active listener for the account", async () => {
-    vi.doMock("./connection-controller-registry.js", () => ({
-      getRegisteredWhatsAppConnectionController: () => null,
-    }));
+  it("returns null when the controller has no active listener for the account", () => {
+    registryMocks.getRegisteredWhatsAppConnectionController.mockReturnValue(null);
 
-    const mod = await importActiveListenerModule(`missing-${Date.now()}`);
-
-    expect(mod.getActiveWebListener("work")).toBeNull();
+    expect(getActiveWebListener("work")).toBeNull();
   });
 });

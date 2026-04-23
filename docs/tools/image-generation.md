@@ -1,23 +1,21 @@
 ---
-summary: "Generate and edit images using configured providers (OpenAI, Google Gemini, fal, MiniMax, ComfyUI, Vydra, xAI)"
+summary: "Generate and edit images using configured providers (OpenAI, OpenAI Codex OAuth, Google Gemini, fal, MiniMax, ComfyUI, Vydra, xAI)"
 read_when:
   - Generating images via the agent
   - Configuring image generation providers and models
   - Understanding the image_generate tool parameters
-title: "Image Generation"
+title: "Image generation"
 ---
-
-# Image Generation
 
 The `image_generate` tool lets the agent create and edit images using your configured providers. Generated images are delivered automatically as media attachments in the agent's reply.
 
 <Note>
-The tool only appears when at least one image generation provider is available. If you don't see `image_generate` in your agent's tools, configure `agents.defaults.imageGenerationModel` or set up a provider API key.
+The tool only appears when at least one image generation provider is available. If you don't see `image_generate` in your agent's tools, configure `agents.defaults.imageGenerationModel`, set up a provider API key, or sign in with OpenAI Codex OAuth.
 </Note>
 
 ## Quick start
 
-1. Set an API key for at least one provider (for example `OPENAI_API_KEY` or `GEMINI_API_KEY`).
+1. Set an API key for at least one provider (for example `OPENAI_API_KEY` or `GEMINI_API_KEY`) or sign in with OpenAI Codex OAuth.
 2. Optionally set your preferred model:
 
 ```json5
@@ -32,21 +30,36 @@ The tool only appears when at least one image generation provider is available. 
 }
 ```
 
+Use Codex OAuth instead of an OpenAI API key:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "openai-codex/gpt-image-2",
+      },
+    },
+  },
+}
+```
+
 3. Ask the agent: _"Generate an image of a friendly lobster mascot."_
 
 The agent calls `image_generate` automatically. No tool allow-listing needed — it's enabled by default when a provider is available.
 
 ## Supported providers
 
-| Provider | Default model                    | Edit support                       | API key                                               |
-| -------- | -------------------------------- | ---------------------------------- | ----------------------------------------------------- |
-| OpenAI   | `gpt-image-2`                    | Yes (up to 5 images)               | `OPENAI_API_KEY`                                      |
-| Google   | `gemini-3.1-flash-image-preview` | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
-| fal      | `fal-ai/flux/dev`                | Yes                                | `FAL_KEY`                                             |
-| MiniMax  | `image-01`                       | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
-| ComfyUI  | `workflow`                       | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
-| Vydra    | `grok-imagine`                   | No                                 | `VYDRA_API_KEY`                                       |
-| xAI      | `grok-imagine-image`             | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
+| Provider     | Default model                    | Edit support                       | API key                                               |
+| ------------ | -------------------------------- | ---------------------------------- | ----------------------------------------------------- |
+| OpenAI       | `gpt-image-2`                    | Yes (up to 4 images)               | `OPENAI_API_KEY`                                      |
+| OpenAI Codex | `gpt-image-2`                    | Yes (up to 4 images)               | OpenAI Codex OAuth                                    |
+| Google       | `gemini-3.1-flash-image-preview` | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| fal          | `fal-ai/flux/dev`                | Yes                                | `FAL_KEY`                                             |
+| MiniMax      | `image-01`                       | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
+| ComfyUI      | `workflow`                       | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
+| Vydra        | `grok-imagine`                   | No                                 | `VYDRA_API_KEY`                                       |
+| xAI          | `grok-imagine-image`             | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -60,7 +73,7 @@ Use `action: "list"` to inspect available providers and models at runtime:
 | ------------- | -------- | ------------------------------------------------------------------------------------- |
 | `prompt`      | string   | Image generation prompt (required for `action: "generate"`)                           |
 | `action`      | string   | `"generate"` (default) or `"list"` to inspect providers                               |
-| `model`       | string   | Provider/model override, e.g. `openai/gpt-image-2`                                    |
+| `model`       | string   | Provider/model override, e.g. `openai/gpt-image-2` or `openai-codex/gpt-image-2`      |
 | `image`       | string   | Single reference image path or URL for edit mode                                      |
 | `images`      | string[] | Multiple reference images for edit mode (up to 5)                                     |
 | `size`        | string   | Size hint: `1024x1024`, `1536x1024`, `1024x1536`, `2048x2048`, `3840x2160`            |
@@ -126,9 +139,11 @@ OpenAI, Google, and xAI support up to 5 reference images via the `images` parame
 
 ### OpenAI `gpt-image-2`
 
-OpenAI image generation defaults to `openai/gpt-image-2`. The older
-`openai/gpt-image-1` model can still be selected explicitly, but new OpenAI
-image-generation and image-editing requests should use `gpt-image-2`.
+OpenAI image generation defaults to `openai/gpt-image-2` with `OPENAI_API_KEY`.
+Use `openai-codex/gpt-image-2` to generate or edit images with the same Codex
+OAuth sign-in used by `openai-codex` chat models. The older `openai/gpt-image-1`
+model can still be selected explicitly, but new OpenAI image-generation and
+image-editing requests should use `gpt-image-2`.
 
 `gpt-image-2` supports both text-to-image generation and reference-image
 editing through the same `image_generate` tool. OpenClaw forwards `prompt`,
@@ -154,11 +169,27 @@ Edit one local reference image:
 /tool image_generate action=generate model=openai/gpt-image-2 prompt="Keep the subject, replace the background with a bright studio setup" image=/path/to/reference.png size=1024x1536
 ```
 
+Generate with Codex OAuth:
+
+```
+/tool image_generate action=generate model=openai-codex/gpt-image-2 prompt="A clean editorial poster for OpenClaw image generation" size=3840x2160 count=1
+```
+
+Edit one local reference image with Codex OAuth:
+
+```
+/tool image_generate action=generate model=openai-codex/gpt-image-2 prompt="Keep the subject, replace the background with a bright studio setup" image=/path/to/reference.png size=1024x1536
+```
+
 Edit with multiple references:
 
 ```
 /tool image_generate action=generate model=openai/gpt-image-2 prompt="Combine the character identity from the first image with the color palette from the second" images='["/path/to/character.png","/path/to/palette.jpg"]' size=1536x1024
 ```
+
+To route OpenAI image generation through an Azure OpenAI deployment instead
+of `api.openai.com`, see [Azure OpenAI endpoints](/providers/openai#azure-openai-endpoints)
+in the OpenAI provider docs.
 
 MiniMax image generation is available through both bundled MiniMax auth paths:
 

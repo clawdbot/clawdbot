@@ -1,0 +1,274 @@
+name: Test Performance Agent
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] main-only test optimization after trusted CI; job gates repository, event, branch, actor, conclusion, current main SHA, and daily cadence before using write token
+    workflows:
+      - CI
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: test-performance-agent-main
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  TEST_PERF_BEFORE: .artifacts/test-perf/baseline-before.json
+  TEST_PERF_AFTER: .artifacts/test-perf/after-agent.json
+  TEST_PERF_COMPARE: .artifacts/test-perf/agent-compare.json
+
+jobs:
+  optimize-tests:
+    if: >
+      github.repository == 'openclaw/openclaw' &&
+      (github.event_name == 'workflow_dispatch' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          !endsWith(github.event.workflow_run.actor.login, '[bot]')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Gate trusted main activity and daily cadence
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" != "workflow_run" ]; then
+            echo "run_agent=true" >> "$GITHUB_OUTPUT"
+            echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          for attempt in 1 2 3 4 5; do
+            if git fetch --no-tags origin main; then
+              break
+            fi
+            if [ "$attempt" = "5" ]; then
+              echo "Failed to fetch main after retries." >&2
+              exit 1
+            fi
+            echo "Fetch attempt ${attempt} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          remote_main="$(git rev-parse origin/main)"
+          if [ "$remote_main" != "$WORKFLOW_HEAD_SHA" ]; then
+            echo "CI run is superseded by ${remote_main}; skipping test performance agent for ${WORKFLOW_HEAD_SHA}."
+            echo "run_agent=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          day_start="$(date -u +%Y-%m-%dT00:00:00Z)"
+          runs_json="$RUNNER_TEMP/test-performance-agent-runs.json"
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/test-performance-agent.yml/runs" \
+            -f branch=main \
+            -f event=workflow_run \
+            -f per_page=50 > "$runs_json"
+
+          prior_runs="$(
+            jq -r \
+              --argjson current_run_id "$GITHUB_RUN_ID" \
+              --arg day_start "$day_start" \
+              '.workflow_runs[]
+                | select(.database_id != $current_run_id)
+                | select(.created_at >= $day_start)
+                | select(.status != "cancelled")
+                | select((.conclusion // "") != "skipped")
+                | [.database_id, .status, (.conclusion // ""), .created_at, .head_sha]
+                | @tsv' "$runs_json"
+          )"
+
+          if [ -n "$prior_runs" ]; then
+            echo "Test performance agent already ran or is running today; skipping."
+            printf '%s\n' "$prior_runs"
+            echo "run_agent=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "run_agent=true" >> "$GITHUB_OUTPUT"
+          echo "base_sha=${remote_main}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node environment
+        if: steps.gate.outputs.run_agent == 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Ensure test performance agent key exists
+        if: steps.gate.outputs.run_agent == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_TEST_PERF_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "Missing OPENCLAW_TEST_PERF_AGENT_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
+
+      - name: Build baseline full-suite performance report
+        if: steps.gate.outputs.run_agent == 'true'
+        run: pnpm test:perf:groups --full-suite --allow-failures --output "$TEST_PERF_BEFORE" --limit 20 --top-files 40
+
+      - name: Run Codex test performance agent
+        if: steps.gate.outputs.run_agent == 'true'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_TEST_PERF_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/test-performance-agent.md
+          model: gpt-5.4
+          effort: high
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--full-auto"]'
+
+      - name: Enforce focused test performance patch
+        if: steps.gate.outputs.run_agent == 'true'
+        id: patch
+        run: |
+          set -euo pipefail
+
+          untracked="$(git ls-files --others --exclude-standard)"
+          if [ -n "$untracked" ]; then
+            echo "Test performance agent created untracked files; forbidden:"
+            printf '%s\n' "$untracked"
+            exit 1
+          fi
+
+          added_deleted_or_renamed="$(git diff --name-status --diff-filter=ADR)"
+          if [ -n "$added_deleted_or_renamed" ]; then
+            echo "Test performance agent added, deleted, or renamed tracked files; forbidden:"
+            printf '%s\n' "$added_deleted_or_renamed"
+            exit 1
+          fi
+
+          bad_paths="$(
+            git diff --name-only | while IFS= read -r path; do
+              case "$path" in
+                apps/*|extensions/*|packages/*|scripts/*|src/*|Swabble/*|test/*|ui/*) ;;
+                *) printf '%s\n' "$path" ;;
+              esac
+            done
+          )"
+          if [ -n "$bad_paths" ]; then
+            echo "Test performance agent touched forbidden paths:"
+            printf '%s\n' "$bad_paths"
+            exit 1
+          fi
+
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore Node 24 path
+        if: steps.gate.outputs.run_agent == 'true' && steps.patch.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          export PATH="${NODE_BIN}:${PATH}"
+          echo "${NODE_BIN}" >> "$GITHUB_PATH"
+          node -v
+          corepack enable
+          pnpm -v
+
+      - name: Run full-suite performance report after agent changes
+        if: steps.gate.outputs.run_agent == 'true' && steps.patch.outputs.has_changes == 'true'
+        run: pnpm test:perf:groups --full-suite --output "$TEST_PERF_AFTER" --limit 20 --top-files 40
+
+      - name: Compare test performance reports
+        if: steps.gate.outputs.run_agent == 'true' && steps.patch.outputs.has_changes == 'true'
+        run: pnpm test:perf:groups:compare "$TEST_PERF_BEFORE" "$TEST_PERF_AFTER" --output "$TEST_PERF_COMPARE" --limit 20 --top-files 40
+
+      - name: Enforce coverage-preserving test count
+        if: steps.gate.outputs.run_agent == 'true' && steps.patch.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const before = JSON.parse(fs.readFileSync(process.env.TEST_PERF_BEFORE, "utf8"));
+          const after = JSON.parse(fs.readFileSync(process.env.TEST_PERF_AFTER, "utf8"));
+
+          if (before.failed) {
+            console.log("Baseline had failing configs; skipping total test-count comparison against partial report.");
+            process.exit(0);
+          }
+
+          const beforeTests = before.totals?.testCount ?? 0;
+          const afterTests = after.totals?.testCount ?? 0;
+          if (afterTests < beforeTests) {
+            console.error(`Test count decreased from ${beforeTests} to ${afterTests}; refusing coverage-reducing patch.`);
+            process.exit(1);
+          }
+          console.log(`Test count preserved: ${beforeTests} -> ${afterTests}.`);
+          NODE
+
+      - name: Check changed lanes
+        if: steps.gate.outputs.run_agent == 'true' && steps.patch.outputs.has_changes == 'true'
+        run: pnpm check:changed
+
+      - name: Commit test performance updates
+        if: steps.gate.outputs.run_agent == 'true' && steps.patch.outputs.has_changes == 'true'
+        env:
+          BASE_SHA: ${{ steps.gate.outputs.base_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: main
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet; then
+            echo "No test performance changes."
+            exit 0
+          fi
+
+          git config user.name "openclaw-test-performance-agent[bot]"
+          git config user.email "openclaw-test-performance-agent[bot]@users.noreply.github.com"
+          git add apps extensions packages scripts src Swabble test ui
+          git commit --no-verify -m "test: optimize slow tests"
+
+          for attempt in 1 2 3 4 5; do
+            if ! git fetch --no-tags origin "${TARGET_BRANCH}"; then
+              echo "Fetch attempt ${attempt} failed; retrying."
+              sleep $((attempt * 2))
+              continue
+            fi
+            if git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:"${TARGET_BRANCH}"; then
+              exit 0
+            fi
+            remote_main="$(git rev-parse "origin/${TARGET_BRANCH}")"
+            if [ "$remote_main" != "$BASE_SHA" ]; then
+              echo "main advanced from ${BASE_SHA} to ${remote_main}; skipping stale test performance update."
+              exit 0
+            fi
+            echo "Test performance update attempt ${attempt} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to push test performance updates after retries." >&2
+          exit 1
+
+      - name: Upload test performance artifacts
+        if: steps.gate.outputs.run_agent == 'true' && always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-performance-agent-${{ github.run_id }}
+          path: .artifacts/test-perf/
+          if-no-files-found: ignore
+          retention-days: 14

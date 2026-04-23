@@ -430,6 +430,50 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
     });
   });
 
+  it("falls back across providers after bare Codex/Undici transport failures", async () => {
+    const cases = [
+      {
+        name: "undici-terminated",
+        message: "terminated",
+      },
+      {
+        name: "codex-empty-transport-response",
+        message: "Request failed",
+      },
+    ] as const;
+
+    for (const { name, message } of cases) {
+      await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+        await writeAuthStore(agentDir);
+        runEmbeddedAttemptMock.mockClear();
+        computeBackoffMock.mockClear();
+        sleepWithAbortMock.mockClear();
+        mockPrimaryErrorThenFallbackSuccess(message);
+
+        const result = await runEmbeddedFallback({
+          agentDir,
+          workspaceDir,
+          sessionKey: `agent:test:transport-fallback:${name}`,
+          runId: `run:transport-fallback:${name}`,
+        });
+
+        expect(result.provider).toBe("groq");
+        expect(result.model).toBe("mock-2");
+        expect(result.attempts[0]?.reason).toBe("timeout");
+        expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+        const usageStats = await readUsageStats(agentDir);
+        expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+        expect(usageStats["openai:p1"]?.failureCounts).toBeUndefined();
+        expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
+
+        expectOpenAiThenGroqAttemptOrder();
+        expect(computeBackoffMock).not.toHaveBeenCalled();
+        expect(sleepWithAbortMock).not.toHaveBeenCalled();
+      });
+    }
+  });
+
   it("falls back across providers after a bare leading 402 quota-refresh assistant error", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

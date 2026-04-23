@@ -1,12 +1,10 @@
 ---
-title: "Vercel AI Gateway"
 summary: "Vercel AI Gateway setup (auth + model selection)"
+title: "Vercel AI gateway"
 read_when:
   - You want to use Vercel AI Gateway with OpenClaw
   - You need the API key env var or CLI auth choice
 ---
-
-# Vercel AI Gateway
 
 The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to
 access hundreds of models through a single endpoint.
@@ -21,7 +19,7 @@ access hundreds of models through a single endpoint.
 <Tip>
 OpenClaw auto-discovers the Gateway `/v1/models` catalog, so
 `/models vercel-ai-gateway` includes current model refs such as
-`vercel-ai-gateway/openai/gpt-5.4` and
+`vercel-ai-gateway/openai/gpt-5.5` and
 `vercel-ai-gateway/moonshotai/kimi-k2.6`.
 </Tip>
 
@@ -83,7 +81,7 @@ You can use either the shorthand or the fully qualified model ref in your
 configuration. OpenClaw resolves the canonical form automatically.
 </Tip>
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Environment variable for daemon processes">
@@ -102,7 +100,7 @@ configuration. OpenClaw resolves the canonical form automatically.
   <Accordion title="Provider routing">
     Vercel AI Gateway routes requests to the upstream provider based on the model
     ref prefix. For example, `vercel-ai-gateway/anthropic/claude-opus-4.6` routes
-    through Anthropic, while `vercel-ai-gateway/openai/gpt-5.4` routes through
+    through Anthropic, while `vercel-ai-gateway/openai/gpt-5.5` routes through
     OpenAI and `vercel-ai-gateway/moonshotai/kimi-k2.6` routes through
     MoonshotAI. Your single `AI_GATEWAY_API_KEY` handles authentication for all
     upstream providers.

@@ -183,7 +183,7 @@ describe("buildAgentContext", () => {
         id: "main",
         workspace: "/tmp/agent-workspace",
         model: {
-          primary: "openai/gpt-5.4",
+          primary: "openai/gpt-5.5",
           fallbacks: ["openai-codex/gpt-5.2-codex"],
         },
       },
@@ -194,7 +194,7 @@ describe("buildAgentContext", () => {
     );
 
     expect(context.workspace).toBe("/tmp/agent-workspace");
-    expect(context.model).toBe("openai/gpt-5.4 (+1 fallback)");
+    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
     expect(context.isDefault).toBe(true);
   });
 
@@ -206,7 +206,7 @@ describe("buildAgentContext", () => {
           defaults: {
             workspace: "/tmp/default-workspace",
             model: {
-              primary: "openai/gpt-5.4",
+              primary: "openai/gpt-5.5",
               fallbacks: ["openai-codex/gpt-5.2-codex"],
             },
           },
@@ -219,6 +219,6 @@ describe("buildAgentContext", () => {
     );
 
     expect(context.workspace).toBe("/tmp/default-workspace");
-    expect(context.model).toBe("openai/gpt-5.4 (+1 fallback)");
+    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
   });
 });

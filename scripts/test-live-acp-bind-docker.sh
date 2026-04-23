@@ -271,7 +271,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   echo "==> Agent: $ACP_AGENT"
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
-  docker run --rm -t \
+  DOCKER_RUN_ARGS=(docker run --rm -t \
     -u "$DOCKER_USER" \
     --entrypoint bash \
     -e ANTHROPIC_API_KEY \
@@ -292,15 +292,18 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_LIVE_TEST=1 \
     -e OPENCLAW_LIVE_ACP_BIND=1 \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
-    -e OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="$AGENT_COMMAND" \
-    "${DOCKER_HOME_MOUNT[@]}" \
+    -e OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="$AGENT_COMMAND")
+  openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
+  DOCKER_RUN_ARGS+=(\
     -v "$CACHE_HOME_DIR":/home/node/.cache \
     -v "$ROOT_DIR":/src:ro \
     -v "$CONFIG_DIR":/home/node/.openclaw \
     -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
-    -v "$CLI_TOOLS_DIR":/home/node/.npm-global \
-    "${EXTERNAL_AUTH_MOUNTS[@]}" \
-    "${PROFILE_MOUNT[@]}" \
+    -v "$CLI_TOOLS_DIR":/home/node/.npm-global)
+  openclaw_live_append_array DOCKER_RUN_ARGS EXTERNAL_AUTH_MOUNTS
+  openclaw_live_append_array DOCKER_RUN_ARGS PROFILE_MOUNT
+  DOCKER_RUN_ARGS+=(\
     "$LIVE_IMAGE_NAME" \
-    -lc "$LIVE_TEST_CMD"
+    -lc "$LIVE_TEST_CMD")
+  "${DOCKER_RUN_ARGS[@]}"
 done

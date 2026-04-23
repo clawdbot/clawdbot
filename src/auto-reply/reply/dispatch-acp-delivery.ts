@@ -156,6 +156,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   ctx: FinalizedMsgContext;
   dispatcher: ReplyDispatcher;
   inboundAudio: boolean;
+  sessionKey?: string;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
@@ -182,6 +183,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   };
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
+  const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
   const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
   const resolvedAccountId =
     explicitAccountId ??
@@ -319,7 +321,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         payload: ttsPayload,
         channel: params.originatingChannel,
         to: params.originatingTo,
-        sessionKey: params.ctx.SessionKey,
+        sessionKey: deliverySessionKey,
+        ...(deliverySessionKey !== params.ctx.SessionKey
+          ? { policySessionKey: params.ctx.SessionKey }
+          : {}),
         accountId: resolvedAccountId,
         requesterSenderId: params.ctx.SenderId,
         requesterSenderName: params.ctx.SenderName,

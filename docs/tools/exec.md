@@ -3,10 +3,8 @@ summary: "Exec tool usage, stdin modes, and TTY support"
 read_when:
   - Using or modifying the exec tool
   - Debugging stdin or TTY behavior
-title: "Exec Tool"
+title: "Exec tool"
 ---
-
-# Exec tool
 
 Run shell commands in the workspace. Supports foreground + background execution via `process`.
 If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
@@ -215,7 +213,7 @@ when you want to disable it or restrict it to specific models:
 {
   tools: {
     exec: {
-      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.4"] },
+      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.5"] },
     },
   },
 }

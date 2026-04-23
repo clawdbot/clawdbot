@@ -1,4 +1,4 @@
-/** @typedef {{ cpuCount?: number, loadAverage1m?: number, totalMemoryBytes?: number }} VitestHostInfo */
+/** @typedef {{ cpuCount?: number, loadAverage1m?: number, totalMemoryBytes?: number, freeMemoryBytes?: number }} VitestHostInfo */
 /** @typedef {{ maxWorkers: number, fileParallelism: boolean, throttledBySystem: boolean }} LocalVitestScheduling */
 
 import os from "node:os";
@@ -30,7 +30,22 @@ export function detectVitestHostInfo() {
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
     loadAverage1m: os.loadavg()[0] ?? 0,
     totalMemoryBytes: os.totalmem(),
+    freeMemoryBytes: os.freemem(),
   };
+}
+
+function resolveMemoryPressureWorkerLimit(system) {
+  const freeMemoryGb = (system.freeMemoryBytes ?? 0) / 1024 ** 3;
+  if (!Number.isFinite(freeMemoryGb) || freeMemoryGb <= 0) {
+    return null;
+  }
+  if (freeMemoryGb <= 4) {
+    return 1;
+  }
+  if (freeMemoryGb <= 8) {
+    return 2;
+  }
+  return null;
 }
 
 export function resolveLocalVitestMaxWorkers(
@@ -112,6 +127,16 @@ export function resolveLocalVitestScheduling(
     };
   }
 
+  const memoryPressureLimit = resolveMemoryPressureWorkerLimit(system);
+  if (memoryPressureLimit !== null && inferred > memoryPressureLimit) {
+    const maxWorkers = memoryPressureLimit;
+    return {
+      maxWorkers,
+      fileParallelism: maxWorkers > 1,
+      throttledBySystem: true,
+    };
+  }
+
   if (loadRatio >= 1) {
     const maxWorkers = Math.max(1, Math.floor(inferred / 2));
     return {
@@ -149,6 +174,22 @@ export function shouldUseLargeLocalFullSuiteProfile(
 }
 
 export function resolveLocalFullSuiteProfile(env = process.env, system = detectVitestHostInfo()) {
+  if (!isSystemThrottleDisabled(env)) {
+    const memoryPressureLimit = resolveMemoryPressureWorkerLimit(system);
+    if (memoryPressureLimit === 1) {
+      return {
+        shardParallelism: 1,
+        vitestMaxWorkers: 1,
+      };
+    }
+    if (memoryPressureLimit === 2) {
+      return {
+        shardParallelism: 2,
+        vitestMaxWorkers: 1,
+      };
+    }
+  }
+
   if (shouldUseLargeLocalFullSuiteProfile(env, system)) {
     return {
       shardParallelism: LARGE_LOCAL_FULL_SUITE_PARALLELISM,

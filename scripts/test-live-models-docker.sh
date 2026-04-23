@@ -191,7 +191,7 @@ echo "==> Target: src/agents/models.profiles.live.test.ts"
 echo "==> Profile env only: ${OPENCLAW_DOCKER_PROFILE_ENV_ONLY:-0}"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
-docker run --rm -t \
+DOCKER_RUN_ARGS=(docker run --rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
@@ -210,13 +210,16 @@ docker run --rm -t \
   -e OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS="${OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS:-}" \
   -e OPENCLAW_LIVE_GATEWAY_MODELS="${OPENCLAW_LIVE_GATEWAY_MODELS:-}" \
   -e OPENCLAW_LIVE_GATEWAY_PROVIDERS="${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" \
-  -e OPENCLAW_LIVE_GATEWAY_MAX_MODELS="${OPENCLAW_LIVE_GATEWAY_MAX_MODELS:-}" \
-  "${DOCKER_HOME_MOUNT[@]}" \
+  -e OPENCLAW_LIVE_GATEWAY_MAX_MODELS="${OPENCLAW_LIVE_GATEWAY_MAX_MODELS:-}")
+openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
+DOCKER_RUN_ARGS+=(\
   -v "$CACHE_HOME_DIR":/home/node/.cache \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \
-  -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
-  "${EXTERNAL_AUTH_MOUNTS[@]}" \
-  "${PROFILE_MOUNT[@]}" \
+  -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace)
+openclaw_live_append_array DOCKER_RUN_ARGS EXTERNAL_AUTH_MOUNTS
+openclaw_live_append_array DOCKER_RUN_ARGS PROFILE_MOUNT
+DOCKER_RUN_ARGS+=(\
   "$LIVE_IMAGE_NAME" \
-  -lc "$LIVE_TEST_CMD"
+  -lc "$LIVE_TEST_CMD")
+"${DOCKER_RUN_ARGS[@]}"

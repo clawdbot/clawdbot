@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { draftToCronFormPatch, type CronQuickCreateDraft } from "./cron-quick-create.ts";
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { handleAgentEvent, type FallbackStatus, type ToolStreamEntry } from "./app-tool-stream.ts";
 

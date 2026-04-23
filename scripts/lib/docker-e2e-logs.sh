@@ -4,7 +4,9 @@ run_logged() {
   local label="$1"
   shift
   local log_file
-  log_file="$(mktemp "${TMPDIR:-/tmp}/openclaw-${label}.XXXXXX.log")"
+  local tmp_dir="${TMPDIR:-/tmp}"
+  tmp_dir="${tmp_dir%/}"
+  log_file="$(mktemp "$tmp_dir/openclaw-${label}.XXXXXX")"
   if ! "$@" >"$log_file" 2>&1; then
     cat "$log_file"
     rm -f "$log_file"

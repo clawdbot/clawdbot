@@ -4,10 +4,8 @@ read_when:
   - You want to serve models from your own GPU box
   - You are wiring LM Studio or an OpenAI-compatible proxy
   - You need the safest local model guidance
-title: "Local Models"
+title: "Local models"
 ---
-
-# Local models
 
 Local is doable, but OpenClaw expects large context + strong defenses against prompt injection. Small cards truncate context and leak safety. Aim high: **≥2 maxed-out Mac Studios or equivalent GPU rig (~$30k+)**. A single **24 GB** GPU works only for lighter prompts with higher latency. Use the **largest / full-size model variant you can run**; aggressively quantized or “small” checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
 

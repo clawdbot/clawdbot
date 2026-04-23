@@ -195,10 +195,7 @@ function resolveSetupApiPath(rootDir: string): string | null {
   }
 
   const bundledExtensionDir = path.basename(rootDir);
-  const repoRootCandidates = [
-    path.resolve(path.dirname(CURRENT_MODULE_PATH), "..", ".."),
-    process.cwd(),
-  ];
+  const repoRootCandidates = [path.resolve(path.dirname(CURRENT_MODULE_PATH), "..", "..")];
   for (const repoRoot of repoRootCandidates) {
     const sourceExtensionRoot = path.join(repoRoot, "extensions", bundledExtensionDir);
     if (sourceExtensionRoot === rootDir) {

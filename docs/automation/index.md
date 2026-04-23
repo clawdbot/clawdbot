@@ -4,10 +4,8 @@ read_when:
   - Deciding how to automate work with OpenClaw
   - Choosing between heartbeat, cron, hooks, and standing orders
   - Looking for the right automation entry point
-title: "Automation & Tasks"
+title: "Automation & tasks"
 ---
-
-# Automation & Tasks
 
 OpenClaw runs work in the background through tasks, scheduled jobs, event hooks, and standing instructions. This page helps you choose the right mechanism and understand how they fit together.
 

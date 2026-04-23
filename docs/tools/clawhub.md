@@ -7,8 +7,6 @@ read_when:
 title: "ClawHub"
 ---
 
-# ClawHub
-
 ClawHub is the public registry for **OpenClaw skills and plugins**.
 
 - Use native `openclaw` commands to search/install/update skills and install

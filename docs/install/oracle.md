@@ -7,8 +7,6 @@ read_when:
 title: "Oracle Cloud"
 ---
 
-# Oracle Cloud
-
 Run a persistent OpenClaw Gateway on Oracle Cloud's **Always Free** ARM tier (up to 4 OCPU, 24 GB RAM, 200 GB storage) at no cost.
 
 ## Prerequisites

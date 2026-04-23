@@ -1,0 +1,59 @@
+name: Duplicate PRs After Merge
+
+on:
+  workflow_dispatch:
+    inputs:
+      landed_pr:
+        description: "Merged PR number that supersedes the duplicates"
+        required: true
+        type: string
+      duplicate_prs:
+        description: "Comma or whitespace separated duplicate PR numbers to close"
+        required: true
+        type: string
+      apply:
+        description: "When true, label/comment/close; otherwise dry-run only"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: duplicate-after-merge-${{ github.event.inputs.landed_pr }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  close-duplicates:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Close confirmed duplicates
+        env:
+          APPLY: ${{ inputs.apply }}
+          DUPLICATE_PRS: ${{ inputs.duplicate_prs }}
+          LANDED_PR: ${{ inputs.landed_pr }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          args=(
+            --repo "$REPO"
+            --landed-pr "$LANDED_PR"
+            --duplicates "$DUPLICATE_PRS"
+          )
+
+          if [[ "$APPLY" == "true" ]]; then
+            args+=(--apply)
+          fi
+
+          node scripts/close-duplicate-prs-after-merge.mjs "${args[@]}"

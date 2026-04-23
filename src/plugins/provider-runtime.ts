@@ -20,6 +20,7 @@ import {
   resolveProviderRuntimePlugin,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
+import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
@@ -761,7 +762,15 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveSyntheticAuthContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context) ?? undefined;
+  const runtimeResolved = resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context);
+  if (runtimeResolved) {
+    return runtimeResolved;
+  }
+  return resolvePluginDiscoveryProvidersRuntime({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  }).find((provider) => provider.id === params.provider)?.resolveSyntheticAuth?.(params.context);
 }
 
 export function resolveExternalAuthProfilesWithPlugins(params: {

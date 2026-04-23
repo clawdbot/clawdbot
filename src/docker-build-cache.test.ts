@@ -138,9 +138,7 @@ describe("docker build cache layout", () => {
         /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
       ),
     ).toBeLessThan(installIndex);
-    expect(dockerfile).toContain(
-      "This image only exercises the root qrcode-terminal dependency path.",
-    );
+    expect(dockerfile).toContain("This image only exercises the root QR runtime dependency path.");
     expect(
       indexOfPattern(
         dockerfile,

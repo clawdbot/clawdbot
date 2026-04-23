@@ -1,14 +1,12 @@
 ---
-title: "Plugin Entry Points"
-sidebarTitle: "Entry Points"
 summary: "Reference for definePluginEntry, defineChannelPluginEntry, and defineSetupPluginEntry"
+title: "Plugin entry points"
+sidebarTitle: "Entry Points"
 read_when:
   - You need the exact type signature of definePluginEntry or defineChannelPluginEntry
   - You want to understand registration mode (full vs setup vs CLI metadata)
   - You are looking up entry point options
 ---
-
-# Plugin Entry Points
 
 Every plugin exports a default entry object. The SDK provides three helpers for
 creating them.

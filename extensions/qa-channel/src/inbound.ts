@@ -9,6 +9,15 @@ import { buildQaTarget, sendQaBusMessage, type QaBusMessage } from "./bus-client
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
+export function isHttpMediaUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachments"]) {
   if (!Array.isArray(attachments) || attachments.length === 0) {
     return {};
@@ -33,6 +42,12 @@ async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachmen
       continue;
     }
     if (typeof attachment.url === "string" && attachment.url.trim()) {
+      if (!isHttpMediaUrl(attachment.url)) {
+        console.warn(
+          `[qa-channel] inbound attachment URL rejected (non-http scheme): ${attachment.url}`,
+        );
+        continue;
+      }
       const saved = await saveMediaSource(attachment.url, undefined, "inbound");
       mediaList.push({
         path: saved.path,

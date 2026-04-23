@@ -193,7 +193,39 @@ function resolveSelectedImageGenerationProvider(params: {
 }
 
 function formatIgnoredImageGenerationOverride(override: ImageGenerationIgnoredOverride): string {
-  return `${override.key}=${override.value}`;
+  return `${override.key}=${sanitizeInlineDirectiveText(override.value)}`;
+}
+
+function sanitizeInlineDirectiveText(value: string): string {
+  let sanitized = "";
+  for (const char of value) {
+    switch (char) {
+      case "\\":
+        sanitized += "\\\\";
+        break;
+      case "\r":
+        sanitized += "\\r";
+        break;
+      case "\n":
+        sanitized += "\\n";
+        break;
+      case "\t":
+        sanitized += "\\t";
+        break;
+      default:
+        if (isInlineDirectiveControlCharacter(char)) {
+          sanitized += `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
+        } else {
+          sanitized += char;
+        }
+    }
+  }
+  return sanitized;
+}
+
+function isInlineDirectiveControlCharacter(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code <= 0x1f || code === 0x7f || code === 0x2028 || code === 0x2029;
 }
 
 function validateImageGenerationCapabilities(params: {
@@ -505,9 +537,11 @@ export function createImageGenerateTool(options?: {
         inputImages,
       });
       const ignoredOverrides = result.ignoredOverrides ?? [];
+      const displayProvider = sanitizeInlineDirectiveText(result.provider);
+      const displayModel = sanitizeInlineDirectiveText(result.model);
       const warning =
         ignoredOverrides.length > 0
-          ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map(formatIgnoredImageGenerationOverride).join(", ")}.`
+          ? `Ignored unsupported overrides for ${displayProvider}/${displayModel}: ${ignoredOverrides.map(formatIgnoredImageGenerationOverride).join(", ")}.`
           : undefined;
       const normalizedSize =
         result.normalization?.size?.applied ??
@@ -550,7 +584,7 @@ export function createImageGenerateTool(options?: {
         .map((image) => image.revisedPrompt?.trim())
         .filter((entry): entry is string => Boolean(entry));
       const lines = [
-        `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+        `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
         ...(warning ? [`Warning: ${warning}`] : []),
         // Show the actual saved paths so the model does not invent a bogus
         // local path when it references the generated image in a follow-up reply.

@@ -790,6 +790,100 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history persists assistant image data URLs as managed image blocks", async () => {
+    await withMainSessionStore(async (dir) => {
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = dir;
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text?: string; mediaUrls?: string[] }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          mediaUrls: [`data:image/png;base64,${pngB64}`],
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      try {
+        const finalPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.state === "final" &&
+            o.payload?.runId === "idem-managed-image-history",
+          8000,
+        );
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "show me an image",
+          idempotencyKey: "idem-managed-image-history",
+        });
+
+        expect(res.ok).toBe(true);
+        expect(res.payload?.runId).toBe("idem-managed-image-history");
+        await finalPromise;
+
+        let assistantMessage: Record<string, unknown> | undefined;
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+            sessionKey: "main",
+          });
+          expect(historyRes.ok).toBe(true);
+          const messages = historyRes.payload?.messages ?? [];
+          assistantMessage = messages.find(
+            (message): message is Record<string, unknown> =>
+              typeof message === "object" &&
+              message !== null &&
+              (message as { role?: unknown }).role === "assistant",
+          );
+          if (assistantMessage) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        expect(assistantMessage).toBeTruthy();
+        const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
+        expect(assistantContent).toEqual([
+          { type: "text", text: "Image reply" },
+          expect.objectContaining({
+            type: "image",
+            url: expect.stringContaining("/api/chat/media/outgoing/"),
+            openUrl: expect.stringContaining("/full"),
+            alt: "Generated image 1",
+            mimeType: "image/png",
+            width: 1,
+            height: 1,
+          }),
+        ]);
+        const serializedAssistant = JSON.stringify(assistantMessage);
+        expect(serializedAssistant).not.toContain("data:image/png;base64");
+        expect(serializedAssistant).not.toContain(pngB64);
+      } finally {
+        if (previousStateDir == null) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
+    });
+  });
+
   test("chat.history hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture(true));
     const roleAndText = historyMessages

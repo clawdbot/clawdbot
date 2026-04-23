@@ -1,11 +1,9 @@
 ---
 summary: "Multi-agent routing: isolated agents, channel accounts, and bindings"
-title: Multi-Agent Routing
+title: Multi-agent routing
 read_when: "You want multiple isolated agents (workspaces + auth) in one gateway process."
 status: active
 ---
-
-# Multi-Agent Routing
 
 Goal: multiple _isolated_ agents (separate workspace + `agentDir` + sessions), plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
 

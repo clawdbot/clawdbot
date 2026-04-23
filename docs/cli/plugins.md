@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw plugins` (list, install, marketplace, unin
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to debug plugin load failures
-title: "plugins"
+title: "Plugins"
 ---
 
 # `openclaw plugins`

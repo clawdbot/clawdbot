@@ -6,8 +6,6 @@ read_when:
 title: "Uninstall"
 ---
 
-# Uninstall
-
 Two paths:
 
 - **Easy path** if `openclaw` is still installed.

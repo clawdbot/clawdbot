@@ -1,13 +1,11 @@
 ---
-title: "Memory Search"
 summary: "How memory search finds relevant notes using embeddings and hybrid retrieval"
+title: "Memory search"
 read_when:
   - You want to understand how memory_search works
   - You want to choose an embedding provider
   - You want to tune search quality
 ---
-
-# Memory Search
 
 `memory_search` finds relevant notes from your memory files, even when the
 wording differs from the original text. It works by indexing memory into small

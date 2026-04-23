@@ -1,43 +1,5 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import { beforeAll, describe, expect, it } from "vitest";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
-
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => [
-    {
-      pluginId: "google",
-      id: "gemini",
-      label: "gemini",
-      hint: "gemini test provider",
-      envVars: ["GEMINI_API_KEY"],
-      placeholder: "gemini-...",
-      signupUrl: "https://example.com/gemini",
-      autoDetectOrder: 20,
-      credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-      inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
-      getCredentialValue: (searchConfig) => searchConfig?.apiKey,
-      setCredentialValue: (searchConfigTarget, value) => {
-        searchConfigTarget.apiKey = value;
-      },
-      getConfiguredCredentialValue: (config) =>
-        (config?.plugins?.entries?.google?.config as { webSearch?: { apiKey?: unknown } })
-          ?.webSearch?.apiKey,
-      setConfiguredCredentialValue: (configTarget, value) => {
-        const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
-        const entries = (plugins.entries ??= {});
-        const entry = (entries.google ??= {}) as { config?: Record<string, unknown> };
-        const config = (entry.config ??= {});
-        const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
-        webSearch.apiKey = value;
-      },
-      createTool: () => null,
-    },
-  ]),
-}));
-
-vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-}));
 
 let activateSecretsRuntimeSnapshot: typeof import("./runtime.js").activateSecretsRuntimeSnapshot;
 let getActiveRuntimeWebToolsMetadata: typeof import("./runtime.js").getActiveRuntimeWebToolsMetadata;

@@ -6,8 +6,6 @@ read_when:
 title: "Updating"
 ---
 
-# Updating
-
 Keep OpenClaw up to date.
 
 ## Recommended: `openclaw update`

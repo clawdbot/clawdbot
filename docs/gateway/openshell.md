@@ -1,13 +1,11 @@
 ---
-title: OpenShell
 summary: "Use OpenShell as a managed sandbox backend for OpenClaw agents"
+title: OpenShell
 read_when:
   - You want cloud-managed sandboxes instead of local Docker
   - You are setting up the OpenShell plugin
   - You need to choose between mirror and remote workspace modes
 ---
-
-# OpenShell
 
 OpenShell is a managed sandbox backend for OpenClaw. Instead of running Docker
 containers locally, OpenClaw delegates sandbox lifecycle to the `openshell` CLI,

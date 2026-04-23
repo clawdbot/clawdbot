@@ -54,10 +54,10 @@ describe("status-overview-values", () => {
         sessions: {
           count: 2,
           paths: ["store.json", "other.json"],
-          defaults: { model: "gpt-5.4", contextTokens: 12_000 },
+          defaults: { model: "gpt-5.5", contextTokens: 12_000 },
         },
         formatKTokens: (value) => `${Math.round(value / 1000)}k`,
       }),
-    ).toBe("2 active · default gpt-5.4 (12k ctx) · 2 stores");
+    ).toBe("2 active · default gpt-5.5 (12k ctx) · 2 stores");
   });
 });

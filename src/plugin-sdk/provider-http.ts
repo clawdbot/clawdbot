@@ -10,6 +10,7 @@ export {
   normalizeBaseUrl,
   pollProviderOperationJson,
   postJsonRequest,
+  postMultipartRequest,
   postTranscriptionRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,

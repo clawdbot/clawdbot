@@ -6,8 +6,6 @@ read_when:
 title: "LM Studio"
 ---
 
-# LM Studio
-
 LM Studio is a friendly yet powerful app for running open-weight models on your own hardware. It lets you run llama.cpp (GGUF) or MLX models (Apple Silicon). Comes in a GUI package or headless daemon (`llmster`). For product and setup docs, see [lmstudio.ai](https://lmstudio.ai/).
 
 ## Quick start

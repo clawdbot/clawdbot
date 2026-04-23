@@ -71,4 +71,26 @@ describe("plugin-sdk/command-auth", () => {
       expect(result.effectiveGroupAllowFrom).toEqual(["group-owner"]);
     }
   });
+
+  it("does not grant command authorization to non-command DM input from pairing store", async () => {
+    const result = await resolveSenderCommandAuthorization({
+      cfg: baseCfg,
+      rawBody: "hello",
+      isGroup: false,
+      dmPolicy: "pairing",
+      configuredAllowFrom: [],
+      configuredGroupAllowFrom: [],
+      senderId: "paired-user",
+      isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
+      readAllowFromStore: async () => ["paired-user"],
+      shouldComputeCommandAuthorized: (rawBody) => rawBody.startsWith("/"),
+      resolveCommandAuthorizedFromAuthorizers: ({ useAccessGroups, authorizers }) =>
+        useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
+    });
+
+    expect(result.shouldComputeAuth).toBe(false);
+    expect(result.effectiveAllowFrom).toEqual(["paired-user"]);
+    expect(result.senderAllowedForCommands).toBe(true);
+    expect(result.commandAuthorized).toBeUndefined();
+  });
 });

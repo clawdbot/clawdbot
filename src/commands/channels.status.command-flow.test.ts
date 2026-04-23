@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { channelsStatusCommand } from "./channels/status.js";
+import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 
@@ -176,17 +177,6 @@ function createTokenOnlyPlugin() {
   };
 }
 
-function createRuntimeCapture() {
-  const logs: string[] = [];
-  const errors: string[] = [];
-  const runtime = {
-    log: (message: unknown) => logs.push(String(message)),
-    error: (message: unknown) => errors.push(String(message)),
-    exit: (_code?: number) => undefined,
-  };
-  return { runtime, logs, errors };
-}
-
 describe("channelsStatusCommand SecretRef fallback flow", () => {
   beforeEach(() => {
     mocks.callGateway.mockReset();
@@ -210,7 +200,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
         "channels status: channels.discord.token is unavailable in this command path; continuing with degraded read-only config.",
       ],
     });
-    const { runtime, logs, errors } = createRuntimeCapture();
+    const { runtime, logs, errors } = createCapturingTestRuntime();
 
     await channelsStatusCommand({ probe: false }, runtime as never);
 
@@ -239,7 +229,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
       effectiveConfig: { secretResolved: true, channels: {} },
       diagnostics: [],
     });
-    const { runtime, logs } = createRuntimeCapture();
+    const { runtime, logs } = createCapturingTestRuntime();
 
     await channelsStatusCommand({ probe: false }, runtime as never);
 
@@ -267,7 +257,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
       effectiveConfig: { secretResolved: true, channels: {} },
       diagnostics: [],
     });
-    const { runtime, logs, errors } = createRuntimeCapture();
+    const { runtime, logs, errors } = createCapturingTestRuntime();
 
     await channelsStatusCommand({ json: true, probe: false }, runtime as never);
 

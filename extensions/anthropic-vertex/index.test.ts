@@ -1,8 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+
+const { hasAnthropicVertexAvailableAuthMock } = vi.hoisted(() => ({
+  hasAnthropicVertexAvailableAuthMock: vi.fn(),
+}));
+
+vi.mock("./api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api.js")>();
+  return {
+    ...actual,
+    hasAnthropicVertexAvailableAuth: hasAnthropicVertexAvailableAuthMock,
+  };
+});
+
 import anthropicVertexPlugin from "./index.js";
 
 describe("anthropic-vertex provider plugin", () => {
+  beforeEach(() => {
+    hasAnthropicVertexAvailableAuthMock.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("resolves the ADC marker through the provider hook", async () => {
     const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
 
@@ -76,5 +97,35 @@ describe("anthropic-vertex provider plugin", () => {
       validateAnthropicTurns: true,
       allowSyntheticToolResults: true,
     });
+  });
+
+  it("resolves synthetic auth when ADC is available", async () => {
+    hasAnthropicVertexAvailableAuthMock.mockReturnValue(true);
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    const result = provider.resolveSyntheticAuth?.({
+      provider: "anthropic-vertex",
+      config: undefined,
+      providerConfig: undefined,
+    } as never);
+
+    expect(result).toEqual({
+      apiKey: "gcp-vertex-credentials",
+      source: "gcp-vertex-credentials (ADC)",
+      mode: "api-key",
+    });
+  });
+
+  it("returns undefined when ADC is not available", async () => {
+    hasAnthropicVertexAvailableAuthMock.mockReturnValue(false);
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    const result = provider.resolveSyntheticAuth?.({
+      provider: "anthropic-vertex",
+      config: undefined,
+      providerConfig: undefined,
+    } as never);
+
+    expect(result).toBeUndefined();
   });
 });

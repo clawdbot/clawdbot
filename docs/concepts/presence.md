@@ -7,8 +7,6 @@ read_when:
 title: "Presence"
 ---
 
-# Presence
-
 OpenClaw “presence” is a lightweight, best‑effort view of:
 
 - the **Gateway** itself, and

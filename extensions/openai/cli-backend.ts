@@ -6,7 +6,7 @@ import {
 import { prepareOpenAICodexCliExecution } from "./openai-codex-cli-bridge.js";
 
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
-const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.4";
+const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
 
 export function buildOpenAICodexCliBackend(): CliBackendPlugin {
   return {
@@ -16,7 +16,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       defaultImageProbe: true,
       defaultMcpProbe: true,
       docker: {
-        npmPackage: "@openai/codex",
+        npmPackage: "@openai/codex@0.124.0",
         binaryName: "codex",
       },
     },
@@ -34,6 +34,8 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "never",
         "--sandbox",
         "workspace-write",
+        "-c",
+        'service_tier="fast"',
         "--skip-git-repo-check",
       ],
       resumeArgs: [
@@ -42,6 +44,8 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "{sessionId}",
         "-c",
         'sandbox_mode="workspace-write"',
+        "-c",
+        'service_tier="fast"',
         "--skip-git-repo-check",
       ],
       output: "jsonl",
@@ -55,6 +59,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       systemPromptWhen: "first",
       imageArg: "--image",
       imageMode: "repeat",
+      imagePathScope: "workspace",
       reliability: {
         watchdog: {
           fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },

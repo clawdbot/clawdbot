@@ -1,13 +1,11 @@
 ---
-title: "fal"
 summary: "fal image and video generation setup in OpenClaw"
+title: "Fal"
 read_when:
   - You want to use fal image generation in OpenClaw
   - You need the FAL_KEY auth flow
   - You want fal defaults for image_generate or video_generate
 ---
-
-# fal
 
 OpenClaw ships a bundled `fal` provider for hosted image and video generation.
 

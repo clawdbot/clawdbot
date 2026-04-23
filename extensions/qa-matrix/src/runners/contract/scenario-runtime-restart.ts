@@ -1,6 +1,7 @@
 import {
   MATRIX_QA_HOMESERVER_ROOM_KEY,
   MATRIX_QA_RESTART_ROOM_KEY,
+  MATRIX_QA_STALE_SYNC_ROOM_KEY,
   resolveMatrixQaScenarioRoomId,
 } from "./scenario-catalog.js";
 import {
@@ -344,7 +345,7 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
     throw new Error("Matrix stale sync replay dedupe scenario requires a gateway state directory");
   }
   const stateDir = context.gatewayStateDir;
-  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_RESTART_ROOM_KEY);
+  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_STALE_SYNC_ROOM_KEY);
   const syncStore = await waitForMatrixSyncStoreWithCursor({
     context,
     stateDir,

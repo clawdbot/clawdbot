@@ -1,14 +1,12 @@
 ---
-title: "Memory configuration reference"
 summary: "All configuration knobs for memory search, embedding providers, QMD, hybrid search, and multimodal indexing"
+title: "Memory configuration reference"
 read_when:
   - You want to configure memory search providers or embedding models
   - You want to set up the QMD backend
   - You want to tune hybrid search, MMR, or temporal decay
   - You want to enable multimodal memory indexing
 ---
-
-# Memory configuration reference
 
 This page lists every configuration knob for OpenClaw memory search. For
 conceptual overviews, see:

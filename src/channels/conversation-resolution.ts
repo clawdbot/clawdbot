@@ -53,6 +53,7 @@ export type ResolveCommandConversationResolutionInput = {
   fallbackTo?: string | null;
   from?: string | null;
   nativeChannelId?: string | null;
+  includePlacementHint?: boolean;
 };
 
 export type ResolveInboundConversationResolutionInput = {
@@ -114,6 +115,7 @@ function normalizeResolutionTarget(params: {
   source: ConversationResolutionSource;
   threadId?: string;
   plugin?: ChannelPlugin;
+  includePlacementHint?: boolean;
 }): ConversationResolution | null {
   const conversationId = normalizeOptionalString(params.conversation?.conversationId);
   if (!conversationId) {
@@ -131,6 +133,10 @@ function normalizeResolutionTarget(params: {
   const normalizedParentConversationId = defaultParentToSelf
     ? normalized.conversationId
     : normalized.parentConversationId;
+  const placementHint =
+    params.includePlacementHint === false
+      ? undefined
+      : resolveChannelDefaultBindingPlacement(params.channel);
   return {
     canonical: {
       channel: params.channel,
@@ -141,7 +147,7 @@ function normalizeResolutionTarget(params: {
         : {}),
     },
     ...(params.threadId ? { threadId: params.threadId } : {}),
-    placementHint: resolveChannelDefaultBindingPlacement(params.channel),
+    ...(placementHint ? { placementHint } : {}),
     source: params.source,
   };
 }
@@ -273,6 +279,7 @@ export function resolveCommandConversationResolution(
     source: "command-provider",
     threadId,
     plugin,
+    includePlacementHint: params.includePlacementHint,
   });
   if (providerResolution) {
     return providerResolution;
@@ -297,6 +304,7 @@ export function resolveCommandConversationResolution(
     source: "focused-binding",
     threadId,
     plugin,
+    includePlacementHint: params.includePlacementHint,
   });
   if (focusedResolution) {
     return focusedResolution;
@@ -337,6 +345,7 @@ export function resolveCommandConversationResolution(
     source: "command-fallback",
     threadId,
     plugin,
+    includePlacementHint: params.includePlacementHint,
   });
 }
 

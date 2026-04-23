@@ -4,10 +4,8 @@ read_when:
   - Diagnosing auth profile rotation, cooldowns, or model fallback behavior
   - Updating failover rules for auth profiles or models
   - Understanding how session model overrides interact with fallback retries
-title: "Model Failover"
+title: "Model failover"
 ---
-
-# Model failover
 
 OpenClaw handles failures in two stages:
 

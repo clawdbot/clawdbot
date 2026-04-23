@@ -219,13 +219,13 @@ const hasDirtyRuntimePostBuildInputs = (deps) => {
   return parseGitStatusPaths(output).some((repoPath) => isRuntimePostBuildRelevantPath(repoPath));
 };
 
-const readBuildStamp = (deps) => {
-  const mtime = statMtime(deps.buildStampPath, deps.fs);
+const readJsonStamp = (filePath, deps) => {
+  const mtime = statMtime(filePath, deps.fs);
   if (mtime == null) {
     return { mtime: null, head: null };
   }
   try {
-    const raw = deps.fs.readFileSync(deps.buildStampPath, "utf8").trim();
+    const raw = deps.fs.readFileSync(filePath, "utf8").trim();
     if (!raw.startsWith("{")) {
       return { mtime, head: null };
     }
@@ -237,22 +237,10 @@ const readBuildStamp = (deps) => {
   }
 };
 
+const readBuildStamp = (deps) => readJsonStamp(deps.buildStampPath, deps);
+
 const readRuntimePostBuildStamp = (deps) => {
-  const mtime = statMtime(deps.runtimePostBuildStampPath, deps.fs);
-  if (mtime == null) {
-    return { mtime: null, head: null };
-  }
-  try {
-    const raw = deps.fs.readFileSync(deps.runtimePostBuildStampPath, "utf8").trim();
-    if (!raw.startsWith("{")) {
-      return { mtime, head: null };
-    }
-    const parsed = JSON.parse(raw);
-    const head = typeof parsed?.head === "string" && parsed.head.trim() ? parsed.head.trim() : null;
-    return { mtime, head };
-  } catch {
-    return { mtime, head: null };
-  }
+  return readJsonStamp(deps.runtimePostBuildStampPath, deps);
 };
 
 const hasSourceMtimeChanged = (stampMtime, deps) => {

@@ -50,6 +50,7 @@ pnpm test:parallels:macos \
 - Avoid `prlctl enter` / expect for long Discord setup scripts; it line-wraps/corrupts long commands. Use `prlctl exec --current-user /bin/sh -lc ...` for the Discord config phase.
 - Full 3-OS sweeps: the shared build lock is safe in parallel, but snapshot restore is still a Parallels bottleneck. Prefer serialized Windows/Linux restore-heavy reruns if the host is already under load.
 - Harness cleanup deletes the temporary Discord smoke messages at exit.
+- After a successful Discord roundtrip, shut down the macOS guest before handoff (`prlctl stop "macOS Tahoe"`). The macOS smoke harness should do this automatically after successful Discord proof; still stop the VM manually after ad-hoc Discord checks. Do not leave the Discord-configured VM running; it can keep reading/posting in `#maintainer` and spam Discord after the proof is complete.
 - Per-phase logs: `/tmp/openclaw-parallels-smoke.*`
 - Machine summary: pass `--json`
 - If roundtrip flakes, inspect `fresh.discord-roundtrip.log` and `discord-last-readback.json` in the run dir first.

@@ -1,24 +1,23 @@
 ---
-title: "Plugin SDK Overview"
-sidebarTitle: "SDK Overview"
 summary: "Import map, registration API reference, and SDK architecture"
+title: "Plugin SDK overview"
+sidebarTitle: "SDK overview"
 read_when:
   - You need to know which SDK subpath to import from
   - You want a reference for all registration methods on OpenClawPluginApi
   - You are looking up a specific SDK export
 ---
 
-# Plugin SDK Overview
-
 The plugin SDK is the typed contract between plugins and core. This page is the
 reference for **what to import** and **what you can register**.
 
 <Tip>
-  **Looking for a how-to guide?**
-  - First plugin? Start with [Getting Started](/plugins/building-plugins)
-  - Channel plugin? See [Channel Plugins](/plugins/sdk-channel-plugins)
-  - Provider plugin? See [Provider Plugins](/plugins/sdk-provider-plugins)
-</Tip>
+  Looking for a how-to guide instead?
+
+- First plugin? Start with [Building plugins](/plugins/building-plugins).
+- Channel plugin? See [Channel plugins](/plugins/sdk-channel-plugins).
+- Provider plugin? See [Provider plugins](/plugins/sdk-provider-plugins).
+  </Tip>
 
 ## Import convention
 
@@ -35,29 +34,26 @@ prefer `openclaw/plugin-sdk/channel-core`; keep `openclaw/plugin-sdk/core` for
 the broader umbrella surface and shared helpers such as
 `buildChannelConfigSchema`.
 
-Do not add or depend on provider-named convenience seams such as
-`openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
-`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`, or
-channel-branded helper seams. Bundled plugins should compose generic
-SDK subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core
-should either use those plugin-local barrels or add a narrow generic SDK
-contract when the need is truly cross-channel.
+<Warning>
+  Do not import provider- or channel-branded convenience seams (for example
+  `openclaw/plugin-sdk/slack`, `.../discord`, `.../signal`, `.../whatsapp`).
+  Bundled plugins compose generic SDK subpaths inside their own `api.ts` /
+  `runtime-api.ts` barrels; core consumers should either use those plugin-local
+  barrels or add a narrow generic SDK contract when a need is truly
+  cross-channel.
 
-The generated export map still contains a small set of bundled-plugin helper
-seams such as `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`,
-`plugin-sdk/zalo`, `plugin-sdk/zalo-setup`, and `plugin-sdk/matrix*`. Those
-subpaths exist for bundled-plugin maintenance and compatibility only; they are
-intentionally omitted from the common table below and are not the recommended
-import path for new third-party plugins.
+A small set of bundled-plugin helper seams (`plugin-sdk/feishu`,
+`plugin-sdk/zalo`, `plugin-sdk/matrix*`, and similar) still appear in the
+generated export map. They exist for bundled-plugin maintenance only and are
+not recommended import paths for new third-party plugins.
+</Warning>
 
 ## Subpath reference
 
 The most commonly used subpaths, grouped by purpose. The generated full list of
-200+ subpaths lives in `scripts/lib/plugin-sdk-entrypoints.json`.
-
-Reserved bundled-plugin helper subpaths still appear in that generated list.
-Treat those as implementation detail/compatibility surfaces unless a doc page
-explicitly promotes one as public.
+200+ subpaths lives in `scripts/lib/plugin-sdk-entrypoints.json`; reserved
+bundled-plugin helper subpaths appear there but are implementation detail
+unless a doc page explicitly promotes them.
 
 ### Plugin entry
 
@@ -355,18 +351,23 @@ methods:
 | `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section |
 | `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus      |
 
-Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
-`update.*`) always stay `operator.admin`, even if a plugin tries to assign a
-narrower gateway method scope. Prefer plugin-specific prefixes for
-plugin-owned methods.
+<Note>
+  Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
+  `update.*`) always stay `operator.admin`, even if a plugin tries to assign a
+  narrower gateway method scope. Prefer plugin-specific prefixes for
+  plugin-owned methods.
+</Note>
 
-Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
-event timing during OpenClaw embedded runs, for example async `tool_result`
-rewrites that must happen before the final tool-result message is emitted.
-This is a bundled-plugin seam today: only bundled plugins may register one, and
-they must declare `contracts.embeddedExtensionFactories: ["pi"]` in
+<Accordion title="When to use registerEmbeddedExtensionFactory">
+  Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
+  event timing during OpenClaw embedded runs — for example async `tool_result`
+  rewrites that must happen before the final tool-result message is emitted.
+
+This is a bundled-plugin seam today: only bundled plugins may register one,
+and they must declare `contracts.embeddedExtensionFactories: ["pi"]` in
 `openclaw.plugin.json`. Keep normal OpenClaw plugin hooks for everything that
 does not require that lower-level seam.
+</Accordion>
 
 ### CLI registration metadata
 
@@ -500,23 +501,20 @@ my-plugin/
 </Warning>
 
 Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
-`index.ts`, `setup-entry.ts`, and similar public entry files) now prefer the
+`index.ts`, `setup-entry.ts`, and similar public entry files) prefer the
 active runtime config snapshot when OpenClaw is already running. If no runtime
 snapshot exists yet, they fall back to the resolved config file on disk.
 
-Provider plugins can also expose a narrow plugin-local contract barrel when a
+Provider plugins can expose a narrow plugin-local contract barrel when a
 helper is intentionally provider-specific and does not belong in a generic SDK
-subpath yet. Current bundled example: the Anthropic provider keeps its Claude
-stream helpers in its own public `api.ts` / `contract-api.ts` seam instead of
-promoting Anthropic beta-header and `service_tier` logic into a generic
-`plugin-sdk/*` contract.
+subpath yet. Bundled examples:
 
-Other current bundled examples:
-
-- `@openclaw/openai-provider`: `api.ts` exports provider builders,
-  default-model helpers, and realtime provider builders
-- `@openclaw/openrouter-provider`: `api.ts` exports the provider builder plus
-  onboarding/config helpers
+- **Anthropic**: public `api.ts` / `contract-api.ts` seam for Claude
+  beta-header and `service_tier` stream helpers.
+- **`@openclaw/openai-provider`**: `api.ts` exports provider builders,
+  default-model helpers, and realtime provider builders.
+- **`@openclaw/openrouter-provider`**: `api.ts` exports the provider builder
+  plus onboarding/config helpers.
 
 <Warning>
   Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`
@@ -527,9 +525,23 @@ Other current bundled examples:
 
 ## Related
 
-- [Entry Points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry` options
-- [Runtime Helpers](/plugins/sdk-runtime) — full `api.runtime` namespace reference
-- [Setup and Config](/plugins/sdk-setup) — packaging, manifests, config schemas
-- [Testing](/plugins/sdk-testing) — test utilities and lint rules
-- [SDK Migration](/plugins/sdk-migration) — migrating from deprecated surfaces
-- [Plugin Internals](/plugins/architecture) — deep architecture and capability model
+<CardGroup cols={2}>
+  <Card title="Entry points" icon="door-open" href="/plugins/sdk-entrypoints">
+    `definePluginEntry` and `defineChannelPluginEntry` options.
+  </Card>
+  <Card title="Runtime helpers" icon="gears" href="/plugins/sdk-runtime">
+    Full `api.runtime` namespace reference.
+  </Card>
+  <Card title="Setup and config" icon="sliders" href="/plugins/sdk-setup">
+    Packaging, manifests, and config schemas.
+  </Card>
+  <Card title="Testing" icon="vial" href="/plugins/sdk-testing">
+    Test utilities and lint rules.
+  </Card>
+  <Card title="SDK migration" icon="arrows-turn-right" href="/plugins/sdk-migration">
+    Migrating from deprecated surfaces.
+  </Card>
+  <Card title="Plugin internals" icon="diagram-project" href="/plugins/architecture">
+    Deep architecture and capability model.
+  </Card>
+</CardGroup>

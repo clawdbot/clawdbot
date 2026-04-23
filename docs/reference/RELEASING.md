@@ -1,12 +1,10 @@
 ---
-title: "Release Policy"
 summary: "Public release channels, version naming, and cadence"
+title: "Release policy"
 read_when:
   - Looking for public release channel definitions
   - Looking for version naming and cadence
 ---
-
-# Release Policy
 
 OpenClaw has three public release lanes:
 

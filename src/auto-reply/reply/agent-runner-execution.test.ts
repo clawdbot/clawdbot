@@ -274,6 +274,7 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.run.model = "gpt-5.4";
     followupRun.run.extraSystemPrompt = "dynamic inbound metadata\n\nstable group prompt";
     followupRun.run.extraSystemPromptStatic = "stable group prompt";
+    followupRun.originatingChannel = "telegram";
 
     const result = await runAgentTurnWithFallback({
       commandBody: "hello",
@@ -304,6 +305,60 @@ describe("runAgentTurnWithFallback", () => {
       expect.objectContaining({
         extraSystemPrompt: "dynamic inbound metadata\n\nstable group prompt",
         extraSystemPromptStatic: "stable group prompt",
+        trigger: "user",
+        messageChannel: "telegram",
+        messageProvider: "telegram",
+      }),
+    );
+  });
+
+  it("resolves CLI messageProvider from the live session surface when no origin channel is set", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    followupRun.run.messageProvider = "stale-provider";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "discord",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(state.runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageChannel: undefined,
+        messageProvider: "discord",
       }),
     );
   });
@@ -1462,7 +1517,7 @@ describe("runAgentTurnWithFallback", () => {
   it("surfaces direct provider auth guidance for missing API keys", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4. | No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access. | No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       ),
     );
 
@@ -1494,7 +1549,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.4` for OAuth, or set `OPENAI_API_KEY`, then try again.",
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY`, then try again.",
       );
     }
   });

@@ -1,13 +1,11 @@
 ---
-title: "PDF Tool"
 summary: "Analyze one or more PDF documents with native provider support and extraction fallback"
+title: "PDF tool"
 read_when:
   - You want to analyze PDFs from agents
   - You need exact pdf tool parameters and limits
   - You are debugging native PDF mode vs extraction fallback
 ---
-
-# PDF tool
 
 `pdf` analyzes one or more PDF documents and returns text.
 

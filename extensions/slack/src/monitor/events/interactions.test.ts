@@ -17,6 +17,10 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
 
+vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
+  readStoreAllowFromForDmPolicy: async () => [],
+}));
+
 vi.mock("../../interactive-dispatch.js", () => ({
   dispatchSlackPluginInteractiveHandler: (params: {
     data: string;

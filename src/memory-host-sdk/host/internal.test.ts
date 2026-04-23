@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMultimodalChunkForIndexing,
   buildFileEntry,
@@ -87,6 +87,97 @@ describe("listMemoryFiles", () => {
     const files = await listMemoryFiles(tmpDir, [singleFile]);
     expect(files).toHaveLength(2);
     expect(files.some((file) => file.endsWith("standalone.md"))).toBe(true);
+  });
+
+  it("ignores lowercase root memory.md when canonical MEMORY.md is absent", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
+
+    const files = await listMemoryFiles(tmpDir, [path.join(tmpDir, "memory.md")]);
+
+    expect(files).toEqual([]);
+  });
+
+  it("prefers canonical MEMORY.md over legacy root memory.md even through extra paths", async () => {
+    const tmpDir = getTmpDir();
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    const actualLstat = fs.lstat.bind(fs);
+    const actualReaddir = fs.readdir.bind(fs);
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
+      if (target === canonicalPath || target === legacyPath) {
+        return {
+          isSymbolicLink: () => false,
+          isFile: () => true,
+          isDirectory: () => false,
+        } as Awaited<ReturnType<typeof fs.lstat>>;
+      }
+      return actualLstat(target);
+    });
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (
+      target: unknown,
+      options: unknown,
+    ) => {
+      if (
+        target === tmpDir &&
+        typeof options === "object" &&
+        options !== null &&
+        "withFileTypes" in options &&
+        options.withFileTypes
+      ) {
+        return [
+          {
+            name: "MEMORY.md",
+            isSymbolicLink: () => false,
+            isDirectory: () => false,
+            isFile: () => true,
+          },
+          {
+            name: "memory.md",
+            isSymbolicLink: () => false,
+            isDirectory: () => false,
+            isFile: () => true,
+          },
+        ] as unknown as Awaited<ReturnType<typeof fs.readdir>>;
+      }
+      return actualReaddir(target as never, options as never);
+    }) as never);
+
+    try {
+      const files = await listMemoryFiles(tmpDir, [legacyPath, path.join(tmpDir, ".")]);
+      expect(files).toEqual([canonicalPath]);
+    } finally {
+      lstatSpy.mockRestore();
+      readdirSpy.mockRestore();
+    }
+  });
+
+  it("skips root-memory repair backups from extra workspace paths", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory", "2026-04-23");
+    await fs.mkdir(repairDir, { recursive: true });
+    await fs.writeFile(path.join(repairDir, "memory.md"), "# Archived legacy memory");
+
+    const files = await listMemoryFiles(tmpDir, [tmpDir]);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toBe(path.join(tmpDir, "MEMORY.md"));
+  });
+
+  it("skips explicit root-memory repair directories from extra paths", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory", "2026-04-23");
+    await fs.mkdir(repairDir, { recursive: true });
+    await fs.writeFile(path.join(repairDir, "memory.md"), "# Archived legacy memory");
+
+    const files = await listMemoryFiles(tmpDir, [
+      path.join(tmpDir, ".openclaw-repair", "root-memory"),
+    ]);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toBe(path.join(tmpDir, "MEMORY.md"));
   });
 
   it("handles relative paths in additional paths", async () => {

@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw backup` (create local backup archives)"
 read_when:
   - You want a first-class backup archive for local OpenClaw state
   - You want to preview which paths would be included before reset or uninstall
-title: "backup"
+title: "Backup"
 ---
 
 # `openclaw backup`

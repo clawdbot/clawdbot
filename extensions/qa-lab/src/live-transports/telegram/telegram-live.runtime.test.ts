@@ -594,6 +594,28 @@ describe("telegram live qa runtime", () => {
     ]);
   });
 
+  it("prints Telegram scenario RTT in the Markdown report", () => {
+    expect(
+      __testing.renderTelegramQaMarkdown({
+        cleanupIssues: [],
+        credentialSource: "env",
+        groupId: "-100123",
+        redactMetadata: false,
+        startedAt: "2026-04-23T00:00:00.000Z",
+        finishedAt: "2026-04-23T00:00:10.000Z",
+        scenarios: [
+          {
+            id: "telegram-canary",
+            title: "Telegram canary",
+            status: "pass",
+            details: "reply message 12 matched in 4321ms",
+            rttMs: 4321,
+          },
+        ],
+      }),
+    ).toContain("- RTT: 4321ms");
+  });
+
   it("formats phase-specific canary diagnostics with context", () => {
     const error = new Error(
       "SUT bot did not send any group reply after the canary command within 30s.",

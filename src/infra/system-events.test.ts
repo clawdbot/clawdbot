@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
+import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
-import { isCronSystemEvent } from "./heartbeat-runner.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { isCronSystemEvent } from "./heartbeat-events-filter.js";
 import {
   consumeSystemEventEntries,
   drainSystemEventEntries,

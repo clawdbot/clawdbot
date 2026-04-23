@@ -95,10 +95,113 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Session: agent:main:main");
     expect(normalized).toContain("updated 10m ago");
     expect(normalized).toContain("Runtime: direct");
+    expect(normalized).toContain("Runner: pi (embedded)");
     expect(normalized).toContain("Think: medium");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
+  });
+
+  it("shows the CLI runner for CLI-backed providers", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/opus",
+      },
+      sessionEntry: {
+        sessionId: "cli",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "opus",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: claude-cli (cli)");
+  });
+
+  it("falls back to the configured CLI provider when session provider fields are empty", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/opus",
+      },
+      sessionEntry: {
+        sessionId: "cli-default",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: claude-cli (cli)");
+  });
+
+  it("shows the ACP harness agent and backend when ACP owns the session", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "acp",
+        updatedAt: 0,
+        acp: {
+          backend: "acpx",
+          agent: "gemini",
+          runtimeSessionName: "status-test",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 0,
+        },
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: gemini (acp/acpx)");
+  });
+
+  it("sanitizes runner labels sourced from session metadata", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "acp-sanitized",
+        updatedAt: 0,
+        acp: {
+          backend: "acpx\nrewritten",
+          agent: "gemini\u001b[2K",
+          runtimeSessionName: "status-test",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 0,
+        },
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Runner: gemini (acp/acpx\\nrewritten)");
+    expect(normalized).not.toContain("\u001b");
   });
 
   it("falls back to sessionEntry levels when resolved levels are not passed", () => {
@@ -277,6 +380,43 @@ describe("buildStatusMessage", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Fast");
+  });
+
+  it("shows a non-PI harness next to fast mode when resolved", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "codex-harness",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      resolvedHarness: "codex",
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast · codex");
+  });
+
+  it("hides the default PI harness label", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "pi-harness",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      resolvedHarness: "pi",
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast");
+    expect(normalizeTestText(text)).not.toContain("· pi");
   });
 
   it("hides fast mode when disabled", () => {

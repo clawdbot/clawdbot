@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw wiki` (memory-wiki vault status, search, c
 read_when:
   - You want to use the memory-wiki CLI
   - You are documenting or changing `openclaw wiki`
-title: "wiki"
+title: "Wiki"
 ---
 
 # `openclaw wiki`

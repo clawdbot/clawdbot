@@ -7,8 +7,6 @@ read_when:
 title: "Hostinger"
 ---
 
-# Hostinger
-
 Run a persistent OpenClaw Gateway on [Hostinger](https://www.hostinger.com/openclaw) via a **1-Click** managed deployment or a **VPS** install.
 
 ## Prerequisites

@@ -62,18 +62,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

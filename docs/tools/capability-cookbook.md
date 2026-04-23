@@ -4,11 +4,9 @@ read_when:
   - Adding a new core capability and plugin registration surface
   - Deciding whether code belongs in core, a vendor plugin, or a feature plugin
   - Wiring a new runtime helper for channels or tools
-title: "Adding Capabilities (Contributor Guide)"
+title: "Adding capabilities (contributor guide)"
 sidebarTitle: "Adding Capabilities"
 ---
-
-# Adding Capabilities
 
 <Info>
   This is a **contributor guide** for OpenClaw core developers. If you are

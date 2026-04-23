@@ -12,7 +12,6 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
@@ -95,7 +94,7 @@ export const __testing = {
   },
 };
 
-const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const;
+const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME] as const;
 
 const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
 
@@ -213,22 +212,11 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
       updatedAtMs: primaryMeta.updatedAtMs,
     });
   } else {
-    const altMeta = await statWorkspaceFileSafely(workspaceDir, DEFAULT_MEMORY_ALT_FILENAME);
-    if (altMeta) {
-      files.push({
-        name: DEFAULT_MEMORY_ALT_FILENAME,
-        path: path.join(workspaceDir, DEFAULT_MEMORY_ALT_FILENAME),
-        missing: false,
-        size: altMeta.size,
-        updatedAtMs: altMeta.updatedAtMs,
-      });
-    } else {
-      files.push({
-        name: DEFAULT_MEMORY_FILENAME,
-        path: path.join(workspaceDir, DEFAULT_MEMORY_FILENAME),
-        missing: true,
-      });
-    }
+    files.push({
+      name: DEFAULT_MEMORY_FILENAME,
+      path: path.join(workspaceDir, DEFAULT_MEMORY_FILENAME),
+      missing: true,
+    });
   }
 
   return files;

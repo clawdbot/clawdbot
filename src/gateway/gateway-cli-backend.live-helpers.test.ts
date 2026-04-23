@@ -112,7 +112,7 @@ describe("gateway cli backend live helpers", () => {
     );
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-sonnet-4-6")).toBe(true);
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-opus-4-6")).toBe(false);
-    expect(shouldRunCliModelSwitchProbe("codex-cli", "codex-cli/gpt-5.4")).toBe(false);
+    expect(shouldRunCliModelSwitchProbe("codex-cli", "codex-cli/gpt-5.5")).toBe(false);
   });
 
   it("lets env disable the model switch probe", async () => {

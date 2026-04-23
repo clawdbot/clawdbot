@@ -4,10 +4,8 @@ read_when:
   - You want a web search provider that requires no API key
   - You want to use DuckDuckGo for web_search
   - You need a zero-config search fallback
-title: "DuckDuckGo Search"
+title: "DuckDuckGo search"
 ---
-
-# DuckDuckGo Search
 
 OpenClaw supports DuckDuckGo as a **key-free** `web_search` provider. No API
 key or account is required.

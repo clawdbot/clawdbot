@@ -713,6 +713,139 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("routes exec-event replies using persisted session delivery context when current turn has no originating route", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "acc-1",
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:999",
+      lastAccountId: "acc-1",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "exec-event",
+      Surface: "exec-event",
+      SessionKey: "agent:main:main",
+      AccountId: undefined,
+      OriginatingChannel: undefined,
+      OriginatingTo: undefined,
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "acc-1",
+      }),
+    );
+    expect(replyMediaPathMocks.createReplyMediaPathNormalizer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "telegram",
+        accountId: "acc-1",
+      }),
+    );
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shouldRouteToOriginating: true,
+        originatingChannel: "telegram",
+        originatingTo: "telegram:999",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("routes exec-event replies using last route fields when delivery context is missing", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      lastChannel: "discord",
+      lastTo: "channel:123",
+      lastAccountId: "default",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "exec-event",
+      Surface: "exec-event",
+      SessionKey: "agent:main:main",
+      AccountId: undefined,
+      OriginatingChannel: undefined,
+      OriginatingTo: undefined,
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:123",
+        accountId: "default",
+      }),
+    );
+  });
+
+  it("honors sendPolicy deny for recovered exec-event delivery channel", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "acc-1",
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:999",
+      lastAccountId: "acc-1",
+    };
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [{ action: "deny", match: { channel: "telegram" } }],
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "exec-event",
+      Surface: "exec-event",
+      SessionKey: "agent:main:main",
+      AccountId: undefined,
+      OriginatingChannel: undefined,
+      OriginatingTo: undefined,
+    });
+
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sendPolicy: "deny",
+        suppressUserDelivery: true,
+        shouldRouteToOriginating: true,
+        originatingChannel: "telegram",
+        originatingTo: "telegram:999",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("falls back to thread-scoped session key when current ctx has no MessageThreadId", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

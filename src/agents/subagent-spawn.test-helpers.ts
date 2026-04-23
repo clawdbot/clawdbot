@@ -114,6 +114,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   loadConfig?: () => Record<string, unknown>;
   updateSessionStoreMock?: MockFn;
+  forkSessionFromParentMock?: MockFn;
+  resolveContextEngineMock?: MockFn;
+  resolveParentForkMaxTokensMock?: MockFn;
   pruneLegacyStoreKeysMock?: MockFn;
   registerSubagentRunMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
@@ -121,6 +124,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
   resolveAgentWorkspaceDir?: (cfg: Record<string, unknown>, agentId: string) => string;
   resolveSubagentSpawnModelSelection?: () => string | undefined;
+  getSubagentDepthFromSessionStore?: (sessionKey: string, opts?: unknown) => number;
+  countActiveRunsForSession?: (sessionKey: string) => number;
   resolveSandboxRuntimeStatus?: (params: {
     cfg?: Record<string, unknown>;
     sessionKey?: string;
@@ -154,6 +159,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
   vi.doMock("./subagent-spawn.runtime.js", () => ({
     callGateway: (opts: unknown) => params.callGatewayMock(opts),
     buildSubagentSystemPrompt: () => "system-prompt",
+    forkSessionFromParent:
+      params.forkSessionFromParentMock ??
+      (async () => ({ sessionId: "forked-session-id", sessionFile: "/tmp/forked-session.jsonl" })),
     getGlobalHookRunner: () => params.hookRunner ?? { hasHooks: () => false },
     emitSessionLifecycleEvent: (...args: unknown[]) =>
       params.emitSessionLifecycleEventMock?.(...args),
@@ -165,6 +173,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
     AGENT_LANE_SUBAGENT: "subagent",
     loadConfig: () =>
       params.loadConfig?.() ?? createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
+    resolveParentForkMaxTokens: params.resolveParentForkMaxTokensMock ?? (() => 100_000),
     mergeSessionEntry: (
       current: Record<string, unknown> | undefined,
       next: Record<string, unknown>,
@@ -220,11 +230,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   vi.doMock("./subagent-depth.js", () => ({
-    getSubagentDepthFromSessionStore: () => 0,
+    getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
   }));
 
   vi.doMock("./subagent-registry.js", () => ({
-    countActiveRunsForSession: () => 0,
+    countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     registerSubagentRun:
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
     resetSubagentRegistryForTests,

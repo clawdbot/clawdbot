@@ -13,8 +13,13 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import {
+  appendLocalMediaParentRoots,
+  getAgentScopedMediaLocalRoots,
+} from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -54,6 +59,11 @@ import { MediaOffloadError } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
+import {
+  attachManagedOutgoingImagesToMessage,
+  cleanupManagedOutgoingImageRecords,
+  createManagedOutgoingImageBlocks,
+} from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -85,7 +95,10 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
-import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
+import {
+  buildWebchatAssistantMessageFromReplyPayloads,
+  buildWebchatAudioContentBlocksFromReplyPayloads,
+} from "./chat-webchat-media.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -143,7 +156,9 @@ async function buildWebchatAssistantMediaMessage(
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 let chatHistoryPlaceholderEmitCount = 0;
+const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
   "direct",
@@ -252,6 +267,204 @@ function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
   return payloads.some(
     (payload) => payload.sensitiveMedia === true && isMediaBearingPayload(payload),
   );
+}
+
+type AssistantDisplayContentBlock = Record<string, unknown>;
+
+function sanitizeAssistantDisplayText(value?: string | null): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const withoutEnvelope = stripEnvelopeFromMessage(value);
+  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
+  const stripped = stripInlineDirectiveTagsForDisplay(normalized).text.trim();
+  return stripped || undefined;
+}
+
+function extractAssistantDisplayTextFromContent(
+  content?: readonly AssistantDisplayContentBlock[] | null,
+): string | undefined {
+  if (!Array.isArray(content) || content.length === 0) {
+    return undefined;
+  }
+  const parts = content
+    .map((block) => {
+      if (block?.type !== "text" || typeof block.text !== "string") {
+        return "";
+      }
+      return block.text.trim();
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+async function buildAssistantDisplayContentFromReplyPayloads(params: {
+  sessionKey: string;
+  payloads: ReplyPayload[];
+  managedImageLocalRoots?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["localRoots"];
+  includeSensitiveMedia?: boolean;
+  onLocalAudioAccessDenied?: (message: string) => void;
+  onManagedImagePrepareError?: (message: string) => void;
+}): Promise<AssistantDisplayContentBlock[] | undefined> {
+  const rawTextPayloadCount = params.payloads.filter(
+    (payload) => typeof payload.text === "string" && payload.text.trim().length > 0,
+  ).length;
+  const normalized = normalizeReplyPayloadsForDelivery(params.payloads);
+  if (normalized.length === 0) {
+    return rawTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
+  }
+
+  const content: AssistantDisplayContentBlock[] = [];
+  let strippedTextPayloadCount = 0;
+  for (const payload of normalized) {
+    const text = sanitizeAssistantDisplayText(payload.text);
+    if (text) {
+      content.push({ type: "text", text });
+    } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
+      strippedTextPayloadCount += 1;
+    }
+    if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
+      continue;
+    }
+    const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([payload], {
+      localRoots: Array.isArray(params.managedImageLocalRoots)
+        ? params.managedImageLocalRoots
+        : undefined,
+      onLocalAudioAccessDenied: (err) => {
+        params.onLocalAudioAccessDenied?.(formatForLog(err));
+      },
+    });
+    content.push(...audioBlocks);
+
+    const mediaUrls = Array.from(
+      new Set([
+        ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+        ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
+      ]),
+    );
+    const imageBlocks = await createManagedOutgoingImageBlocks({
+      sessionKey: params.sessionKey,
+      mediaUrls,
+      localRoots: params.managedImageLocalRoots,
+      continueOnPrepareError: true,
+      onPrepareError: (error) => {
+        params.onManagedImagePrepareError?.(error.message);
+      },
+    });
+    if (imageBlocks.length > 0) {
+      content.push(...imageBlocks);
+    }
+  }
+
+  if (content.length > 0) {
+    return content;
+  }
+  return strippedTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
+}
+
+function replaceAssistantContentTextBlocks(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+  transcriptMediaMessage: { content: Array<Record<string, unknown>> } | null,
+): AssistantDisplayContentBlock[] | undefined {
+  const transcriptTextBlocks = (transcriptMediaMessage?.content ?? []).filter(
+    (block): block is AssistantDisplayContentBlock =>
+      Boolean(block) &&
+      typeof block === "object" &&
+      block.type === "text" &&
+      typeof block.text === "string",
+  );
+  if (transcriptTextBlocks.length === 0) {
+    return content ? [...content] : undefined;
+  }
+  if (!content || content.length === 0) {
+    return [...transcriptTextBlocks];
+  }
+  const merged: AssistantDisplayContentBlock[] = [];
+  let transcriptTextIndex = 0;
+  for (const block of content) {
+    if (
+      block?.type === "text" &&
+      typeof block.text === "string" &&
+      transcriptTextIndex < transcriptTextBlocks.length
+    ) {
+      merged.push(transcriptTextBlocks[transcriptTextIndex++]);
+      continue;
+    }
+    merged.push(block);
+  }
+  if (transcriptTextIndex < transcriptTextBlocks.length) {
+    merged.unshift(...transcriptTextBlocks.slice(transcriptTextIndex));
+  }
+  return merged;
+}
+
+function isManagedOutgoingImageUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value, "http://localhost");
+    return parsed.pathname.startsWith(MANAGED_OUTGOING_IMAGE_PATH_PREFIX);
+  } catch {
+    return false;
+  }
+}
+
+function stripManagedOutgoingAssistantContentBlocks(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+): AssistantDisplayContentBlock[] | undefined {
+  if (!content || content.length === 0) {
+    return undefined;
+  }
+  const filtered = content.filter((block) => {
+    if (block?.type !== "image") {
+      return true;
+    }
+    return !(isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl));
+  });
+  return filtered.length > 0 ? filtered : undefined;
+}
+
+function extractAssistantDisplayText(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+): string | undefined {
+  if (!content || content.length === 0) {
+    return undefined;
+  }
+  const text = content
+    .map((block) => (block?.type === "text" && typeof block.text === "string" ? block.text : ""))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || undefined;
+}
+
+function hasAssistantDisplayMediaContent(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+): boolean {
+  return Boolean(content?.some((block) => block?.type !== "text"));
+}
+
+function scheduleChatHistoryManagedImageCleanup(params: {
+  sessionKey: string;
+  context: Pick<GatewayRequestContext, "logGateway">;
+}) {
+  if (chatHistoryManagedImageCleanupState.has(params.sessionKey)) {
+    return;
+  }
+  const pending = cleanupManagedOutgoingImageRecords({ sessionKey: params.sessionKey })
+    .then(() => undefined)
+    .catch((error) => {
+      params.context.logGateway.debug(
+        `chat.history managed image cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(error)}`,
+      );
+    })
+    .finally(() => {
+      if (chatHistoryManagedImageCleanupState.get(params.sessionKey) === pending) {
+        chatHistoryManagedImageCleanupState.delete(params.sessionKey);
+      }
+    });
+  chatHistoryManagedImageCleanupState.set(params.sessionKey, pending);
 }
 
 function resolveChatSendOriginatingRoute(params: {
@@ -368,6 +581,26 @@ function resolveChatSendOriginatingRoute(params: {
     messageThreadId: routeThreadIdCandidate,
     explicitDeliverRoute: true,
   };
+}
+
+function isAcpSessionKey(sessionKey: string | undefined): boolean {
+  return Boolean(sessionKey?.split(":").includes("acp"));
+}
+
+function explicitOriginTargetsAcpSession(origin: ChatSendExplicitOrigin | undefined): boolean {
+  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
+    return false;
+  }
+  const channel = normalizeMessageChannel(origin.originatingChannel);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
+  const binding = getSessionBindingService().resolveByConversation({
+    channel,
+    accountId: origin.accountId,
+    conversationId: origin.originatingTo,
+  });
+  return isAcpSessionKey(binding?.targetSessionKey);
 }
 
 function stripDisallowedChatControlChars(message: string): string {
@@ -1665,6 +1898,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       messages: normalized,
       maxSingleMessageBytes: perMessageHardCap,
     });
+    scheduleChatHistoryManagedImageCleanup({ sessionKey, context });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
@@ -1949,11 +2183,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     if (normalizedAttachments.length > 0) {
       const modelRef = resolveSessionModelRef(cfg, entry, agentId);
-      const supportsImages = await resolveGatewayModelSupportsImages({
+      const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         provider: modelRef.provider,
         model: modelRef.model,
       });
+      const supportsImages =
+        supportsSessionModelImages || explicitOriginTargetsAcpSession(explicitOriginResult.value);
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: 5_000_000,
@@ -2126,20 +2362,53 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
         }
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+        const resolvedTranscriptPath = resolveTranscriptPath({
+          sessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+          agentId,
+        });
+        const mediaLocalRoots = appendLocalMediaParentRoots(
+          getAgentScopedMediaLocalRoots(cfg, agentId),
+          resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
+        );
+        const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
+          sessionKey,
+          payloads: [payload],
+          managedImageLocalRoots: mediaLocalRoots,
+          includeSensitiveMedia: payload.sensitiveMedia !== true,
+          onLocalAudioAccessDenied: (message) => {
+            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
+          },
+          onManagedImagePrepareError: (message) => {
+            context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+          },
+        });
         const mediaMessage = await buildWebchatAssistantMediaMessage([payload], {
-          localRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+          localRoots: mediaLocalRoots,
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
           },
         });
-        if (!mediaMessage) {
+        const persistedAssistantContent = replaceAssistantContentTextBlocks(
+          assistantContent,
+          mediaMessage,
+        );
+        const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
+          ? persistedAssistantContent
+          : undefined;
+        const transcriptReply =
+          mediaMessage?.transcriptText ??
+          extractAssistantDisplayTextFromContent(assistantContent) ??
+          buildTranscriptReplyText([payload]);
+        if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
           return;
         }
-        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-        const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
         const appended = appendAssistantTranscriptMessage({
-          message: mediaMessage.transcriptText,
-          ...(payload.sensitiveMedia === true ? {} : { content: mediaMessage.content }),
+          message: transcriptReply,
+          ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
           sessionId,
           storePath: latestStorePath,
           sessionFile: latestEntry?.sessionFile,
@@ -2148,6 +2417,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           idempotencyKey: `${clientRunId}:assistant-media`,
         });
         if (appended.ok) {
+          if (appended.messageId && assistantContent?.length) {
+            await attachManagedOutgoingImagesToMessage({
+              messageId: appended.messageId,
+              blocks: assistantContent,
+            });
+          }
           appendedWebchatAgentMedia = true;
           return;
         }
@@ -2258,22 +2533,87 @@ export const chatHandlers: GatewayRequestHandlers = {
               const finalPayloads = deliveredReplies
                 .filter((entry) => entry.kind === "final")
                 .map((entry) => entry.payload);
-              const combinedReply = buildTranscriptReplyText(finalPayloads);
+              const { storePath: latestStorePath, entry: latestEntry } =
+                loadSessionEntry(sessionKey);
+              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+              const resolvedTranscriptPath = resolveTranscriptPath({
+                sessionId,
+                storePath: latestStorePath,
+                sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+                agentId,
+              });
+              const mediaLocalRoots = appendLocalMediaParentRoots(
+                getAgentScopedMediaLocalRoots(cfg, agentId),
+                resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
+              );
+              const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
+                sessionKey,
+                payloads: finalPayloads,
+                managedImageLocalRoots: mediaLocalRoots,
+                includeSensitiveMedia: false,
+                onLocalAudioAccessDenied: (message) => {
+                  context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
+                },
+                onManagedImagePrepareError: (message) => {
+                  context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+                },
+              });
               const mediaMessage = await buildWebchatAssistantMediaMessage(finalPayloads, {
-                localRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+                localRoots: mediaLocalRoots,
                 onLocalAudioAccessDenied: (message) => {
                   context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
                 },
               });
               const hasSensitiveMedia = hasSensitiveMediaPayload(finalPayloads);
+              const persistedAssistantContent = replaceAssistantContentTextBlocks(
+                hasSensitiveMedia
+                  ? await buildAssistantDisplayContentFromReplyPayloads({
+                      sessionKey,
+                      payloads: finalPayloads,
+                      managedImageLocalRoots: mediaLocalRoots,
+                      includeSensitiveMedia: false,
+                      onLocalAudioAccessDenied: (message) => {
+                        context.logGateway.warn(
+                          `webchat audio embedding denied local path: ${message}`,
+                        );
+                      },
+                      onManagedImagePrepareError: (message) => {
+                        context.logGateway.warn(
+                          `webchat image embedding skipped attachment: ${message}`,
+                        );
+                      },
+                    })
+                  : assistantContent,
+                mediaMessage,
+              );
+              const persistedContentForAppend = hasAssistantDisplayMediaContent(
+                persistedAssistantContent,
+              )
+                ? persistedAssistantContent
+                : undefined;
+              const broadcastAssistantContent = hasAssistantDisplayMediaContent(assistantContent)
+                ? assistantContent
+                : hasAssistantDisplayMediaContent(mediaMessage?.content)
+                  ? mediaMessage?.content
+                  : assistantContent;
+              const displayReply =
+                extractAssistantDisplayTextFromContent(assistantContent) ??
+                buildTranscriptReplyText(finalPayloads);
+              const transcriptReply =
+                mediaMessage?.transcriptText ||
+                buildTranscriptReplyText(finalPayloads) ||
+                displayReply;
               let message: Record<string, unknown> | undefined;
-              if (mediaMessage || combinedReply) {
-                const { storePath: latestStorePath, entry: latestEntry } =
-                  loadSessionEntry(sessionKey);
-                const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+              if (
+                transcriptReply ||
+                persistedContentForAppend?.length ||
+                assistantContent?.length
+              ) {
                 const appended = appendAssistantTranscriptMessage({
-                  message: mediaMessage?.transcriptText ?? combinedReply,
-                  ...(mediaMessage && !hasSensitiveMedia ? { content: mediaMessage.content } : {}),
+                  message: transcriptReply,
+                  ...(persistedContentForAppend?.length
+                    ? { content: persistedContentForAppend }
+                    : {}),
                   sessionId,
                   storePath: latestStorePath,
                   sessionFile: latestEntry?.sessionFile,
@@ -2281,22 +2621,33 @@ export const chatHandlers: GatewayRequestHandlers = {
                   createIfMissing: true,
                 });
                 if (appended.ok) {
-                  if (hasSensitiveMedia && mediaMessage) {
-                    message = {
-                      ...appended.message,
-                      content: mediaMessage.content,
-                    };
-                  } else {
-                    message = appended.message;
+                  if (appended.messageId && assistantContent?.length) {
+                    await attachManagedOutgoingImagesToMessage({
+                      messageId: appended.messageId,
+                      blocks: assistantContent,
+                    });
                   }
+                  message = broadcastAssistantContent?.length
+                    ? { ...appended.message, content: broadcastAssistantContent }
+                    : appended.message;
                 } else {
                   context.logGateway.warn(
                     `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
                   );
+                  const fallbackAssistantContent =
+                    stripManagedOutgoingAssistantContentBlocks(persistedAssistantContent) ??
+                    stripManagedOutgoingAssistantContentBlocks(assistantContent);
+                  const fallbackText =
+                    extractAssistantDisplayText(fallbackAssistantContent) ?? displayReply;
                   const now = Date.now();
                   message = {
                     role: "assistant",
-                    content: mediaMessage?.content ?? [{ type: "text", text: combinedReply }],
+                    ...(fallbackAssistantContent?.length
+                      ? { content: fallbackAssistantContent }
+                      : fallbackText
+                        ? { content: [{ type: "text", text: fallbackText }] }
+                        : {}),
+                    ...(fallbackText ? { text: fallbackText } : {}),
                     timestamp: now,
                     // Keep this compatible with Pi stopReason enums even though this message isn't
                     // persisted to the transcript due to the append failure.

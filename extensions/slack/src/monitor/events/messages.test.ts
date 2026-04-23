@@ -4,31 +4,24 @@ import {
   type SlackSystemEventTestOverrides,
 } from "./system-event-test-harness.js";
 
-const messageQueueMock = vi.fn();
-const messageAllowMock = vi.fn();
+const { messageQueueMock, messageAllowMock } = vi.hoisted(() => ({
+  messageQueueMock: vi.fn(),
+  messageAllowMock: vi.fn(),
+}));
 
-async function createChannelRuntimeMock() {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
-  );
-  return {
-    ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
-  };
-}
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
+}));
+vi.mock("openclaw/plugin-sdk/infra-runtime.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
+}));
+vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
+  readStoreAllowFromForDmPolicy: async () => [],
+}));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", createChannelRuntimeMock);
-vi.mock("openclaw/plugin-sdk/infra-runtime.js", createChannelRuntimeMock);
-
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
-    "openclaw/plugin-sdk/conversation-runtime",
-  );
-  return {
-    ...actual,
-    readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
+  readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
+}));
 
 let registerSlackMessageEvents: typeof import("./messages.js").registerSlackMessageEvents;
 

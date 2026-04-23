@@ -54,7 +54,7 @@
     "realtimeVoiceProviders": ["openai"],
     "memoryEmbeddingProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
-    "imageGenerationProviders": ["openai"],
+    "imageGenerationProviders": ["openai", "openai-codex"],
     "videoGenerationProviders": ["openai"]
   },
   "mediaUnderstandingProviderMetadata": {
@@ -72,7 +72,7 @@
     "openai-codex": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "gpt-5.4"
+        "image": "gpt-5.5"
       }
     }
   },

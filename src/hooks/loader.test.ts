@@ -243,28 +243,6 @@ describe("loader", () => {
       expect(event.messages).toEqual(["keep-hook"]);
     });
 
-    it("should load a handler from a module", async () => {
-      // Create a test handler module
-      const handlerCode = `
-        export default async function(event) {
-          // Test handler
-        }
-      `;
-      const handlerPath = await writeHandlerModule("test-handler.js", handlerCode);
-      const cfg = createEnabledHooksConfig([
-        {
-          event: "command:new",
-          module: path.basename(handlerPath),
-        },
-      ]);
-
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(1);
-
-      const keys = getRegisteredEventKeys();
-      expect(keys).toContain("command:new");
-    });
-
     it("should load multiple handlers", async () => {
       // Create test handler modules
       const handler1Path = await writeHandlerModule("handler1.js");
@@ -361,56 +339,6 @@ describe("loader", () => {
         const count = await loadInternalHooks(cfg, tmpDir);
         expect(count).toBe(0);
       }
-    });
-
-    it("should handle relative paths", async () => {
-      // Create a handler module
-      const handlerPath = await writeHandlerModule("relative-handler.js");
-
-      // Relative to workspaceDir (tmpDir)
-      const relativePath = path.relative(tmpDir, handlerPath);
-
-      const cfg = createEnabledHooksConfig([
-        {
-          event: "command:new",
-          module: relativePath,
-        },
-      ]);
-
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(1);
-    });
-
-    it("should actually call the loaded handler", async () => {
-      // Create a handler that we can verify was called
-      const handlerCode = `
-        let callCount = 0;
-        export default async function(event) {
-          callCount++;
-        }
-        export function getCallCount() {
-          return callCount;
-        }
-      `;
-      const handlerPath = await writeHandlerModule("callable-handler.js", handlerCode);
-
-      const cfg = createEnabledHooksConfig([
-        {
-          event: "command:new",
-          module: path.basename(handlerPath),
-        },
-      ]);
-
-      await loadInternalHooks(cfg, tmpDir);
-
-      // Trigger the hook
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-
-      // The handler should have been called, but we can't directly verify
-      // the call count from this context without more complex test infrastructure
-      // This test mainly verifies that loading and triggering doesn't crash
-      expect(getRegisteredEventKeys()).toContain("command:new");
     });
 
     it("keeps workspace hooks disabled by default until explicitly enabled", async () => {

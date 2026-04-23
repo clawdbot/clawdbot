@@ -4,36 +4,29 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const hoisted = vi.hoisted(() => ({
-  resolveDefaultSessionStorePathMock: vi.fn(() => "/tmp/target-store/sessions.json"),
-  resolveSessionFilePathMock: vi.fn(() => "/tmp/target-store/session.jsonl"),
-  resolveSessionFilePathOptionsMock: vi.fn(
-    (params: { agentId: string; storePath: string }) => params,
-  ),
-  loadSessionStoreMock: vi.fn(() => ({
-    "agent:target:session": {
-      sessionId: "session-1",
-      updatedAt: 1,
-    },
-  })),
-  exportTrajectoryBundleMock: vi.fn(() => ({
-    outputDir: "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
-    manifest: {
-      eventCount: 7,
-      runtimeEventCount: 3,
-      transcriptEventCount: 4,
-    },
-    events: [{ type: "context.compiled" }],
-    runtimeFile: "/tmp/target-store/session.trajectory.jsonl",
-    supplementalFiles: ["metadata.json", "artifacts.json", "prompts.json"],
-  })),
-  resolveDefaultTrajectoryExportDirMock: vi.fn(
-    () => "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
-  ),
-  existsSyncMock: vi.fn((file: fs.PathLike, actualExistsSync: (path: fs.PathLike) => boolean) =>
-    actualExistsSync(file),
-  ),
-}));
+const hoisted = await vi.hoisted(async () => {
+  const { createExportCommandSessionMocks } = await import("./commands-export-test-mocks.js");
+  return {
+    ...createExportCommandSessionMocks(vi),
+    exportTrajectoryBundleMock: vi.fn(() => ({
+      outputDir: "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
+      manifest: {
+        eventCount: 7,
+        runtimeEventCount: 3,
+        transcriptEventCount: 4,
+      },
+      events: [{ type: "context.compiled" }],
+      runtimeFile: "/tmp/target-store/session.trajectory.jsonl",
+      supplementalFiles: ["metadata.json", "artifacts.json", "prompts.json"],
+    })),
+    resolveDefaultTrajectoryExportDirMock: vi.fn(
+      () => "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
+    ),
+    existsSyncMock: vi.fn((file: fs.PathLike, actualExistsSync: (path: fs.PathLike) => boolean) =>
+      actualExistsSync(file),
+    ),
+  };
+});
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveDefaultSessionStorePath: hoisted.resolveDefaultSessionStorePathMock,

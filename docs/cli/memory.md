@@ -4,7 +4,7 @@ read_when:
   - You want to index or search semantic memory
   - You’re debugging memory availability or indexing
   - You want to promote recalled short-term memory into `MEMORY.md`
-title: "memory"
+title: "Memory"
 ---
 
 # `openclaw memory`

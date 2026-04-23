@@ -257,15 +257,17 @@ function resolveProviderSyntheticRuntimeAuth(params: {
     config: OpenClawConfig | undefined,
   ): ResolvedProviderAuth | undefined => {
     const providerConfig = resolveProviderConfig(config, params.provider);
-    return resolveProviderSyntheticAuthWithPlugin({
-      provider: params.provider,
-      config,
-      context: {
-        config,
+    return (
+      resolveProviderSyntheticAuthWithPlugin({
         provider: params.provider,
-        providerConfig,
-      },
-    });
+        config,
+        context: {
+          config,
+          provider: params.provider,
+          providerConfig,
+        },
+      }) ?? undefined
+    );
   };
 
   const directAuth = resolveFromConfig(params.cfg);

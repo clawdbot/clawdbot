@@ -7,8 +7,6 @@ read_when:
 title: "Browser (OpenClaw-managed)"
 ---
 
-# Browser (openclaw-managed)
-
 OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls.
 It is isolated from your personal browser and is managed through a small local
 control service inside the Gateway (loopback only).
@@ -47,9 +45,7 @@ is unavailable, jump to [Missing browser command or tool](/tools/browser#missing
 
 ## Plugin control
 
-The default `browser` tool is now a bundled plugin that ships enabled by
-default. That means you can disable or replace it without removing the rest of
-OpenClaw's plugin system:
+The default `browser` tool is a bundled plugin. Disable it to replace it with another plugin that registers the same `browser` tool name:
 
 ```json5
 {
@@ -63,43 +59,13 @@ OpenClaw's plugin system:
 }
 ```
 
-Disable the bundled plugin before installing another plugin that provides the
-same `browser` tool name. The default browser experience needs both:
+Defaults need both `plugins.entries.browser.enabled` **and** `browser.enabled=true`. Disabling only the plugin removes the `openclaw browser` CLI, `browser.request` gateway method, agent tool, and control service as one unit; your `browser.*` config stays intact for a replacement.
 
-- `plugins.entries.browser.enabled` not disabled
-- `browser.enabled=true`
-
-If you turn off only the plugin, the bundled browser CLI (`openclaw browser`),
-gateway method (`browser.request`), agent tool, and default browser control
-service all disappear together. Your `browser.*` config stays intact for a
-replacement plugin to reuse.
-
-The bundled browser plugin also owns the browser runtime implementation now.
-Core keeps only shared Plugin SDK helpers plus compatibility re-exports for
-older internal import paths. In practice, removing or replacing the browser
-plugin package removes the browser feature set instead of leaving a second
-core-owned runtime behind.
-
-Browser config changes still require a Gateway restart so the bundled plugin
-can re-register its browser service with the new settings.
+Browser config changes require a Gateway restart so the plugin can re-register its service.
 
 ## Missing browser command or tool
 
-If `openclaw browser` suddenly becomes an unknown command after an upgrade, or
-the agent reports that the browser tool is missing, the most common cause is a
-restrictive `plugins.allow` list that does not include `browser`.
-
-Example broken config:
-
-```json5
-{
-  plugins: {
-    allow: ["telegram"],
-  },
-}
-```
-
-Fix it by adding `browser` to the plugin allowlist:
+If `openclaw browser` is unknown after an upgrade, `browser.request` is missing, or the agent reports the browser tool as unavailable, the usual cause is a `plugins.allow` list that omits `browser`. Add it:
 
 ```json5
 {
@@ -109,18 +75,7 @@ Fix it by adding `browser` to the plugin allowlist:
 }
 ```
 
-Important notes:
-
-- `browser.enabled=true` is not enough by itself when `plugins.allow` is set.
-- `plugins.entries.browser.enabled=true` is also not enough by itself when `plugins.allow` is set.
-- `tools.alsoAllow: ["browser"]` does **not** load the bundled browser plugin. It only adjusts tool policy after the plugin is already loaded.
-- If you do not need a restrictive plugin allowlist, removing `plugins.allow` also restores the default bundled browser behavior.
-
-Typical symptoms:
-
-- `openclaw browser` is an unknown command.
-- `browser.request` is missing.
-- The agent reports the browser tool as unavailable or missing.
+`browser.enabled=true`, `plugins.entries.browser.enabled=true`, and `tools.alsoAllow: ["browser"]` do not substitute for allowlist membership — the allowlist gates plugin loading, and tool policy only runs after load. Removing `plugins.allow` entirely also restores the default.
 
 ## Profiles: `openclaw` vs `user`
 
@@ -180,28 +135,37 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 }
 ```
 
-Notes:
+<AccordionGroup>
 
-- The browser control service binds to loopback on a port derived from `gateway.port`
-  (default: `18791`, which is gateway + 2).
-- If you override the Gateway port (`gateway.port` or `OPENCLAW_GATEWAY_PORT`),
-  the derived browser ports shift to stay in the same “family”.
-- `cdpUrl` defaults to the managed local CDP port when unset.
-- `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP reachability checks.
-- `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
-- Browser navigation/open-tab is SSRF-guarded before navigation and best-effort re-checked on final `http(s)` URL after navigation.
-- In strict SSRF mode, remote CDP endpoint discovery/probes (`cdpUrl`, including `/json/version` lookups) are checked too.
-- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled by default. Set it to `true` only when you intentionally trust private-network browser access.
-- `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
-- `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
-- `color` + per-profile `color` tint the browser UI so you can see which profile is active.
-- Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "user"` to opt into the signed-in user browser.
+<Accordion title="Ports and reachability">
+
+- Control service binds to loopback on a port derived from `gateway.port` (default `18791` = gateway + 2). Overriding `gateway.port` or `OPENCLAW_GATEWAY_PORT` shifts the derived ports in the same family.
+- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for remote CDP. `cdpUrl` defaults to the managed local CDP port when unset.
+- `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP HTTP reachability checks; `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket handshakes.
+
+</Accordion>
+
+<Accordion title="SSRF policy">
+
+- Browser navigation and open-tab are SSRF-guarded before navigation and best-effort re-checked on the final `http(s)` URL afterwards.
+- In strict SSRF mode, remote CDP endpoint discovery and `/json/version` probes (`cdpUrl`) are checked too.
+- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
+- `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
+
+</Accordion>
+
+<Accordion title="Profile behavior">
+
+- `attachOnly: true` means never launch a local browser; only attach if one is already running.
+- `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
+- Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
-- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
-- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do
-  not set `cdpUrl` for that driver.
-- Set `browser.profiles.<name>.userDataDir` when an existing-session profile
-  should attach to a non-default Chromium user profile such as Brave or Edge.
+- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do not set `cdpUrl` for that driver.
+- Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.).
+
+</Accordion>
+
+</AccordionGroup>
 
 ## Use Brave (or another Chromium-based browser)
 
@@ -209,34 +173,41 @@ If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
 OpenClaw uses it automatically. Set `browser.executablePath` to override
 auto-detection:
 
-CLI example:
-
 ```bash
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 ```
 
+Or set it in config, per platform:
+
+<Tabs>
+  <Tab title="macOS">
 ```json5
-// macOS
 {
   browser: {
-    executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
-  }
-}
-
-// Windows
-{
-  browser: {
-    executablePath: "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"
-  }
-}
-
-// Linux
-{
-  browser: {
-    executablePath: "/usr/bin/brave-browser"
-  }
+    executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+  },
 }
 ```
+  </Tab>
+  <Tab title="Windows">
+```json5
+{
+  browser: {
+    executablePath: "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+  },
+}
+```
+  </Tab>
+  <Tab title="Linux">
+```json5
+{
+  browser: {
+    executablePath: "/usr/bin/brave-browser",
+  },
+}
+```
+  </Tab>
+</Tabs>
 
 ## Local vs remote control
 
@@ -331,14 +302,10 @@ CDP URL shapes and picks the right connection strategy automatically:
   [Browserbase](https://www.browserbase.com)). OpenClaw tries HTTP
   `/json/version` discovery first (normalising the scheme to `http`/`https`);
   if discovery returns a `webSocketDebuggerUrl` it is used, otherwise OpenClaw
-  falls back to a direct WebSocket handshake at the bare root. This covers
-  both Chrome-style remote debug ports and WebSocket-only providers.
-
-Plain `ws://host:port` / `wss://host:port` without a `/devtools/...` path
-pointed at a local Chrome instance is supported via the discovery-first
-fallback — Chrome only accepts WebSocket upgrades on the specific per-browser
-or per-target path returned by `/json/version`, so a bare-root handshake alone
-would fail.
+  falls back to a direct WebSocket handshake at the bare root. This lets a
+  bare `ws://` pointed at a local Chrome still connect, since Chrome only
+  accepts WebSocket upgrades on the specific per-target path from
+  `/json/version`.
 
 ### Browserbase
 
@@ -505,36 +472,23 @@ Notes:
 
 - This path is higher-risk than the isolated `openclaw` profile because it can
   act inside your signed-in browser session.
-- OpenClaw does not launch the browser for this driver; it attaches to an
-  existing session only.
+- OpenClaw does not launch the browser for this driver; it only attaches.
 - OpenClaw uses the official Chrome DevTools MCP `--autoConnect` flow here. If
-  `userDataDir` is set, OpenClaw passes it through to target that explicit
-  Chromium user data directory.
-- Existing-session screenshots support page captures and `--ref` element
-  captures from snapshots, but not CSS `--element` selectors.
-- Existing-session page screenshots work without Playwright through Chrome MCP.
-  Ref-based element screenshots (`--ref`) also work there, but `--full-page`
-  cannot be combined with `--ref` or `--element`.
-- Existing-session actions are still more limited than the managed browser
-  path:
-  - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require
-    snapshot refs instead of CSS selectors
-  - `click` is left-button only (no button overrides or modifiers)
-  - `type` does not support `slowly=true`; use `fill` or `press`
-  - `press` does not support `delayMs`
-  - `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not
-    support per-call timeout overrides
-  - `select` currently supports a single value only
-- Existing-session `wait --url` supports exact, substring, and glob patterns
-  like other browser drivers. `wait --load networkidle` is not supported yet.
-- Existing-session upload hooks require `ref` or `inputRef`, support one file
-  at a time, and do not support CSS `element` targeting.
-- Existing-session dialog hooks do not support timeout overrides.
-- Some features still require the managed browser path, including batch
-  actions, PDF export, download interception, and `responsebody`.
+  `userDataDir` is set, it is passed through to target that user data directory.
 - Existing-session can attach on the selected host or through a connected
   browser node. If Chrome lives elsewhere and no browser node is connected, use
   remote CDP or a node host instead.
+
+<Accordion title="Existing-session feature limitations">
+
+Compared to the managed `openclaw` profile, existing-session drivers are more constrained:
+
+- **Screenshots** — page captures and `--ref` element captures work; CSS `--element` selectors do not. `--full-page` cannot combine with `--ref` or `--element`. Playwright is not required for page or ref-based element screenshots.
+- **Actions** — `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click` is left-button only. `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call timeouts. `select` accepts a single value.
+- **Wait / upload / dialog** — `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported. Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides.
+- **Managed-only features** — batch actions, PDF export, download interception, and `responsebody` still require the managed browser path.
+
+</Accordion>
 
 ## Isolation guarantees
 
@@ -658,126 +612,118 @@ To persist browser downloads, set `PLAYWRIGHT_BROWSERS_PATH` (for example,
 
 ## How it works (internal)
 
-High-level flow:
-
-- A small **control server** accepts HTTP requests.
-- It connects to Chromium-based browsers (Chrome/Brave/Edge/Chromium) via **CDP**.
-- For advanced actions (click/type/snapshot/PDF), it uses **Playwright** on top
-  of CDP.
-- When Playwright is missing, only non-Playwright operations are available.
-
-This design keeps the agent on a stable, deterministic interface while letting
-you swap local/remote browsers and profiles.
+A small loopback control server accepts HTTP requests and connects to Chromium-based browsers via CDP. Advanced actions (click/type/snapshot/PDF) go through Playwright on top of CDP; when Playwright is missing, only non-Playwright operations are available. The agent sees one stable interface while local/remote browsers and profiles swap freely underneath.
 
 ## CLI quick reference
 
-All commands accept `--browser-profile <name>` to target a specific profile.
-All commands also accept `--json` for machine-readable output (stable payloads).
+All commands accept `--browser-profile <name>` to target a specific profile, and `--json` for machine-readable output.
 
-Basics:
+<AccordionGroup>
 
-- `openclaw browser status`
-- `openclaw browser start`
-- `openclaw browser stop`
-- `openclaw browser tabs`
-- `openclaw browser tab`
-- `openclaw browser tab new`
-- `openclaw browser tab select 2`
-- `openclaw browser tab close 2`
-- `openclaw browser open https://example.com`
-- `openclaw browser focus abcd1234`
-- `openclaw browser close abcd1234`
+<Accordion title="Basics: status, tabs, open/focus/close">
 
-Inspection:
+```bash
+openclaw browser status
+openclaw browser start
+openclaw browser stop            # also clears emulation on attach-only/remote CDP
+openclaw browser tabs
+openclaw browser tab             # shortcut for current tab
+openclaw browser tab new
+openclaw browser tab select 2
+openclaw browser tab close 2
+openclaw browser open https://example.com
+openclaw browser focus abcd1234
+openclaw browser close abcd1234
+```
 
-- `openclaw browser screenshot`
-- `openclaw browser screenshot --full-page`
-- `openclaw browser screenshot --ref 12`
-- `openclaw browser screenshot --ref e12`
-- `openclaw browser snapshot`
-- `openclaw browser snapshot --format aria --limit 200`
-- `openclaw browser snapshot --interactive --compact --depth 6`
-- `openclaw browser snapshot --efficient`
-- `openclaw browser snapshot --labels`
-- `openclaw browser snapshot --selector "#main" --interactive`
-- `openclaw browser snapshot --frame "iframe#main" --interactive`
-- `openclaw browser console --level error`
+</Accordion>
 
-Lifecycle note:
+<Accordion title="Inspection: screenshot, snapshot, console, errors, requests">
 
-- For attach-only and remote CDP profiles, `openclaw browser stop` is still the
-  right cleanup command after tests. It closes the active control session and
-  clears temporary emulation overrides instead of killing the underlying
-  browser.
-- `openclaw browser errors --clear`
-- `openclaw browser requests --filter api --clear`
-- `openclaw browser pdf`
-- `openclaw browser responsebody "**/api" --max-chars 5000`
+```bash
+openclaw browser screenshot
+openclaw browser screenshot --full-page
+openclaw browser screenshot --ref 12        # or --ref e12
+openclaw browser snapshot
+openclaw browser snapshot --format aria --limit 200
+openclaw browser snapshot --interactive --compact --depth 6
+openclaw browser snapshot --efficient
+openclaw browser snapshot --labels
+openclaw browser snapshot --selector "#main" --interactive
+openclaw browser snapshot --frame "iframe#main" --interactive
+openclaw browser console --level error
+openclaw browser errors --clear
+openclaw browser requests --filter api --clear
+openclaw browser pdf
+openclaw browser responsebody "**/api" --max-chars 5000
+```
 
-Actions:
+</Accordion>
 
-- `openclaw browser navigate https://example.com`
-- `openclaw browser resize 1280 720`
-- `openclaw browser click 12 --double`
-- `openclaw browser click e12 --double`
-- `openclaw browser type 23 "hello" --submit`
-- `openclaw browser press Enter`
-- `openclaw browser hover 44`
-- `openclaw browser scrollintoview e12`
-- `openclaw browser drag 10 11`
-- `openclaw browser select 9 OptionA OptionB`
-- `openclaw browser download e12 report.pdf`
-- `openclaw browser waitfordownload report.pdf`
-- `openclaw browser upload /tmp/openclaw/uploads/file.pdf`
-- `openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'`
-- `openclaw browser dialog --accept`
-- `openclaw browser wait --text "Done"`
-- `openclaw browser wait "#main" --url "**/dash" --load networkidle --fn "window.ready===true"`
-- `openclaw browser evaluate --fn '(el) => el.textContent' --ref 7`
-- `openclaw browser highlight e12`
-- `openclaw browser trace start`
-- `openclaw browser trace stop`
+<Accordion title="Actions: navigate, click, type, drag, wait, evaluate">
 
-State:
+```bash
+openclaw browser navigate https://example.com
+openclaw browser resize 1280 720
+openclaw browser click 12 --double           # or e12 for role refs
+openclaw browser type 23 "hello" --submit
+openclaw browser press Enter
+openclaw browser hover 44
+openclaw browser scrollintoview e12
+openclaw browser drag 10 11
+openclaw browser select 9 OptionA OptionB
+openclaw browser download e12 report.pdf
+openclaw browser waitfordownload report.pdf
+openclaw browser upload /tmp/openclaw/uploads/file.pdf
+openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'
+openclaw browser dialog --accept
+openclaw browser wait --text "Done"
+openclaw browser wait "#main" --url "**/dash" --load networkidle --fn "window.ready===true"
+openclaw browser evaluate --fn '(el) => el.textContent' --ref 7
+openclaw browser highlight e12
+openclaw browser trace start
+openclaw browser trace stop
+```
 
-- `openclaw browser cookies`
-- `openclaw browser cookies set session abc123 --url "https://example.com"`
-- `openclaw browser cookies clear`
-- `openclaw browser storage local get`
-- `openclaw browser storage local set theme dark`
-- `openclaw browser storage session clear`
-- `openclaw browser set offline on`
-- `openclaw browser set headers --headers-json '{"X-Debug":"1"}'`
-- `openclaw browser set credentials user pass`
-- `openclaw browser set credentials --clear`
-- `openclaw browser set geo 37.7749 -122.4194 --origin "https://example.com"`
-- `openclaw browser set geo --clear`
-- `openclaw browser set media dark`
-- `openclaw browser set timezone America/New_York`
-- `openclaw browser set locale en-US`
-- `openclaw browser set device "iPhone 14"`
+</Accordion>
+
+<Accordion title="State: cookies, storage, offline, headers, geo, device">
+
+```bash
+openclaw browser cookies
+openclaw browser cookies set session abc123 --url "https://example.com"
+openclaw browser cookies clear
+openclaw browser storage local get
+openclaw browser storage local set theme dark
+openclaw browser storage session clear
+openclaw browser set offline on
+openclaw browser set headers --headers-json '{"X-Debug":"1"}'
+openclaw browser set credentials user pass            # --clear to remove
+openclaw browser set geo 37.7749 -122.4194 --origin "https://example.com"
+openclaw browser set media dark
+openclaw browser set timezone America/New_York
+openclaw browser set locale en-US
+openclaw browser set device "iPhone 14"
+```
+
+</Accordion>
+
+</AccordionGroup>
 
 Notes:
 
-- `upload` and `dialog` are **arming** calls; run them before the click/press
-  that triggers the chooser/dialog.
-- Download and trace output paths are constrained to OpenClaw temp roots:
-  - traces: `/tmp/openclaw` (fallback: `${os.tmpdir()}/openclaw`)
-  - downloads: `/tmp/openclaw/downloads` (fallback: `${os.tmpdir()}/openclaw/downloads`)
-- Upload paths are constrained to an OpenClaw temp uploads root:
-  - uploads: `/tmp/openclaw/uploads` (fallback: `${os.tmpdir()}/openclaw/uploads`)
+- `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog.
+- `click`/`type`/etc require a `ref` from `snapshot` (numeric `12` or role ref `e12`). CSS selectors are intentionally not supported for actions.
+- Download, trace, and upload paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads,/uploads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
-- `snapshot`:
-  - `--format ai` (default when Playwright is installed): returns an AI snapshot with numeric refs (`aria-ref="<n>"`).
-  - `--format aria`: returns the accessibility tree (no refs; inspection only).
-  - `--efficient` (or `--mode efficient`): compact role snapshot preset (interactive + compact + depth + lower maxChars).
-  - Config default (tool/CLI only): set `browser.snapshotDefaults.mode: "efficient"` to use efficient snapshots when the caller does not pass a mode (see [Gateway configuration](/gateway/configuration-reference#browser)).
-  - Role snapshot options (`--interactive`, `--compact`, `--depth`, `--selector`) force a role-based snapshot with refs like `ref=e12`.
-  - `--frame "<iframe selector>"` scopes role snapshots to an iframe (pairs with role refs like `e12`).
-  - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).
-  - `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
-- `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
-  CSS selectors are intentionally not supported for actions.
+
+Snapshot flags at a glance:
+
+- `--format ai` (default with Playwright): AI snapshot with numeric refs (`aria-ref="<n>"`).
+- `--format aria`: accessibility tree, no refs; inspection only.
+- `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/configuration-reference#browser)).
+- `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
+- `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
 
 ## Snapshots and refs
 
@@ -868,7 +814,7 @@ These are useful for “make the site behave like X” workflows:
   - `set device "iPhone 14"` (Playwright device presets)
   - `set viewport 1280 720`
 
-## Security & privacy
+## Security and privacy
 
 - The openclaw browser profile may contain logged-in sessions; treat it as sensitive.
 - `browser act kind=evaluate` / `openclaw browser evaluate` and `wait --fn`
@@ -941,21 +887,6 @@ Security guidance:
 - Do **not** relax browser SSRF policy by default.
 - Prefer narrow host exceptions such as `hostnameAllowlist` or `allowedHostnames` over broad private-network access.
 - Use `dangerouslyAllowPrivateNetwork: true` only in intentionally trusted environments where private-network browser access is required and reviewed.
-
-Example: navigation blocked, control plane healthy
-
-- `start` succeeds
-- `tabs` succeeds
-- `open http://internal.example` fails
-
-That usually means browser startup is fine and the navigation target needs policy review.
-
-Example: startup blocked before navigation matters
-
-- `start` fails with `not reachable after start`
-- `tabs` also fails or cannot run
-
-That points to browser launch or CDP reachability, not a page URL allowlist problem.
 
 ## Agent tools + how control works
 

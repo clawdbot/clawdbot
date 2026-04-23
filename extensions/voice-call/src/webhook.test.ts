@@ -567,7 +567,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     const { manager, processEvent } = createManager([]);
     const config = createConfig({
       provider: "twilio",
-      inboundPolicy: "allowlist",
+      inboundPolicy: "open",
       realtime: {
         enabled: true,
         streamPath: "/voice/stream/realtime",
@@ -601,6 +601,106 @@ describe("VoiceCallWebhookServer replay handling", () => {
       expect(await response.text()).toContain("<Connect><Stream");
       expect(parseWebhookEvent).not.toHaveBeenCalled();
       expect(processEvent).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("rejects non-allowlisted inbound realtime calls before creating a stream token", async () => {
+    const buildTwiMLPayload = vi.fn(() => ({
+      statusCode: 200,
+      headers: { "Content-Type": "text/xml" },
+      body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+    }));
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:rt-deny" }),
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({
+      provider: "twilio",
+      inboundPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+      realtime: {
+        enabled: true,
+        streamPath: "/voice/stream/realtime",
+        tools: [],
+        providers: {},
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    server.setRealtimeHandler({
+      buildTwiMLPayload,
+      getStreamPathPattern: () => "/voice/stream/realtime",
+      handleWebSocketUpgrade: () => {},
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookFormWithHeaders(
+        server,
+        baseUrl,
+        "CallSid=CA123&Direction=inbound&CallStatus=ringing&From=%2B15550002222",
+        { "x-twilio-signature": "sig" },
+      );
+      const body = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(body).toContain("<Reject");
+      expect(buildTwiMLPayload).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("creates a realtime stream only for allowlisted inbound callers", async () => {
+    const buildTwiMLPayload = vi.fn(() => ({
+      statusCode: 200,
+      headers: { "Content-Type": "text/xml" },
+      body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+    }));
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:rt-allow" }),
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({
+      provider: "twilio",
+      inboundPolicy: "allowlist",
+      allowFrom: ["+15550002222"],
+      realtime: {
+        enabled: true,
+        streamPath: "/voice/stream/realtime",
+        tools: [],
+        providers: {},
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    server.setRealtimeHandler({
+      buildTwiMLPayload,
+      getStreamPathPattern: () => "/voice/stream/realtime",
+      handleWebSocketUpgrade: () => {},
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookFormWithHeaders(
+        server,
+        baseUrl,
+        "CallSid=CA123&Direction=inbound&CallStatus=ringing&From=%2B15550002222",
+        { "x-twilio-signature": "sig" },
+      );
+      const body = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(body).toContain("<Connect><Stream");
+      expect(buildTwiMLPayload).toHaveBeenCalledTimes(1);
     } finally {
       await server.stop();
     }

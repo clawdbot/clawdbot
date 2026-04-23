@@ -83,8 +83,8 @@ vi.mock("../agents/model-selection.js", () => {
     return primary?.primary;
   };
   const resolveDefaultRef = (cfg?: ConfigWithModels): ModelRef => {
-    const parsed = parseModelRefImpl(resolvePrimary(cfg) ?? "openai/gpt-5.4", "openai");
-    return parsed ?? { provider: "openai", model: "gpt-5.4" };
+    const parsed = parseModelRefImpl(resolvePrimary(cfg) ?? "openai/gpt-5.5", "openai");
+    return parsed ?? { provider: "openai", model: "gpt-5.5" };
   };
   const resolveModelConfig = (cfg: ConfigWithModels | undefined, ref: ModelRef) => {
     const models = cfg?.agents?.defaults?.models ?? {};

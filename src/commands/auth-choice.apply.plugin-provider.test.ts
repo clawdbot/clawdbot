@@ -136,6 +136,38 @@ function buildParams(overrides: Partial<ApplyAuthChoiceParams> = {}): ApplyAuthC
   };
 }
 
+function buildLocalProviderInstallCatalogEntry() {
+  return {
+    pluginId: "local-provider-plugin",
+    providerId: LOCAL_PROVIDER_ID,
+    methodId: LOCAL_AUTH_METHOD_ID,
+    choiceId: LOCAL_PROVIDER_ID,
+    choiceLabel: LOCAL_PROVIDER_LABEL,
+    label: LOCAL_PROVIDER_LABEL,
+    origin: "bundled" as const,
+    install: {
+      npmSpec: "@openclaw/local-provider",
+    },
+  };
+}
+
+function buildInstalledLocalProviderPluginResult() {
+  return {
+    cfg: {
+      plugins: {
+        entries: {
+          "local-provider-plugin": {
+            enabled: true,
+          },
+        },
+      },
+    },
+    installed: true,
+    pluginId: "local-provider-plugin",
+    status: "installed" as const,
+  };
+}
+
 describe("applyAuthChoiceLoadedPluginProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -290,32 +322,8 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
   it("installs a missing provider plugin and retries setup resolution", async () => {
     const provider = buildProvider();
-    resolveProviderInstallCatalogEntry.mockReturnValue({
-      pluginId: "local-provider-plugin",
-      providerId: LOCAL_PROVIDER_ID,
-      methodId: LOCAL_AUTH_METHOD_ID,
-      choiceId: LOCAL_PROVIDER_ID,
-      choiceLabel: LOCAL_PROVIDER_LABEL,
-      label: LOCAL_PROVIDER_LABEL,
-      origin: "bundled",
-      install: {
-        npmSpec: "@openclaw/local-provider",
-      },
-    });
-    ensureOnboardingPluginInstalled.mockResolvedValue({
-      cfg: {
-        plugins: {
-          entries: {
-            "local-provider-plugin": {
-              enabled: true,
-            },
-          },
-        },
-      },
-      installed: true,
-      pluginId: "local-provider-plugin",
-      status: "installed",
-    });
+    resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
+    ensureOnboardingPluginInstalled.mockResolvedValue(buildInstalledLocalProviderPluginResult());
     resolvePluginProviders.mockReturnValue([provider]);
     resolveProviderPluginChoice.mockReturnValueOnce(null).mockReturnValueOnce({
       provider,
@@ -341,18 +349,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   });
 
   it("does not persist plugin enablement when install is skipped", async () => {
-    resolveProviderInstallCatalogEntry.mockReturnValue({
-      pluginId: "local-provider-plugin",
-      providerId: LOCAL_PROVIDER_ID,
-      methodId: LOCAL_AUTH_METHOD_ID,
-      choiceId: LOCAL_PROVIDER_ID,
-      choiceLabel: LOCAL_PROVIDER_LABEL,
-      label: LOCAL_PROVIDER_LABEL,
-      origin: "bundled",
-      install: {
-        npmSpec: "@openclaw/local-provider",
-      },
-    });
+    resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
     resolveProviderPluginChoice.mockReturnValue(null);
 
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
@@ -362,32 +359,8 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   });
 
   it("preserves install config when the chosen provider still cannot resolve after install", async () => {
-    resolveProviderInstallCatalogEntry.mockReturnValue({
-      pluginId: "local-provider-plugin",
-      providerId: LOCAL_PROVIDER_ID,
-      methodId: LOCAL_AUTH_METHOD_ID,
-      choiceId: LOCAL_PROVIDER_ID,
-      choiceLabel: LOCAL_PROVIDER_LABEL,
-      label: LOCAL_PROVIDER_LABEL,
-      origin: "bundled",
-      install: {
-        npmSpec: "@openclaw/local-provider",
-      },
-    });
-    ensureOnboardingPluginInstalled.mockResolvedValue({
-      cfg: {
-        plugins: {
-          entries: {
-            "local-provider-plugin": {
-              enabled: true,
-            },
-          },
-        },
-      },
-      installed: true,
-      pluginId: "local-provider-plugin",
-      status: "installed",
-    });
+    resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
+    ensureOnboardingPluginInstalled.mockResolvedValue(buildInstalledLocalProviderPluginResult());
     resolveProviderPluginChoice.mockReturnValue(null);
 
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());

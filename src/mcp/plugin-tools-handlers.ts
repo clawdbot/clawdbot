@@ -19,7 +19,8 @@ function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
 }
 
 export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
-  const wrappedTools = tools.map((tool) => {
+  const allowedTools = tools.filter((tool) => !tool.ownerOnly);
+  const wrappedTools = allowedTools.map((tool) => {
     if (isToolWrappedWithBeforeToolCallHook(tool)) {
       return tool;
     }

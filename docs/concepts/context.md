@@ -7,8 +7,6 @@ read_when:
 title: "Context"
 ---
 
-# Context
-
 “Context” is **everything OpenClaw sends to the model for a run**. It is bounded by the model’s **context window** (token limit).
 
 Beginner mental model:

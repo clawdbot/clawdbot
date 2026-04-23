@@ -30,6 +30,7 @@ describe("config secret refs schema", () => {
             path: "~/.openclaw/secrets.json",
             mode: "json",
             timeoutMs: 10_000,
+            allowInsecurePath: true,
           },
           vault: {
             source: "exec",

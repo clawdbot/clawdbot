@@ -1,13 +1,11 @@
 ---
-title: "QA Channel"
 summary: "Synthetic Slack-class channel plugin for deterministic OpenClaw QA scenarios"
+title: "QA channel"
 read_when:
   - You are wiring the synthetic QA transport into a local or CI test run
   - You need the bundled qa-channel config surface
   - You are iterating on end-to-end QA automation
 ---
-
-# QA Channel
 
 `qa-channel` is a bundled synthetic message transport for automated OpenClaw QA.
 

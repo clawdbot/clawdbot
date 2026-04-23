@@ -3,7 +3,7 @@ summary: "Plugin manifest + JSON schema requirements (strict config validation)"
 read_when:
   - You are building an OpenClaw plugin
   - You need to ship a plugin config schema or debug plugin validation errors
-title: "Plugin Manifest"
+title: "Plugin manifest"
 ---
 
 # Plugin manifest (openclaw.plugin.json)
@@ -38,37 +38,22 @@ For the native capability model and current external-compatibility guidance:
 
 ## What this file does
 
-`openclaw.plugin.json` is the metadata OpenClaw reads before it loads your
-plugin code.
+`openclaw.plugin.json` is the metadata OpenClaw reads **before it loads your
+plugin code**. Everything below must be cheap enough to inspect without booting
+plugin runtime.
 
-Use it for:
+**Use it for:**
 
-- plugin identity
-- config validation
-- auth and onboarding metadata that should be available without booting plugin
-  runtime
-- cheap activation hints that control-plane surfaces can inspect before runtime
-  loads
-- cheap setup descriptors that setup/onboarding surfaces can inspect before
-  runtime loads
-- alias and auto-enable metadata that should resolve before plugin runtime loads
-- shorthand model-family ownership metadata that should auto-activate the
-  plugin before runtime loads
-- static capability ownership snapshots used for bundled compat wiring and
-  contract coverage
-- cheap QA runner metadata that the shared `openclaw qa` host can inspect
-  before plugin runtime loads
-- channel-specific config metadata that should merge into catalog and validation
-  surfaces without loading runtime
-- config UI hints
+- plugin identity, config validation, and config UI hints
+- auth, onboarding, and setup metadata (alias, auto-enable, provider env vars, auth choices)
+- activation hints for control-plane surfaces
+- shorthand model-family ownership
+- static capability-ownership snapshots (`contracts`)
+- QA runner metadata the shared `openclaw qa` host can inspect
+- channel-specific config metadata merged into catalog and validation surfaces
 
-Do not use it for:
-
-- registering runtime behavior
-- declaring code entrypoints
-- npm install metadata
-
-Those belong in your plugin code and `package.json`.
+**Do not use it for:** registering runtime behavior, declaring code entrypoints,
+or npm install metadata. Those belong in your plugin code and `package.json`.
 
 ## Minimal example
 
@@ -498,7 +483,7 @@ Each channel entry can include:
 ## modelSupport reference
 
 Use `modelSupport` when OpenClaw should infer your provider plugin from
-shorthand model ids like `gpt-5.4` or `claude-sonnet-4.6` before plugin runtime
+shorthand model ids like `gpt-5.5` or `claude-sonnet-4.6` before plugin runtime
 loads.
 
 ```json
@@ -686,53 +671,25 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 
 ## Notes
 
-- The manifest is **required for native OpenClaw plugins**, including local filesystem loads.
-- Runtime still loads the plugin module separately; the manifest is only for
-  discovery + validation.
-- Native manifests are parsed with JSON5, so comments, trailing commas, and
-  unquoted keys are accepted as long as the final value is still an object.
-- Only documented manifest fields are read by the manifest loader. Avoid adding
-  custom top-level keys here.
-- `providerAuthEnvVars` is the cheap metadata path for auth probes, env-marker
-  validation, and similar provider-auth surfaces that should not boot plugin
-  runtime just to inspect env names.
-- `providerAuthAliases` lets provider variants reuse another provider's auth
-  env vars, auth profiles, config-backed auth, and API-key onboarding choice
-  without hardcoding that relationship in core.
-- `providerEndpoints` lets provider plugins own simple endpoint host/baseUrl
-  matching metadata. Use it only for endpoint classes core already supports;
-  the plugin still owns runtime behavior.
-- `syntheticAuthRefs` is the cheap metadata path for provider-owned synthetic
-  auth hooks that must be visible to cold model discovery before the runtime
-  registry exists. Only list refs whose runtime provider or CLI backend actually
-  implements `resolveSyntheticAuth`.
-- `nonSecretAuthMarkers` is the cheap metadata path for bundled plugin-owned
-  placeholder API keys such as local, OAuth, or ambient credential markers.
-  Core treats these as non-secrets for auth display and secret audits without
-  hardcoding the owning provider.
-- `channelEnvVars` is the cheap metadata path for shell-env fallback, setup
-  prompts, and similar channel surfaces that should not boot plugin runtime
-  just to inspect env names. Env names are metadata, not activation by
-  themselves: status, audit, cron delivery validation, and other read-only
-  surfaces still apply plugin trust and effective activation policy before they
-  treat an env var as a configured channel.
-- `providerAuthChoices` is the cheap metadata path for auth-choice pickers,
-  `--auth-choice` resolution, preferred-provider mapping, and simple onboarding
-  CLI flag registration before provider runtime loads. For runtime wizard
-  metadata that requires provider code, see
-  [Provider runtime hooks](/plugins/architecture#provider-runtime-hooks).
-- Exclusive plugin kinds are selected through `plugins.slots.*`.
-  - `kind: "memory"` is selected by `plugins.slots.memory`.
-  - `kind: "context-engine"` is selected by `plugins.slots.contextEngine`
-    (default: built-in `legacy`).
-- `channels`, `providers`, `cliBackends`, and `skills` can be omitted when a
-  plugin does not need them.
-- If your plugin depends on native modules, document the build steps and any
-  package-manager allowlist requirements (for example, pnpm `allow-build-scripts`
-  - `pnpm rebuild <package>`).
+- The manifest is **required for native OpenClaw plugins**, including local filesystem loads. Runtime still loads the plugin module separately; the manifest is only for discovery + validation.
+- Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.
+- Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
+- `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
+- Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
+- Env-var metadata (`providerAuthEnvVars`, `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
+- For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture#provider-runtime-hooks).
+- If your plugin depends on native modules, document the build steps and any package-manager allowlist requirements (for example, pnpm `allow-build-scripts` + `pnpm rebuild <package>`).
 
 ## Related
 
-- [Building Plugins](/plugins/building-plugins) — getting started with plugins
-- [Plugin Architecture](/plugins/architecture) — internal architecture
-- [SDK Overview](/plugins/sdk-overview) — Plugin SDK reference
+<CardGroup cols={3}>
+  <Card title="Building plugins" href="/plugins/building-plugins" icon="rocket">
+    Getting started with plugins.
+  </Card>
+  <Card title="Plugin architecture" href="/plugins/architecture" icon="diagram-project">
+    Internal architecture and capability model.
+  </Card>
+  <Card title="SDK overview" href="/plugins/sdk-overview" icon="book">
+    Plugin SDK reference and subpath imports.
+  </Card>
+</CardGroup>

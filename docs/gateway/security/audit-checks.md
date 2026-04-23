@@ -7,8 +7,6 @@ read_when:
 title: "Security audit checks"
 ---
 
-# Security audit checks
-
 `openclaw security audit` emits structured findings keyed by `checkId`. This
 page is the reference catalog for those IDs. For the high-level threat model
 and hardening guidance, see [Security](/gateway/security).

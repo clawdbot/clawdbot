@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Message, Usage } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import { resolveTrajectoryPointerFilePath } from "./runtime.js";
@@ -120,6 +119,62 @@ function writeToolCallOnlySessionFile(sessionFile: string): void {
   fs.writeFileSync(
     sessionFile,
     `${[header, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    "utf8",
+  );
+}
+
+function writeToolCallSessionFile(sessionFile: string): void {
+  const header = {
+    type: "session",
+    version: 3,
+    id: "session-1",
+    timestamp: "2026-04-01T05:46:39.000Z",
+    cwd: path.dirname(sessionFile),
+    title: "Trajectory Test",
+  };
+  const entries = [
+    header,
+    {
+      type: "message",
+      id: "entry-user",
+      parentId: null,
+      timestamp: "2026-04-01T05:46:40.000Z",
+      message: userMessage("hello"),
+    },
+    {
+      type: "message",
+      id: "entry-tool-call",
+      parentId: "entry-user",
+      timestamp: "2026-04-01T05:46:41.000Z",
+      message: assistantMessage([
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "read",
+          arguments: {
+            filePath: path.join(path.dirname(sessionFile), "skills", "weather", "SKILL.md"),
+          },
+        },
+      ]),
+    },
+    {
+      type: "message",
+      id: "entry-tool-result",
+      parentId: "entry-tool-call",
+      timestamp: "2026-04-01T05:46:42.000Z",
+      message: toolResultMessage([{ type: "text", text: "README contents" }]),
+    },
+    {
+      type: "message",
+      id: "entry-assistant",
+      parentId: "entry-tool-result",
+      timestamp: "2026-04-01T05:46:43.000Z",
+      message: assistantMessage([{ type: "text", text: "done" }]),
+    },
+  ];
+  fs.writeFileSync(
+    sessionFile,
+    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     "utf8",
   );
 }
@@ -550,22 +605,7 @@ describe("exportTrajectoryBundle", () => {
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
     const outputDir = path.join(tmpDir, "bundle");
-    const sessionManager = SessionManager.open(sessionFile);
-
-    sessionManager.appendSessionInfo("Trajectory Test");
-    sessionManager.appendMessage(userMessage("hello"));
-    sessionManager.appendMessage(
-      assistantMessage([
-        {
-          type: "toolCall",
-          id: "call_1",
-          name: "read",
-          arguments: { filePath: path.join(tmpDir, "skills", "weather", "SKILL.md") },
-        },
-      ]),
-    );
-    sessionManager.appendMessage(toolResultMessage([{ type: "text", text: "README contents" }]));
-    sessionManager.appendMessage(assistantMessage([{ type: "text", text: "done" }]));
+    writeToolCallSessionFile(sessionFile);
 
     const runtimeEvents: TrajectoryEvent[] = [
       {

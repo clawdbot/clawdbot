@@ -431,6 +431,29 @@ describe("runSetupWizard", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
+  it("fails fast if the auth choice prompt returns nothing", async () => {
+    promptAuthChoiceGrouped.mockImplementationOnce(async () => undefined as never);
+    const prompter = buildWizardPrompter();
+    const runtime = createRuntime();
+
+    await expect(
+      runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      ),
+    ).rejects.toThrow("auth choice is required");
+  });
+
   async function runTuiHatchTest(params: {
     writeBootstrapFile: boolean;
     expectedMessage: string | undefined;

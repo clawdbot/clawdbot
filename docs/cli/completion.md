@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw completion` (generate/install shell comple
 read_when:
   - You want shell completions for zsh/bash/fish/PowerShell
   - You need to cache completion scripts under OpenClaw state
-title: "completion"
+title: "Completion"
 ---
 
 # `openclaw completion`

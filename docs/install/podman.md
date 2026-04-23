@@ -5,8 +5,6 @@ read_when:
 title: "Podman"
 ---
 
-# Podman
-
 Run the OpenClaw Gateway in a rootless Podman container, managed by your current non-root user.
 
 The intended model is:

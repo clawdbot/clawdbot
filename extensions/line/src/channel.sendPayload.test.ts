@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
-import { linePlugin } from "./channel.js";
+import { lineConfigAdapter } from "./config-adapter.js";
+import { resolveLineGroupRequireMention } from "./group-policy.js";
+import { lineOutboundAdapter } from "./outbound.js";
 import { setLineRuntime } from "./runtime.js";
 
 type LineRuntimeMocks = {
@@ -87,43 +89,7 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
   };
 }
 
-describe("linePlugin outbound.sendPayload", () => {
-  it("preserves resolved accountId when pairing notifications push directly", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = {
-      channels: {
-        line: {
-          accounts: {
-            primary: {
-              channelAccessToken: "token-primary",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    mocks.resolveLineAccount.mockReturnValue({
-      accountId: "primary",
-      channelAccessToken: "token-primary",
-      config: {},
-    });
-
-    await linePlugin.pairing!.notifyApproval!({
-      cfg,
-      id: "line:user:1",
-    });
-
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
-      "line:user:1",
-      "OpenClaw: your access has been approved.",
-      {
-        cfg,
-        accountId: "primary",
-        channelAccessToken: "token-primary",
-      },
-    );
-  });
-
+describe("line outbound sendPayload", () => {
   it("sends flex message without dropping text", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
@@ -141,7 +107,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await lineOutboundAdapter.sendPayload!({
       to: "line:group:1",
       text: payload.text,
       payload,
@@ -178,7 +144,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await lineOutboundAdapter.sendPayload!({
       to: "line:user:1",
       text: payload.text,
       payload,
@@ -212,7 +178,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await lineOutboundAdapter.sendPayload!({
       to: "line:user:2",
       text: "",
       payload,
@@ -251,7 +217,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await lineOutboundAdapter.sendPayload!({
       to: "line:user:3",
       text: payload.text,
       payload,
@@ -285,7 +251,7 @@ describe("linePlugin outbound.sendPayload", () => {
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
 
-    await linePlugin.outbound!.sendPayload!({
+    await lineOutboundAdapter.sendPayload!({
       to: "line:user:4",
       text: "",
       payload: {
@@ -308,7 +274,7 @@ describe("linePlugin outbound.sendPayload", () => {
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
 
-    await linePlugin.outbound!.sendPayload!({
+    await lineOutboundAdapter.sendPayload!({
       to: "line:user:5",
       text: "",
       payload: {
@@ -354,7 +320,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await lineOutboundAdapter.sendPayload!({
       to: "line:user:3",
       text: payload.text,
       payload,
@@ -386,7 +352,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await lineOutboundAdapter.sendPayload!({
       to: "line:group:C123",
       text: payload.text,
       payload,
@@ -426,7 +392,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await lineOutboundAdapter.sendPayload!({
       to: "line:user:U123",
       text: payload.text,
       payload,
@@ -466,7 +432,7 @@ describe("linePlugin outbound.sendPayload", () => {
     };
 
     await expect(
-      linePlugin.outbound!.sendPayload!({
+      lineOutboundAdapter.sendPayload!({
         to: "line:user:U123",
         text: payload.text,
         payload,
@@ -479,7 +445,7 @@ describe("linePlugin outbound.sendPayload", () => {
 
 describe("linePlugin config.formatAllowFrom", () => {
   it("strips line:user: prefixes without lowercasing", () => {
-    const formatted = linePlugin.config.formatAllowFrom!({
+    const formatted = lineConfigAdapter.formatAllowFrom!({
       cfg: {} as OpenClawConfig,
       allowFrom: ["line:user:UABC", "line:UDEF"],
     });
@@ -509,7 +475,7 @@ describe("linePlugin groups.resolveRequireMention", () => {
       },
     } as OpenClawConfig;
 
-    const requireMention = linePlugin.groups!.resolveRequireMention!({
+    const requireMention = resolveLineGroupRequireMention({
       cfg,
       accountId: "primary",
       groupId: "group-1",

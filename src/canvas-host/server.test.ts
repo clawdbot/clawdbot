@@ -3,7 +3,6 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
-import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -19,8 +18,6 @@ type MockWatcher = {
   close: () => Promise<void>;
   __emit: (event: string, ...args: unknown[]) => void;
 };
-
-const CANVAS_RELOAD_TEST_TIMEOUT_MS = 20_000;
 
 type TrackingWebSocket = {
   sent: string[];
@@ -148,6 +145,18 @@ describe("canvas host", () => {
 
   beforeAll(async () => {
     vi.doUnmock("undici");
+    vi.doMock("node:timers", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:timers")>();
+      return {
+        ...actual,
+        setTimeout: ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+          actual.setTimeout(
+            callback,
+            delay === 12 ? 0 : delay,
+            ...args,
+          )) as typeof actual.setTimeout,
+      };
+    });
     vi.resetModules();
     ({ createCanvasHostHandler, startCanvasHost } = await import("./server.js"));
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
@@ -161,6 +170,7 @@ describe("canvas host", () => {
   });
 
   afterAll(async () => {
+    vi.doUnmock("node:timers");
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -246,99 +256,102 @@ describe("canvas host", () => {
     }
   });
 
-  it(
-    "broadcasts reload on file changes",
-    async () => {
-      const dir = await createCaseDir();
-      const index = path.join(dir, "index.html");
-      await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
+  it("broadcasts reload on file changes", async () => {
+    const dir = await createCaseDir();
+    const index = path.join(dir, "index.html");
+    await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
+    let resolveReload!: () => void;
+    const reloadSent = new Promise<void>((resolve) => {
+      resolveReload = resolve;
+    });
 
-      const watcherStart = watcherState.watchers.length;
-      const TrackingWebSocketServerClass = class TrackingWebSocketServer {
-        static latestInstance: { connectionCount: number } | undefined;
-        static latestSocket: TrackingWebSocket | undefined;
-        connectionCount = 0;
-        readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+    const watcherStart = watcherState.watchers.length;
+    const TrackingWebSocketServerClass = class TrackingWebSocketServer {
+      static latestInstance: { connectionCount: number } | undefined;
+      static latestSocket: TrackingWebSocket | undefined;
+      connectionCount = 0;
+      readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
-        on(event: string, cb: (...args: unknown[]) => void) {
-          const list = this.handlers.get(event) ?? [];
-          list.push(cb);
-          this.handlers.set(event, list);
-          return this;
-        }
-
-        emit(event: string, ...args: unknown[]) {
-          for (const cb of this.handlers.get(event) ?? []) {
-            cb(...args);
-          }
-        }
-
-        handleUpgrade(
-          req: IncomingMessage,
-          socket: Duplex,
-          head: Buffer,
-          cb: (ws: TrackingWebSocket) => void,
-        ) {
-          void req;
-          void socket;
-          void head;
-          const closeHandlers: Array<() => void> = [];
-          const ws: TrackingWebSocket = {
-            sent: [],
-            on: (event, handler) => {
-              if (event === "close") {
-                closeHandlers.push(handler);
-              }
-              return ws;
-            },
-            send: (message: string) => {
-              ws.sent.push(message);
-            },
-          };
-          TrackingWebSocketServerClass.latestSocket = ws;
-          cb(ws);
-        }
-
-        close(cb?: (err?: Error) => void) {
-          cb?.();
-        }
-
-        constructor(..._args: unknown[]) {
-          TrackingWebSocketServerClass.latestInstance = this;
-          this.on("connection", () => {
-            this.connectionCount += 1;
-          });
-        }
-      };
-
-      const handler = await createTestCanvasHostHandler(dir, {
-        webSocketServerClass:
-          TrackingWebSocketServerClass as unknown as typeof import("ws").WebSocketServer,
-      });
-
-      try {
-        const watcher = watcherState.watchers[watcherStart];
-        expect(watcher).toBeTruthy();
-        const upgraded = handler.handleUpgrade(
-          { url: CANVAS_WS_PATH } as IncomingMessage,
-          {} as Duplex,
-          Buffer.alloc(0),
-        );
-        expect(upgraded).toBe(true);
-        expect(TrackingWebSocketServerClass.latestInstance?.connectionCount).toBe(1);
-        const ws = TrackingWebSocketServerClass.latestSocket;
-        expect(ws).toBeTruthy();
-
-        await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
-        watcher.__emit("all", "change", index);
-        await sleep(15);
-        expect(ws?.sent[0]).toBe("reload");
-      } finally {
-        await handler.close();
+      on(event: string, cb: (...args: unknown[]) => void) {
+        const list = this.handlers.get(event) ?? [];
+        list.push(cb);
+        this.handlers.set(event, list);
+        return this;
       }
-    },
-    CANVAS_RELOAD_TEST_TIMEOUT_MS,
-  );
+
+      emit(event: string, ...args: unknown[]) {
+        for (const cb of this.handlers.get(event) ?? []) {
+          cb(...args);
+        }
+      }
+
+      handleUpgrade(
+        req: IncomingMessage,
+        socket: Duplex,
+        head: Buffer,
+        cb: (ws: TrackingWebSocket) => void,
+      ) {
+        void req;
+        void socket;
+        void head;
+        const closeHandlers: Array<() => void> = [];
+        const ws: TrackingWebSocket = {
+          sent: [],
+          on: (event, handler) => {
+            if (event === "close") {
+              closeHandlers.push(handler);
+            }
+            return ws;
+          },
+          send: (message: string) => {
+            ws.sent.push(message);
+            if (message === "reload") {
+              resolveReload();
+            }
+          },
+        };
+        TrackingWebSocketServerClass.latestSocket = ws;
+        cb(ws);
+      }
+
+      close(cb?: (err?: Error) => void) {
+        cb?.();
+      }
+
+      constructor(..._args: unknown[]) {
+        TrackingWebSocketServerClass.latestInstance = this;
+        this.on("connection", () => {
+          this.connectionCount += 1;
+        });
+      }
+    };
+
+    const handler = await createTestCanvasHostHandler(dir, {
+      webSocketServerClass:
+        TrackingWebSocketServerClass as unknown as typeof import("ws").WebSocketServer,
+    });
+
+    try {
+      const watcher = watcherState.watchers[watcherStart];
+      expect(watcher).toBeTruthy();
+      const upgraded = handler.handleUpgrade(
+        { url: CANVAS_WS_PATH } as IncomingMessage,
+        {} as Duplex,
+        Buffer.alloc(0),
+      );
+      expect(upgraded).toBe(true);
+      expect(TrackingWebSocketServerClass.latestInstance?.connectionCount).toBe(1);
+      const ws = TrackingWebSocketServerClass.latestSocket;
+      expect(ws).toBeTruthy();
+
+      await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
+      watcher.__emit("all", "change", index);
+      await reloadSent;
+      expect(ws?.sent[0]).toBe("reload");
+    } finally {
+      await handler.close();
+    }
+  });
 
   it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
     const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");

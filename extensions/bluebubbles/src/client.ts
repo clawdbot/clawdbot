@@ -11,13 +11,13 @@
 //   - #60715 BB health check fails on LAN/private serverUrl
 //   - #66869 move `?password=` → header auth (future-proofed via AuthStrategy)
 
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isBlockedHostnameOrIp, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { extractAttachments } from "./monitor-normalize.js";
 import { postMultipartFormData } from "./multipart.js";
 import { resolveRequestUrl } from "./request-url.js";
-import { DEFAULT_ACCOUNT_ID } from "./runtime-api.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import {

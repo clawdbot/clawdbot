@@ -21,6 +21,7 @@ import {
   writeCredsJsonAtomically,
   type CredsQueueWaitResult,
 } from "./creds-persistence.js";
+import { renderQrTerminal } from "./qr-terminal.js";
 import { formatError, getStatusCode } from "./session-errors.js";
 import {
   DisconnectReason,
@@ -59,11 +60,6 @@ export type { CredsQueueWaitResult } from "./creds-persistence.js";
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
-
-async function loadQrTerminal() {
-  const mod = await import("qrcode-terminal");
-  return mod.default ?? mod;
-}
 
 function enqueueSaveCreds(
   authDir: string,
@@ -111,6 +107,11 @@ async function safeSaveCreds(
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
   }
+}
+
+async function printTerminalQr(qr: string): Promise<void> {
+  const output = await renderQrTerminal(qr, { small: true });
+  process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 
 /**
@@ -172,8 +173,9 @@ export async function createWaSocket(
           opts.onQr?.(qr);
           if (printQr) {
             console.log("Scan this QR in WhatsApp (Linked Devices):");
-            const qrcode = await loadQrTerminal();
-            qrcode.generate(qr, { small: true });
+            void printTerminalQr(qr).catch((err) => {
+              sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
+            });
           }
         }
         if (connection === "close") {

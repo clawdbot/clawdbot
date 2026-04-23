@@ -64,7 +64,7 @@ describe("onboard auth provider config merges", () => {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.4": { alias: "GPT" },
+            "openai/gpt-5.5": { alias: "GPT" },
           },
         },
       },
@@ -89,7 +89,7 @@ describe("onboard auth provider config merges", () => {
     });
 
     expect(next.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.4": { alias: "GPT" },
+      "openai/gpt-5.5": { alias: "GPT" },
       ...agentModels,
     });
   });

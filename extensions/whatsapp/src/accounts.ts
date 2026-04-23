@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   resolveUserPath,
@@ -11,8 +10,15 @@ import type { DmPolicy, GroupPolicy, ReplyToMode } from "openclaw/plugin-sdk/con
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
+import {
+  listConfiguredAccountIds,
+  listWhatsAppAccountIds,
+  resolveDefaultWhatsAppAccountId,
+} from "./account-ids.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
 import { hasWebCredsSync } from "./creds-files.js";
+
+export { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 
 export type ResolvedWhatsAppAccount = {
   accountId: string;
@@ -42,11 +48,6 @@ export type ResolvedWhatsAppAccount = {
 };
 
 export const DEFAULT_WHATSAPP_MEDIA_MAX_MB = 50;
-
-const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
-  createAccountListHelpers("whatsapp");
-export const listWhatsAppAccountIds = listAccountIds;
-export const resolveDefaultWhatsAppAccountId = resolveDefaultAccountId;
 
 export function listWhatsAppAuthDirs(cfg: OpenClawConfig): string[] {
   const oauthDir = resolveOAuthDir();

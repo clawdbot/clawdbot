@@ -41,6 +41,8 @@ export type CompactEmbeddedPiSessionParams = {
   skillsSnapshot?: SkillSnapshot;
   provider?: string;
   model?: string;
+  /** Session-pinned embedded harness id. Prevents compaction hot-switching. */
+  agentHarnessId?: string;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;

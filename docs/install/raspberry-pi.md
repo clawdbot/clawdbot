@@ -7,8 +7,6 @@ read_when:
 title: "Raspberry Pi"
 ---
 
-# Raspberry Pi
-
 Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is just the gateway (models run in the cloud via API), even a modest Pi handles the workload well.
 
 ## Prerequisites

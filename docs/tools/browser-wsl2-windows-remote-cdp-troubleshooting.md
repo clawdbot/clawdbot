@@ -7,8 +7,6 @@ read_when:
 title: "WSL2 + Windows + remote Chrome CDP troubleshooting"
 ---
 
-# WSL2 + Windows + remote Chrome CDP troubleshooting
-
 This guide covers the common split-host setup where:
 
 - OpenClaw Gateway runs inside WSL2

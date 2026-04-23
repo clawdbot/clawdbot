@@ -95,6 +95,57 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });
 
+  it("carries image payloads across collected batches", async () => {
+    const key = `test-collect-images-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+    const firstImage = { type: "image" as const, data: "first", mimeType: "image/png" };
+    const secondImage = { type: "image" as const, data: "second", mimeType: "image/png" };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: "one",
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        images: [firstImage],
+        imageOrder: ["inline"],
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: "two",
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        images: [secondImage],
+        imageOrder: ["inline"],
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.images).toEqual([firstImage, secondImage]);
+    expect(calls[0]?.imageOrder).toEqual(["inline", "inline"]);
+  });
+
   it("splits collect batches when sender authorization changes", async () => {
     const key = `test-collect-auth-split-${Date.now()}`;
     const calls: FollowupRun[] = [];

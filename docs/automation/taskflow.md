@@ -4,10 +4,8 @@ read_when:
   - You want to understand how Task Flow relates to background tasks
   - You encounter Task Flow or openclaw tasks flow in release notes or docs
   - You want to inspect or manage durable flow state
-title: "Task Flow"
+title: "Task flow"
 ---
-
-# Task Flow
 
 Task Flow is the flow orchestration substrate that sits above [background tasks](/automation/tasks). It manages durable multi-step flows with their own state, revision tracking, and sync semantics while individual tasks remain the unit of detached work.
 

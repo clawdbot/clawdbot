@@ -3,7 +3,7 @@ summary: "Date and time handling across envelopes, prompts, tools, and connector
 read_when:
   - You are changing how timestamps are shown to the model or users
   - You are debugging time formatting in messages or system prompt output
-title: "Date and Time"
+title: "Date and time"
 ---
 
 # Date & Time

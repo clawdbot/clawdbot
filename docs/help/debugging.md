@@ -7,8 +7,6 @@ read_when:
 title: "Debugging"
 ---
 
-# Debugging
-
 This page covers debugging helpers for streaming output, especially when a
 provider mixes reasoning into normal text.
 

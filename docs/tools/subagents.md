@@ -4,10 +4,8 @@ read_when:
   - You want background/parallel work via the agent
   - You are changing sessions_spawn or sub-agent tool policy
   - You are implementing or troubleshooting thread-bound subagent sessions
-title: "Sub-Agents"
+title: "Sub-agents"
 ---
-
-# Sub-agents
 
 Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`agent:<agentId>:subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat channel. Each sub-agent run is tracked as a [background task](/automation/tasks).
 
@@ -71,9 +69,11 @@ Primary goals:
 - Keep the tool surface hard to misuse: sub-agents do **not** get session tools by default.
 - Support configurable nesting depth for orchestrator patterns.
 
-Cost note: each sub-agent has its **own** context and token usage. For heavy or repetitive
-tasks, set a cheaper model for sub-agents and keep your main agent on a higher-quality model.
-You can configure this via `agents.defaults.subagents.model` or per-agent overrides.
+Cost note: each sub-agent has its **own** context and token usage by default. For heavy or
+repetitive tasks, set a cheaper model for sub-agents and keep your main agent on a
+higher-quality model. You can configure this via `agents.defaults.subagents.model` or per-agent
+overrides. When a child genuinely needs the requester's current transcript, the agent can request
+`context: "fork"` on that one spawn.
 
 ## Tool
 
@@ -100,6 +100,10 @@ Tool params:
   - `mode: "session"` requires `thread: true`
 - `cleanup?` (`delete|keep`, default `keep`)
 - `sandbox?` (`inherit|require`, default `inherit`; `require` rejects spawn unless target child runtime is sandboxed)
+- `context?` (`isolated|fork`, default `isolated`; native sub-agents only)
+  - `isolated` creates a clean child transcript and is the default.
+  - `fork` branches the requester's current transcript into the child session so the child starts with the same conversation context.
+  - Use `fork` only when the child needs the current transcript. For scoped work, omit `context`.
 - `sessions_spawn` does **not** accept channel-delivery params (`target`, `channel`, `to`, `threadId`, `replyTo`, `transport`). For delivery, use `message`/`sessions_send` from the spawned run.
 
 ## Thread-bound sessions

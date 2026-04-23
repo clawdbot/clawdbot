@@ -1,10 +1,24 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { __setFsSafeTestHooksForTest } from "../infra/fs-safe.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { __testing, createExecTool } from "./bash-tools.exec.js";
+
+vi.mock("./bash-tools.exec-host-gateway.js", () => ({
+  processGatewayAllowlist: async () => ({ allowWithoutEnforcedCommand: true }),
+}));
+
+vi.mock("./bash-tools.exec-host-node.js", () => ({
+  executeNodeHostCommand: async () => {
+    throw new Error("node host execution is not used by script preflight tests");
+  },
+}));
+
+vi.mock("../utils/delivery-context.js", () => ({
+  normalizeDeliveryContext: (value: unknown) => value,
+}));
 
 const isWin = process.platform === "win32";
 

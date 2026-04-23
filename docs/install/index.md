@@ -7,8 +7,6 @@ read_when:
 title: "Install"
 ---
 
-# Install
-
 ## Recommended: installer script
 
 The fastest way to install. It detects your OS, installs Node if needed, installs OpenClaw, and launches onboarding.

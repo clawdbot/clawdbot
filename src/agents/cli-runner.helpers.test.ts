@@ -275,11 +275,15 @@ describe("writeCliImages", () => {
         baseArgs: ["exec", "--json"],
         modelId: "gpt-5.4",
         imagePaths: prepared.imagePaths,
+        promptArg: "describe the attached image",
         useResume: false,
       });
 
       const imageArgIndex = argv.indexOf("--image");
+      const promptIndex = argv.indexOf("describe the attached image");
       expect(imageArgIndex).toBeGreaterThanOrEqual(0);
+      expect(promptIndex).toBeGreaterThanOrEqual(0);
+      expect(imageArgIndex).toBeGreaterThan(promptIndex);
       expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images");
       expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
 

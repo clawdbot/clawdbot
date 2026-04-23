@@ -598,6 +598,40 @@ describe("createFollowupRunner runtime config", () => {
       agentAccountId: "bot-account",
     });
   });
+
+  it("passes queued images into queued embedded followup runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const images = [{ type: "image" as const, data: "base64-cat", mimeType: "image/png" }];
+    const imageOrder = ["inline" as const];
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+      opts: {
+        images: [{ type: "image", data: "fallback", mimeType: "image/png" }],
+        imageOrder: ["inline"],
+      },
+    });
+
+    await runner(
+      createQueuedRun({
+        images,
+        imageOrder,
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          images?: unknown;
+          imageOrder?: unknown;
+        }
+      | undefined;
+    expect(call?.images).toBe(images);
+    expect(call?.imageOrder).toBe(imageOrder);
+  });
 });
 
 describe("createFollowupRunner compaction", () => {

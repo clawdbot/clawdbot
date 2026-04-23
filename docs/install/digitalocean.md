@@ -6,8 +6,6 @@ read_when:
 title: "DigitalOcean"
 ---
 
-# DigitalOcean
-
 Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
 
 ## Prerequisites

@@ -13,9 +13,9 @@ const DEFAULT_MAX_TOKENS = 128_000;
 
 export const FALLBACK_CODEX_MODELS = [
   {
-    id: "gpt-5.4",
-    model: "gpt-5.4",
-    displayName: "gpt-5.4",
+    id: "gpt-5.5",
+    model: "gpt-5.5",
+    displayName: "gpt-5.5",
     description: "Latest frontier agentic coding model.",
     isDefault: true,
     inputModalities: ["text", "image"],

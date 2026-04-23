@@ -8,8 +8,6 @@ title: "Plugins"
 sidebarTitle: "Install and Configure"
 ---
 
-# Plugins
-
 Plugins extend OpenClaw with new capabilities: channels, model providers,
 tools, skills, speech, realtime transcription, realtime voice,
 media-understanding, image generation, video generation, web fetch, web
@@ -254,6 +252,10 @@ plugin). Other bundled plugins still need `openclaw plugins enable <id>`.
 `openclaw plugins update <id-or-npm-spec>` for routine upgrades of tracked npm
 plugins. It is not supported with `--link`, which reuses the source path instead
 of copying over a managed install target.
+
+When `plugins.allow` is already set, `openclaw plugins install` adds the
+installed plugin id to that allowlist before enabling it, so installs are
+immediately loadable after restart.
 
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name

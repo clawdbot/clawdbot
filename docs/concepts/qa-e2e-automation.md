@@ -4,10 +4,8 @@ read_when:
   - Extending qa-lab or qa-channel
   - Adding repo-backed QA scenarios
   - Building higher-realism QA automation around the Gateway dashboard
-title: "QA E2E Automation"
+title: "QA E2E automation"
 ---
-
-# QA E2E Automation
 
 The private QA stack is meant to exercise OpenClaw in a more realistic,
 channel-shaped way than a single unit test can.
@@ -82,6 +80,8 @@ observation works best when both bots have Bot-to-Bot Communication Mode
 enabled in `@BotFather`.
 The command exits non-zero when any scenario fails. Use `--allow-failures` when
 you want artifacts without a failing exit code.
+The Telegram report and summary include per-reply RTT from the driver message
+send request to the observed SUT reply, starting with the canary.
 
 Live transport lanes now share one smaller contract instead of each inventing
 their own scenario list shape:
@@ -207,7 +207,7 @@ refs and write a judged Markdown report:
 
 ```bash
 pnpm openclaw qa character-eval \
-  --model openai/gpt-5.4,thinking=xhigh \
+  --model openai/gpt-5.5,thinking=xhigh \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
   --model anthropic/claude-opus-4-6,thinking=high \
@@ -215,7 +215,7 @@ pnpm openclaw qa character-eval \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
-  --judge-model openai/gpt-5.4,thinking=xhigh,fast \
+  --judge-model openai/gpt-5.5,thinking=xhigh,fast \
   --judge-model anthropic/claude-opus-4-6,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
@@ -247,12 +247,12 @@ Candidate and judge model runs both default to concurrency 16. Lower
 `--concurrency` or `--judge-concurrency` when provider limits or local gateway
 pressure make a run too noisy.
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.4`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
+`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
 `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and
 `google/gemini-3.1-pro-preview` when no `--model` is passed.
 When no `--judge-model` is passed, the judges default to
-`openai/gpt-5.4,thinking=xhigh,fast` and
+`openai/gpt-5.5,thinking=xhigh,fast` and
 `anthropic/claude-opus-4-6,thinking=high`.
 
 ## Related docs

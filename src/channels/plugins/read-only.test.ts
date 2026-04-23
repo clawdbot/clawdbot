@@ -266,6 +266,22 @@ module.exports = {
   return { bundledRoot, pluginDir, fullMarker, setupMarker, pluginId, channelId, envVar };
 }
 
+function expectExternalChatSetupOnlyPluginLoaded(params: {
+  plugins: ReturnType<typeof listReadOnlyChannelPluginsForConfig>;
+  setupMarker: string;
+  fullMarker: string;
+}) {
+  const plugin = params.plugins.find((entry) => entry.id === "external-chat");
+  expect(plugin?.meta.blurb).toBe("setup entry");
+  expect(
+    plugin?.secrets?.secretTargetRegistryEntries?.some(
+      (entry) => entry.id === "channels.external-chat.token",
+    ),
+  ).toBe(true);
+  expect(fs.existsSync(params.setupMarker)).toBe(true);
+  expect(fs.existsSync(params.fullMarker)).toBe(false);
+}
+
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
 });
@@ -293,15 +309,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       },
     );
 
-    const plugin = plugins.find((entry) => entry.id === "external-chat");
-    expect(plugin?.meta.blurb).toBe("setup entry");
-    expect(
-      plugin?.secrets?.secretTargetRegistryEntries?.some(
-        (entry) => entry.id === "channels.external-chat.token",
-      ),
-    ).toBe(true);
-    expect(fs.existsSync(setupMarker)).toBe(true);
-    expect(fs.existsSync(fullMarker)).toBe(false);
+    expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
   });
 
   it("matches setup-only plugins by manifest-owned channel ids when plugin id differs", () => {
@@ -466,15 +474,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       },
     );
 
-    const plugin = plugins.find((entry) => entry.id === "external-chat");
-    expect(plugin?.meta.blurb).toBe("setup entry");
-    expect(
-      plugin?.secrets?.secretTargetRegistryEntries?.some(
-        (entry) => entry.id === "channels.external-chat.token",
-      ),
-    ).toBe(true);
-    expect(fs.existsSync(setupMarker)).toBe(true);
-    expect(fs.existsSync(fullMarker)).toBe(false);
+    expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
   });
 
   it("does not promote disabled external channels from manifest env", () => {

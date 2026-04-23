@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw hooks` (agent hooks)"
 read_when:
   - You want to manage agent hooks
   - You want to inspect hook availability or enable workspace hooks
-title: "hooks"
+title: "Hooks"
 ---
 
 # `openclaw hooks`

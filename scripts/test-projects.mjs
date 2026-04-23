@@ -20,6 +20,7 @@ import {
   resolveParallelFullSuiteConcurrency,
   resolveChangedTargetArgs,
   shouldAcquireLocalHeavyCheckLock,
+  shouldRetryVitestNoOutputTimeout,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
 
@@ -189,11 +190,15 @@ function runVitestSpec(spec) {
   if (spec.includeFilePath && spec.includePatterns) {
     writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
   }
+  let noOutputTimedOut = false;
   return new Promise((resolve, reject) => {
     const { child, teardown } = spawnWatchedVitestProcess({
       pnpmArgs: spec.pnpmArgs,
       env: spec.env,
       label: spec.config,
+      onNoOutputTimeout: () => {
+        noOutputTimedOut = true;
+      },
       spawnParams: {
         cwd: process.cwd(),
         ...resolveVitestSpawnParams(spec.env),
@@ -203,7 +208,7 @@ function runVitestSpec(spec) {
     child.on("exit", (code, signal) => {
       teardown();
       cleanupVitestRunSpec(spec);
-      resolve({ code: code ?? 1, signal });
+      resolve({ code: code ?? (signal ? 143 : 1), noOutputTimedOut, signal });
     });
 
     child.on("error", (error) => {
@@ -231,8 +236,21 @@ function applyDefaultParallelVitestWorkerBudget(specs, env) {
 async function runLoggedVitestSpec(spec) {
   console.error(`[test] starting ${spec.config}`);
   const startedAt = performance.now();
-  const result = await runVitestSpec(spec);
+  let result = await runVitestSpec(spec);
+  if (result.noOutputTimedOut && !spec.watchMode && shouldRetryVitestNoOutputTimeout(spec.env)) {
+    console.error(`[test] retrying ${spec.config} after no-output timeout`);
+    result = await runVitestSpec(spec);
+  }
   const durationMs = performance.now() - startedAt;
+  if (result.noOutputTimedOut && result.signal) {
+    console.error(`[test] ${spec.config} exceeded no-output timeout`);
+    return {
+      ...result,
+      code: result.code || 143,
+      signal: null,
+      timing: null,
+    };
+  }
   if (result.signal) {
     console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
     releaseLockOnce();

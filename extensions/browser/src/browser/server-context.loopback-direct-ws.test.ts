@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test-support.js";
+import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import * as cdpModule from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -33,7 +33,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       } as unknown as Response;
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
     state.resolved.ssrfPolicy = {};
     state.resolved.profiles.openclaw = {
@@ -78,7 +78,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       throw new Error(`unexpected fetch: ${u}`);
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
     state.resolved.ssrfPolicy = {};
     state.resolved.profiles.openclaw = {
@@ -127,7 +127,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       throw new Error(`unexpected fetch: ${u}`);
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
     state.resolved.profiles.openclaw = {
       cdpUrl: "wss://127.0.0.1:18800/cdp?token=abc",
@@ -148,7 +148,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       throw new Error("unexpected fetch");
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
     state.resolved.ssrfPolicy = {
       dangerouslyAllowPrivateNetwork: false,

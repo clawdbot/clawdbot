@@ -37,6 +37,7 @@ runs:
         check-latest: false
 
     - name: Setup pnpm + cache store
+      id: pnpm-cache
       uses: ./.github/actions/setup-pnpm-store-cache
       with:
         pnpm-version: ${{ inputs.pnpm-version }}
@@ -97,3 +98,11 @@ runs:
           install_args+=("$LOCKFILE_FLAG")
         fi
         pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+
+    - name: Save pnpm store cache
+      if: inputs.install-deps == 'true' && steps.pnpm-cache.outputs.cache-enabled == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      continue-on-error: true
+      with:
+        path: ${{ steps.pnpm-cache.outputs.store-path }}
+        key: ${{ steps.pnpm-cache.outputs.primary-key }}

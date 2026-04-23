@@ -3,11 +3,9 @@ summary: "Overview of OpenClaw onboarding options and flows"
 read_when:
   - Choosing an onboarding path
   - Setting up a new environment
-title: "Onboarding Overview"
+title: "Onboarding overview"
 sidebarTitle: "Onboarding Overview"
 ---
-
-# Onboarding Overview
 
 OpenClaw has two onboarding paths. Both configure auth, the Gateway, and
 optional chat channels — they just differ in how you interact with the setup.

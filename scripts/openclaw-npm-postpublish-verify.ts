@@ -10,6 +10,7 @@ import {
   realpathSync,
   rmSync,
 } from "node:fs";
+import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -20,9 +21,11 @@ import {
   collectBundledPluginRootRuntimeMirrorErrors,
   collectRootDistBundledRuntimeMirrors,
   collectRuntimeDependencySpecs,
+  packageNameFromSpecifier,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import { createRequire } from "node:module";
 
 type InstalledPackageJson = {
   version?: string;
@@ -47,6 +50,13 @@ const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
   (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
 );
+const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
+const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
+const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 2 * 1024 * 1024;
+const MAX_INSTALLED_ROOT_DIST_JS_FILES = 5000;
+const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
+const require = createRequire(import.meta.url);
+const acorn = require("acorn") as typeof import("acorn");
 
 export type PublishedInstallScenario = {
   name: string;
@@ -101,6 +111,7 @@ export function collectInstalledPackageErrors(params: {
   }
 
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
+  errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
   errors.push(...collectInstalledMirroredRootDependencyManifestErrors(params.packageRoot));
 
   return errors;
@@ -131,7 +142,7 @@ function listDistJavaScriptFiles(packageRoot: string): string[] {
         pending.push(entryPath);
         continue;
       }
-      if (entry.isFile() && entry.name.endsWith(".js")) {
+      if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
         files.push(entryPath);
       }
     }
@@ -152,6 +163,183 @@ export function collectInstalledContextEngineRuntimeErrors(packageRoot: string):
     }
   }
   return errors;
+}
+
+function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {
+  const distDir = join(packageRoot, "dist");
+  if (!existsSync(distDir)) {
+    return [];
+  }
+
+  const pending = [distDir];
+  const files: string[] = [];
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      const entryPath = join(currentDir, entry.name);
+      const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
+      if (relativePath.startsWith("extensions/")) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+        continue;
+      }
+      if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
+        files.push(entryPath);
+      }
+    }
+  }
+
+  return files;
+}
+
+type ParsedImportSpecifiersResult =
+  | { ok: true; specifiers: Set<string> }
+  | { ok: false; error: string };
+
+function extractLiteralSpecifier(node: unknown): string | null {
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+  const candidate = node as { type?: string; value?: unknown };
+  if (candidate.type === "Literal" && typeof candidate.value === "string") {
+    return candidate.value;
+  }
+  return null;
+}
+
+function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifiersResult {
+  const specifiers = new Set<string>();
+  let program: unknown;
+  try {
+    program = acorn.parse(source, {
+      allowHashBang: true,
+      ecmaVersion: "latest",
+      sourceType: "module",
+    });
+  } catch (error) {
+    return { ok: false, error: formatErrorMessage(error) };
+  }
+
+  const visited = new Set<unknown>();
+  const pending: unknown[] = [program];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || typeof current !== "object" || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+    const node = current as Record<string, unknown>;
+    const nodeType = typeof node.type === "string" ? node.type : null;
+
+    if (nodeType === "ImportDeclaration") {
+      const specifier = extractLiteralSpecifier(node.source);
+      if (specifier) {
+        specifiers.add(specifier);
+      }
+    } else if (nodeType === "ExportAllDeclaration" || nodeType === "ExportNamedDeclaration") {
+      const specifier = extractLiteralSpecifier(node.source);
+      if (specifier) {
+        specifiers.add(specifier);
+      }
+    } else if (nodeType === "ImportExpression") {
+      const specifier = extractLiteralSpecifier(node.source);
+      if (specifier) {
+        specifiers.add(specifier);
+      }
+    } else if (nodeType === "CallExpression") {
+      const callee = node.callee as { type?: string; name?: string } | undefined;
+      const args = Array.isArray(node.arguments) ? node.arguments : [];
+      if (callee?.type === "Identifier" && callee.name === "require" && args.length === 1) {
+        const specifier = extractLiteralSpecifier(args[0]);
+        if (specifier) {
+          specifiers.add(specifier);
+        }
+      }
+    }
+
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        pending.push(...value);
+      } else if (value && typeof value === "object") {
+        pending.push(value);
+      }
+    }
+  }
+
+  return { ok: true, specifiers };
+}
+
+export function collectInstalledRootDependencyManifestErrors(packageRoot: string): string[] {
+  const packageJsonPath = join(packageRoot, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    return ["installed package is missing package.json."];
+  }
+  const packageJsonStat = lstatSync(packageJsonPath);
+  if (!packageJsonStat.isFile() || packageJsonStat.size > MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES) {
+    return [
+      `installed package.json is invalid or exceeds ${MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES} bytes.`,
+    ];
+  }
+  let rootPackageJson: InstalledPackageJson;
+  try {
+    rootPackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
+  } catch (error) {
+    return [`installed package.json could not be parsed: ${formatErrorMessage(error)}.`];
+  }
+  const declaredRuntimeDeps = new Set([
+    ...Object.keys(rootPackageJson.dependencies ?? {}),
+    ...Object.keys(rootPackageJson.optionalDependencies ?? {}),
+  ]);
+  const distFiles = listInstalledRootDistJavaScriptFiles(packageRoot);
+  if (distFiles.length > MAX_INSTALLED_ROOT_DIST_JS_FILES) {
+    return [
+      `installed package root dist contains ${distFiles.length} JavaScript files, exceeding the ${MAX_INSTALLED_ROOT_DIST_JS_FILES} file scan limit.`,
+    ];
+  }
+  const missingImporters = new Map<string, Set<string>>();
+
+  for (const filePath of distFiles) {
+    const fileStat = lstatSync(filePath);
+    if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
+      const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
+      return [
+        `installed package root dist file '${relativePath}' is invalid or exceeds ${MAX_INSTALLED_ROOT_DIST_JS_BYTES} bytes.`,
+      ];
+    }
+    const source = readFileSync(filePath, "utf8");
+    const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
+    const parsedSpecifiers = extractJavaScriptImportSpecifiers(source);
+    if (!parsedSpecifiers.ok) {
+      return [
+        `installed package root dist file '${relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
+      ];
+    }
+    for (const specifier of parsedSpecifiers.specifiers) {
+      const dependencyName = packageNameFromSpecifier(specifier);
+      if (
+        !dependencyName ||
+        NODE_BUILTIN_MODULES.has(dependencyName) ||
+        declaredRuntimeDeps.has(dependencyName)
+      ) {
+        continue;
+      }
+      const importers = missingImporters.get(dependencyName) ?? new Set<string>();
+      importers.add(relativePath);
+      missingImporters.set(dependencyName, importers);
+    }
+  }
+
+  return [...missingImporters.entries()]
+    .map(([dependencyName, importers]) => {
+      const importerList = [...importers].toSorted((left, right) => left.localeCompare(right));
+      return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
+    })
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {

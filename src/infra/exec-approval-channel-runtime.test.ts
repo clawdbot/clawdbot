@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
 const mockGatewayClientStarts = vi.hoisted(() => vi.fn());
@@ -46,15 +47,45 @@ function lastGatewayEventClientParams(): GatewayEventClientParams | undefined {
 function emitPluginApprovalRequested(clientParams = lastGatewayEventClientParams()) {
   clientParams?.onEvent?.({
     event: "plugin.approval.requested",
-    payload: {
-      id: "plugin:abc",
-      request: {
-        title: "Plugin approval",
-        description: "Let plugin proceed",
-      },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
+    payload: createPluginReplayRequest("plugin:abc"),
+  });
+}
+
+function createExecReplayRequest(id = "abc"): ExecApprovalRequest {
+  return {
+    id,
+    request: {
+      command: "echo abc",
     },
+    createdAtMs: 1000,
+    expiresAtMs: 2000,
+  };
+}
+
+function createPluginReplayRequest(id = "plugin:abc"): PluginApprovalRequest {
+  return {
+    id,
+    request: {
+      title: "Plugin approval",
+      description: "Let plugin proceed",
+    },
+    createdAtMs: 1000,
+    expiresAtMs: 2000,
+  };
+}
+
+function mockReplayLists(params: {
+  exec?: ExecApprovalRequest[];
+  plugin?: PluginApprovalRequest[];
+}) {
+  mockGatewayClientRequests.mockImplementation(async (method: string) => {
+    if (method === "exec.approval.list") {
+      return params.exec ?? [];
+    }
+    if (method === "plugin.approval.list") {
+      return params.plugin ?? [];
+    }
+    return { ok: true };
   });
 }
 
@@ -400,21 +431,7 @@ describe("createExecApprovalChannelRuntime", () => {
   });
 
   it("replays pending approvals after the gateway connection is ready", async () => {
-    mockGatewayClientRequests.mockImplementation(async (method: string) => {
-      if (method === "exec.approval.list") {
-        return [
-          {
-            id: "abc",
-            request: {
-              command: "echo abc",
-            },
-            createdAtMs: 1000,
-            expiresAtMs: 2000,
-          },
-        ];
-      }
-      return { ok: true };
-    });
+    mockReplayLists({ exec: [createExecReplayRequest()] });
     const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
     const runtime = createExecApprovalChannelRuntime({
       label: "test/replay",
@@ -428,31 +445,46 @@ describe("createExecApprovalChannelRuntime", () => {
 
     await runtime.start();
 
-    expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
-    expect(deliverRequested).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "abc",
-      }),
-    );
+    await vi.waitFor(() => {
+      expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
+      expect(deliverRequested).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "abc",
+        }),
+      );
+    });
+  });
+
+  it("does not block start on pending approval replay delivery", async () => {
+    mockReplayLists({ exec: [createExecReplayRequest()] });
+    const pendingDelivery = createDeferred<Array<{ id: string }>>();
+    const deliverRequested = vi.fn(async () => pendingDelivery.promise);
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/replay-start",
+      clientDisplayName: "Test Replay Start",
+      cfg: {} as never,
+      nowMs: () => 1000,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested,
+      finalizeResolved: async () => undefined,
+    });
+
+    await runtime.start();
+
+    await vi.waitFor(() => {
+      expect(deliverRequested).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "abc",
+        }),
+      );
+    });
+    pendingDelivery.resolve([{ id: "abc" }]);
+    await runtime.stop();
   });
 
   it("ignores live duplicate approval events after replay", async () => {
-    mockGatewayClientRequests.mockImplementation(async (method: string) => {
-      if (method === "plugin.approval.list") {
-        return [
-          {
-            id: "plugin:abc",
-            request: {
-              title: "Plugin approval",
-              description: "Let plugin proceed",
-            },
-            createdAtMs: 1000,
-            expiresAtMs: 2000,
-          },
-        ];
-      }
-      return { ok: true };
-    });
+    mockReplayLists({ plugin: [createPluginReplayRequest()] });
     const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
     const runtime = createExecApprovalChannelRuntime<
       { id: string },
@@ -470,21 +502,50 @@ describe("createExecApprovalChannelRuntime", () => {
     });
 
     await runtime.start();
+    await vi.waitFor(() => {
+      expect(deliverRequested).toHaveBeenCalledTimes(1);
+    });
     emitPluginApprovalRequested();
     await Promise.resolve();
 
     expect(deliverRequested).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores live duplicate approval events while replay delivery is still in flight", async () => {
+    mockReplayLists({ plugin: [createPluginReplayRequest()] });
+    const pendingDelivery = createDeferred<Array<{ id: string }>>();
+    const deliverRequested = vi.fn(async () => pendingDelivery.promise);
+    const runtime = createExecApprovalChannelRuntime<
+      { id: string },
+      PluginApprovalRequest,
+      PluginApprovalResolved
+    >({
+      label: "test/plugin-replay-live-duplicate",
+      clientDisplayName: "Test Plugin Replay Live Duplicate",
+      cfg: {} as never,
+      nowMs: () => 1000,
+      eventKinds: ["plugin"],
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested,
+      finalizeResolved: async () => undefined,
+    });
+
+    await runtime.start();
+    await vi.waitFor(() => {
+      expect(deliverRequested).toHaveBeenCalledTimes(1);
+    });
+
+    emitPluginApprovalRequested();
+    await Promise.resolve();
+    expect(deliverRequested).toHaveBeenCalledTimes(1);
+
+    pendingDelivery.resolve([{ id: "plugin:abc" }]);
+    await runtime.stop();
+  });
+
   it("does not replay approvals after stop wins once hello is already complete", async () => {
-    const replayDeferred = createDeferred<
-      Array<{
-        id: string;
-        request: { command: string };
-        createdAtMs: number;
-        expiresAtMs: number;
-      }>
-    >();
+    const replayDeferred = createDeferred<ExecApprovalRequest[]>();
     mockGatewayClientRequests.mockImplementation(async (method: string) => {
       if (method === "exec.approval.list") {
         return replayDeferred.promise;
@@ -508,22 +569,103 @@ describe("createExecApprovalChannelRuntime", () => {
     });
 
     const stopPromise = runtime.stop();
-    replayDeferred.resolve([
-      {
-        id: "abc",
-        request: {
-          command: "echo abc",
-        },
-        createdAtMs: 1000,
-        expiresAtMs: 2000,
-      },
-    ]);
+    replayDeferred.resolve([createExecReplayRequest()]);
 
     await startPromise;
     await stopPromise;
 
     expect(deliverRequested).not.toHaveBeenCalled();
     expect(mockGatewayClientStops).toHaveBeenCalled();
+    expect(loggerMocks.error).not.toHaveBeenCalled();
+  });
+
+  it("waits for in-flight replay delivery before running stopped cleanup", async () => {
+    mockReplayLists({ exec: [createExecReplayRequest()] });
+    const pendingDelivery = createDeferred<Array<{ id: string }>>();
+    const deliverRequested = vi.fn(async () => pendingDelivery.promise);
+    const onStopped = vi.fn(async () => undefined);
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/replay-stop-waits",
+      clientDisplayName: "Test Replay Stop Waits",
+      cfg: {} as never,
+      nowMs: () => 1000,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested,
+      finalizeResolved: async () => undefined,
+      onStopped,
+    });
+
+    await runtime.start();
+    await vi.waitFor(() => {
+      expect(deliverRequested).toHaveBeenCalledTimes(1);
+    });
+
+    let stopResolved = false;
+    const stopPromise = runtime.stop().then(() => {
+      stopResolved = true;
+    });
+    await Promise.resolve();
+    expect(stopResolved).toBe(false);
+    expect(onStopped).not.toHaveBeenCalled();
+
+    pendingDelivery.resolve([{ id: "abc" }]);
+    await stopPromise;
+
+    expect(stopResolved).toBe(true);
+    expect(onStopped).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.error).not.toHaveBeenCalled();
+  });
+
+  it("logs replay delivery failures without failing startup", async () => {
+    mockReplayLists({ exec: [createExecReplayRequest()] });
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/replay-error",
+      clientDisplayName: "Test Replay Error",
+      cfg: {} as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => {
+        throw new Error("deliver failed");
+      },
+      finalizeResolved: async () => undefined,
+    });
+
+    await expect(runtime.start()).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(loggerMocks.error).toHaveBeenCalledWith(
+        "error replaying pending approvals: deliver failed",
+      );
+    });
+  });
+
+  it("logs replay list failures without failing startup", async () => {
+    mockGatewayClientRequests.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.list") {
+        throw new Error("list failed");
+      }
+      return { ok: true };
+    });
+    const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/replay-list-error",
+      clientDisplayName: "Test Replay List Error",
+      cfg: {} as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested,
+      finalizeResolved: async () => undefined,
+    });
+
+    await expect(runtime.start()).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(loggerMocks.error).toHaveBeenCalledWith(
+        "error replaying pending approvals: list failed",
+      );
+    });
+    expect(deliverRequested).not.toHaveBeenCalled();
   });
 
   it("clears pending state when delivery throws", async () => {

@@ -6,13 +6,21 @@ import bundledConfig from "./vitest/vitest.bundled.config.ts";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
 import baseConfig, { rootVitestProjects } from "./vitest/vitest.config.ts";
+import contractChannelConfigConfig from "./vitest/vitest.contracts-channel-config.config.ts";
+import contractChannelRegistryConfig from "./vitest/vitest.contracts-channel-registry.config.ts";
+import contractChannelSessionConfig from "./vitest/vitest.contracts-channel-session.config.ts";
+import contractChannelSurfaceConfig from "./vitest/vitest.contracts-channel-surface.config.ts";
+import contractPluginConfig from "./vitest/vitest.contracts-plugin.config.ts";
 import {
   createContractsVitestConfig,
   pluginContractPatterns,
 } from "./vitest/vitest.contracts-shared.ts";
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
-import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
+import {
+  resolveSharedVitestWorkerConfig,
+  sharedVitestConfig,
+} from "./vitest/vitest.shared.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
@@ -44,11 +52,60 @@ describe("projects vitest config", () => {
     expect(createContractsVitestConfig(pluginContractPatterns).test.pool).toBe("forks");
   });
 
+  it("honors explicit worker caps in CI vitest lanes", () => {
+    expect(
+      resolveSharedVitestWorkerConfig({
+        env: { CI: "true", OPENCLAW_VITEST_MAX_WORKERS: "1" },
+        isCI: true,
+        isWindows: false,
+        localScheduling: {
+          fileParallelism: false,
+          maxWorkers: 1,
+          throttledBySystem: false,
+        },
+      }),
+    ).toEqual({
+      fileParallelism: false,
+      maxWorkers: 1,
+    });
+    expect(
+      resolveSharedVitestWorkerConfig({
+        env: { CI: "true" },
+        isCI: true,
+        isWindows: false,
+        localScheduling: {
+          fileParallelism: false,
+          maxWorkers: 1,
+          throttledBySystem: false,
+        },
+      }),
+    ).toEqual({
+      fileParallelism: true,
+      maxWorkers: 3,
+    });
+  });
+
   it("keeps contract shards on the non-isolated fork runner by default", () => {
     const config = createContractsVitestConfig(pluginContractPatterns);
     expect(config.test.pool).toBe("forks");
     expect(config.test.isolate).toBe(false);
     expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
+  });
+
+  it("gives contract project configs unique names", () => {
+    expect([
+      contractChannelSurfaceConfig.test?.name,
+      contractChannelConfigConfig.test?.name,
+      contractChannelRegistryConfig.test?.name,
+      contractChannelSessionConfig.test?.name,
+      contractPluginConfig.test?.name,
+    ]).toEqual([
+      "contracts-channel-surface",
+      "contracts-channel-config",
+      "contracts-channel-registry",
+      "contracts-channel-session",
+      "contracts-plugin",
+    ]);
   });
 
   it("narrows the contracts lane to targeted contract files", () => {

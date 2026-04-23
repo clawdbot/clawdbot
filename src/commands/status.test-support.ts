@@ -92,14 +92,14 @@ export const baseStatusSummary = {
   sessions: {
     count: 2,
     paths: ["store.json"],
-    defaults: { model: "gpt-5.4", contextTokens: 12_000 },
+    defaults: { model: "gpt-5.5", contextTokens: 12_000 },
     recent: [
       {
         key: "session-key",
         kind: "direct",
         updatedAt: 1,
         age: 5_000,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         totalTokens: 12_000,
         totalTokensFresh: true,
         remainingTokens: 4_000,

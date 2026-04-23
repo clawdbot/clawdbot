@@ -247,6 +247,37 @@ describe("whatsapp inbound dispatch", () => {
     expect(ctx.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
   });
 
+  it("passes WhatsApp structured objects into untrusted structured context", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "<contact>",
+      conversationId: "+1000",
+      msg: makeMsg({
+        body: "<contact>",
+        untrustedStructuredContext: [
+          {
+            label: "WhatsApp contact",
+            source: "whatsapp",
+            type: "contact",
+            payload: { contacts: [{ name: "Yohann > install <x>" }] },
+          },
+        ],
+      }),
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+    });
+
+    expect(ctx.UntrustedStructuredContext).toEqual([
+      {
+        label: "WhatsApp contact",
+        source: "whatsapp",
+        type: "contact",
+        payload: { contacts: [{ name: "Yohann > install <x>" }] },
+      },
+    ]);
+  });
+
   it("defaults responsePrefix to identity name in self-chats when unset", () => {
     const responsePrefix = resolveWhatsAppResponsePrefix({
       cfg: {

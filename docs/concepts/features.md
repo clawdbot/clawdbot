@@ -5,8 +5,6 @@ read_when:
 title: "Features"
 ---
 
-# Features
-
 ## Highlights
 
 <Columns>

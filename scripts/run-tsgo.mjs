@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { readFlagValue } from "./lib/arg-utils.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
@@ -44,17 +45,4 @@ try {
   }
 } finally {
   releaseLock();
-}
-
-function readFlagValue(args, name) {
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === name) {
-      return args[index + 1];
-    }
-    if (arg.startsWith(`${name}=`)) {
-      return arg.slice(name.length + 1);
-    }
-  }
-  return undefined;
 }

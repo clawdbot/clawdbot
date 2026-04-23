@@ -140,6 +140,7 @@ export function buildWhatsAppInboundContext(params: {
     ReplyThreading: params.replyThreading,
     WasMentioned: params.msg.wasMentioned,
     GroupSystemPrompt: params.groupSystemPrompt,
+    UntrustedStructuredContext: params.msg.untrustedStructuredContext,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
     Provider: "whatsapp",
     Surface: "whatsapp",

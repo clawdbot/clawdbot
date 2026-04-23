@@ -1,14 +1,12 @@
 ---
-title: "Building Plugins"
-sidebarTitle: "Getting Started"
 summary: "Create your first OpenClaw plugin in minutes"
+title: "Building plugins"
+sidebarTitle: "Getting Started"
 read_when:
   - You want to create a new OpenClaw plugin
   - You need a quick-start for plugin development
   - You are adding a new channel, provider, tool, or other capability to OpenClaw
 ---
-
-# Building Plugins
 
 Plugins extend OpenClaw with new capabilities: channels, model providers,
 speech, realtime transcription, realtime voice, media understanding, image

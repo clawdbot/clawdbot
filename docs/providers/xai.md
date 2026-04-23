@@ -6,8 +6,6 @@ read_when:
 title: "xAI"
 ---
 
-# xAI
-
 OpenClaw ships a bundled `xai` provider plugin for Grok models.
 
 ## Getting started

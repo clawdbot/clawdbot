@@ -17,11 +17,11 @@ describe("applyProviderAuthConfigPatch", () => {
   };
 
   it("merges default model maps by default so other providers survive login", () => {
-    const patch = { agents: { defaults: { models: { "openai-codex/gpt-5.4": {} } } } };
+    const patch = { agents: { defaults: { models: { "openai/gpt-5.5": {} } } } };
     const next = applyProviderAuthConfigPatch(base, patch);
     expect(next.agents?.defaults?.models).toEqual({
       ...base.agents.defaults.models,
-      "openai-codex/gpt-5.4": {},
+      "openai/gpt-5.5": {},
     });
     expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
   });

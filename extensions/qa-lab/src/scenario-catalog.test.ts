@@ -137,7 +137,7 @@ describe("qa scenario catalog", () => {
 
     expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt54-thinking-visibility-switch.md");
     expect(config?.requiredLiveProvider).toBe("openai");
-    expect(config?.requiredLiveModel).toBe("gpt-5.4");
+    expect(config?.requiredLiveModel).toBe("gpt-5.5");
     expect(config?.offDirective).toBe("/think off");
     expect(config?.maxDirective).toBe("/think max");
     expect(config?.reasoningDirective).toBe("/reasoning on");
@@ -169,10 +169,10 @@ describe("qa scenario catalog", () => {
       },
     });
     expect(config?.requiredProvider).toBe("openai");
-    expect(config?.requiredModel).toBe("gpt-5.4");
+    expect(config?.requiredModel).toBe("gpt-5.5");
     expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
-      "confirms live OpenAI GPT-5.4 web search auto mode",
+      "confirms live OpenAI GPT-5.5 web search auto mode",
       "searches official OpenAI News through the live model",
     ]);
   });
@@ -191,7 +191,7 @@ describe("qa scenario catalog", () => {
     expect(scenario.sourcePath).toBe("qa/scenarios/models/thinking-slash-model-remap.md");
     expect(config?.requiredProviderMode).toBe("live-frontier");
     expect(config?.anthropicModelRef).toBe("anthropic/claude-sonnet-4-6");
-    expect(config?.openAiXhighModelRef).toBe("openai/gpt-5.4");
+    expect(config?.openAiXhighModelRef).toBe("openai/gpt-5.5");
     expect(config?.noXhighModelRef).toBe("anthropic/claude-sonnet-4-6");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "selects Anthropic and verifies adaptive options",

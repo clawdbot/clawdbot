@@ -12,14 +12,20 @@ export type ConversationBindingContext = {
   threadId?: string;
 };
 
-export type ResolveConversationBindingContextInput = ResolveCommandConversationResolutionInput & {
+export type ResolveConversationBindingContextInput = Omit<
+  ResolveCommandConversationResolutionInput,
+  "includePlacementHint"
+> & {
   cfg: OpenClawConfig;
 };
 
 export function resolveConversationBindingContext(
   params: ResolveConversationBindingContextInput,
 ): ConversationBindingContext | null {
-  const resolution = resolveCommandConversationResolution(params);
+  const resolution = resolveCommandConversationResolution({
+    ...params,
+    includePlacementHint: false,
+  });
   if (!resolution) {
     return null;
   }

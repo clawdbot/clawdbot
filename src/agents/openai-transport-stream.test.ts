@@ -1654,6 +1654,232 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function?.strict).toBe(false);
   });
 
+  describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
+    const geminiModel = {
+      id: "gemini-3-flash-preview",
+      name: "Gemini 3 Flash Preview",
+      api: "openai-completions",
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    function makeAssistantOutput(model: Model<"openai-completions">) {
+      return {
+        role: "assistant" as const,
+        content: [] as Array<Record<string, unknown>>,
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+    }
+
+    it("captures thought_signature from streamed Google tool_calls", async () => {
+      const output = makeAssistantOutput(geminiModel);
+      const chunks = [
+        {
+          id: "chatcmpl-gemini",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: geminiModel.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_abc",
+                    type: "function",
+                    function: { name: "echo_value", arguments: "" },
+                    extra_content: { google: { thought_signature: "SIG-OPAQUE-ABC==" } },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-gemini",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: geminiModel.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [{ index: 0, function: { arguments: '{"value":"repro"}' } }],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls" as const,
+            },
+          ],
+        },
+      ] as const;
+      async function* mockStream() {
+        for (const chunk of chunks) {
+          yield chunk as never;
+        }
+      }
+
+      await __testing.processOpenAICompletionsStream(mockStream(), output, geminiModel, {
+        push() {},
+      });
+
+      expect(output.content[0]).toMatchObject({
+        type: "toolCall",
+        id: "call_abc",
+        name: "echo_value",
+        arguments: { value: "repro" },
+        thoughtSignature: "SIG-OPAQUE-ABC==",
+      });
+    });
+
+    it("re-emits captured thought_signature for same Google route tool-call replay", () => {
+      const params = buildOpenAICompletionsParams(
+        geminiModel,
+        {
+          messages: [
+            { role: "user", content: "echo" },
+            {
+              role: "assistant",
+              api: geminiModel.api,
+              provider: geminiModel.provider,
+              model: geminiModel.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "echo_value",
+                  arguments: { value: "repro" },
+                  thoughtSignature: "SIG-OPAQUE-ABC==",
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_abc",
+              toolName: "echo_value",
+              content: [{ type: "text", text: "ok" }],
+              isError: false,
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((message) => message.role === "assistant") as
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+        | undefined;
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "SIG-OPAQUE-ABC==",
+      );
+    });
+
+    it("does not replay thought_signature across a different API surface", () => {
+      const params = buildOpenAICompletionsParams(
+        geminiModel,
+        {
+          messages: [
+            {
+              role: "assistant",
+              api: "google-generative-ai",
+              provider: geminiModel.provider,
+              model: geminiModel.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "echo_value",
+                  arguments: { value: "repro" },
+                  thoughtSignature: "SIG-OPAQUE-ABC==",
+                },
+              ],
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((message) => message.role === "assistant") as
+        | { tool_calls?: Array<{ extra_content?: unknown }> }
+        | undefined;
+      expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
+    });
+
+    it("does not emit extra_content when no thought_signature was captured", () => {
+      const params = buildOpenAICompletionsParams(
+        geminiModel,
+        {
+          messages: [
+            {
+              role: "assistant",
+              api: geminiModel.api,
+              provider: geminiModel.provider,
+              model: geminiModel.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [{ type: "toolCall", id: "call_abc", name: "echo_value", arguments: {} }],
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((message) => message.role === "assistant") as
+        | { tool_calls?: Array<{ extra_content?: unknown }> }
+        | undefined;
+      expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
+    });
+  });
+
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {

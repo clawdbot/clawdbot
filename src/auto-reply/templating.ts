@@ -21,6 +21,13 @@ export type StickerContextMetadata = {
   isVideo?: boolean;
 } & Record<string, unknown>;
 
+export type UntrustedStructuredContextEntry = {
+  label: string;
+  source?: string;
+  type?: string;
+  payload: unknown;
+};
+
 export type MsgContext = {
   Body?: string;
   /**
@@ -137,6 +144,8 @@ export type MsgContext = {
   GroupSystemPrompt?: string;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
+  /** Structured untrusted metadata rendered by prompt assembly as fenced JSON. */
+  UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
@@ -147,6 +156,14 @@ export type MsgContext = {
   SenderTag?: string;
   SenderE164?: string;
   Timestamp?: number;
+  LocationLat?: number;
+  LocationLon?: number;
+  LocationAccuracy?: number;
+  LocationName?: string;
+  LocationAddress?: string;
+  LocationSource?: string;
+  LocationIsLive?: boolean;
+  LocationCaption?: string;
   /** Provider label. */
   Provider?: string;
   /** Provider surface label. Prefer this over `Provider` when available. */

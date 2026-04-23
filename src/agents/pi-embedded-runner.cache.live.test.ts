@@ -805,7 +805,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         provider: "openai",
         api: "openai-responses",
         envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-        preferredModelIds: ["gpt-5.4-mini", "gpt-5.4", "gpt-5.4"],
+        preferredModelIds: ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
       });
       logLiveCache(`openai model=${fixture.model.provider}/${fixture.model.id}`);
     }, 120_000);

@@ -7,8 +7,6 @@ title: "Onboarding (CLI)"
 sidebarTitle: "Onboarding: CLI"
 ---
 
-# Onboarding (CLI)
-
 CLI onboarding is the **recommended** way to set up OpenClaw on macOS,
 Linux, or Windows (via WSL2; strongly recommended).
 It configures a local Gateway or a remote Gateway connection, plus channels, skills,

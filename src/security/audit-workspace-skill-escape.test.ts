@@ -1,38 +1,28 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectWorkspaceSkillSymlinkEscapeFindings } from "./audit-extra.async.js";
+import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
 const isWindows = process.platform === "win32";
 
 describe("security audit workspace skill path escape findings", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
+  const tempCases = new AsyncTempCaseFactory("openclaw-security-audit-workspace-");
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-workspace-"));
+    await tempCases.setup();
   });
 
   afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
-    await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+    await tempCases.cleanup();
   });
-
-  const makeTmpDir = async (label: string) => {
-    const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
-    await fs.mkdir(dir, { recursive: true });
-    return dir;
-  };
 
   it("evaluates workspace skill path escape findings", async () => {
     const runs = [
       !isWindows
         ? (async () => {
-            const tmp = await makeTmpDir("workspace-skill-symlink-escape");
+            const tmp = await tempCases.makeTmpDir("workspace-skill-symlink-escape");
             const workspaceDir = path.join(tmp, "workspace");
             const outsideDir = path.join(tmp, "outside");
             await fs.mkdir(path.join(workspaceDir, "skills", "leak"), { recursive: true });
@@ -54,7 +44,7 @@ describe("security audit workspace skill path escape findings", () => {
           })()
         : Promise.resolve(),
       (async () => {
-        const tmp = await makeTmpDir("workspace-skill-in-root");
+        const tmp = await tempCases.makeTmpDir("workspace-skill-in-root");
         const workspaceDir = path.join(tmp, "workspace");
         await fs.mkdir(path.join(workspaceDir, "skills", "safe"), { recursive: true });
         await fs.writeFile(
@@ -75,7 +65,7 @@ describe("security audit workspace skill path escape findings", () => {
   });
 
   it("treats an unresolvable realpath (timeout/error simulation) as a potential symlink escape", async () => {
-    const tmp = await makeTmpDir("workspace-skill-realpath-unresolvable");
+    const tmp = await tempCases.makeTmpDir("workspace-skill-realpath-unresolvable");
     const workspaceDir = path.join(tmp, "workspace");
     const skillsDir = path.join(workspaceDir, "skills", "suspect-skill");
     await fs.mkdir(skillsDir, { recursive: true });
@@ -112,7 +102,7 @@ describe("security audit workspace skill path escape findings", () => {
   });
 
   it("surfaces scan_truncated finding when BFS visit cap is hit", async () => {
-    const tmp = await makeTmpDir("workspace-skill-bfs-truncated");
+    const tmp = await tempCases.makeTmpDir("workspace-skill-bfs-truncated");
     const workspaceDir = path.join(tmp, "workspace");
     const skillsRoot = path.join(workspaceDir, "skills");
     await fs.mkdir(skillsRoot, { recursive: true });

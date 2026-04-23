@@ -6,8 +6,6 @@ read_when:
 title: "Venice AI"
 ---
 
-# Venice AI
-
 Venice AI provides **privacy-focused AI inference** with support for uncensored models and access to major proprietary models through their anonymized proxy. All inference is private by default — no training on your data, no logging.
 
 ## Why Venice in OpenClaw

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { __testing } from "./provider.js";
+import { createSlackBoltApp, resolveSlackBoltInterop } from "./provider-support.js";
 
 describe("resolveSlackBoltInterop", () => {
   function FakeApp() {}
@@ -7,7 +7,7 @@ describe("resolveSlackBoltInterop", () => {
   function FakeSocketModeReceiver() {}
 
   it("uses the default import when it already exposes named exports", () => {
-    const resolved = __testing.resolveSlackBoltInterop({
+    const resolved = resolveSlackBoltInterop({
       defaultImport: {
         App: FakeApp,
         HTTPReceiver: FakeHTTPReceiver,
@@ -24,7 +24,7 @@ describe("resolveSlackBoltInterop", () => {
   });
 
   it("uses nested default export when the default import is a wrapper object", () => {
-    const resolved = __testing.resolveSlackBoltInterop({
+    const resolved = resolveSlackBoltInterop({
       defaultImport: {
         default: {
           App: FakeApp,
@@ -43,7 +43,7 @@ describe("resolveSlackBoltInterop", () => {
   });
 
   it("uses the namespace receiver when the default import is the App constructor itself", () => {
-    const resolved = __testing.resolveSlackBoltInterop({
+    const resolved = resolveSlackBoltInterop({
       defaultImport: FakeApp,
       namespaceImport: {
         HTTPReceiver: FakeHTTPReceiver,
@@ -59,7 +59,7 @@ describe("resolveSlackBoltInterop", () => {
   });
 
   it("uses namespace.default when it exposes named exports", () => {
-    const resolved = __testing.resolveSlackBoltInterop({
+    const resolved = resolveSlackBoltInterop({
       defaultImport: undefined,
       namespaceImport: {
         default: {
@@ -78,7 +78,7 @@ describe("resolveSlackBoltInterop", () => {
   });
 
   it("falls back to the namespace import when it exposes named exports", () => {
-    const resolved = __testing.resolveSlackBoltInterop({
+    const resolved = resolveSlackBoltInterop({
       defaultImport: undefined,
       namespaceImport: {
         App: FakeApp,
@@ -96,7 +96,7 @@ describe("resolveSlackBoltInterop", () => {
 
   it("throws when the module cannot be resolved", () => {
     expect(() =>
-      __testing.resolveSlackBoltInterop({
+      resolveSlackBoltInterop({
         defaultImport: null,
         namespaceImport: {},
       }),
@@ -131,7 +131,7 @@ describe("createSlackBoltApp", () => {
 
   it("uses SocketModeReceiver with OpenClaw-owned reconnects and shared client options", () => {
     const clientOptions = { teamId: "T1" };
-    const { app, receiver } = __testing.createSlackBoltApp({
+    const { app, receiver } = createSlackBoltApp({
       interop: {
         App: FakeApp as never,
         HTTPReceiver: FakeHTTPReceiver as never,
@@ -162,7 +162,7 @@ describe("createSlackBoltApp", () => {
 
   it("uses HTTPReceiver for webhook mode", () => {
     const clientOptions = { teamId: "T1" };
-    const { app, receiver } = __testing.createSlackBoltApp({
+    const { app, receiver } = createSlackBoltApp({
       interop: {
         App: FakeApp as never,
         HTTPReceiver: FakeHTTPReceiver as never,

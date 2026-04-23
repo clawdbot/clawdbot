@@ -4,7 +4,7 @@ read_when:
   - Re-resolving secret refs at runtime
   - Auditing plaintext residues and unresolved refs
   - Configuring SecretRefs and applying one-way scrub changes
-title: "secrets"
+title: "Secrets"
 ---
 
 # `openclaw secrets`

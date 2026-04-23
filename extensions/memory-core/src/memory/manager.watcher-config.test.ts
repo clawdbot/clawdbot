@@ -139,7 +139,6 @@ describe("memory watcher config", () => {
     expect(watchedPaths).toEqual(
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),
-        path.join(workspaceDir, "memory.md"),
         path.join(workspaceDir, "memory"),
         path.join(extraDir, "**", "*.md"),
       ]),

@@ -75,6 +75,77 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalog).not.toHaveBeenCalled();
   });
 
+  it("uses the implicit model default when no global thinking default is configured", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.openai.com/v1",
+            models: [makeConfiguredModel()],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "openai-codex",
+      defaultModel: "gpt-5.4",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("hydrates runtime catalog metadata when the configured allowlist entry lacks reasoning", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.openai.com/v1",
+            models: [makeConfiguredModel({ reasoning: undefined })],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "openai-codex",
+      defaultModel: "gpt-5.4",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+
   it("prefers per-agent thinkingDefault over model and global defaults", async () => {
     vi.mocked(loadModelCatalog).mockClear();
     const cfg = {

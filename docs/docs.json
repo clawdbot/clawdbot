@@ -1025,6 +1025,7 @@
                   "channels/irc",
                   "channels/line",
                   "channels/matrix",
+                  "channels/matrix-push-rules",
                   "channels/mattermost",
                   "channels/msteams",
                   "channels/nextcloud-talk",
@@ -1182,8 +1183,25 @@
               {
                 "group": "Tools",
                 "pages": [
-                  "tools/media-overview",
                   "tools/apply-patch",
+                  "tools/btw",
+                  "tools/code-execution",
+                  "tools/diffs",
+                  "tools/elevated",
+                  "tools/exec-approvals",
+                  "tools/exec",
+                  "tools/image-generation",
+                  "tools/llm-task",
+                  "tools/lobster",
+                  "tools/media-overview",
+                  "tools/music-generation",
+                  "tools/pdf",
+                  "tools/reactions",
+                  "tools/thinking",
+                  "tools/tokenjuice",
+                  "tools/loop-detection",
+                  "tools/trajectory",
+                  "tools/video-generation",
                   {
                     "group": "Web Browser",
                     "pages": [
@@ -1211,24 +1229,7 @@
                       "tools/searxng-search",
                       "tools/tavily"
                     ]
-                  },
-                  "tools/btw",
-                  "tools/code-execution",
-                  "tools/diffs",
-                  "tools/trajectory",
-                  "tools/elevated",
-                  "tools/exec",
-                  "tools/exec-approvals",
-                  "tools/image-generation",
-                  "tools/music-generation",
-                  "tools/llm-task",
-                  "tools/lobster",
-                  "tools/loop-detection",
-                  "tools/pdf",
-                  "tools/reactions",
-                  "tools/thinking",
-                  "tools/tokenjuice",
-                  "tools/video-generation"
+                  }
                 ]
               },
               {
@@ -1366,6 +1367,7 @@
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth",
                       "gateway/health",
+                      "gateway/diagnostics",
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/logging",

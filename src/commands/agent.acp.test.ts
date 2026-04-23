@@ -130,8 +130,8 @@ function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig
     },
     agents: {
       defaults: {
-        model: { primary: "openai/gpt-5.4" },
-        models: { "openai/gpt-5.4": {} },
+        model: { primary: "openai/gpt-5.5" },
+        models: { "openai/gpt-5.5": {} },
         workspace: path.join(home, "openclaw"),
       },
     },

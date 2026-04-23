@@ -1363,10 +1363,10 @@ describe("model-selection", () => {
       expect(resolveAnthropicOpus47Thinking(cfg)).toBe("off");
     });
 
-    it("falls back to low when no provider thinking hook is active", () => {
+    it("falls back to medium when no provider thinking hook is active", () => {
       const cfg = {} as OpenClawConfig;
 
-      expect(resolveAnthropicOpusThinking(cfg)).toBe("low");
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("medium");
 
       expect(
         resolveThinkingDefault({
@@ -1382,7 +1382,7 @@ describe("model-selection", () => {
             },
           ],
         }),
-      ).toBe("low");
+      ).toBe("medium");
     });
   });
 });

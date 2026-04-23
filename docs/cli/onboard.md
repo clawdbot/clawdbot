@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw onboard` (interactive onboarding)"
 read_when:
   - You want guided setup for gateway, workspace, auth, channels, and skills
-title: "onboard"
+title: "Onboard"
 ---
 
 # `openclaw onboard`

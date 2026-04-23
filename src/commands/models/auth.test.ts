@@ -298,7 +298,7 @@ describe("modelsAuthLoginCommand", () => {
           },
         },
       ],
-      defaultModel: "openai-codex/gpt-5.4",
+      defaultModel: "openai/gpt-5.5",
     });
     mocks.resolvePluginProviders.mockReturnValue([
       createProvider({
@@ -365,7 +365,7 @@ describe("modelsAuthLoginCommand", () => {
       "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai-codex/gpt-5.4 (use --set-default to apply)",
+      "Default model available: openai/gpt-5.5 (use --set-default to apply)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
@@ -585,7 +585,7 @@ describe("modelsAuthLoginCommand", () => {
       "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
       "anthropic/claude-opus-4-6": { alias: "opus" },
       "moonshot/kimi-k2.5": { alias: "kimi" },
-      "openai-codex/gpt-5.4": { alias: "gpt54" },
+      "openai/gpt-5.5": { alias: "gpt55" },
     };
     currentConfig = { agents: { defaults: { models: existingModels } } };
     runProviderAuth.mockResolvedValue({
@@ -602,8 +602,8 @@ describe("modelsAuthLoginCommand", () => {
           },
         },
       ],
-      configPatch: { agents: { defaults: { models: { "openai-codex/gpt-5.4": {} } } } },
-      defaultModel: "openai-codex/gpt-5.4",
+      configPatch: { agents: { defaults: { models: { "openai/gpt-5.5": {} } } } },
+      defaultModel: "openai/gpt-5.5",
     });
 
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);

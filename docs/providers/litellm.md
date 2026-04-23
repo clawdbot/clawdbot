@@ -1,12 +1,10 @@
 ---
-title: "LiteLLM"
 summary: "Run OpenClaw through LiteLLM Proxy for unified model access and cost tracking"
+title: "LiteLLM"
 read_when:
   - You want to route OpenClaw through a LiteLLM proxy
   - You need cost tracking, logging, or model routing through LiteLLM
 ---
-
-# LiteLLM
 
 [LiteLLM](https://litellm.ai) is an open-source LLM gateway that provides a unified API to 100+ model providers. Route OpenClaw through LiteLLM to get centralized cost tracking, logging, and the flexibility to switch backends without changing your OpenClaw config.
 
@@ -108,7 +106,7 @@ export LITELLM_API_KEY="sk-litellm-key"
 }
 ```
 
-## Advanced topics
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Virtual keys">
@@ -186,7 +184,7 @@ For general provider configuration and failover behavior, see [Model Providers](
   <Card title="LiteLLM Docs" href="https://docs.litellm.ai" icon="book">
     Official LiteLLM documentation and API reference.
   </Card>
-  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
+  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Overview of all providers, model refs, and failover behavior.
   </Card>
   <Card title="Configuration" href="/gateway/configuration" icon="gear">

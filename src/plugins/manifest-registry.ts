@@ -45,6 +45,24 @@ import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 
+/**
+ * Resolve a plugin source path, falling back from .ts to .js when the
+ * .ts file doesn't exist on disk (e.g. in dist builds where only .js
+ * is emitted but the manifest still references the .ts entry).
+ */
+function resolvePluginSourcePath(sourcePath: string): string {
+  if (fs.existsSync(sourcePath)) {
+    return sourcePath;
+  }
+  if (sourcePath.endsWith(".ts")) {
+    const jsPath = sourcePath.slice(0, -3) + ".js";
+    if (fs.existsSync(jsPath)) {
+      return jsPath;
+    }
+  }
+  return sourcePath;
+}
+
 type PluginManifestContractListKey =
   | "speechProviders"
   | "externalAuthProviders"
@@ -334,7 +352,9 @@ function buildRecord(params: {
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
     providerDiscoverySource: params.manifest.providerDiscoveryEntry
-      ? path.resolve(params.candidate.rootDir, params.manifest.providerDiscoveryEntry)
+      ? resolvePluginSourcePath(
+          path.resolve(params.candidate.rootDir, params.manifest.providerDiscoveryEntry),
+        )
       : undefined,
     modelSupport: params.manifest.modelSupport,
     providerEndpoints: params.manifest.providerEndpoints,

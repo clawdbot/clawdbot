@@ -6,8 +6,6 @@ read_when:
 title: "Scripts"
 ---
 
-# Scripts
-
 The `scripts/` directory contains helper scripts for local workflows and ops tasks.
 Use these when a task is clearly tied to a script; otherwise prefer the CLI.
 

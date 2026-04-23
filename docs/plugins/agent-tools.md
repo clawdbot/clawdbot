@@ -2,7 +2,7 @@
 summary: "Redirects to Building Plugins (registering tools section)"
 read_when:
   - Legacy link to agent-tools
-title: "Registering Tools"
+title: "Registering tools"
 ---
 
 # Registering Tools in Plugins

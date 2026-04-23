@@ -143,6 +143,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     skillsSnapshot: targetSessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
+    agentHarnessId:
+      targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
       enabled: false,

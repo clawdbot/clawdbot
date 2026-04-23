@@ -49,6 +49,7 @@ export type ChatHost = {
   sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
+  pendingAbort?: { runId: string; sessionKey: string } | null;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void;
 };
@@ -94,6 +95,12 @@ function isBtwCommand(text: string) {
 }
 
 export async function handleAbortChat(host: ChatHost) {
+  // If disconnected but we have an active runId, queue the abort for when we reconnect
+  if (!host.connected && host.chatRunId) {
+    host.chatMessage = "";
+    host.pendingAbort = { runId: host.chatRunId, sessionKey: host.sessionKey };
+    return;
+  }
   if (!host.connected) {
     return;
   }

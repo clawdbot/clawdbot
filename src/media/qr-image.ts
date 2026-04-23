@@ -1,68 +1,53 @@
-import { encodePngRgba, fillPixel } from "./png-encode.ts";
+import { loadQrCodeTuiRuntime } from "./qr-runtime.ts";
 
-type QRCodeConstructor = new (
-  typeNumber: number,
-  errorCorrectLevel: unknown,
-) => {
-  addData: (data: string) => void;
-  make: () => void;
-  getModuleCount: () => number;
-  isDark: (row: number, col: number) => boolean;
-};
+const DEFAULT_QR_PNG_SCALE = 6;
+const DEFAULT_QR_PNG_MARGIN_MODULES = 4;
+const MIN_QR_PNG_SCALE = 1;
+const MAX_QR_PNG_SCALE = 12;
+const MIN_QR_PNG_MARGIN_MODULES = 0;
+const MAX_QR_PNG_MARGIN_MODULES = 16;
 
-let qrCodeRuntimePromise: Promise<{
-  QRCode: QRCodeConstructor;
-  QRErrorCorrectLevel: Record<string, unknown>;
-}> | null = null;
-
-async function loadQrCodeRuntime() {
-  if (!qrCodeRuntimePromise) {
-    qrCodeRuntimePromise = Promise.all([
-      import("qrcode-terminal/vendor/QRCode/index.js"),
-      import("qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js"),
-    ]).then(([qrCodeModule, errorCorrectLevelModule]) => ({
-      QRCode: qrCodeModule.default as QRCodeConstructor,
-      QRErrorCorrectLevel: errorCorrectLevelModule.default,
-    }));
+function resolveQrPngIntegerOption(params: {
+  name: string;
+  value: number | undefined;
+  defaultValue: number;
+  min: number;
+  max: number;
+}): number {
+  if (params.value === undefined) {
+    return params.defaultValue;
   }
-  return await qrCodeRuntimePromise;
-}
-
-async function createQrMatrix(input: string) {
-  const { QRCode, QRErrorCorrectLevel } = await loadQrCodeRuntime();
-  const qr = new QRCode(-1, QRErrorCorrectLevel.L);
-  qr.addData(input);
-  qr.make();
-  return qr;
+  if (!Number.isFinite(params.value)) {
+    throw new RangeError(`${params.name} must be a finite number.`);
+  }
+  const value = Math.floor(params.value);
+  if (value < params.min || value > params.max) {
+    throw new RangeError(`${params.name} must be between ${params.min} and ${params.max}.`);
+  }
+  return value;
 }
 
 export async function renderQrPngBase64(
   input: string,
   opts: { scale?: number; marginModules?: number } = {},
 ): Promise<string> {
-  const { scale = 6, marginModules = 4 } = opts;
-  const qr = await createQrMatrix(input);
-  const modules = qr.getModuleCount();
-  const size = (modules + marginModules * 2) * scale;
-
-  const buf = Buffer.alloc(size * size * 4, 255);
-  for (let row = 0; row < modules; row += 1) {
-    for (let col = 0; col < modules; col += 1) {
-      if (!qr.isDark(row, col)) {
-        continue;
-      }
-      const startX = (col + marginModules) * scale;
-      const startY = (row + marginModules) * scale;
-      for (let y = 0; y < scale; y += 1) {
-        const pixelY = startY + y;
-        for (let x = 0; x < scale; x += 1) {
-          const pixelX = startX + x;
-          fillPixel(buf, pixelX, pixelY, size, 0, 0, 0, 255);
-        }
-      }
-    }
-  }
-
-  const png = encodePngRgba(buf, size, size);
-  return png.toString("base64");
+  const scale = resolveQrPngIntegerOption({
+    name: "scale",
+    value: opts.scale,
+    defaultValue: DEFAULT_QR_PNG_SCALE,
+    min: MIN_QR_PNG_SCALE,
+    max: MAX_QR_PNG_SCALE,
+  });
+  const marginModules = resolveQrPngIntegerOption({
+    name: "marginModules",
+    value: opts.marginModules,
+    defaultValue: DEFAULT_QR_PNG_MARGIN_MODULES,
+    min: MIN_QR_PNG_MARGIN_MODULES,
+    max: MAX_QR_PNG_MARGIN_MODULES,
+  });
+  const { renderPngBase64 } = await loadQrCodeTuiRuntime();
+  return await renderPngBase64(input, {
+    margin: marginModules,
+    scale,
+  });
 }

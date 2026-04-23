@@ -6,8 +6,6 @@ read_when:
 title: "Synthetic"
 ---
 
-# Synthetic
-
 [Synthetic](https://synthetic.new) exposes Anthropic-compatible endpoints.
 OpenClaw registers it as the `synthetic` provider and uses the Anthropic
 Messages API.
@@ -144,7 +142,7 @@ account.
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
+  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Provider rules, model refs, and failover behavior.
   </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">

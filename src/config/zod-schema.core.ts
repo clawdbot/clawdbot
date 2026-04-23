@@ -102,6 +102,7 @@ const SecretsFileProviderSchema = z
       .positive()
       .max(20 * 1024 * 1024)
       .optional(),
+    allowInsecurePath: z.boolean().optional(),
   })
   .strict();
 

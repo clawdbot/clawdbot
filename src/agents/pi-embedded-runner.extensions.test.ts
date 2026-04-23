@@ -1,62 +1,24 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { listEmbeddedExtensionFactories } from "../plugins/embedded-extension-factory.js";
-import { clearPluginLoaderCache, loadOpenClawPlugins } from "../plugins/loader.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { buildEmbeddedExtensionFactories } from "./pi-embedded-runner/extensions.js";
+import {
+  cleanupTempPluginTestEnvironment,
+  createTempPluginDir,
+  resetActivePluginRegistryForTest,
+  writeTempPlugin,
+} from "./test-helpers/temp-plugin-extension-fixtures.js";
 
-const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const tempDirs: string[] = [];
 
 function createTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-ext-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-function writeTempPlugin(params: {
-  dir: string;
-  id: string;
-  body: string;
-  manifest?: Record<string, unknown>;
-  filename?: string;
-}): string {
-  const pluginDir = path.join(params.dir, params.id);
-  fs.mkdirSync(pluginDir, { recursive: true });
-  const file = path.join(pluginDir, params.filename ?? `${params.id}.mjs`);
-  fs.writeFileSync(file, params.body, "utf-8");
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        ...params.manifest,
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  return file;
+  return createTempPluginDir(tempDirs, "openclaw-embedded-ext-");
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  clearPluginLoaderCache();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  if (originalBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-  }
+  cleanupTempPluginTestEnvironment(tempDirs, originalBundledPluginsDir);
 });
 
 describe("buildEmbeddedExtensionFactories", () => {
@@ -104,7 +66,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(firstFactories).toHaveLength(1);
     expect(listEmbeddedExtensionFactories()).toHaveLength(1);
 
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetActivePluginRegistryForTest();
     expect(listEmbeddedExtensionFactories()).toHaveLength(0);
 
     loadOpenClawPlugins(options);

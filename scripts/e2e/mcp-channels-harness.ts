@@ -41,8 +41,9 @@ export type McpClientHandle = {
   rawMessages: unknown[];
 };
 
-const GATEWAY_WS_TIMEOUT_MS = 30_000;
-const GATEWAY_CONNECT_RETRY_WINDOW_MS = 45_000;
+const GATEWAY_WS_OPEN_TIMEOUT_MS = 5_000;
+const GATEWAY_RPC_TIMEOUT_MS = 30_000;
+const GATEWAY_CONNECT_RETRY_WINDOW_MS = 120_000;
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -119,7 +120,7 @@ async function connectGatewayOnce(params: {
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("gateway ws open timeout")),
-      GATEWAY_WS_TIMEOUT_MS,
+      GATEWAY_WS_OPEN_TIMEOUT_MS,
     );
     timeout.unref?.();
     ws.once("open", () => {
@@ -228,7 +229,7 @@ async function connectGatewayOnce(params: {
     const timeout = setTimeout(() => {
       pending.delete(connectId);
       reject(new Error("gateway connect timeout"));
-    }, GATEWAY_WS_TIMEOUT_MS);
+    }, GATEWAY_RPC_TIMEOUT_MS);
     timeout.unref?.();
     pending.set(connectId, {
       resolve: () => {
@@ -247,7 +248,7 @@ async function connectGatewayOnce(params: {
     const timeout = setTimeout(() => {
       pending.delete(id);
       reject(new Error("gateway sessions.subscribe timeout"));
-    }, GATEWAY_WS_TIMEOUT_MS);
+    }, GATEWAY_RPC_TIMEOUT_MS);
     timeout.unref?.();
     pending.set(id, {
       resolve: () => {

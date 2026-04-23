@@ -7,8 +7,6 @@ read_when:
 title: "ElevenLabs"
 ---
 
-# ElevenLabs
-
 OpenClaw uses ElevenLabs for text-to-speech, batch speech-to-text with Scribe
 v2, and Voice Call streaming STT with Scribe v2 Realtime.
 

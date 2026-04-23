@@ -5,27 +5,9 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecretsCli } from "./secrets-cli.js";
 
-const mocks = vi.hoisted(() => {
-  const runtimeLogs: string[] = [];
-  const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime = {
-    log: vi.fn((...args: unknown[]) => {
-      runtimeLogs.push(stringifyArgs(args));
-    }),
-    error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
-    }),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  const runtime = createCliRuntimeMock(vi);
   return {
     callGatewayFromCli: vi.fn(),
     runSecretsAudit: vi.fn(),
@@ -33,9 +15,7 @@ const mocks = vi.hoisted(() => {
     runSecretsConfigureInteractive: vi.fn(),
     runSecretsApply: vi.fn(),
     confirm: vi.fn(),
-    defaultRuntime,
-    runtimeLogs,
-    runtimeErrors,
+    ...runtime,
   };
 });
 

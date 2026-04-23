@@ -8,8 +8,8 @@ const mocks = vi.hoisted(() => ({
   }),
   loadProviderCatalogModelsForList: vi.fn().mockResolvedValue([
     {
-      id: "gpt-5.4",
-      name: "gpt-5.4",
+      id: "gpt-5.5",
+      name: "gpt-5.5",
       provider: "codex",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
@@ -57,7 +57,7 @@ describe("appendProviderCatalogRows", () => {
       seenKeys: new Set(),
       context: {
         cfg: {
-          agents: { defaults: { model: { primary: "codex/gpt-5.4" } } },
+          agents: { defaults: { model: { primary: "codex/gpt-5.5" } } },
           models: { providers: {} },
         },
         agentDir: "/tmp/openclaw-agent",
@@ -72,7 +72,7 @@ describe("appendProviderCatalogRows", () => {
     expect(mocks.shouldSuppressBuiltInModel).not.toHaveBeenCalled();
     expect(rows).toMatchObject([
       {
-        key: "codex/gpt-5.4",
+        key: "codex/gpt-5.5",
         available: true,
         missing: false,
       },

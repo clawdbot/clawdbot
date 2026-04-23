@@ -72,4 +72,25 @@ describe("chat run controls", () => {
     expect(onSend).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("keeps Stop clickable while disconnected when a run is abortable", () => {
+    const container = document.createElement("div");
+    const onAbort = vi.fn();
+    render(
+      renderChatRunControls(
+        createProps({
+          canAbort: true,
+          connected: false,
+          onAbort,
+        }),
+      ),
+      container,
+    );
+
+    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
+    expect(stopButton).not.toBeNull();
+    expect(stopButton?.disabled).toBe(false);
+    stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onAbort).toHaveBeenCalledTimes(1);
+  });
 });

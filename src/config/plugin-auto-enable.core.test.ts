@@ -365,7 +365,7 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("preserves configured plugin entries in restrictive plugins.allow", () => {
-    const result = applyPluginAutoEnable({
+    const result = materializePluginAutoEnableCandidates({
       config: {
         plugins: {
           allow: ["glueclaw"],
@@ -378,7 +378,9 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
+      candidates: [],
       env,
+      manifestRegistry: makeRegistry([{ id: "discord", channels: [] }]),
     });
 
     expect(result.config.plugins?.allow).toEqual(["glueclaw", "discord"]);
@@ -386,7 +388,7 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
-    const result = applyPluginAutoEnable({
+    const result = materializePluginAutoEnableCandidates({
       config: {
         plugins: {
           allow: ["glueclaw"],
@@ -399,7 +401,9 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
+      candidates: [],
       env,
+      manifestRegistry: makeRegistry([]),
     });
 
     expect(result.config.plugins?.allow).toEqual(["glueclaw"]);

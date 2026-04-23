@@ -99,6 +99,7 @@ type MockOpenAiRequestSnapshot = {
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
   plannedToolName?: string;
+  plannedToolArgs?: Record<string, unknown>;
 };
 
 // Anthropic /v1/messages request/response shapes the mock actually needs.
@@ -577,6 +578,7 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
   }
   const label = extractQuotedToolArg(text, "label") ?? extractBareToolArg(text, "label");
   const mode = extractBareToolArg(text, "mode")?.toLowerCase();
+  const context = extractBareToolArg(text, "context")?.toLowerCase();
   const runTimeoutSecondsRaw = extractBareToolArg(text, "runTimeoutSeconds");
   const runTimeoutSeconds =
     runTimeoutSecondsRaw && /^\d+$/.test(runTimeoutSecondsRaw)
@@ -587,6 +589,7 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
     ...(label ? { label } : {}),
     ...(extractBareToolArg(text, "thread")?.toLowerCase() === "true" ? { thread: true } : {}),
     ...(mode === "session" || mode === "run" ? { mode } : {}),
+    ...(context === "fork" || context === "isolated" ? { context } : {}),
     ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
   };
 }
@@ -745,10 +748,26 @@ function buildAssistantText(
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
   }
+  if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
+    return "FORKED-CONTEXT-ALPHA";
+  }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
   if (scenarioState.subagentFanoutPhase === 2 && prompt) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
+  }
+  if (
+    /forked subagent context qa check/i.test(prompt) &&
+    /FORKED-CONTEXT-ALPHA/i.test(allInputText)
+  ) {
+    return [
+      "Worked",
+      "- FORKED-CONTEXT-ALPHA",
+      "Evidence",
+      "- The forked child recovered the visible code from requester transcript context.",
+      "Blocked",
+      "- None.",
+    ].join("\n");
   }
   if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
     const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
@@ -797,6 +816,25 @@ function extractPlannedToolName(events: StreamEvent[]) {
     const item = event.item as { type?: unknown; name?: unknown };
     if (item.type === "function_call" && typeof item.name === "string") {
       return item.name;
+    }
+  }
+  return undefined;
+}
+
+function extractPlannedToolArgs(events: StreamEvent[]) {
+  for (const event of events) {
+    if (event.type !== "response.output_item.done") {
+      continue;
+    }
+    const item = event.item as { type?: unknown; arguments?: unknown };
+    if (item.type !== "function_call" || typeof item.arguments !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(item.arguments);
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+    } catch {
+      return undefined;
     }
   }
   return undefined;
@@ -1276,6 +1314,14 @@ async function buildResponsesPayload(
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
   if (canCallSessionsSpawn && explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
+  }
+  if (canCallSessionsSpawn && /forked subagent context qa check/i.test(prompt) && !toolOutput) {
+    return buildToolCallEventsWithArgs("sessions_spawn", {
+      task: "Report the visible code from the requester transcript.",
+      label: "qa-fork-context",
+      mode: "run",
+      context: "fork",
+    });
   }
   if (/tool continuity check/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -1814,6 +1860,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         providerVariant: resolveProviderVariant(resolvedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
+        plannedToolArgs: extractPlannedToolArgs(events),
       };
       requests.push(lastRequest);
       if (requests.length > 50) {
@@ -1869,6 +1916,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         providerVariant: resolveProviderVariant(normalizedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
+        plannedToolArgs: extractPlannedToolArgs(events),
       };
       requests.push(lastRequest);
       if (requests.length > 50) {

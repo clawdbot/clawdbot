@@ -12,7 +12,9 @@ let augmentCatalogMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
   shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
-    (params.provider === "openai" || params.provider === "azure-openai-responses") &&
+    (params.provider === "openai" ||
+      params.provider === "azure-openai-responses" ||
+      params.provider === "openai-codex") &&
     params.id === "gpt-5.3-codex-spark",
 }));
 
@@ -177,7 +179,7 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("filters stale openai gpt-5.3-codex-spark built-ins from the catalog", async () => {
+  it("filters stale gpt-5.3-codex-spark built-ins from the catalog", async () => {
     mockPiDiscoveryModels([
       {
         id: "gpt-5.3-codex-spark",
@@ -218,7 +220,7 @@ describe("loadModelCatalog", () => {
         id: "gpt-5.3-codex-spark",
       }),
     );
-    expect(result).toContainEqual(
+    expect(result).not.toContainEqual(
       expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.3-codex-spark",

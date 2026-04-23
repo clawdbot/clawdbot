@@ -4,10 +4,8 @@ read_when:
   - You want to connect OpenClaw to QQ
   - You need QQ Bot credential setup
   - You want QQ Bot group or private chat support
-title: QQ Bot
+title: QQ bot
 ---
-
-# QQ Bot
 
 QQ Bot connects to OpenClaw via the official QQ Bot API (WebSocket gateway). The
 plugin supports C2C private chat, group @messages, and guild channel messages with

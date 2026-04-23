@@ -72,18 +72,15 @@
           },
           "approvalPolicy": {
             "type": "string",
-            "enum": ["never", "on-request", "on-failure", "untrusted"],
-            "default": "never"
+            "enum": ["never", "on-request", "on-failure", "untrusted"]
           },
           "sandbox": {
             "type": "string",
-            "enum": ["read-only", "workspace-write", "danger-full-access"],
-            "default": "danger-full-access"
+            "enum": ["read-only", "workspace-write", "danger-full-access"]
           },
           "approvalsReviewer": {
             "type": "string",
-            "enum": ["user", "guardian_subagent"],
-            "default": "user"
+            "enum": ["user", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] }
         }

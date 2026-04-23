@@ -18,7 +18,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "feishu",
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
-    mirroredRootRuntimeDeps: ["typebox", "qrcode-terminal"],
+    mirroredRootRuntimeDeps: ["typebox"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "google", pluginLocalRuntimeDeps: ["@google/genai"] },
@@ -105,7 +105,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "whatsapp",
     pluginLocalRuntimeDeps: ["@whiskeysockets/baileys", "jimp"],
-    mirroredRootRuntimeDeps: ["qrcode-terminal"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },

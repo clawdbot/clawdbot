@@ -3,7 +3,7 @@ summary: "Agent loop lifecycle, streams, and wait semantics"
 read_when:
   - You need an exact walkthrough of the agent loop or lifecycle events
   - You are changing session queueing, transcript writes, or session write lock behavior
-title: "Agent Loop"
+title: "Agent loop"
 ---
 
 # Agent Loop (OpenClaw)

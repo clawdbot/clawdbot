@@ -4,7 +4,7 @@ read_when:
   - You are debugging provider request rejections tied to transcript shape
   - You are changing transcript sanitization or tool-call repair logic
   - You are investigating tool-call id mismatches across providers
-title: "Transcript Hygiene"
+title: "Transcript hygiene"
 ---
 
 # Transcript Hygiene (Provider Fixups)

@@ -1,13 +1,11 @@
 ---
-title: Channel Presentation Refactor Plan
 summary: Decouple semantic message presentation from channel native UI renderers.
+title: Channel presentation refactor plan
 read_when:
   - Refactoring channel message UI, interactive payloads, or native channel renderers
   - Changing message tool capabilities, delivery hints, or cross-context markers
   - Debugging Discord Carbon import fanout or channel plugin runtime laziness
 ---
-
-# Channel Presentation Refactor Plan
 
 ## Status
 

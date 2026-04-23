@@ -1,12 +1,10 @@
 ---
-title: IRC
 summary: "IRC plugin setup, access controls, and troubleshooting"
+title: IRC
 read_when:
   - You want to connect OpenClaw to IRC channels or DMs
   - You are configuring IRC allowlists, group policy, or mention gating
 ---
-
-# IRC
 
 Use IRC when you want OpenClaw in classic channels (`#room`) and direct messages.
 IRC ships as a bundled plugin, but it is configured in the main config under `channels.irc`.

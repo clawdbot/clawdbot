@@ -1,6 +1,6 @@
 ---
-title: "Threat Model (MITRE ATLAS)"
 summary: "OpenClaw threat model mapped to the MITRE ATLAS framework"
+title: "Threat model (MITRE ATLAS)"
 read_when:
   - Reviewing security posture or threat scenarios
   - Working on security features or audit responses

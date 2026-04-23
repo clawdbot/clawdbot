@@ -70,9 +70,9 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
     }
     if (raw.type !== "object") {
       raw.type = "object";
-      if (!raw.properties) {
-        raw.properties = {};
-      }
+    }
+    if (!raw.properties) {
+      raw.properties = {};
     }
     return {
       name: tool.name,

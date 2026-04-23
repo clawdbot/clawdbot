@@ -56,7 +56,6 @@ export const CLAUDE_CLI_CLEAR_ENV = [
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
-const CLAUDE_BYPASS_PERMISSIONS_MODE = "bypassPermissions";
 const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 
@@ -69,7 +68,6 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
     return args;
   }
   const normalized: string[] = [];
-  let hasPermissionMode = false;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG) {
@@ -82,7 +80,6 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
         maybeValue.trim().length > 0 &&
         !maybeValue.startsWith("-")
       ) {
-        hasPermissionMode = true;
         normalized.push(arg);
         normalized.push(maybeValue);
         i += 1;
@@ -90,12 +87,13 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
       continue;
     }
     if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_ARG}=`)) {
-      hasPermissionMode = true;
+      const maybeValue = arg.slice(`${CLAUDE_PERMISSION_MODE_ARG}=`.length).trim();
+      if (maybeValue.length > 0 && !maybeValue.startsWith("-")) {
+        normalized.push(`${CLAUDE_PERMISSION_MODE_ARG}=${maybeValue}`);
+      }
+      continue;
     }
     normalized.push(arg);
-  }
-  if (!hasPermissionMode) {
-    normalized.push(CLAUDE_PERMISSION_MODE_ARG, CLAUDE_BYPASS_PERMISSIONS_MODE);
   }
   return normalized;
 }

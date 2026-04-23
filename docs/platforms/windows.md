@@ -7,8 +7,6 @@ read_when:
 title: "Windows"
 ---
 
-# Windows
-
 OpenClaw supports both **native Windows** and **WSL2**. WSL2 is the more
 stable path and recommended for the full experience — the CLI, Gateway, and
 tooling run inside Linux with full compatibility. Native Windows works for

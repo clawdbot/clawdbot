@@ -4,10 +4,8 @@ read_when:
   - You want persistent knowledge beyond plain MEMORY.md notes
   - You are configuring the bundled memory-wiki plugin
   - You want to understand wiki_search, wiki_get, or bridge mode
-title: "Memory Wiki"
+title: "Memory wiki"
 ---
-
-# Memory Wiki
 
 `memory-wiki` is a bundled plugin that turns durable memory into a compiled
 knowledge vault.

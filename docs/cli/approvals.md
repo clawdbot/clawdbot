@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw approvals` and `openclaw exec-policy`"
 read_when:
   - You want to edit exec approvals from the CLI
   - You need to manage allowlists on gateway or node hosts
-title: "approvals"
+title: "Approvals"
 ---
 
 # `openclaw approvals`

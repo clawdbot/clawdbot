@@ -4,10 +4,8 @@ read_when:
   - You want to use Exa for web_search
   - You need an EXA_API_KEY
   - You want neural search or content extraction
-title: "Exa Search"
+title: "Exa search"
 ---
-
-# Exa Search
 
 OpenClaw supports [Exa AI](https://exa.ai/) as a `web_search` provider. Exa
 offers neural, keyword, and hybrid search modes with built-in content

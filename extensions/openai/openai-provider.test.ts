@@ -229,6 +229,101 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("resolves gpt-5.5 and gpt-5.5-pro with launch metadata", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.4"
+            ? {
+                id,
+                name: "GPT-5.4",
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : null,
+      } as never,
+    });
+    const pro = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.4-pro"
+            ? {
+                id,
+                name: "GPT-5.4 Pro",
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : null,
+      } as never,
+    });
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      cost: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 },
+    });
+    expect(pro).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.5-pro",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
+  it("surfaces gpt-5.5 in xhigh and augmented catalog metadata", () => {
+    const provider = buildOpenAIProvider();
+
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-5.5",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
+    ).toBe(true);
+
+    const entries = provider.augmentModelCatalog?.({
+      env: process.env,
+      entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4" }],
+    } as never);
+
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "gpt-5.5",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+      }),
+    );
+  });
+
   it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
@@ -249,6 +344,12 @@ describe("buildOpenAIProvider", () => {
       provider.isModernModelRef?.({
         provider: "openai",
         modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
       } as never),
     ).toBe(true);
 
@@ -274,6 +375,12 @@ describe("buildOpenAIProvider", () => {
       codexProvider.isModernModelRef?.({
         provider: "openai-codex",
         modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
       } as never),
     ).toBe(true);
   });

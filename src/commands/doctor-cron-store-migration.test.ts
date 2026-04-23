@@ -36,7 +36,7 @@ describe("normalizeStoredCronJobs", () => {
         jobId: "legacy-job",
         schedule: { kind: "cron", cron: "*/5 * * * *", tz: "UTC" },
         message: "say hi",
-        model: "openai/gpt-5.4",
+        model: "openai/gpt-5.5",
         deliver: true,
         provider: " TeLeGrAm ",
         to: "12345",
@@ -73,7 +73,7 @@ describe("normalizeStoredCronJobs", () => {
     expect(job?.payload).toMatchObject({
       kind: "agentTurn",
       message: "say hi",
-      model: "openai/gpt-5.4",
+      model: "openai/gpt-5.5",
     });
   });
 

@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
@@ -15,7 +15,9 @@ import {
   collectForbiddenPackPaths,
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
+  createPackedCliSmokeEnv,
   createPackedBundledPluginPostinstallEnv,
+  PACKED_CLI_SMOKE_COMMANDS,
   packageNameFromSpecifier,
 } from "../scripts/release-check.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
@@ -51,6 +53,53 @@ describe("collectAppcastSparkleVersionErrors", () => {
     const xml = `<rss><channel>${makeItem("2026.3.1", "2026030190")}</channel></rss>`;
 
     expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+  });
+});
+
+describe("packed CLI smoke", () => {
+  it("keeps the expected packaged CLI smoke command list", () => {
+    expect(PACKED_CLI_SMOKE_COMMANDS).toEqual([
+      ["--help"],
+      ["status", "--json", "--timeout", "1"],
+      ["config", "schema"],
+      ["models", "list", "--provider", "amazon-bedrock"],
+    ]);
+  });
+
+  it("builds a packed CLI smoke env with packaged-install guardrails", () => {
+    expect(
+      createPackedCliSmokeEnv(
+        {
+          PATH: "/usr/bin",
+          HOME: "/tmp/original-home",
+          USERPROFILE: "/tmp/original-profile",
+          TMPDIR: "/tmp/original-tmp",
+          SystemRoot: "C:\\Windows",
+          GITHUB_TOKEN: "redacted",
+          OPENAI_API_KEY: "real-secret",
+        },
+        { HOME: "/tmp/smoke-home", OPENCLAW_STATE_DIR: "/tmp/smoke-state" },
+      ),
+    ).toEqual({
+      PATH:
+        process.platform === "win32"
+          ? `${dirname(process.execPath)};C:\\Windows\\System32;C:\\Windows`
+          : `${dirname(process.execPath)}:/usr/bin:/bin`,
+      HOME: "/tmp/smoke-home",
+      USERPROFILE: "/tmp/smoke-home",
+      ComSpec: "C:\\Windows/System32/cmd.exe",
+      APPDATA: "/tmp/smoke-home/AppData/Roaming",
+      LOCALAPPDATA: "/tmp/smoke-home/AppData/Local",
+      AWS_EC2_METADATA_DISABLED: "true",
+      AWS_SHARED_CREDENTIALS_FILE: "/tmp/smoke-home/.aws/credentials",
+      AWS_CONFIG_FILE: "/tmp/smoke-home/.aws/config",
+      TMPDIR: "/tmp/original-tmp",
+      SystemRoot: "C:\\Windows",
+      OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+      OPENCLAW_NO_ONBOARD: "1",
+      OPENCLAW_SUPPRESS_NOTES: "1",
+      OPENCLAW_STATE_DIR: "/tmp/smoke-state",
+    });
   });
 });
 

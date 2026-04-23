@@ -286,7 +286,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 }
 ```
 
-## Advanced
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Native thinking mode">

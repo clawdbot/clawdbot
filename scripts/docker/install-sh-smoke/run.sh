@@ -255,7 +255,41 @@ run_update_smoke() {
     UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
     UPDATE_TAG_URL="$UPDATE_TAG_URL" \
     node - <<'NODE'
-const payload = JSON.parse(process.env.UPDATE_JSON || "{}");
+function parseFirstJsonObject(raw) {
+  const start = raw.indexOf("{");
+  if (start < 0) {
+    throw new Error("missing update JSON object");
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return JSON.parse(raw.slice(start, index + 1));
+      }
+    }
+  }
+  throw new Error("unterminated update JSON object");
+}
+
+const payload = parseFirstJsonObject(process.env.UPDATE_JSON || "{}");
 const expectedVersion = String(process.env.UPDATE_EXPECT_VERSION || "");
 const baselineVersion = String(process.env.UPDATE_BASELINE_VERSION || "");
 const expectedUrl = String(process.env.UPDATE_TAG_URL || "");

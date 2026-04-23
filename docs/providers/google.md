@@ -1,12 +1,10 @@
 ---
-title: "Google (Gemini)"
 summary: "Google Gemini setup (API key + OAuth, image generation, media understanding, TTS, web search)"
+title: "Google (Gemini)"
 read_when:
   - You want to use Google Gemini models with OpenClaw
   - You need the API key or OAuth auth flow
 ---
-
-# Google (Gemini)
 
 The Google plugin provides access to Gemini models through Google AI Studio, plus
 image generation, media understanding (image/audio/video), text-to-speech, and web search via

@@ -16,6 +16,7 @@ MODEL_ID=""
 PYTHON_BIN="${PYTHON_BIN:-}"
 PACKAGE_SPEC=""
 UPDATE_TARGET=""
+RUN_PLATFORMS="all"
 JSON_OUTPUT=0
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-npm-update.XXXXXX)"
 MAIN_TGZ_DIR="$(mktemp -d)"
@@ -115,6 +116,8 @@ Options:
   --update-target <target>    Target passed to guest 'openclaw update --tag'.
                              Default: host-served tgz packed from current checkout.
                              Examples: latest, beta, 2026.4.10, http://host/openclaw.tgz
+  --platform <list>           Comma-separated platforms to run: all, macos, windows, linux.
+                             Default: all
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
   --api-key-env <var>        Host env var name for provider API key.
@@ -138,6 +141,10 @@ while [[ $# -gt 0 ]]; do
       UPDATE_TARGET="$2"
       shift 2
       ;;
+    --platform|--only)
+      RUN_PLATFORMS="$2"
+      shift 2
+      ;;
     --provider)
       PROVIDER="$2"
       shift 2
@@ -159,6 +166,41 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+platform_enabled() {
+  local platform="$1"
+  [[ "$RUN_PLATFORMS" == "all" ]] && return 0
+  case ",$RUN_PLATFORMS," in
+    *,"$platform",*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_platforms() {
+  local normalized entry valid_any
+  local -a entries
+  normalized="${RUN_PLATFORMS// /}"
+  [[ -n "$normalized" ]] || die "--platform must not be empty"
+  RUN_PLATFORMS="$normalized"
+  if [[ "$RUN_PLATFORMS" == "all" ]]; then
+    return
+  fi
+  valid_any=0
+  IFS=',' read -ra entries <<<"$RUN_PLATFORMS"
+  for entry in "${entries[@]}"; do
+    case "$entry" in
+      macos|windows|linux)
+        valid_any=1
+        ;;
+      *)
+        die "invalid --platform entry: $entry"
+        ;;
+    esac
+  done
+  [[ "$valid_any" -eq 1 ]] || die "--platform must include at least one platform"
+}
+
+validate_platforms
 
 case "$PROVIDER" in
   openai)
@@ -1533,50 +1575,65 @@ if [[ -z "$PACKAGE_SPEC" ]]; then
 fi
 resolve_current_head
 
-RESOLVED_LINUX_VM="$(resolve_linux_vm_name)"
-if [[ "$RESOLVED_LINUX_VM" != "$LINUX_VM" ]]; then
-  warn "requested VM $LINUX_VM not found; using $RESOLVED_LINUX_VM"
-  LINUX_VM="$RESOLVED_LINUX_VM"
+if platform_enabled linux; then
+  RESOLVED_LINUX_VM="$(resolve_linux_vm_name)"
+  if [[ "$RESOLVED_LINUX_VM" != "$LINUX_VM" ]]; then
+    warn "requested VM $LINUX_VM not found; using $RESOLVED_LINUX_VM"
+    LINUX_VM="$RESOLVED_LINUX_VM"
+  fi
 fi
 
 say "Run fresh npm baseline: $PACKAGE_SPEC"
+say "Platforms: $RUN_PLATFORMS"
 say "Run dir: $RUN_DIR"
-bash "$ROOT_DIR/scripts/e2e/parallels-macos-smoke.sh" \
-  --mode fresh \
-  --provider "$PROVIDER" \
-  --api-key-env "$API_KEY_ENV" \
-  --target-package-spec "$PACKAGE_SPEC" \
-  --json >"$RUN_DIR/macos-fresh.log" 2>&1 &
-macos_fresh_pid=$!
+fresh_monitor_args=()
+if platform_enabled macos; then
+  bash "$ROOT_DIR/scripts/e2e/parallels-macos-smoke.sh" \
+    --mode fresh \
+    --provider "$PROVIDER" \
+    --api-key-env "$API_KEY_ENV" \
+    --target-package-spec "$PACKAGE_SPEC" \
+    --json >"$RUN_DIR/macos-fresh.log" 2>&1 &
+  macos_fresh_pid=$!
+  fresh_monitor_args+=("macOS" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log")
+fi
 
-bash "$ROOT_DIR/scripts/e2e/parallels-windows-smoke.sh" \
-  --mode fresh \
-  --provider "$PROVIDER" \
-  --api-key-env "$API_KEY_ENV" \
-  --target-package-spec "$PACKAGE_SPEC" \
-  --json >"$RUN_DIR/windows-fresh.log" 2>&1 &
-windows_fresh_pid=$!
+if platform_enabled windows; then
+  bash "$ROOT_DIR/scripts/e2e/parallels-windows-smoke.sh" \
+    --mode fresh \
+    --provider "$PROVIDER" \
+    --api-key-env "$API_KEY_ENV" \
+    --target-package-spec "$PACKAGE_SPEC" \
+    --json >"$RUN_DIR/windows-fresh.log" 2>&1 &
+  windows_fresh_pid=$!
+  fresh_monitor_args+=("Windows" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log")
+fi
 
-bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
-  --mode fresh \
-  --provider "$PROVIDER" \
-  --api-key-env "$API_KEY_ENV" \
-  --target-package-spec "$PACKAGE_SPEC" \
-  --json >"$RUN_DIR/linux-fresh.log" 2>&1 &
-linux_fresh_pid=$!
+if platform_enabled linux; then
+  bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
+    --mode fresh \
+    --provider "$PROVIDER" \
+    --api-key-env "$API_KEY_ENV" \
+    --target-package-spec "$PACKAGE_SPEC" \
+    --json >"$RUN_DIR/linux-fresh.log" 2>&1 &
+  linux_fresh_pid=$!
+  fresh_monitor_args+=("Linux" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log")
+fi
 
-monitor_jobs_progress "fresh" \
-  "macOS" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" \
-  "Windows" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" \
-  "Linux" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log"
+monitor_jobs_progress "fresh" "${fresh_monitor_args[@]}"
 
-wait_job "macOS fresh" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" && MACOS_FRESH_STATUS="pass" || MACOS_FRESH_STATUS="fail"
-wait_job "Windows fresh" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" && WINDOWS_FRESH_STATUS="pass" || WINDOWS_FRESH_STATUS="fail"
-wait_job "Linux fresh" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log" && LINUX_FRESH_STATUS="pass" || LINUX_FRESH_STATUS="fail"
-
-[[ "$MACOS_FRESH_STATUS" == "pass" ]] || die "macOS fresh baseline failed"
-[[ "$WINDOWS_FRESH_STATUS" == "pass" ]] || die "Windows fresh baseline failed"
-[[ "$LINUX_FRESH_STATUS" == "pass" ]] || die "Linux fresh baseline failed"
+if platform_enabled macos; then
+  wait_job "macOS fresh" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" && MACOS_FRESH_STATUS="pass" || MACOS_FRESH_STATUS="fail"
+  [[ "$MACOS_FRESH_STATUS" == "pass" ]] || die "macOS fresh baseline failed"
+fi
+if platform_enabled windows; then
+  wait_job "Windows fresh" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" && WINDOWS_FRESH_STATUS="pass" || WINDOWS_FRESH_STATUS="fail"
+  [[ "$WINDOWS_FRESH_STATUS" == "pass" ]] || die "Windows fresh baseline failed"
+fi
+if platform_enabled linux; then
+  wait_job "Linux fresh" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log" && LINUX_FRESH_STATUS="pass" || LINUX_FRESH_STATUS="fail"
+  [[ "$LINUX_FRESH_STATUS" == "pass" ]] || die "Linux fresh baseline failed"
+fi
 
 if [[ -z "$UPDATE_TARGET" || "$UPDATE_TARGET" == "local-main" ]]; then
   pack_main_tgz
@@ -1591,48 +1648,64 @@ else
     [[ -n "$UPDATE_EXPECTED_NEEDLE" ]] || UPDATE_EXPECTED_NEEDLE="$UPDATE_TARGET_EFFECTIVE"
   fi
 fi
-write_windows_update_script
-start_server
+if platform_enabled windows; then
+  write_windows_update_script
+fi
+if [[ -n "$MAIN_TGZ_PATH" ]] || platform_enabled windows; then
+  start_server
+fi
 
 if [[ -n "$MAIN_TGZ_PATH" ]]; then
   UPDATE_TARGET_EFFECTIVE="http://$HOST_IP:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
 fi
-windows_update_script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_UPDATE_SCRIPT_PATH")"
+if platform_enabled windows; then
+  windows_update_script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_UPDATE_SCRIPT_PATH")"
+fi
 
 say "Run same-guest openclaw update to $UPDATE_TARGET_EFFECTIVE"
-ensure_vm_running_for_update "$MACOS_VM"
-ensure_vm_running_for_update "$WINDOWS_VM"
-ensure_vm_running_for_update "$LINUX_VM"
-run_macos_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/macos-update.log" 2>&1 &
-macos_update_pid=$!
-run_windows_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" "$windows_update_script_url" >"$RUN_DIR/windows-update.log" 2>&1 &
-windows_update_pid=$!
-run_linux_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/linux-update.log" 2>&1 &
-linux_update_pid=$!
-macos_update_guard_pid="$(start_timeout_guard "macOS update" "$TIMEOUT_UPDATE_S" "$macos_update_pid" "$RUN_DIR/macos-update.log")"
-windows_update_guard_pid="$(start_timeout_guard "Windows update" "$TIMEOUT_UPDATE_S" "$windows_update_pid" "$RUN_DIR/windows-update.log")"
-linux_update_guard_pid="$(start_timeout_guard "Linux update" "$TIMEOUT_UPDATE_S" "$linux_update_pid" "$RUN_DIR/linux-update.log")"
+update_monitor_args=()
+if platform_enabled macos; then
+  ensure_vm_running_for_update "$MACOS_VM"
+  run_macos_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/macos-update.log" 2>&1 &
+  macos_update_pid=$!
+  macos_update_guard_pid="$(start_timeout_guard "macOS update" "$TIMEOUT_UPDATE_S" "$macos_update_pid" "$RUN_DIR/macos-update.log")"
+  update_monitor_args+=("macOS" "$macos_update_pid" "$RUN_DIR/macos-update.log")
+fi
+if platform_enabled windows; then
+  ensure_vm_running_for_update "$WINDOWS_VM"
+  run_windows_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" "$windows_update_script_url" >"$RUN_DIR/windows-update.log" 2>&1 &
+  windows_update_pid=$!
+  windows_update_guard_pid="$(start_timeout_guard "Windows update" "$TIMEOUT_UPDATE_S" "$windows_update_pid" "$RUN_DIR/windows-update.log")"
+  update_monitor_args+=("Windows" "$windows_update_pid" "$RUN_DIR/windows-update.log")
+fi
+if platform_enabled linux; then
+  ensure_vm_running_for_update "$LINUX_VM"
+  run_linux_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/linux-update.log" 2>&1 &
+  linux_update_pid=$!
+  linux_update_guard_pid="$(start_timeout_guard "Linux update" "$TIMEOUT_UPDATE_S" "$linux_update_pid" "$RUN_DIR/linux-update.log")"
+  update_monitor_args+=("Linux" "$linux_update_pid" "$RUN_DIR/linux-update.log")
+fi
 
-monitor_jobs_progress "update" \
-  "macOS" "$macos_update_pid" "$RUN_DIR/macos-update.log" \
-  "Windows" "$windows_update_pid" "$RUN_DIR/windows-update.log" \
-  "Linux" "$linux_update_pid" "$RUN_DIR/linux-update.log"
+monitor_jobs_progress "update" "${update_monitor_args[@]}"
 
-stop_timeout_guard "$macos_update_guard_pid"
-stop_timeout_guard "$windows_update_guard_pid"
-stop_timeout_guard "$linux_update_guard_pid"
-
-wait_job "macOS update" "$macos_update_pid" "$RUN_DIR/macos-update.log" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
-wait_job "Windows update" "$windows_update_pid" "$RUN_DIR/windows-update.log" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
-wait_job "Linux update" "$linux_update_pid" "$RUN_DIR/linux-update.log" && LINUX_UPDATE_STATUS="pass" || LINUX_UPDATE_STATUS="fail"
-
-[[ "$MACOS_UPDATE_STATUS" == "pass" ]] || die "macOS update failed"
-[[ "$WINDOWS_UPDATE_STATUS" == "pass" ]] || die "Windows update failed"
-[[ "$LINUX_UPDATE_STATUS" == "pass" ]] || die "Linux update failed"
-
-MACOS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/macos-update.log")"
-WINDOWS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/windows-update.log")"
-LINUX_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/linux-update.log")"
+if platform_enabled macos; then
+  stop_timeout_guard "$macos_update_guard_pid"
+  wait_job "macOS update" "$macos_update_pid" "$RUN_DIR/macos-update.log" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
+  [[ "$MACOS_UPDATE_STATUS" == "pass" ]] || die "macOS update failed"
+  MACOS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/macos-update.log")"
+fi
+if platform_enabled windows; then
+  stop_timeout_guard "$windows_update_guard_pid"
+  wait_job "Windows update" "$windows_update_pid" "$RUN_DIR/windows-update.log" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
+  [[ "$WINDOWS_UPDATE_STATUS" == "pass" ]] || die "Windows update failed"
+  WINDOWS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/windows-update.log")"
+fi
+if platform_enabled linux; then
+  stop_timeout_guard "$linux_update_guard_pid"
+  wait_job "Linux update" "$linux_update_pid" "$RUN_DIR/linux-update.log" && LINUX_UPDATE_STATUS="pass" || LINUX_UPDATE_STATUS="fail"
+  [[ "$LINUX_UPDATE_STATUS" == "pass" ]] || die "Linux update failed"
+  LINUX_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/linux-update.log")"
+fi
 
 SUMMARY_PACKAGE_SPEC="$PACKAGE_SPEC" \
 SUMMARY_UPDATE_TARGET="$UPDATE_TARGET_EFFECTIVE" \

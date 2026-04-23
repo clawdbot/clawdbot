@@ -27,7 +27,7 @@ jobs:
     with:
       ref: ${{ github.sha }}
       include_repo_e2e: true
-      include_release_path_suites: false
+      include_release_path_suites: true
       include_openwebui: true
       include_live_suites: true
     secrets:

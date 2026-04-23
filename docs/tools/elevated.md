@@ -3,10 +3,8 @@ summary: "Elevated exec mode: run commands outside the sandbox from a sandboxed 
 read_when:
   - Adjusting elevated mode defaults, allowlists, or slash command behavior
   - Understanding how sandboxed agents can access the host
-title: "Elevated Mode"
+title: "Elevated mode"
 ---
-
-# Elevated Mode
 
 When an agent runs inside a sandbox, its `exec` commands are confined to the
 sandbox environment. **Elevated mode** lets the agent break out and run commands

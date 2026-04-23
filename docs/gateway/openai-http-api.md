@@ -2,7 +2,7 @@
 summary: "Expose an OpenAI-compatible /v1/chat/completions HTTP endpoint from the Gateway"
 read_when:
   - Integrating tools that expect OpenAI Chat Completions
-title: "OpenAI Chat Completions"
+title: "OpenAI chat completions"
 ---
 
 # OpenAI Chat Completions (HTTP)
@@ -169,8 +169,8 @@ This is the highest-leverage compatibility set for self-hosted frontends and too
     Use `x-openclaw-model`.
 
     Examples:
-    `x-openclaw-model: openai/gpt-5.4`
-    `x-openclaw-model: gpt-5.4`
+    `x-openclaw-model: openai/gpt-5.5`
+    `x-openclaw-model: gpt-5.5`
 
     If you omit it, the selected agent runs with its normal configured model choice.
 
@@ -237,7 +237,7 @@ Streaming:
 curl -N http://127.0.0.1:18789/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-openclaw-model: openai/gpt-5.4' \
+  -H 'x-openclaw-model: openai/gpt-5.5' \
   -d '{
     "model": "openclaw/research",
     "stream": true,

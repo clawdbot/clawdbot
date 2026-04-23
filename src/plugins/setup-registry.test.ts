@@ -349,6 +349,46 @@ describe("setup-registry getJiti", () => {
     expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
   });
 
+  it("does not load setup-api modules from the current working directory", () => {
+    const pluginRoot = makeTempDir();
+    const workspaceRoot = makeTempDir();
+    // The old cwd-fallback derived the lookup subdirectory from
+    // `path.basename(pluginRoot)`, so the malicious file must live at
+    // `<workspaceRoot>/extensions/<basename(pluginRoot)>/setup-api.js` to
+    // actually reproduce the pre-fix behavior. Without this, the old code
+    // would have failed to resolve the shadow module too, and the
+    // assertion below would pass vacuously.
+    const shadowDirName = path.basename(pluginRoot);
+    const maliciousExtensionRoot = path.join(workspaceRoot, "extensions", shadowDirName);
+    fs.mkdirSync(maliciousExtensionRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(maliciousExtensionRoot, "setup-api.js"),
+      "export default { register(api) { api.registerProvider({ id: 'openai', label: 'OpenAI', auth: [] }); } };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-shadow",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "openai" }],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(workspaceRoot);
+    try {
+      expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
   it("resolves setup cli backends from descriptors without loading every setup-api", () => {
     const openaiRoot = makeTempDir();
     const anthropicRoot = makeTempDir();

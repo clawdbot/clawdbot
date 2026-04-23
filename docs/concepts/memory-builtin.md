@@ -1,12 +1,10 @@
 ---
-title: "Builtin Memory Engine"
 summary: "The default SQLite-based memory backend with keyword, vector, and hybrid search"
+title: "Builtin memory engine"
 read_when:
   - You want to understand the default memory backend
   - You want to configure embedding providers or hybrid search
 ---
-
-# Builtin Memory Engine
 
 The builtin engine is the default memory backend. It stores your memory index in
 a per-agent SQLite database and needs no extra dependencies to get started.

@@ -32,6 +32,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   authProfileIdSource?: "auto" | "user";
   provider: string;
   modelId: string;
+  /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
+  agentHarnessId?: string;
   model: Model<Api>;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
@@ -70,6 +72,7 @@ export type EmbeddedRunAttemptResult = {
         handled?: false;
       };
   sessionIdUsed: string;
+  agentHarnessId?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;

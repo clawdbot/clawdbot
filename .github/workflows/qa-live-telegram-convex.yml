@@ -89,6 +89,12 @@ jobs:
             trusted_reason="main-ancestor"
           elif git tag --points-at "$selected_sha" | grep -Eq '^v'; then
             trusted_reason="release-tag"
+          elif [[ "$INPUT_REF" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
+            git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
+            release_branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"
+            if [[ "$selected_sha" == "$release_branch_sha" ]]; then
+              trusted_reason="release-branch-head"
+            fi
           else
             pr_head_count="$(
               gh api \
@@ -103,7 +109,7 @@ jobs:
 
           if [[ -z "$trusted_reason" ]]; then
             echo "Ref '${INPUT_REF}' resolved to $selected_sha, which is not trusted for this secret-bearing QA run." >&2
-            echo "Allowed refs must be on main, point to a release tag, or match an open PR head in ${GITHUB_REPOSITORY}." >&2
+            echo "Allowed refs must be on main, point to a release tag, match a release branch head, or match an open PR head in ${GITHUB_REPOSITORY}." >&2
             exit 1
           fi
 

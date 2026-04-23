@@ -5,7 +5,7 @@ read_when:
   - You want to pass url/token/session from scripts
   - You want to run the TUI in local embedded mode without a Gateway
   - You want to use openclaw chat or openclaw tui --local
-title: "tui"
+title: "TUI"
 ---
 
 # `openclaw tui`

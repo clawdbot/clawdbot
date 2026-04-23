@@ -1,15 +1,13 @@
 ---
-title: "Web Search"
-sidebarTitle: "Web Search"
 summary: "web_search, x_search, and web_fetch -- search the web, search X posts, or fetch page content"
+title: "Web search"
+sidebarTitle: "Web Search"
 read_when:
   - You want to enable or configure web_search
   - You want to enable or configure x_search
   - You need to choose a search provider
   - You want to understand auto-detection and provider fallback
 ---
-
-# Web Search
 
 The `web_search` tool searches the web using your configured provider and
 returns results. Results are cached by query for 15 minutes (configurable).

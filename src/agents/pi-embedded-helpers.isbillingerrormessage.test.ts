@@ -844,6 +844,34 @@ describe("isFailoverErrorMessage", () => {
     expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
     expect(isFailoverErrorMessage(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe(true);
   });
+
+  it("matches bare undici transport failures as timeout (#69368)", () => {
+    expectTimeoutFailoverSamples([
+      "terminated",
+      "Terminated",
+      "  terminated  ",
+      "UND_ERR_SOCKET",
+      "Error: UND_ERR_SOCKET other side closed",
+      "UND_ERR_CONNECT_TIMEOUT",
+      "UND_ERR_HEADERS_TIMEOUT",
+      "UND_ERR_BODY_TIMEOUT",
+      "UND_ERR_ABORTED",
+      "UND_ERR_REQ_CONTENT_LENGTH_MISMATCH",
+    ]);
+  });
+
+  it("matches pi-ai openai-codex bare transport failures as timeout (#69368)", () => {
+    expectTimeoutFailoverSamples([
+      "Request failed",
+      "request failed",
+      "  Request failed  ",
+      "Request failed after repeated internal retries.",
+    ]);
+  });
+
+  it("does not classify unrelated 'terminated' prose as timeout", () => {
+    expectNotFailoverSample("The user terminated the session manually.");
+  });
 });
 
 describe("parseImageSizeError", () => {

@@ -3,6 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
+import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -49,6 +51,23 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
     activeModelAuthOverride: "api-key",
   });
 }
+
+function registerStatusCodexHarness(): void {
+  const harness: AgentHarness = {
+    id: "codex",
+    label: "Codex",
+    supports: (ctx) =>
+      ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+    runAttempt: async () => {
+      throw new Error("not used in status tests");
+    },
+  };
+  registerAgentHarness(harness, { ownerPluginId: "codex" });
+}
+
+afterEach(() => {
+  clearAgentHarnesses();
+});
 
 function writeTranscriptUsageLog(params: {
   dir: string;
@@ -460,5 +479,82 @@ describe("buildStatusReply subagent summary", () => {
 
       expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
     });
+  });
+
+  it("shows the effective non-PI embedded harness in /status", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            embeddedHarness: { runtime: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-codex",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      resolvedFastMode: true,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast · codex");
+  });
+
+  it("keeps /status on a session-pinned PI harness after config changes", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            embeddedHarness: { runtime: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-pinned-pi",
+        updatedAt: 0,
+        fastMode: true,
+        agentHarnessId: "pi",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      resolvedFastMode: true,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fast");
+    expect(normalized).not.toContain("codex");
   });
 });

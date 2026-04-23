@@ -4,10 +4,8 @@ read_when:
   - You want to understand how OpenClaw assembles model context
   - You are switching between the legacy engine and a plugin engine
   - You are building a context engine plugin
-title: "Context Engine"
+title: "Context engine"
 ---
-
-# Context Engine
 
 A **context engine** controls how OpenClaw builds model context for each run.
 It decides which messages to include, how to summarize older history, and how
@@ -80,12 +78,14 @@ four lifecycle points:
 
 ### Subagent lifecycle (optional)
 
-OpenClaw currently calls one subagent lifecycle hook:
+OpenClaw calls two optional subagent lifecycle hooks:
 
+- **prepareSubagentSpawn** — prepare shared context state before a child run
+  starts. The hook receives parent/child session keys, `contextMode`
+  (`isolated` or `fork`), available transcript ids/files, and optional TTL.
+  If it returns a rollback handle, OpenClaw calls it when spawn fails after
+  preparation succeeds.
 - **onSubagentEnded** — clean up when a subagent session completes or is swept.
-
-The `prepareSubagentSpawn` hook is part of the interface for future use, but
-the runtime does not invoke it yet.
 
 ### System prompt addition
 
@@ -193,7 +193,7 @@ Optional members:
 | `bootstrap(params)`            | Method | Initialize engine state for a session. Called once when the engine first sees a session (e.g., import history). |
 | `ingestBatch(params)`          | Method | Ingest a completed turn as a batch. Called after a run completes, with all messages from that turn at once.     |
 | `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                         |
-| `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session.                                                                        |
+| `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                       |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                 |
 | `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload — not per-session.                           |
 

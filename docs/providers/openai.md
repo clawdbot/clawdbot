@@ -7,12 +7,10 @@ read_when:
 title: "OpenAI"
 ---
 
-# OpenAI
-
-OpenAI provides developer APIs for GPT models. OpenClaw supports two auth routes:
+OpenAI provides developer APIs for GPT models. OpenClaw supports two auth routes behind the same canonical OpenAI model refs:
 
 - **API key** — direct OpenAI Platform access with usage-based billing (`openai/*` models)
-- **Codex subscription** — ChatGPT/Codex sign-in with subscription access (`openai-codex/*` models)
+- **Codex subscription** — ChatGPT/Codex sign-in with subscription access. The internal auth/provider id is `openai-codex`, but new model refs should still use `openai/*`.
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
 
@@ -21,7 +19,7 @@ OpenAI explicitly supports subscription OAuth usage in external tools and workfl
 | OpenAI capability         | OpenClaw surface                          | Status                                                 |
 | ------------------------- | ----------------------------------------- | ------------------------------------------------------ |
 | Chat / Responses          | `openai/<model>` model provider           | Yes                                                    |
-| Codex subscription models | `openai-codex/<model>` model provider     | Yes                                                    |
+| Codex subscription models | `openai/<model>` with `openai-codex` auth | Yes                                                    |
 | Server-side web search    | Native OpenAI Responses tool              | Yes, when web search is enabled and no provider pinned |
 | Images                    | `image_generate`                          | Yes                                                    |
 | Videos                    | `video_generate`                          | Yes                                                    |
@@ -65,11 +63,11 @@ Choose your preferred auth method and follow the setup steps.
 
     | Model ref | Route | Auth |
     |-----------|-------|------|
-    | `openai/gpt-5.4` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
-    | `openai/gpt-5.4-pro` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
+    | `openai/gpt-5.5` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
+    | `openai/gpt-5.5-pro` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
 
     <Note>
-    ChatGPT/Codex sign-in is routed through `openai-codex/*`, not `openai/*`.
+    `openai-codex/*` remains accepted as a legacy compatibility alias, but new configs should use `openai/*`.
     </Note>
 
     ### Config example
@@ -77,12 +75,12 @@ Choose your preferred auth method and follow the setup steps.
     ```json5
     {
       env: { OPENAI_API_KEY: "sk-..." },
-      agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     }
     ```
 
     <Warning>
-    OpenClaw does **not** expose `openai/gpt-5.3-codex-spark` on the direct API path. Live OpenAI API requests reject that model. Spark is Codex-only.
+    OpenClaw does **not** expose `openai/gpt-5.3-codex-spark`. Live OpenAI API requests reject that model, and the current Codex catalog does not expose it either.
     </Warning>
 
   </Tab>
@@ -110,7 +108,7 @@ Choose your preferred auth method and follow the setup steps.
       </Step>
       <Step title="Set the default model">
         ```bash
-        openclaw config set agents.defaults.model.primary openai-codex/gpt-5.4
+        openclaw config set agents.defaults.model.primary openai/gpt-5.5
         ```
       </Step>
       <Step title="Verify the model is available">
@@ -124,18 +122,17 @@ Choose your preferred auth method and follow the setup steps.
 
     | Model ref | Route | Auth |
     |-----------|-------|------|
-    | `openai-codex/gpt-5.4` | ChatGPT/Codex OAuth | Codex sign-in |
-    | `openai-codex/gpt-5.3-codex-spark` | ChatGPT/Codex OAuth | Codex sign-in (entitlement-dependent) |
+    | `openai/gpt-5.5` | ChatGPT/Codex OAuth | Codex sign-in |
 
     <Note>
-    This route is intentionally separate from `openai/gpt-5.4`. Use `openai/*` with an API key for direct Platform access, and `openai-codex/*` for Codex subscription access.
+    `openai-codex/*` and `codex/*` model refs are legacy compatibility aliases. Keep using the `openai-codex` provider id for auth/profile commands.
     </Note>
 
     ### Config example
 
     ```json5
     {
-      agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     }
     ```
 
@@ -143,13 +140,23 @@ Choose your preferred auth method and follow the setup steps.
     Onboarding no longer imports OAuth material from `~/.codex`. Sign in with browser OAuth (default) or the device-code flow above — OpenClaw manages the resulting credentials in its own agent auth store.
     </Note>
 
+    ### Status indicator
+
+    Chat `/status` shows which embedded harness is active for the current
+    session. The default PI harness appears as `Runner: pi (embedded)` and does
+    not add a separate badge. When the bundled Codex app-server harness is
+    selected, `/status` appends the non-PI harness id next to `Fast`, for example
+    `Fast · codex`. Existing sessions keep their recorded harness id, so use
+    `/new` or `/reset` after changing `embeddedHarness` if you want `/status` to
+    reflect a new PI/Codex choice.
+
     ### Context window cap
 
     OpenClaw treats model metadata and the runtime context cap as separate values.
 
-    For `openai-codex/gpt-5.4`:
+    For `openai/gpt-5.5` through Codex OAuth:
 
-    - Native `contextWindow`: `1050000`
+    - Native `contextWindow`: `1000000`
     - Default runtime `contextTokens` cap: `272000`
 
     The smaller default cap has better latency and quality characteristics in practice. Override it with `contextTokens`:
@@ -159,7 +166,7 @@ Choose your preferred auth method and follow the setup steps.
       models: {
         providers: {
           "openai-codex": {
-            models: [{ id: "gpt-5.4", contextTokens: 160000 }],
+            models: [{ id: "gpt-5.5", contextTokens: 160000 }],
           },
         },
       },
@@ -176,20 +183,35 @@ Choose your preferred auth method and follow the setup steps.
 ## Image generation
 
 The bundled `openai` plugin registers image generation through the `image_generate` tool.
+It supports both OpenAI API-key image generation and Codex OAuth image
+generation.
 
-| Capability                | Value                              |
-| ------------------------- | ---------------------------------- |
-| Default model             | `openai/gpt-image-2`               |
-| Max images per request    | 4                                  |
-| Edit mode                 | Enabled (up to 5 reference images) |
-| Size overrides            | Supported, including 2K/4K sizes   |
-| Aspect ratio / resolution | Not forwarded to OpenAI Images API |
+| Capability                | OpenAI API key                     | Codex OAuth                        |
+| ------------------------- | ---------------------------------- | ---------------------------------- |
+| Model ref                 | `openai/gpt-image-2`               | `openai-codex/gpt-image-2`         |
+| Auth                      | `OPENAI_API_KEY`                   | OpenAI Codex OAuth sign-in         |
+| Max images per request    | 4                                  | 4                                  |
+| Edit mode                 | Enabled (up to 5 reference images) | Enabled (up to 5 reference images) |
+| Size overrides            | Supported, including 2K/4K sizes   | Supported, including 2K/4K sizes   |
+| Aspect ratio / resolution | Not forwarded to OpenAI Images API | Mapped to supported size when safe |
 
 ```json5
 {
   agents: {
     defaults: {
       imageGenerationModel: { primary: "openai/gpt-image-2" },
+    },
+  },
+}
+```
+
+Use Codex OAuth instead:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: { primary: "openai-codex/gpt-image-2" },
     },
   },
 }
@@ -203,10 +225,29 @@ See [Image Generation](/tools/image-generation) for shared tool parameters, prov
 editing. `gpt-image-1` remains usable as an explicit model override, but new
 OpenAI image workflows should use `openai/gpt-image-2`.
 
+The `openai-codex` provider also exposes `gpt-image-2` for image generation and
+reference-image editing through OpenAI Codex OAuth. Use
+`openai-codex/gpt-image-2` when the agent is signed in with Codex OAuth but does
+not have an `OPENAI_API_KEY`. OpenClaw resolves the stored Codex OAuth access
+token for `openai-codex` and sends image requests through the Codex Responses
+backend, so this path works without the public OpenAI Images API key.
+
 Generate:
 
 ```
 /tool image_generate model=openai/gpt-image-2 prompt="A polished launch poster for OpenClaw on macOS" size=3840x2160 count=1
+```
+
+Generate with Codex OAuth:
+
+```
+/tool image_generate model=openai-codex/gpt-image-2 prompt="A polished launch poster for OpenClaw on macOS" size=3840x2160 count=1
+```
+
+Edit with Codex OAuth:
+
+```
+/tool image_generate model=openai-codex/gpt-image-2 prompt="Preserve the object shape, change the material to translucent glass" image=/path/to/reference.png size=1024x1536
 ```
 
 Edit:
@@ -243,9 +284,9 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai/gpt-5.4`, `openai-codex/gpt-5.4`, `openrouter/openai/gpt-5.4`, `opencode/gpt-5.4`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
+OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai/gpt-5.5`, `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
 
-The bundled native Codex harness provider (`codex/*`) uses the same GPT-5 behavior and heartbeat overlay through Codex app-server developer instructions, so `codex/gpt-5.x` sessions keep the same follow-through and proactive heartbeat guidance even though Codex owns the rest of the harness prompt.
+The bundled native Codex harness uses the same GPT-5 behavior and heartbeat overlay through Codex app-server developer instructions, so `openai/gpt-5.x` sessions forced through `embeddedHarness.runtime: "codex"` keep the same follow-through and proactive heartbeat guidance even though Codex owns the rest of the harness prompt.
 
 The GPT-5 contribution adds a tagged behavior contract for persona persistence, execution safety, tool discipline, output shape, completion checks, and verification. Channel-specific reply and silent-message behavior stays in the shared OpenClaw system prompt and outbound delivery policy. The GPT-5 guidance is always enabled for matching models. The friendly interaction-style layer is separate and configurable.
 
@@ -379,7 +420,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
 
     | Setting | Config path | Default |
     |---------|------------|---------|
-    | Model | `plugins.entries.voice-call.config.realtime.providers.openai.model` | `gpt-realtime` |
+    | Model | `plugins.entries.voice-call.config.realtime.providers.openai.model` | `gpt-realtime-1.5` |
     | Voice | `...openai.voice` | `alloy` |
     | Temperature | `...openai.temperature` | `0.8` |
     | VAD threshold | `...openai.vadThreshold` | `0.5` |
@@ -392,6 +433,125 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
 
   </Accordion>
 </AccordionGroup>
+
+## Azure OpenAI endpoints
+
+The bundled `openai` provider can target an Azure OpenAI resource for image
+generation by overriding the base URL. On the image-generation path, OpenClaw
+detects Azure hostnames on `models.providers.openai.baseUrl` and switches to
+Azure's request shape automatically.
+
+<Note>
+Realtime voice uses a separate configuration path
+(`plugins.entries.voice-call.config.realtime.providers.openai.azureEndpoint`)
+and is not affected by `models.providers.openai.baseUrl`. See the **Realtime
+voice** accordion under [Voice and speech](#voice-and-speech) for its Azure
+settings.
+</Note>
+
+Use Azure OpenAI when:
+
+- You already have an Azure OpenAI subscription, quota, or enterprise agreement
+- You need regional data residency or compliance controls Azure provides
+- You want to keep traffic inside an existing Azure tenancy
+
+### Configuration
+
+For Azure image generation through the bundled `openai` provider, point
+`models.providers.openai.baseUrl` at your Azure resource and set `apiKey` to
+the Azure OpenAI key (not an OpenAI Platform key):
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://<your-resource>.openai.azure.com",
+        apiKey: "<azure-openai-api-key>",
+      },
+    },
+  },
+}
+```
+
+OpenClaw recognizes these Azure host suffixes for the Azure image-generation
+route:
+
+- `*.openai.azure.com`
+- `*.services.ai.azure.com`
+- `*.cognitiveservices.azure.com`
+
+For image-generation requests on a recognized Azure host, OpenClaw:
+
+- Sends the `api-key` header instead of `Authorization: Bearer`
+- Uses deployment-scoped paths (`/openai/deployments/{deployment}/...`)
+- Appends `?api-version=...` to each request
+
+Other base URLs (public OpenAI, OpenAI-compatible proxies) keep the standard
+OpenAI image request shape.
+
+<Note>
+Azure routing for the `openai` provider's image-generation path requires
+OpenClaw 2026.4.22 or later. Earlier versions treat any custom
+`openai.baseUrl` like the public OpenAI endpoint and will fail against Azure
+image deployments.
+</Note>
+
+### API version
+
+Set `AZURE_OPENAI_API_VERSION` to pin a specific Azure preview or GA version
+for the Azure image-generation path:
+
+```bash
+export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
+```
+
+The default is `2024-12-01-preview` when the variable is unset.
+
+### Model names are deployment names
+
+Azure OpenAI binds models to deployments. For Azure image-generation requests
+routed through the bundled `openai` provider, the `model` field in OpenClaw
+must be the **Azure deployment name** you configured in the Azure portal, not
+the public OpenAI model id.
+
+If you create a deployment called `gpt-image-2-prod` that serves `gpt-image-2`:
+
+```
+/tool image_generate model=openai/gpt-image-2-prod prompt="A clean poster" size=1024x1024 count=1
+```
+
+The same deployment-name rule applies to image-generation calls routed through
+the bundled `openai` provider.
+
+### Regional availability
+
+Azure image generation is currently available only in a subset of regions
+(for example `eastus2`, `swedencentral`, `polandcentral`, `westus3`,
+`uaenorth`). Check Microsoft's current region list before creating a
+deployment, and confirm the specific model is offered in your region.
+
+### Parameter differences
+
+Azure OpenAI and public OpenAI do not always accept the same image parameters.
+Azure may reject options that public OpenAI allows (for example certain
+`background` values on `gpt-image-2`) or expose them only on specific model
+versions. These differences come from Azure and the underlying model, not
+OpenClaw. If an Azure request fails with a validation error, check the
+parameter set supported by your specific deployment and API version in the
+Azure portal.
+
+<Note>
+Azure OpenAI uses native transport and compat behavior but does not receive
+OpenClaw's hidden attribution headers — see the **Native vs OpenAI-compatible
+routes** accordion under [Advanced configuration](#advanced-configuration).
+
+For chat or Responses traffic on Azure (beyond image generation), use the
+onboarding flow or a dedicated Azure provider config — `openai.baseUrl` alone
+does not pick up the Azure API/auth shape. A separate
+`azure-openai-responses/*` provider exists; see
+the Server-side compaction accordion below.
+</Note>
 
 ## Advanced configuration
 
@@ -416,7 +576,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {
+            "openai/gpt-5.5": {
               params: { transport: "auto" },
             },
           },
@@ -440,7 +600,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.4": {
+            "openai/gpt-5.5": {
               params: { openaiWsWarmup: false },
             },
           },
@@ -451,10 +611,8 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
 
   </Accordion>
 
-<a id="openai-fast-mode"></a>
-
   <Accordion title="Fast mode">
-    OpenClaw exposes a shared fast-mode toggle for both `openai/*` and `openai-codex/*`:
+    OpenClaw exposes a shared fast-mode toggle for `openai/*`:
 
     - **Chat/UI:** `/fast status|on|off`
     - **Config:** `agents.defaults.models["<provider>/<model>"].params.fastMode`
@@ -466,8 +624,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.4": { params: { fastMode: true } },
-            "openai-codex/gpt-5.4": { params: { fastMode: true } },
+            "openai/gpt-5.5": { params: { fastMode: true } },
           },
         },
       },
@@ -488,8 +645,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.4": { params: { serviceTier: "priority" } },
-            "openai-codex/gpt-5.4": { params: { serviceTier: "priority" } },
+            "openai/gpt-5.5": { params: { serviceTier: "priority" } },
           },
         },
       },
@@ -520,7 +676,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
           agents: {
             defaults: {
               models: {
-                "azure-openai-responses/gpt-5.4": {
+                "azure-openai-responses/gpt-5.5": {
                   params: { responsesServerCompaction: true },
                 },
               },
@@ -535,7 +691,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
           agents: {
             defaults: {
               models: {
-                "openai/gpt-5.4": {
+                "openai/gpt-5.5": {
                   params: {
                     responsesServerCompaction: true,
                     responsesCompactThreshold: 120000,
@@ -553,7 +709,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
           agents: {
             defaults: {
               models: {
-                "openai/gpt-5.4": {
+                "openai/gpt-5.5": {
                   params: { responsesServerCompaction: false },
                 },
               },
@@ -571,7 +727,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
   </Accordion>
 
   <Accordion title="Strict-agentic GPT mode">
-    For GPT-5-family runs on `openai/*` and `openai-codex/*`, OpenClaw can use a stricter embedded execution contract:
+    For GPT-5-family runs on `openai/*`, OpenClaw can use a stricter embedded execution contract:
 
     ```json5
     {
@@ -598,7 +754,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
   <Accordion title="Native vs OpenAI-compatible routes">
     OpenClaw treats direct OpenAI, Codex, and Azure OpenAI endpoints differently from generic OpenAI-compatible `/v1` proxies:
 
-    **Native routes** (`openai/*`, `openai-codex/*`, Azure OpenAI):
+    **Native routes** (`openai/*`, Azure OpenAI):
     - Keep `reasoning: { effort: "none" }` only for models that support the OpenAI `none` effort
     - Omit disabled reasoning for models or proxies that reject `reasoning.effort: "none"`
     - Default tool schemas to strict mode

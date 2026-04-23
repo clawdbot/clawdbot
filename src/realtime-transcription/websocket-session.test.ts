@@ -55,25 +55,21 @@ async function createRealtimeServer(params?: {
   return { url: `ws://127.0.0.1:${port}` };
 }
 
-async function waitFor(expectation: () => void) {
-  const started = Date.now();
-  let lastError: unknown;
-  while (Date.now() - started < 3000) {
-    try {
-      expectation();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-  throw lastError;
-}
-
 describe("createRealtimeTranscriptionWebSocketSession", () => {
   it("flushes queued binary audio after an open-ready connection", async () => {
     const frames: Buffer[] = [];
-    const server = await createRealtimeServer({ onBinary: (payload) => frames.push(payload) });
+    let resolveFrames!: () => void;
+    const framesReady = new Promise<void>((resolve) => {
+      resolveFrames = resolve;
+    });
+    const server = await createRealtimeServer({
+      onBinary: (payload) => {
+        frames.push(payload);
+        if (Buffer.concat(frames).toString() === "queuedafter") {
+          resolveFrames();
+        }
+      },
+    });
     const session = createRealtimeTranscriptionWebSocketSession({
       providerId: "test",
       callbacks: {},
@@ -87,16 +83,26 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.sendAudio(Buffer.from("queued"));
     await session.connect();
     session.sendAudio(Buffer.from("after"));
-    await waitFor(() => expect(Buffer.concat(frames).toString()).toBe("queuedafter"));
+    await framesReady;
+    expect(Buffer.concat(frames).toString()).toBe("queuedafter");
     expect(session.isConnected()).toBe(true);
     session.close();
   });
 
   it("lets providers mark ready after a JSON handshake", async () => {
     const frames: unknown[] = [];
+    let resolveFrames!: () => void;
+    const framesReady = new Promise<void>((resolve) => {
+      resolveFrames = resolve;
+    });
     const server = await createRealtimeServer({
       initialEvent: { type: "session.created" },
-      onText: (payload) => frames.push(payload),
+      onText: (payload) => {
+        frames.push(payload);
+        if (frames.length === 2) {
+          resolveFrames();
+        }
+      },
     });
     const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
       providerId: "test",
@@ -115,12 +121,11 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
 
     session.sendAudio(Buffer.from("queued"));
     await session.connect();
-    await waitFor(() =>
-      expect(frames).toEqual([
-        { type: "session.update" },
-        { type: "input_audio.append", audio: Buffer.from("queued").toString("base64") },
-      ]),
-    );
+    await framesReady;
+    expect(frames).toEqual([
+      { type: "session.update" },
+      { type: "input_audio.append", audio: Buffer.from("queued").toString("base64") },
+    ]);
     session.close();
   });
 

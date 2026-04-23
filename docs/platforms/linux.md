@@ -4,10 +4,8 @@ read_when:
   - Looking for Linux companion app status
   - Planning platform coverage or contributions
   - Debugging Linux OOM kills or exit 137 on a VPS or container
-title: "Linux App"
+title: "Linux app"
 ---
-
-# Linux App
 
 The Gateway is fully supported on Linux. **Node is the recommended runtime**.
 Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).

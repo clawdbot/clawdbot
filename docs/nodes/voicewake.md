@@ -3,7 +3,7 @@ summary: "Global voice wake words (Gateway-owned) and how they sync across nodes
 read_when:
   - Changing voice wake words behavior or defaults
   - Adding new node platforms that need wake word sync
-title: "Voice Wake"
+title: "Voice wake"
 ---
 
 # Voice Wake (Global Wake Words)

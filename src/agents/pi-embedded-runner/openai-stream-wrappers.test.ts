@@ -88,27 +88,10 @@ describe("createOpenAIThinkingLevelWrapper", () => {
   });
 
   it("overrides existing reasoning.effort from upstream wrappers", () => {
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        model: model.id,
-        reasoning: { effort: "none" },
-      };
-      options?.onPayload?.(payload, model);
-      return createAssistantMessageEventStream();
-    };
-
-    const payloads: Array<Record<string, unknown>> = [];
-    const capture: StreamFn = (model, context, options) => {
-      return baseStreamFn(model, context, {
-        ...options,
-        onPayload: (payload, m) => {
-          options?.onPayload?.(payload, m);
-          payloads.push(structuredClone(payload as Record<string, unknown>));
-        },
-      });
-    };
-
-    const wrapped = createOpenAIThinkingLevelWrapper(capture, "medium");
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "none" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "medium");
     void wrapped(codexModel, { messages: [] }, {});
 
     expect(payloads[0]?.reasoning).toEqual({ effort: "medium" });
@@ -121,27 +104,10 @@ describe("createOpenAIThinkingLevelWrapper", () => {
   });
 
   it("preserves other reasoning properties when overriding effort", () => {
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        model: model.id,
-        reasoning: { effort: "none", summary: "auto" },
-      };
-      options?.onPayload?.(payload, model);
-      return createAssistantMessageEventStream();
-    };
-
-    const payloads: Array<Record<string, unknown>> = [];
-    const capture: StreamFn = (model, context, options) => {
-      return baseStreamFn(model, context, {
-        ...options,
-        onPayload: (payload, m) => {
-          options?.onPayload?.(payload, m);
-          payloads.push(structuredClone(payload as Record<string, unknown>));
-        },
-      });
-    };
-
-    const wrapped = createOpenAIThinkingLevelWrapper(capture, "high");
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "none", summary: "auto" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "high");
     void wrapped(codexModel, { messages: [] }, {});
 
     expect(payloads[0]?.reasoning).toEqual({ effort: "high", summary: "auto" });

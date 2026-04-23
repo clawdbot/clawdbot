@@ -17,7 +17,7 @@ function expectStaticFallbackCatalog(
   result: Awaited<ReturnType<typeof buildCodexProviderCatalog>>,
 ) {
   expect(result.provider.models.map((model) => model.id)).toEqual([
-    "gpt-5.4",
+    "gpt-5.5",
     "gpt-5.4-mini",
     "gpt-5.2",
   ]);
@@ -241,7 +241,7 @@ describe("codex provider", () => {
 
     expect(
       result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
-    ).toEqual(["gpt-5.4", "gpt-5.4-mini", "gpt-5.2"]);
+    ).toEqual(["gpt-5.5", "gpt-5.4-mini", "gpt-5.2"]);
   });
 
   it("adds the GPT-5 prompt overlay to Codex provider runs", () => {

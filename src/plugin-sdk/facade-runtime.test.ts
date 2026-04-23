@@ -6,12 +6,13 @@ import { createPluginActivationSource, normalizePluginsConfig } from "../plugins
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
+  evaluateBundledPluginPublicSurfaceAccess,
   resetFacadeActivationCheckRuntimeStateForTest,
   resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
+  throwForBundledPluginPublicSurfaceAccess,
 } from "./facade-activation-check.runtime.js";
 import {
   __testing,
-  canLoadActivatedBundledPluginPublicSurface,
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
   resetFacadeRuntimeStateForTest,
@@ -185,7 +186,7 @@ describe("plugin-sdk facade runtime", () => {
   });
 
   it("blocks runtime-api facade loads for bundled plugins that are not activated", () => {
-    const access = __testing.evaluateBundledPluginPublicSurfaceAccess({
+    const access = evaluateBundledPluginPublicSurfaceAccess({
       params: {
         dirName: "discord",
         artifactBasename: "runtime-api.js",
@@ -207,7 +208,7 @@ describe("plugin-sdk facade runtime", () => {
     expect(access.pluginId).toBe("discord");
     expect(access.reason).toBeTruthy();
     expect(() =>
-      __testing.throwForBundledPluginPublicSurfaceAccess({
+      throwForBundledPluginPublicSurfaceAccess({
         access,
         request: {
           dirName: "discord",
@@ -235,7 +236,7 @@ describe("plugin-sdk facade runtime", () => {
         },
       },
     } as const;
-    const access = __testing.evaluateBundledPluginPublicSurfaceAccess({
+    const access = evaluateBundledPluginPublicSurfaceAccess({
       params: {
         dirName: "discord",
         artifactBasename: "runtime-api.js",
@@ -367,24 +368,20 @@ describe("plugin-sdk facade runtime", () => {
   it("keeps shared runtime-core facades available without plugin activation", () => {
     setRuntimeConfigSnapshot({});
 
-    expect(
-      canLoadActivatedBundledPluginPublicSurface({
-        dirName: "speech-core",
-        artifactBasename: "runtime-api.js",
-      }),
-    ).toBe(true);
-    expect(
-      canLoadActivatedBundledPluginPublicSurface({
-        dirName: "image-generation-core",
-        artifactBasename: "runtime-api.js",
-      }),
-    ).toBe(true);
-    expect(
-      canLoadActivatedBundledPluginPublicSurface({
-        dirName: "media-understanding-core",
-        artifactBasename: "runtime-api.js",
-      }),
-    ).toBe(true);
+    for (const dirName of ["speech-core", "image-generation-core", "media-understanding-core"]) {
+      expect(
+        resolveActivationCheckBundledPluginPublicSurfaceAccess({
+          dirName,
+          artifactBasename: "runtime-api.js",
+          location: null,
+          sourceExtensionsRoot: "",
+          resolutionKey: `runtime-core:${dirName}`,
+        }),
+      ).toEqual({
+        allowed: true,
+        pluginId: dirName,
+      });
+    }
   });
 
   it("prefers the source runtime snapshot for facade activation checks", () => {

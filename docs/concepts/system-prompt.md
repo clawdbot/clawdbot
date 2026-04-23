@@ -3,10 +3,8 @@ summary: "What the OpenClaw system prompt contains and how it is assembled"
 read_when:
   - Editing system prompt text, tools list, or time/heartbeat sections
   - Changing workspace bootstrap or skills injection behavior
-title: "System Prompt"
+title: "System prompt"
 ---
-
-# System Prompt
 
 OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use the pi-coding-agent default prompt.
 
@@ -109,7 +107,7 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `USER.md`
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (only on brand-new workspaces)
-- `MEMORY.md` when present, otherwise `memory.md` as a lowercase fallback
+- `MEMORY.md` when present
 
 All of these files are **injected into the context window** on every turn unless
 a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when

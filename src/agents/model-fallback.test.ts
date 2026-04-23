@@ -1213,6 +1213,14 @@ describe("runWithModelFallback", () => {
         name: "provider request aborted",
         firstError: Object.assign(new Error("Request was aborted"), { name: "AbortError" }),
       },
+      {
+        name: "bare undici terminated transport failure",
+        firstError: new Error("terminated"),
+      },
+      {
+        name: "bare Codex transport failure",
+        firstError: new Error("Request failed"),
+      },
     ];
 
     for (const { name, firstError } of cases) {

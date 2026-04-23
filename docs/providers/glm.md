@@ -81,7 +81,7 @@ The default bundled model ref is `zai/glm-5.1`. GLM versions and availability
 can change; check Z.AI's docs for the latest.
 </Note>
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Endpoint auto-detection">

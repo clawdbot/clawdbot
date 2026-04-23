@@ -5,10 +5,8 @@ read_when:
   - Exporting a support bundle for an OpenClaw session
   - Investigating prompt context, tool calls, runtime errors, or usage metadata
   - Disabling or relocating trajectory capture
-title: "Trajectory Bundles"
+title: "Trajectory bundles"
 ---
-
-# Trajectory bundles
 
 Trajectory capture is OpenClaw's per-session flight recorder. It records a
 structured timeline for each agent run, then `/export-trajectory` packages the

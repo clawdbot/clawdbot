@@ -122,8 +122,23 @@ function mockOpenAIImageApiResponse(params: {
     } as Response,
     release: vi.fn(async () => {}),
   });
+  const postMultipartRequestSpy = vi.spyOn(providerHttp, "postMultipartRequest").mockResolvedValue({
+    finalUrl: params.finalUrl,
+    response: {
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            b64_json: Buffer.from(params.imageData).toString("base64"),
+            ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
+          },
+        ],
+      }),
+    } as Response,
+    release: vi.fn(async () => {}),
+  });
   vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
-  return { resolveApiKeySpy, postJsonRequestSpy };
+  return { resolveApiKeySpy, postJsonRequestSpy, postMultipartRequestSpy };
 }
 
 describe("openai plugin", () => {
@@ -190,10 +205,11 @@ describe("openai plugin", () => {
   });
 
   it("submits reference-image edits to the OpenAI Images edits endpoint", async () => {
-    const { resolveApiKeySpy, postJsonRequestSpy } = mockOpenAIImageApiResponse({
-      finalUrl: "https://api.openai.com/v1/images/edits",
-      imageData: "edited-image",
-    });
+    const { resolveApiKeySpy, postJsonRequestSpy, postMultipartRequestSpy } =
+      mockOpenAIImageApiResponse({
+        finalUrl: "https://api.openai.com/v1/images/edits",
+        imageData: "edited-image",
+      });
 
     const provider = buildOpenAIImageGenerationProvider();
     const authStore = { version: 1, profiles: {} };
@@ -218,24 +234,33 @@ describe("openai plugin", () => {
         store: authStore,
       }),
     );
-    expect(postJsonRequestSpy).toHaveBeenCalledWith(
+    expect(postMultipartRequestSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://api.openai.com/v1/images/edits",
-        body: {
-          model: "gpt-image-2",
-          prompt: "Edit this image",
-          n: 2,
-          size: "1536x1024",
-          images: [
-            {
-              image_url: "data:image/png;base64,eA==",
-            },
-            {
-              image_url: "data:image/jpeg;base64,eQ==",
-            },
-          ],
-        },
+        body: expect.any(FormData),
+        allowPrivateNetwork: false,
+        dispatcherPolicy: undefined,
+        fetchFn: fetch,
       }),
+    );
+    const editCallArgs = postMultipartRequestSpy.mock.calls[0]?.[0] as {
+      headers: Headers;
+      body: FormData;
+    };
+    expect(editCallArgs.headers.has("Content-Type")).toBe(false);
+    const form = editCallArgs.body;
+    expect(form.get("model")).toBe("gpt-image-2");
+    expect(form.get("prompt")).toBe("Edit this image");
+    expect(form.get("n")).toBe("2");
+    expect(form.get("size")).toBe("1536x1024");
+    const images = form.getAll("image[]") as File[];
+    expect(images).toHaveLength(2);
+    expect(images[0]?.name).toBe("image-1.png");
+    expect(images[0]?.type).toBe("image/png");
+    expect(images[1]?.name).toBe("ref.jpg");
+    expect(images[1]?.type).toBe("image/jpeg");
+    expect(postJsonRequestSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://api.openai.com/v1/images/edits" }),
     );
     expect(result).toEqual({
       images: [

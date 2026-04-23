@@ -107,7 +107,12 @@ describe("resolveSandboxContext", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            sandbox: { mode: "all", backend: "test-backend", scope: "session" },
+            sandbox: {
+              mode: "all",
+              backend: "test-backend",
+              scope: "session",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
           },
         },
       };

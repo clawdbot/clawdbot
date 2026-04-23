@@ -19,6 +19,12 @@ export type TestRuntime = {
   exit: MockFn<RuntimeEnv["exit"]>;
 };
 
+export type CapturingTestRuntime = {
+  runtime: RuntimeEnv;
+  logs: string[];
+  errors: string[];
+};
+
 export function createTestRuntime(): TestRuntime {
   const log = vi.fn() as MockFn<RuntimeEnv["log"]>;
   const error = vi.fn() as MockFn<RuntimeEnv["error"]>;
@@ -28,6 +34,17 @@ export function createTestRuntime(): TestRuntime {
     error,
     exit,
   };
+}
+
+export function createCapturingTestRuntime(): CapturingTestRuntime {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const runtime = {
+    log: (message: unknown) => logs.push(String(message)),
+    error: (message: unknown) => errors.push(String(message)),
+    exit: (_code?: number) => undefined,
+  };
+  return { runtime, logs, errors };
 }
 
 export function createThrowingTestRuntime(): RuntimeEnv {

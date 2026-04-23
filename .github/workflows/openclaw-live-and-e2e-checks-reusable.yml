@@ -166,7 +166,7 @@ env:
 
 jobs:
   validate_selected_ref:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
@@ -640,7 +640,7 @@ jobs:
     name: Docker live models (${{ matrix.provider_label }})
     needs: validate_selected_ref
     if: inputs.include_live_suites
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -861,7 +861,7 @@ jobs:
           fi
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
-              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5" >> "$GITHUB_ENV"
               # The CLI backend Docker lane should exercise the same staged
               # Codex auth path Peter uses locally so MCP cron creation and
               # multimodal probes stay covered in CI. Replace the staged

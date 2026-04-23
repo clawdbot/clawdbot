@@ -1,6 +1,6 @@
 ---
-title: "Kilocode"
 summary: "Use Kilo Gateway's unified API to access many models in OpenClaw"
+title: "Kilocode"
 read_when:
   - You want a single API key for many LLMs
   - You want to run models via Kilo Gateway in OpenClaw
@@ -66,7 +66,7 @@ Any model available on the gateway can be used with the `kilocode/` prefix:
 | -------------------------------------- | ---------------------------------- |
 | `kilocode/kilo/auto`                   | Default — smart routing            |
 | `kilocode/anthropic/claude-sonnet-4`   | Anthropic via Kilo                 |
-| `kilocode/openai/gpt-5.4`              | OpenAI via Kilo                    |
+| `kilocode/openai/gpt-5.5`              | OpenAI via Kilo                    |
 | `kilocode/google/gemini-3-pro-preview` | Google via Kilo                    |
 | ...and many more                       | Use `/models kilocode` to list all |
 
@@ -127,7 +127,7 @@ includes `kilocode/kilo/auto` (`Kilo Auto`) with `input: ["text", "image"]`,
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
   </Card>
-  <Card title="Configuration reference" href="/gateway/configuration" icon="gear">
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full OpenClaw configuration reference.
   </Card>
   <Card title="Kilo Gateway" href="https://app.kilo.ai" icon="arrow-up-right-from-square">

@@ -4,7 +4,7 @@ read_when:
   - You need to debug session ids, transcript JSONL, or sessions.json fields
   - You are changing auto-compaction behavior or adding “pre-compaction” housekeeping
   - You want to implement memory flushes or silent system turns
-title: "Session Management Deep Dive"
+title: "Session management deep dive"
 ---
 
 # Session Management & Compaction (Deep Dive)

@@ -262,6 +262,10 @@ export function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+  const sessionPinnedAgentHarnessId =
+    params.sessionEntry?.sessionId === params.sessionId
+      ? (params.sessionEntry.agentHarnessId ?? (params.sessionHasHistory ? "pi" : undefined))
+      : undefined;
   const authProfileId =
     params.providerOverride === params.authProfileProvider
       ? params.sessionEntry?.authProfileOverride
@@ -301,6 +305,7 @@ export function runAgentAttempt(params: {
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         agentId: params.sessionAgentId,
+        trigger: "user",
         sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
         config: params.cfg,
@@ -322,6 +327,7 @@ export function runAgentAttempt(params: {
         images: params.isFallbackRetry ? undefined : params.opts.images,
         imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
         skillsSnapshot: params.skillsSnapshot,
+        messageChannel: params.messageChannel,
         streamParams: params.opts.streamParams,
         messageProvider: params.messageChannel,
         agentAccountId: params.runContext.accountId,
@@ -405,6 +411,7 @@ export function runAgentAttempt(params: {
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    agentHarnessId: sessionPinnedAgentHarnessId,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,
