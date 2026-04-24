@@ -159,3 +159,8 @@ curl -sS http://127.0.0.1:18789/tools/invoke \
     "args": {}
   }'
 ```
+
+## Related
+
+- [Gateway protocol](/gateway/protocol)
+- [Tools and plugins](/tools)

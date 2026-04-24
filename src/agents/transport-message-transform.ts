@@ -1,6 +1,18 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 
+const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
+  "anthropic-messages",
+  "openclaw-anthropic-messages-transport",
+  "bedrock-converse-stream",
+  "google-generative-ai",
+  "openclaw-google-generative-ai-transport",
+]);
+
 type PendingToolCall = { id: string; name: string };
+
+function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
+  return SYNTHETIC_TOOL_RESULT_APIS.has(modelApi);
+}
 
 function appendMissingToolResults(
   result: Context["messages"],
@@ -30,6 +42,7 @@ export function transformTransportMessages(
     source: { provider: string; api: Api; model: string },
   ) => string,
 ): Context["messages"] {
+  const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
   const toolCallIdMap = new Map<string, string>();
   const transformed = messages.map((msg) => {
     if (msg.role === "user") {
@@ -95,11 +108,11 @@ export function transformTransportMessages(
   let existingToolResultIds = new Set<string>();
   for (const msg of transformed) {
     if (msg.role === "assistant") {
-      if (pendingToolCalls.length > 0) {
+      if (allowSyntheticToolResults && pendingToolCalls.length > 0) {
         appendMissingToolResults(result, pendingToolCalls, existingToolResultIds);
-        pendingToolCalls = [];
-        existingToolResultIds = new Set();
       }
+      pendingToolCalls = [];
+      existingToolResultIds = new Set();
       if (msg.stopReason === "error" || msg.stopReason === "aborted") {
         continue;
       }
@@ -119,11 +132,11 @@ export function transformTransportMessages(
       result.push(msg);
       continue;
     }
-    if (pendingToolCalls.length > 0) {
+    if (allowSyntheticToolResults && pendingToolCalls.length > 0) {
       appendMissingToolResults(result, pendingToolCalls, existingToolResultIds);
-      pendingToolCalls = [];
-      existingToolResultIds = new Set();
     }
+    pendingToolCalls = [];
+    existingToolResultIds = new Set();
     result.push(msg);
   }
   return result;

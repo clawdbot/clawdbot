@@ -191,6 +191,64 @@ describe("handlePluginsCommand", () => {
     expect(result?.reply?.text).toContain("requires operator.admin");
   });
 
+  it("enables and disables a discovered plugin", async () => {
+    validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
+
+    const enableParams = buildPluginsParams("/plugins enable superpowers", buildCfg());
+    enableParams.command.senderIsOwner = true;
+
+    const enableResult = await handlePluginsCommand(enableParams, true);
+    expect(enableResult?.reply?.text).toContain('Plugin "superpowers" enabled');
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          entries: expect.objectContaining({
+            superpowers: expect.objectContaining({ enabled: true }),
+          }),
+        }),
+      }),
+    );
+
+    const disableParams = buildPluginsParams("/plugins disable superpowers", buildCfg());
+    disableParams.command.senderIsOwner = true;
+
+    const disableResult = await handlePluginsCommand(disableParams, true);
+    expect(disableResult?.reply?.text).toContain('Plugin "superpowers" disabled');
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          entries: expect.objectContaining({
+            superpowers: expect.objectContaining({ enabled: false }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("resolves write targets by runtime-derived plugin name", async () => {
+    buildPluginDiagnosticsReportMock.mockReturnValue({
+      workspaceDir: "/tmp/plugins-workspace",
+      plugins: [
+        {
+          id: "superpowers",
+          name: "Super Powers",
+          status: "disabled",
+          format: "openclaw",
+          bundleFormat: "claude",
+        },
+      ],
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
+
+    const params = buildPluginsParams("/plugins enable Super Powers", buildCfg());
+    params.command.senderIsOwner = true;
+
+    const result = await handlePluginsCommand(params, true);
+    expect(result?.reply?.text).toContain('Plugin "superpowers" enabled');
+    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalled();
+    expect(buildPluginSnapshotReportMock).not.toHaveBeenCalled();
+  });
+
   it("returns an explicit unauthorized reply for native /plugins list", async () => {
     const params = buildPluginsParams("/plugins list", buildCfg());
     params.command.senderIsOwner = false;

@@ -324,6 +324,10 @@
     "target": "环境变量"
   },
   {
+    "source": "Google Meet Plugin",
+    "target": "Google Meet 插件"
+  },
+  {
     "source": "Plugin SDK",
     "target": "插件 SDK"
   },
@@ -398,6 +402,10 @@
   {
     "source": "Tencent Cloud (TokenHub)",
     "target": "腾讯云（TokenHub）"
+  },
+  {
+    "source": "Codex Harness Context Engine Port",
+    "target": "Codex Harness Context Engine Port"
   },
   {
     "source": "/gateway/configuration#strict-validation",

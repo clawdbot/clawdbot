@@ -1,6 +1,6 @@
 ---
 name: wacli
-description: Send WhatsApp messages to other people or search/sync WhatsApp history via the wacli CLI (not for normal user chats).
+description: Send third-party WhatsApp messages or sync/search WhatsApp history via wacli, not normal active chats.
 homepage: https://wacli.sh
 metadata:
   {

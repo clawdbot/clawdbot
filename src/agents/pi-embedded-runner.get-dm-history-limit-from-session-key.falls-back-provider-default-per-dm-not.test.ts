@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getDmHistoryLimitFromSessionKey } from "./pi-embedded-runner.js";
+import { getDmHistoryLimitFromSessionKey } from "./pi-embedded-runner/history.js";
 
 describe("getDmHistoryLimitFromSessionKey", () => {
   it("falls back to provider default when per-DM not set", () => {

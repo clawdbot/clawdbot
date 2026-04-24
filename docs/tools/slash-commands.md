@@ -241,7 +241,7 @@ Examples:
 /model
 /model list
 /model 3
-/model openai/gpt-5.5
+/model openai/gpt-5.4
 /model opus@anthropic:default
 /model status
 ```
@@ -384,3 +384,9 @@ Example:
 
 See [BTW Side Questions](/tools/btw) for the full behavior and client UX
 details.
+
+## Related
+
+- [Skills](/tools/skills)
+- [Skills config](/tools/skills-config)
+- [Creating skills](/tools/creating-skills)

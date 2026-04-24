@@ -802,6 +802,57 @@ describe("message tool description", () => {
     expect(tool.description).toContain("telegram (delete, edit, react, send, topic-create)");
   });
 
+  it("does not advertise cross-channel actions whose params are hidden by current-channel schema", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["send", "react"],
+    });
+    const matrixProfilePlugin = createChannelPlugin({
+      id: "matrix",
+      label: "Matrix",
+      docsPath: "/channels/matrix",
+      blurb: "Matrix test plugin.",
+      actions: ["send", "set-profile"],
+      toolSchema: {
+        properties: {
+          displayName: Type.Optional(Type.String()),
+          avatarUrl: Type.Optional(Type.String()),
+        },
+      },
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "signal", source: "test", plugin: signalPlugin },
+        { pluginId: "matrix", source: "test", plugin: matrixProfilePlugin },
+      ]),
+    );
+
+    const crossChannelTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+    });
+    const crossChannelProperties = getToolProperties(crossChannelTool);
+
+    expect(getActionEnum(crossChannelProperties)).not.toContain("set-profile");
+    expect(crossChannelProperties.displayName).toBeUndefined();
+    expect(crossChannelProperties.avatarUrl).toBeUndefined();
+    expect(crossChannelTool.description).not.toContain("matrix (send, set-profile)");
+
+    const currentChannelTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "matrix",
+    });
+    const currentChannelProperties = getToolProperties(currentChannelTool);
+
+    expect(getActionEnum(currentChannelProperties)).toContain("set-profile");
+    expect(currentChannelProperties.displayName).toBeDefined();
+    expect(currentChannelProperties.avatarUrl).toBeDefined();
+  });
+
   it("normalizes channel aliases before building the current channel description", () => {
     const signalPlugin = createChannelPlugin({
       id: "signal",

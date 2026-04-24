@@ -11,6 +11,7 @@ import {
   __testing,
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
+  listCrossChannelSchemaSupportedMessageActions,
   listChannelMessageActions,
   listChannelMessageCapabilities,
   listChannelMessageCapabilitiesForChannel,
@@ -190,6 +191,117 @@ describe("message action capability checks", () => {
         channel: "demo-unified",
       }),
     ).toHaveProperty("components");
+  });
+
+  it("filters only actions that depend on current-channel-only schema", () => {
+    const scopedSchemaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-scoped-schema",
+        label: "Demo Scoped Schema",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["read", "list-pins", "unpin"],
+          schema: {
+            actions: ["unpin"],
+            properties: {
+              pinnedMessageId: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "demo-scoped-schema", source: "test", plugin: scopedSchemaPlugin },
+      ]),
+    );
+
+    expect(
+      listCrossChannelSchemaSupportedMessageActions({
+        cfg: {} as OpenClawConfig,
+        channel: "demo-scoped-schema",
+      }),
+    ).toEqual(["read", "list-pins"]);
+  });
+
+  it("keeps unscoped current-channel schema conservative for cross-channel actions", () => {
+    const unscopedSchemaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-unscoped-schema",
+        label: "Demo Unscoped Schema",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["read", "unpin"],
+          schema: {
+            properties: {
+              pinnedMessageId: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "demo-unscoped-schema", source: "test", plugin: unscopedSchemaPlugin },
+      ]),
+    );
+
+    expect(
+      listCrossChannelSchemaSupportedMessageActions({
+        cfg: {} as OpenClawConfig,
+        channel: "demo-unscoped-schema",
+      }),
+    ).toEqual([]);
+  });
+
+  it("treats empty current-channel schema action lists as blocking no cross-channel actions", () => {
+    const emptyScopedSchemaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-empty-scoped-schema",
+        label: "Demo Empty Scoped Schema",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["read", "list-pins"],
+          schema: {
+            actions: [],
+            properties: {
+              optionalChannelOnlyValue: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "demo-empty-scoped-schema",
+          source: "test",
+          plugin: emptyScopedSchemaPlugin,
+        },
+      ]),
+    );
+
+    expect(
+      listCrossChannelSchemaSupportedMessageActions({
+        cfg: {} as OpenClawConfig,
+        channel: "demo-empty-scoped-schema",
+      }),
+    ).toEqual(["read", "list-pins"]);
   });
 
   it("derives plugin-owned media-source params for the current action", () => {

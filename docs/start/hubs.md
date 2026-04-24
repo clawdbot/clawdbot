@@ -195,3 +195,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Testing](/reference/test)
 - [Release policy](/reference/RELEASING)
 - [Device models](/reference/device-models)
+
+## Related
+
+- [Getting started](/start/getting-started)

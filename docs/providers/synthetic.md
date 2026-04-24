@@ -78,7 +78,7 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
 }
 ```
 
-## Model catalog
+## Built-in catalog
 
 All Synthetic models use cost `0` (input/output/cache).
 

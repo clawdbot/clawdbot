@@ -1,11 +1,11 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth";
 import {
+  type CommandArgs,
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
-  listProviderPluginCommandSpecs,
-} from "openclaw/plugin-sdk/command-auth";
-import { type ChatCommandDefinition, type CommandArgs } from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -21,7 +21,7 @@ import { resolveSlackEffectiveAllowFrom } from "./auth.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
-import { normalizeSlackChannelType } from "./context.js";
+import { normalizeSlackChannelType, resolveSlackChatType } from "./context.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
 import {
   createSlackExternalArgMenuStore,
@@ -47,6 +47,9 @@ let slashCommandsRuntimePromise: Promise<typeof import("./slash-commands.runtime
   null;
 let slashDispatchRuntimePromise: Promise<typeof import("./slash-dispatch.runtime.js")> | null =
   null;
+let slackPluginCommandsRuntimePromise: Promise<
+  typeof import("./slash-plugin-commands.runtime.js")
+> | null = null;
 let slashSkillCommandsRuntimePromise: Promise<
   typeof import("./slash-skill-commands.runtime.js")
 > | null = null;
@@ -59,6 +62,11 @@ function loadSlashCommandsRuntime() {
 function loadSlashDispatchRuntime() {
   slashDispatchRuntimePromise ??= import("./slash-dispatch.runtime.js");
   return slashDispatchRuntimePromise;
+}
+
+function loadSlackPluginCommandsRuntime() {
+  slackPluginCommandsRuntimePromise ??= import("./slash-plugin-commands.runtime.js");
+  return slackPluginCommandsRuntimePromise;
 }
 
 function loadSlashSkillCommandsRuntime() {
@@ -332,6 +340,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       const rawChannelType =
         channelInfo?.type ?? (command.channel_name === "directmessage" ? "im" : undefined);
       const channelType = normalizeSlackChannelType(rawChannelType, command.channel_id);
+      const chatType = resolveSlackChatType(channelType);
       const isDirectMessage = channelType === "im";
       const isGroupDm = channelType === "mpim";
       const isRoom = channelType === "channel" || channelType === "group";
@@ -566,10 +575,10 @@ export async function registerSlackMonitorSlashCommands(params: {
             ? `slack:channel:${command.channel_id}`
             : `slack:group:${command.channel_id}`,
         To: `slash:${command.user_id}`,
-        ChatType: isDirectMessage ? "direct" : "channel",
+        ChatType: chatType,
         ConversationLabel:
           resolveConversationLabel({
-            ChatType: isDirectMessage ? "direct" : "channel",
+            ChatType: chatType,
             SenderName: senderName,
             GroupSubject: isRoomish ? roomLabel : undefined,
             From: isDirectMessage
@@ -685,6 +694,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     const existingNativeNames = new Set(
       nativeCommands.map((c) => normalizeLowercaseStringOrEmpty(c.name)).filter(Boolean),
     );
+    const { listProviderPluginCommandSpecs } = await loadSlackPluginCommandsRuntime();
     for (const pluginCommand of listProviderPluginCommandSpecs("slack")) {
       const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
       if (!normalizedName || existingNativeNames.has(normalizedName)) {

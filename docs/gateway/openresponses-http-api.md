@@ -338,3 +338,8 @@ curl -N http://127.0.0.1:18789/v1/responses \
     "input": "hi"
   }'
 ```
+
+## Related
+
+- [OpenAI chat completions](/gateway/openai-http-api)
+- [OpenAI](/providers/openai)

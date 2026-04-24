@@ -99,18 +99,45 @@ If `provider: "perplexity"` is configured and the Perplexity key SecretRef is un
 
 These parameters apply to the native Perplexity Search API path.
 
-| Parameter             | Description                                          |
-| --------------------- | ---------------------------------------------------- |
-| `query`               | Search query (required)                              |
-| `count`               | Number of results to return (1-10, default: 5)       |
-| `country`             | 2-letter ISO country code (e.g., "US", "DE")         |
-| `language`            | ISO 639-1 language code (e.g., "en", "de", "fr")     |
-| `freshness`           | Time filter: `day` (24h), `week`, `month`, or `year` |
-| `date_after`          | Only results published after this date (YYYY-MM-DD)  |
-| `date_before`         | Only results published before this date (YYYY-MM-DD) |
-| `domain_filter`       | Domain allowlist/denylist array (max 20)             |
-| `max_tokens`          | Total content budget (default: 25000, max: 1000000)  |
-| `max_tokens_per_page` | Per-page token limit (default: 2048)                 |
+<ParamField path="query" type="string" required>
+Search query.
+</ParamField>
+
+<ParamField path="count" type="number" default="5">
+Number of results to return (1–10).
+</ParamField>
+
+<ParamField path="country" type="string">
+2-letter ISO country code (e.g. `US`, `DE`).
+</ParamField>
+
+<ParamField path="language" type="string">
+ISO 639-1 language code (e.g. `en`, `de`, `fr`).
+</ParamField>
+
+<ParamField path="freshness" type="'day' | 'week' | 'month' | 'year'">
+Time filter — `day` is 24 hours.
+</ParamField>
+
+<ParamField path="date_after" type="string">
+Only results published after this date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField path="date_before" type="string">
+Only results published before this date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField path="domain_filter" type="string[]">
+Domain allowlist/denylist array (max 20).
+</ParamField>
+
+<ParamField path="max_tokens" type="number" default="25000">
+Total content budget (max 1000000).
+</ParamField>
+
+<ParamField path="max_tokens_per_page" type="number" default="2048">
+Per-page token limit.
+</ParamField>
 
 For the legacy Sonar/OpenRouter compatibility path:
 

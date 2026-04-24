@@ -9,7 +9,12 @@ import {
 } from "../../shared/string-coerce.js";
 import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
-import { ToolInputError, readStringArrayParam, readStringParam } from "./common.js";
+import {
+  ToolInputError,
+  readNumberParam,
+  readStringArrayParam,
+  readStringParam,
+} from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import {
   buildToolModelConfigFromCandidates,
@@ -76,6 +81,20 @@ export function applyMusicGenerationModelConfigDefaults(
   musicGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
   return applyAgentDefaultModelConfig(cfg, "musicGenerationModel", musicGenerationModelConfig);
+}
+
+export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
+  const timeoutMs = readNumberParam(args, "timeoutMs", {
+    integer: true,
+    strict: true,
+  });
+  if (timeoutMs === undefined) {
+    return undefined;
+  }
+  if (timeoutMs <= 0) {
+    throw new ToolInputError("timeoutMs must be a positive integer in milliseconds.");
+  }
+  return timeoutMs;
 }
 
 function applyAgentDefaultModelConfig(

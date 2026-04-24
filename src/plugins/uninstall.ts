@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -84,6 +85,22 @@ export function resolveUninstallChannelConfigKeys(
   return keys;
 }
 
+function loadPathMatchesInstallSourcePath(loadPath: string, sourcePath: string): boolean {
+  if (loadPath === sourcePath) {
+    return true;
+  }
+  return resolveComparablePath(loadPath) === resolveComparablePath(sourcePath);
+}
+
+function resolveComparablePath(value: string): string {
+  const resolved = path.resolve(value);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 /**
  * Remove plugin references from config (pure config mutation).
  * Returns a new config with the plugin removed from entries, installs, allow, load.paths, slots,
@@ -137,8 +154,13 @@ export function removePluginFromConfig(
   if (installRecord?.source === "path" && installRecord.sourcePath) {
     const sourcePath = installRecord.sourcePath;
     const loadPaths = load?.paths;
-    if (Array.isArray(loadPaths) && loadPaths.includes(sourcePath)) {
-      const nextLoadPaths = loadPaths.filter((p) => p !== sourcePath);
+    if (
+      Array.isArray(loadPaths) &&
+      loadPaths.some((p) => loadPathMatchesInstallSourcePath(p, sourcePath))
+    ) {
+      const nextLoadPaths = loadPaths.filter(
+        (p) => !loadPathMatchesInstallSourcePath(p, sourcePath),
+      );
       load = nextLoadPaths.length > 0 ? { ...load, paths: nextLoadPaths } : undefined;
       actions.loadPath = true;
     }

@@ -26,3 +26,7 @@ Notes:
 
 - With no query, `openclaw docs` opens the live docs search entrypoint.
 - Multi-word queries are passed through as one search request.
+
+## Related
+
+- [CLI reference](/cli)

@@ -1,6 +1,7 @@
 export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Codex models:",
   "Available Codex models",
+  "Available models:",
   "Available models, local cache:",
   "Available agent target:",
   "Available agent targets:",
@@ -30,6 +31,10 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Available models in this environment:",
   "Available models in this Codex environment:",
   "Available models in this Codex install",
+  "Available model overrides:",
+  "Available model overrides exposed in this session",
+  "Available model overrides here:",
+  "Available model overrides in this session:",
   "Available agent models:",
   "Visible options in this session:",
   "Current: `openai/",
@@ -84,6 +89,8 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
           normalized.includes("escalation") ||
           normalized.includes("elevated execution"))) ||
       normalized.includes("interactive in this environment") ||
+      normalized.includes("dropped into the interactive ui") ||
+      normalized.includes("does not provide a separate non-interactive") ||
       (normalized.includes("not installed") &&
         normalized.includes("path") &&
         (normalized.includes("codex cli") || normalized.includes("`codex`"))) ||

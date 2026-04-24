@@ -2,6 +2,10 @@ import { createInterface, type Interface as ReadlineInterface } from "node:readl
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
+  type CodexAppServerRequestMethod,
+  type CodexAppServerRequestParams,
+  type CodexAppServerRequestResult,
+  type CodexInitializeParams,
   type CodexInitializeResponse,
   isRpcResponse,
   type CodexServerNotification,
@@ -15,6 +19,7 @@ import { createWebSocketTransport } from "./transport-websocket.js";
 import { closeCodexAppServerTransport, type CodexAppServerTransport } from "./transport.js";
 
 export const MIN_CODEX_APP_SERVER_VERSION = "0.118.0";
+const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 
 type PendingRequest = {
   method: string;
@@ -106,7 +111,7 @@ export class CodexAppServerClient {
     }
     // The handshake identifies the exact app-server process we will keep using,
     // which matters when callers override the binary or app-server args.
-    const response = await this.request<CodexInitializeResponse>("initialize", {
+    const response = await this.request("initialize", {
       clientInfo: {
         name: "openclaw",
         title: "OpenClaw",
@@ -115,17 +120,28 @@ export class CodexAppServerClient {
       capabilities: {
         experimentalApi: true,
       },
-    });
+    } satisfies CodexInitializeParams);
     assertSupportedCodexAppServerVersion(response);
     this.notify("initialized");
     this.initialized = true;
   }
 
+  request<M extends CodexAppServerRequestMethod>(
+    method: M,
+    params: CodexAppServerRequestParams<M>,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<CodexAppServerRequestResult<M>>;
   request<T = JsonValue | undefined>(
     method: string,
-    params?: JsonValue,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+    params?: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<T>;
+  request<T = JsonValue | undefined>(
+    method: string,
+    params?: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<T> {
+    options ??= {};
     if (this.closed) {
       return Promise.reject(new Error("codex app-server client is closed"));
     }
@@ -133,7 +149,7 @@ export class CodexAppServerClient {
       return Promise.reject(new Error(`${method} aborted`));
     }
     const id = this.nextId++;
-    const message: RpcRequest = { id, method, params };
+    const message: RpcRequest = { id, method, params: params as JsonValue | undefined };
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let cleanupAbort: (() => void) | undefined;
@@ -234,7 +250,10 @@ export class CodexAppServerClient {
     try {
       parsed = JSON.parse(trimmed);
     } catch (error) {
-      embeddedAgentLog.warn("failed to parse codex app-server message", { error });
+      embeddedAgentLog.warn("failed to parse codex app-server message", {
+        error,
+        linePreview: redactCodexAppServerLinePreview(trimmed),
+      });
       return;
     }
     if (!parsed || typeof parsed !== "object") {
@@ -416,6 +435,19 @@ function numericVersionParts(version: string): number[] {
     .map((part) => (Number.isFinite(part) ? part : 0));
 }
 
+function redactCodexAppServerLinePreview(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  const redacted = compact
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+/gi, "$1<redacted>")
+    .replace(
+      /("(?:api_?key|authorization|token|access_token|refresh_token)"\s*:\s*")([^"]+)(")/gi,
+      "$1<redacted>$3",
+    );
+  return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
+    ? `${redacted.slice(0, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
+    : redacted;
+}
+
 const CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = new Set([
   "item/commandExecution/requestApproval",
   "item/fileChange/requestApproval",
@@ -438,4 +470,5 @@ function formatExitValue(value: unknown): string {
 
 export const __testing = {
   closeCodexAppServerTransport,
+  redactCodexAppServerLinePreview,
 } as const;

@@ -1,20 +1,20 @@
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  chunkMarkdownTextWithMode,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  type ChunkMode,
+} from "openclaw/plugin-sdk/reply-chunking";
+import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
+  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
-import {
-  chunkMarkdownTextWithMode,
-  createReplyReferencePlanner,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-} from "./reply.runtime.js";
 import { sendMessageSlack, type SlackSendIdentity } from "./send.runtime.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {

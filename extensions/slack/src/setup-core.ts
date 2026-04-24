@@ -24,10 +24,10 @@ import { inspectSlackAccount } from "./account-inspect.js";
 import { resolveSlackAccount } from "./accounts.js";
 import {
   buildSlackSetupLines,
-  SLACK_CHANNEL as channel,
   isSlackSetupAccountConfigured,
+  SLACK_CHANNEL as channel,
   setSlackChannelAllowlist,
-} from "./shared.js";
+} from "./setup-shared.js";
 
 function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
   return patchChannelConfigForAccount({

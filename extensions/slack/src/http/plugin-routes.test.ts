@@ -1,7 +1,9 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerSlackPluginHttpRoutes } from "./plugin-routes.js";
+import { registerSlackHttpHandler } from "./registry.js";
 
 function createApi(config: OpenClawConfig, registerHttpRoute = vi.fn()): OpenClawPluginApi {
   return createTestPluginApi({
@@ -58,5 +60,31 @@ describe("registerSlackPluginHttpRoutes", () => {
       .map((call) => (call[0] as { path: string }).path)
       .toSorted();
     expect(paths).toEqual(["/slack/events"]);
+  });
+
+  it("dispatches through the shared Slack HTTP handler registry", async () => {
+    const routeHandler = vi.fn();
+    const unregister = registerSlackHttpHandler({
+      path: "/slack/events",
+      handler: routeHandler,
+    });
+    const registerHttpRoute = vi.fn();
+
+    try {
+      registerSlackPluginHttpRoutes(createApi({}, registerHttpRoute));
+      const route = registerHttpRoute.mock.calls[0]?.[0] as
+        | {
+            handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+          }
+        | undefined;
+      const req = { url: "/slack/events" } as IncomingMessage;
+      const res = {} as ServerResponse;
+
+      await expect(route?.handler(req, res)).resolves.toBe(true);
+
+      expect(routeHandler).toHaveBeenCalledWith(req, res);
+    } finally {
+      unregister();
+    }
   });
 });

@@ -977,6 +977,400 @@ describe("memory-core dreaming phases", () => {
     ]);
   });
 
+  it("skips isolated cron run transcripts during session ingestion", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "cron-run.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:01:00.000Z",
+            content:
+              "[cron:job-1 Codex Sessions Sync] Run Codex sessions sync: 1. Convert sessions 2. Update qmd",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-05T18:02:00.000Z",
+            content: "Running Codex sessions sync...",
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionId: "cron-run",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+          list: [{ id: "main", workspace: workspaceDir }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    try {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    await expect(
+      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    const sessionIngestion = JSON.parse(
+      await fs.readFile(
+        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
+        "utf-8",
+      ),
+    ) as {
+      files: Record<
+        string,
+        {
+          lineCount: number;
+          lastContentLine: number;
+          contentHash: string;
+        }
+      >;
+    };
+    expect(Object.values(sessionIngestion.files)).toEqual([
+      expect.objectContaining({
+        lineCount: 0,
+        lastContentLine: 0,
+        contentHash: expect.any(String),
+      }),
+    ]);
+  });
+
+  it("drops generated system wrapper text without suppressing paired assistant replies", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "ordinary-session.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-16T18:01:00.000Z",
+            content:
+              "System (untrusted): [2026-04-16 11:01:00 PDT] Exec completed (quiet-fo, code 0) :: Converted: 1",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-16T18:01:30.000Z",
+            content: "Handled internally.",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-16T18:02:00.000Z",
+            content: "What changed in the sync?",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-16T18:03:00.000Z",
+            content: "One new session was converted.",
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+          list: [{ id: "main", workspace: workspaceDir }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
+    try {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+
+    const corpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-16.txt"),
+      "utf-8",
+    );
+    expect(corpus).toContain("User: What changed in the sync?");
+    expect(corpus).toContain("Assistant: One new session was converted.");
+    expect(corpus).not.toContain("System (untrusted):");
+    expect(corpus).toContain("Assistant: Handled internally.");
+  });
+
+  it("drops archive, cron, and heartbeat chatter from fresh session corpus output", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "archived.jsonl.deleted.2026-04-16T18-06-16.529Z"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-16T18:01:00.000Z",
+            content: "[cron:job-1 Example] Run the nightly sync",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-16T18:02:00.000Z",
+            content: "Running the nightly sync now.",
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "ordinary.checkpoint.abc123.jsonl"),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          timestamp: "2026-04-16T18:03:00.000Z",
+          content: "Checkpoint chatter should stay out.",
+        },
+      }) + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "ordinary.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-16T18:04:00.000Z",
+            content:
+              "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-16T18:05:00.000Z",
+            content: "HEARTBEAT_OK",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-16T18:06:00.000Z",
+            content: "[cron:job-2 Example] Run the qmd sync",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-16T18:07:00.000Z",
+            content: "Running the qmd sync now.",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-16T18:08:00.000Z",
+            content: "Document the Ollama provider setup.",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-16T18:09:00.000Z",
+            content: "I documented the Ollama provider setup in the workspace notes.",
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+          list: [{ id: "main", workspace: workspaceDir }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
+    try {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+
+    const corpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-16.txt"),
+      "utf-8",
+    );
+    expect(corpus).toContain("User: Document the Ollama provider setup.");
+    expect(corpus).toContain(
+      "Assistant: I documented the Ollama provider setup in the workspace notes.",
+    );
+    expect(corpus).not.toContain("Run the nightly sync");
+    expect(corpus).not.toContain("Checkpoint chatter should stay out.");
+    expect(corpus).not.toContain("Read HEARTBEAT.md");
+    expect(corpus).not.toContain("HEARTBEAT_OK");
+    expect(corpus).not.toContain("Run the qmd sync");
+  });
+
+  it("ignores chat scaffolding tags when building rem reflections", () => {
+    const preview = __testing.previewRemDreaming({
+      entries: [
+        {
+          key: "memory:1",
+          path: "memory/.dreams/session-corpus/2026-04-16.txt",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "Assistant: I documented the Ollama provider setup.",
+          recallCount: 1,
+          dailyCount: 0,
+          groundedCount: 0,
+          totalScore: 0.6,
+          maxScore: 0.6,
+          firstRecalledAt: "2026-04-16T18:00:00.000Z",
+          lastRecalledAt: "2026-04-16T18:00:00.000Z",
+          queryHashes: ["q1"],
+          recallDays: ["2026-04-16"],
+          conceptTags: ["assistant", "the", "ollama", "provider"],
+        },
+      ],
+      limit: 5,
+      minPatternStrength: 0,
+    });
+
+    expect(preview.reflections.join("\n")).toContain("`ollama`");
+    expect(preview.reflections.join("\n")).toContain("`provider`");
+    expect(preview.reflections.join("\n")).not.toContain("`assistant`");
+    expect(preview.reflections.join("\n")).not.toContain("`the`");
+  });
+
   it("does not reread unchanged dreaming-generated transcripts after checkpointing skip state", async () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");

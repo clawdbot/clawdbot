@@ -38,9 +38,13 @@ export type CanonicalInboundMessageHookContext = {
   provider?: string;
   surface?: string;
   threadId?: string | number;
+  // `mediaPath(s)` are files OpenClaw has already staged locally. `mediaUrl(s)`
+  // are provider/media-server references that may not exist on this host.
   mediaPath?: string;
+  mediaUrl?: string;
   mediaType?: string;
   mediaPaths?: string[];
+  mediaUrls?: string[];
   mediaTypes?: string[];
   originatingChannel?: string;
   originatingTo?: string;
@@ -95,6 +99,11 @@ export function deriveInboundMessageHookContext(
         (value): value is string => typeof value === "string" && value.length > 0,
       )
     : undefined;
+  const mediaUrls = Array.isArray(ctx.MediaUrls)
+    ? ctx.MediaUrls.filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      )
+    : undefined;
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -123,8 +132,10 @@ export function deriveInboundMessageHookContext(
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
     mediaPath: ctx.MediaPath ?? mediaPaths?.[0],
+    mediaUrl: ctx.MediaUrl ?? mediaUrls?.[0],
     mediaType: ctx.MediaType ?? mediaTypes?.[0],
     mediaPaths,
+    mediaUrls,
     mediaTypes,
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
@@ -262,8 +273,10 @@ export function toPluginInboundClaimEvent(
       originatingTo: canonical.originatingTo,
       senderE164: canonical.senderE164,
       mediaPath: canonical.mediaPath,
+      mediaUrl: canonical.mediaUrl,
       mediaType: canonical.mediaType,
       mediaPaths: canonical.mediaPaths,
+      mediaUrls: canonical.mediaUrls,
       mediaTypes: canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,

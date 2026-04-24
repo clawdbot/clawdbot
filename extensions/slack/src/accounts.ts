@@ -2,7 +2,6 @@ import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
-  normalizeChatType,
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
@@ -10,6 +9,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
+
+export { resolveSlackReplyToMode } from "./account-reply-mode.js";
 
 export type SlackTokenSource = "env" | "config" | "none";
 
@@ -108,18 +109,4 @@ export function listEnabledSlackAccounts(cfg: OpenClawConfig): ResolvedSlackAcco
   return listSlackAccountIds(cfg)
     .map((accountId) => resolveSlackAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
-}
-
-export function resolveSlackReplyToMode(
-  account: ResolvedSlackAccount,
-  chatType?: string | null,
-): "off" | "first" | "all" | "batched" {
-  const normalized = normalizeChatType(chatType ?? undefined);
-  if (normalized && account.replyToModeByChatType?.[normalized] !== undefined) {
-    return account.replyToModeByChatType[normalized] ?? "off";
-  }
-  if (normalized === "direct" && account.dm?.replyToMode !== undefined) {
-    return account.dm.replyToMode;
-  }
-  return account.replyToMode ?? "off";
 }

@@ -45,10 +45,14 @@ export function formatModels(result: CodexAppServerModelListResult): string {
   if (result.models.length === 0) {
     return "No Codex app-server models returned.";
   }
-  return [
+  const lines = [
     "Codex models:",
     ...result.models.map((model) => `- ${model.id}${model.isDefault ? " (default)" : ""}`),
-  ].join("\n");
+  ];
+  if (result.truncated) {
+    lines.push("- More models available; output truncated.");
+  }
+  return lines.join("\n");
 }
 
 export function formatThreads(response: JsonValue | undefined): string {
@@ -106,6 +110,14 @@ export function buildHelp(): string {
     "- /codex models",
     "- /codex threads [filter]",
     "- /codex resume <thread-id>",
+    "- /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
+    "- /codex binding",
+    "- /codex stop",
+    "- /codex steer <message>",
+    "- /codex model [model]",
+    "- /codex fast [on|off|status]",
+    "- /codex permissions [default|yolo|status]",
+    "- /codex detach",
     "- /codex compact",
     "- /codex review",
     "- /codex account",
@@ -118,11 +130,16 @@ function summarizeAccount(value: JsonValue | undefined): string {
   if (!isJsonObject(value)) {
     return "unavailable";
   }
+  const account = isJsonObject(value.account) ? value.account : value;
+  const accountType = readString(account, "type");
+  if (accountType === "amazonBedrock") {
+    return "Amazon Bedrock";
+  }
   return (
-    readString(value, "email") ??
-    readString(value, "accountEmail") ??
-    readString(value, "planType") ??
-    readString(value, "id") ??
+    readString(account, "email") ??
+    readString(account, "accountEmail") ??
+    readString(account, "planType") ??
+    readString(account, "id") ??
     "available"
   );
 }

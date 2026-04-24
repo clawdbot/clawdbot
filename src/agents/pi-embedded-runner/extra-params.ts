@@ -6,9 +6,11 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
+  resolveProviderExtraParamsForTransport as resolveProviderExtraParamsForTransportRuntime,
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
@@ -26,6 +28,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
+  resolveProviderExtraParamsForTransport: resolveProviderExtraParamsForTransportRuntime,
   wrapProviderStreamFn: wrapProviderStreamFnRuntime,
 };
 
@@ -39,12 +42,17 @@ export const __testing = {
   ): void {
     providerRuntimeDeps.prepareProviderExtraParams =
       deps?.prepareProviderExtraParams ?? defaultProviderRuntimeDeps.prepareProviderExtraParams;
+    providerRuntimeDeps.resolveProviderExtraParamsForTransport =
+      deps?.resolveProviderExtraParamsForTransport ??
+      defaultProviderRuntimeDeps.resolveProviderExtraParamsForTransport;
     providerRuntimeDeps.wrapProviderStreamFn =
       deps?.wrapProviderStreamFn ?? defaultProviderRuntimeDeps.wrapProviderStreamFn;
   },
   resetProviderRuntimeDepsForTest(): void {
     providerRuntimeDeps.prepareProviderExtraParams =
       defaultProviderRuntimeDeps.prepareProviderExtraParams;
+    providerRuntimeDeps.resolveProviderExtraParamsForTransport =
+      defaultProviderRuntimeDeps.resolveProviderExtraParamsForTransport;
     providerRuntimeDeps.wrapProviderStreamFn = defaultProviderRuntimeDeps.wrapProviderStreamFn;
   },
 };
@@ -111,7 +119,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cachedContent?: string;
   openaiWsWarmup?: boolean;
 };
-type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
+export type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
 
 function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
   return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
@@ -125,10 +133,14 @@ export function resolvePreparedExtraParams(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
+  agentDir?: string;
+  workspaceDir?: string;
   extraParamsOverride?: Record<string, unknown>;
   thinkingLevel?: ThinkLevel;
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
+  model?: ProviderRuntimeModel;
+  resolvedTransport?: SupportedTransport;
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -159,19 +171,38 @@ export function resolvePreparedExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
-  return (
+  const prepared =
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
       config: params.cfg,
+      workspaceDir: params.workspaceDir,
       context: {
         config: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         provider: params.provider,
         modelId: params.modelId,
         extraParams: merged,
         thinkingLevel: params.thinkingLevel,
       },
-    }) ?? merged
-  );
+    }) ?? merged;
+  const transportPatch = providerRuntimeDeps.resolveProviderExtraParamsForTransport({
+    provider: params.provider,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      provider: params.provider,
+      modelId: params.modelId,
+      extraParams: prepared,
+      thinkingLevel: params.thinkingLevel,
+      model: params.model,
+      transport: params.resolvedTransport ?? resolveSupportedTransport(prepared.transport),
+    },
+  })?.patch;
+  return transportPatch ? { ...prepared, ...transportPatch } : prepared;
 }
 
 function sanitizeExtraParamsRecord(
@@ -214,7 +245,7 @@ function applyDefaultOpenAIGptRuntimeParams(
     merged.text_verbosity = "low";
   }
   if (!Object.hasOwn(merged, "openaiWsWarmup")) {
-    merged.openaiWsWarmup = true;
+    merged.openaiWsWarmup = false;
   }
 }
 
@@ -228,6 +259,21 @@ export function resolveAgentTransportOverride(params: {
     return undefined;
   }
   return resolveSupportedTransport(params.effectiveExtraParams?.transport);
+}
+
+export function resolveExplicitSettingsTransport(params: {
+  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  sessionTransport: unknown;
+}): SupportedTransport | undefined {
+  const globalSettings = params.settingsManager.getGlobalSettings();
+  const projectSettings = params.settingsManager.getProjectSettings();
+  if (
+    !hasExplicitTransportSetting(globalSettings) &&
+    !hasExplicitTransportSetting(projectSettings)
+  ) {
+    return undefined;
+  }
+  return resolveSupportedTransport(params.sessionTransport);
 }
 
 function createStreamFnWithExtraParams(
@@ -331,11 +377,7 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (
-      model.api !== "openai-completions" &&
-      model.api !== "openai-responses" &&
-      model.api !== "azure-openai-responses"
-    ) {
+    if (!supportsGptParallelToolCallsPayload(model.api)) {
       return underlying(model, context, options);
     }
     log.debug(
@@ -414,7 +456,7 @@ function applyPostPluginStreamWrappers(
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
-    [ctx.resolvedExtraParams, ctx.override],
+    [ctx.effectiveExtraParams, ctx.override],
     "parallel_tool_calls",
     "parallelToolCalls",
   );
@@ -451,6 +493,7 @@ export function applyExtraParamsToAgent(
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
   agentDir?: string,
+  resolvedTransport?: SupportedTransport,
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -471,7 +514,11 @@ export function applyExtraParamsToAgent(
     extraParamsOverride,
     thinkingLevel,
     agentId,
+    agentDir,
+    workspaceDir,
     resolvedExtraParams,
+    model,
+    resolvedTransport,
   });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,

@@ -88,3 +88,9 @@ compaction cycles.
 - [Compaction](/concepts/compaction) -- summarization-based context reduction
 - [Gateway Configuration](/gateway/configuration) -- all pruning config knobs
   (`contextPruning.*`)
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session tools](/concepts/session-tool)
+- [Context engine](/concepts/context-engine)

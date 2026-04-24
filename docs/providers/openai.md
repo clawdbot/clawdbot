@@ -7,27 +7,44 @@ read_when:
 title: "OpenAI"
 ---
 
-OpenAI provides developer APIs for GPT models. OpenClaw supports two auth routes behind the same canonical OpenAI model refs:
+OpenAI provides developer APIs for GPT models. OpenClaw supports three OpenAI-family routes. The model prefix selects the route:
 
 - **API key** — direct OpenAI Platform access with usage-based billing (`openai/*` models)
-- **Codex subscription** — ChatGPT/Codex sign-in with subscription access. The internal auth/provider id is `openai-codex`, but new model refs should still use `openai/*`.
+- **Codex subscription through PI** — ChatGPT/Codex sign-in with subscription access (`openai-codex/*` models)
+- **Codex app-server harness** — native Codex app-server execution (`openai/*` models plus `agents.defaults.embeddedHarness.runtime: "codex"`)
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
 
+<Note>
+GPT-5.5 is currently available in OpenClaw through subscription/OAuth routes:
+`openai-codex/gpt-5.5` with the PI runner, or `openai/gpt-5.5` with the
+Codex app-server harness. Direct API-key access for `openai/gpt-5.5` is
+supported once OpenAI enables GPT-5.5 on the public API; until then use an
+API-enabled model such as `openai/gpt-5.4` for `OPENAI_API_KEY` setups.
+</Note>
+
+<Note>
+Enabling the OpenAI plugin, or selecting an `openai-codex/*` model, does not
+enable the bundled Codex app-server plugin. OpenClaw enables that plugin only
+when you explicitly select the native Codex harness with
+`embeddedHarness.runtime: "codex"` or use a legacy `codex/*` model ref.
+</Note>
+
 ## OpenClaw feature coverage
 
-| OpenAI capability         | OpenClaw surface                          | Status                                                 |
-| ------------------------- | ----------------------------------------- | ------------------------------------------------------ |
-| Chat / Responses          | `openai/<model>` model provider           | Yes                                                    |
-| Codex subscription models | `openai/<model>` with `openai-codex` auth | Yes                                                    |
-| Server-side web search    | Native OpenAI Responses tool              | Yes, when web search is enabled and no provider pinned |
-| Images                    | `image_generate`                          | Yes                                                    |
-| Videos                    | `video_generate`                          | Yes                                                    |
-| Text-to-speech            | `messages.tts.provider: "openai"` / `tts` | Yes                                                    |
-| Batch speech-to-text      | `tools.media.audio` / media understanding | Yes                                                    |
-| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"` | Yes                                                    |
-| Realtime voice            | Voice Call `realtime.provider: "openai"`  | Yes                                                    |
-| Embeddings                | memory embedding provider                 | Yes                                                    |
+| OpenAI capability         | OpenClaw surface                                           | Status                                                 |
+| ------------------------- | ---------------------------------------------------------- | ------------------------------------------------------ |
+| Chat / Responses          | `openai/<model>` model provider                            | Yes                                                    |
+| Codex subscription models | `openai-codex/<model>` with `openai-codex` OAuth           | Yes                                                    |
+| Codex app-server harness  | `openai/<model>` with `embeddedHarness.runtime: codex`     | Yes                                                    |
+| Server-side web search    | Native OpenAI Responses tool                               | Yes, when web search is enabled and no provider pinned |
+| Images                    | `image_generate`                                           | Yes                                                    |
+| Videos                    | `video_generate`                                           | Yes                                                    |
+| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                  | Yes                                                    |
+| Batch speech-to-text      | `tools.media.audio` / media understanding                  | Yes                                                    |
+| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                  | Yes                                                    |
+| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk | Yes                                                    |
+| Embeddings                | memory embedding provider                                  | Yes                                                    |
 
 ## Getting started
 
@@ -63,11 +80,14 @@ Choose your preferred auth method and follow the setup steps.
 
     | Model ref | Route | Auth |
     |-----------|-------|------|
-    | `openai/gpt-5.5` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
-    | `openai/gpt-5.5-pro` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
+    | `openai/gpt-5.4` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
+    | `openai/gpt-5.4-mini` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
+    | `openai/gpt-5.5` | Future direct API route once OpenAI enables GPT-5.5 on the API | `OPENAI_API_KEY` |
 
     <Note>
-    `openai-codex/*` remains accepted as a legacy compatibility alias, but new configs should use `openai/*`.
+    `openai/*` is the direct OpenAI API-key route unless you explicitly force
+    the Codex app-server harness. GPT-5.5 itself is currently subscription/OAuth
+    only; use `openai-codex/*` for Codex OAuth through the default PI runner.
     </Note>
 
     ### Config example
@@ -75,7 +95,7 @@ Choose your preferred auth method and follow the setup steps.
     ```json5
     {
       env: { OPENAI_API_KEY: "sk-..." },
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
     }
     ```
 
@@ -108,7 +128,7 @@ Choose your preferred auth method and follow the setup steps.
       </Step>
       <Step title="Set the default model">
         ```bash
-        openclaw config set agents.defaults.model.primary openai/gpt-5.5
+        openclaw config set agents.defaults.model.primary openai-codex/gpt-5.5
         ```
       </Step>
       <Step title="Verify the model is available">
@@ -122,17 +142,20 @@ Choose your preferred auth method and follow the setup steps.
 
     | Model ref | Route | Auth |
     |-----------|-------|------|
-    | `openai/gpt-5.5` | ChatGPT/Codex OAuth | Codex sign-in |
+    | `openai-codex/gpt-5.5` | ChatGPT/Codex OAuth through PI | Codex sign-in |
+    | `openai/gpt-5.5` + `embeddedHarness.runtime: "codex"` | Codex app-server harness | Codex app-server auth |
 
     <Note>
-    `openai-codex/*` and `codex/*` model refs are legacy compatibility aliases. Keep using the `openai-codex` provider id for auth/profile commands.
+    Keep using the `openai-codex` provider id for auth/profile commands. The
+    `openai-codex/*` model prefix is also the explicit PI route for Codex OAuth.
+    It does not select or auto-enable the bundled Codex app-server harness.
     </Note>
 
     ### Config example
 
     ```json5
     {
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      agents: { defaults: { model: { primary: "openai-codex/gpt-5.5" } } },
     }
     ```
 
@@ -154,7 +177,7 @@ Choose your preferred auth method and follow the setup steps.
 
     OpenClaw treats model metadata and the runtime context cap as separate values.
 
-    For `openai/gpt-5.5` through Codex OAuth:
+    For `openai-codex/gpt-5.5` through Codex OAuth:
 
     - Native `contextWindow`: `1000000`
     - Default runtime `contextTokens` cap: `272000`
@@ -184,34 +207,23 @@ Choose your preferred auth method and follow the setup steps.
 
 The bundled `openai` plugin registers image generation through the `image_generate` tool.
 It supports both OpenAI API-key image generation and Codex OAuth image
-generation.
+generation through the same `openai/gpt-image-2` model ref.
 
-| Capability                | OpenAI API key                     | Codex OAuth                        |
-| ------------------------- | ---------------------------------- | ---------------------------------- |
-| Model ref                 | `openai/gpt-image-2`               | `openai-codex/gpt-image-2`         |
-| Auth                      | `OPENAI_API_KEY`                   | OpenAI Codex OAuth sign-in         |
-| Max images per request    | 4                                  | 4                                  |
-| Edit mode                 | Enabled (up to 5 reference images) | Enabled (up to 5 reference images) |
-| Size overrides            | Supported, including 2K/4K sizes   | Supported, including 2K/4K sizes   |
-| Aspect ratio / resolution | Not forwarded to OpenAI Images API | Mapped to supported size when safe |
+| Capability                | OpenAI API key                     | Codex OAuth                          |
+| ------------------------- | ---------------------------------- | ------------------------------------ |
+| Model ref                 | `openai/gpt-image-2`               | `openai/gpt-image-2`                 |
+| Auth                      | `OPENAI_API_KEY`                   | OpenAI Codex OAuth sign-in           |
+| Transport                 | OpenAI Images API                  | Codex Responses backend              |
+| Max images per request    | 4                                  | 4                                    |
+| Edit mode                 | Enabled (up to 5 reference images) | Enabled (up to 5 reference images)   |
+| Size overrides            | Supported, including 2K/4K sizes   | Supported, including 2K/4K sizes     |
+| Aspect ratio / resolution | Not forwarded to OpenAI Images API | Mapped to a supported size when safe |
 
 ```json5
 {
   agents: {
     defaults: {
       imageGenerationModel: { primary: "openai/gpt-image-2" },
-    },
-  },
-}
-```
-
-Use Codex OAuth instead:
-
-```json5
-{
-  agents: {
-    defaults: {
-      imageGenerationModel: { primary: "openai-codex/gpt-image-2" },
     },
   },
 }
@@ -225,29 +237,22 @@ See [Image Generation](/tools/image-generation) for shared tool parameters, prov
 editing. `gpt-image-1` remains usable as an explicit model override, but new
 OpenAI image workflows should use `openai/gpt-image-2`.
 
-The `openai-codex` provider also exposes `gpt-image-2` for image generation and
-reference-image editing through OpenAI Codex OAuth. Use
-`openai-codex/gpt-image-2` when the agent is signed in with Codex OAuth but does
-not have an `OPENAI_API_KEY`. OpenClaw resolves the stored Codex OAuth access
-token for `openai-codex` and sends image requests through the Codex Responses
-backend, so this path works without the public OpenAI Images API key.
+For Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
+`openai-codex` OAuth profile is configured, OpenClaw resolves that stored OAuth
+access token and sends image requests through the Codex Responses backend. It
+does not first try `OPENAI_API_KEY` or silently fall back to an API key for that
+request. Configure `models.providers.openai` explicitly with an API key,
+custom base URL, or Azure endpoint when you want the direct OpenAI Images API
+route instead.
+If that custom image endpoint is on a trusted LAN/private address, also set
+`browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true`; OpenClaw keeps
+private/internal OpenAI-compatible image endpoints blocked unless this opt-in is
+present.
 
 Generate:
 
 ```
 /tool image_generate model=openai/gpt-image-2 prompt="A polished launch poster for OpenClaw on macOS" size=3840x2160 count=1
-```
-
-Generate with Codex OAuth:
-
-```
-/tool image_generate model=openai-codex/gpt-image-2 prompt="A polished launch poster for OpenClaw on macOS" size=3840x2160 count=1
-```
-
-Edit with Codex OAuth:
-
-```
-/tool image_generate model=openai-codex/gpt-image-2 prompt="Preserve the object shape, change the material to translucent glass" image=/path/to/reference.png size=1024x1536
 ```
 
 Edit:
@@ -284,7 +289,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai/gpt-5.5`, `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
+OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai-codex/gpt-5.5`, `openai/gpt-5.4`, `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
 
 The bundled native Codex harness uses the same GPT-5 behavior and heartbeat overlay through Codex app-server developer instructions, so `openai/gpt-5.x` sessions forced through `embeddedHarness.runtime: "codex"` keep the same follow-through and proactive heartbeat guidance even though Codex owns the rest of the harness prompt.
 
@@ -576,7 +581,10 @@ the Server-side compaction accordion below.
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": {
+            "openai/gpt-5.4": {
+              params: { transport: "auto" },
+            },
+            "openai-codex/gpt-5.5": {
               params: { transport: "auto" },
             },
           },
@@ -592,7 +600,7 @@ the Server-side compaction accordion below.
   </Accordion>
 
   <Accordion title="WebSocket warm-up">
-    OpenClaw enables WebSocket warm-up by default for `openai/*` to reduce first-turn latency.
+    OpenClaw enables WebSocket warm-up by default for `openai/*` and `openai-codex/*` to reduce first-turn latency.
 
     ```json5
     // Disable warm-up
@@ -600,7 +608,7 @@ the Server-side compaction accordion below.
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": {
+            "openai/gpt-5.4": {
               params: { openaiWsWarmup: false },
             },
           },
@@ -612,7 +620,7 @@ the Server-side compaction accordion below.
   </Accordion>
 
   <Accordion title="Fast mode">
-    OpenClaw exposes a shared fast-mode toggle for `openai/*`:
+    OpenClaw exposes a shared fast-mode toggle for `openai/*` and `openai-codex/*`:
 
     - **Chat/UI:** `/fast status|on|off`
     - **Config:** `agents.defaults.models["<provider>/<model>"].params.fastMode`
@@ -624,7 +632,7 @@ the Server-side compaction accordion below.
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": { params: { fastMode: true } },
+            "openai/gpt-5.4": { params: { fastMode: true } },
           },
         },
       },
@@ -645,7 +653,7 @@ the Server-side compaction accordion below.
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": { params: { serviceTier: "priority" } },
+            "openai/gpt-5.4": { params: { serviceTier: "priority" } },
           },
         },
       },
@@ -661,11 +669,13 @@ the Server-side compaction accordion below.
   </Accordion>
 
   <Accordion title="Server-side compaction (Responses API)">
-    For direct OpenAI Responses models (`openai/*` on `api.openai.com`), OpenClaw auto-enables server-side compaction:
+    For direct OpenAI Responses models (`openai/*` on `api.openai.com`), the OpenAI plugin's Pi-harness stream wrapper auto-enables server-side compaction:
 
     - Forces `store: true` (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
     - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when unavailable)
+
+    This applies to the built-in Pi harness path and to OpenAI provider hooks used by embedded runs. The native Codex app-server harness manages its own context through Codex and is configured separately with `agents.defaults.embeddedHarness.runtime`.
 
     <Tabs>
       <Tab title="Enable explicitly">
@@ -691,7 +701,7 @@ the Server-side compaction accordion below.
           agents: {
             defaults: {
               models: {
-                "openai/gpt-5.5": {
+                "openai/gpt-5.4": {
                   params: {
                     responsesServerCompaction: true,
                     responsesCompactThreshold: 120000,
@@ -709,7 +719,7 @@ the Server-side compaction accordion below.
           agents: {
             defaults: {
               models: {
-                "openai/gpt-5.5": {
+                "openai/gpt-5.4": {
                   params: { responsesServerCompaction: false },
                 },
               },

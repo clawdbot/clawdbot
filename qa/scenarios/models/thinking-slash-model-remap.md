@@ -13,8 +13,8 @@ coverage:
 objective: Verify /think lists provider-owned levels and remaps stored thinking levels when /model changes provider capabilities.
 successCriteria:
   - Anthropic Claude Sonnet 4.6 advertises adaptive but not OpenAI-only xhigh or Opus max.
-  - A stored adaptive level remaps to medium when switching to OpenAI GPT-5.5.
-  - OpenAI GPT-5.5 advertises xhigh but not adaptive or max.
+  - A stored adaptive level remaps to medium when switching to OpenAI GPT-5.4.
+  - OpenAI GPT-5.4 advertises xhigh but not adaptive or max.
   - A stored xhigh level remaps to high when switching to an Anthropic model without xhigh support.
 docsRefs:
   - docs/tools/thinking.md
@@ -33,7 +33,7 @@ execution:
   config:
     requiredProviderMode: live-frontier
     anthropicModelRef: anthropic/claude-sonnet-4-6
-    openAiXhighModelRef: openai/gpt-5.5
+    openAiXhighModelRef: openai/gpt-5.4
     noXhighModelRef: anthropic/claude-sonnet-4-6
     conversationId: qa-thinking-slash-remap
 ```
@@ -165,7 +165,7 @@ steps:
       - assert:
           expr: "/Options: .*\\bxhigh\\b/i.test(openAiThinkStatus.text) && !/Options: .*\\badaptive\\b/i.test(openAiThinkStatus.text) && !/Options: .*\\bmax\\b/i.test(openAiThinkStatus.text)"
           message:
-            expr: "`expected OpenAI GPT-5.5 /think options to include xhigh only, got ${openAiThinkStatus.text}`"
+            expr: "`expected OpenAI GPT-5.4 /think options to include xhigh only, got ${openAiThinkStatus.text}`"
     detailsExpr: "`adaptive=${adaptiveAck.text}; switch=${openAiModelAck.text}; think=${openAiThinkStatus.text}`"
   - name: maps xhigh to high on a model without xhigh
     actions:

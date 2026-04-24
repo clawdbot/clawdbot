@@ -74,6 +74,13 @@ Options:
 - In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
 - Node host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
+For a node connecting to a non-loopback `ws://` Gateway on a trusted private
+network, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`. Without it, node startup
+fails closed and asks you to use `wss://`, an SSH tunnel, or Tailscale.
+This is a process-environment opt-in, not an `openclaw.json` config key.
+`openclaw node install` persists it into the supervised node service when it is
+present in the install command environment.
+
 ## Service (background)
 
 Install a headless node host as a user service.
@@ -135,3 +142,8 @@ For approved async node exec, OpenClaw prepares a canonical `systemRunPlan`
 before prompting. The later approved `system.run` forward reuses that stored
 plan, so edits to command/cwd/session fields after the approval request was
 created are rejected instead of changing what the node executes.
+
+## Related
+
+- [CLI reference](/cli)
+- [Nodes](/nodes)

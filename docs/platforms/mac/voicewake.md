@@ -65,3 +65,9 @@ Hardening:
 
 - Toggle push-to-talk on, hold Cmd+Fn, speak, release: overlay should show partials then send.
 - While holding, menu-bar ears should stay enlarged (uses `triggerVoiceEars(ttl:nil)`); they drop after release.
+
+## Related
+
+- [Voice wake](/nodes/voicewake)
+- [Voice overlay](/platforms/mac/voice-overlay)
+- [macOS app](/platforms/macos)

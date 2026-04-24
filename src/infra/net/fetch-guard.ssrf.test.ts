@@ -4,6 +4,10 @@ import {
   GUARDED_FETCH_MODE,
   retainSafeHeadersForCrossOriginRedirectHeaders,
 } from "./fetch-guard.js";
+import {
+  ensureGlobalUndiciStreamTimeouts,
+  resetGlobalUndiciStreamTimeoutsForTests,
+} from "./undici-global-dispatcher.js";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
@@ -171,6 +175,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     envHttpProxyAgentCtor.mockClear();
     proxyAgentCtor.mockClear();
     logWarnMock.mockClear();
+    resetGlobalUndiciStreamTimeoutsForTests();
     Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   });
 
@@ -1011,6 +1016,69 @@ describe("fetchWithSsrFGuard hardening", () => {
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       expectEnvProxy: true,
     });
+  });
+
+  it("applies explicit timeoutMs to guarded direct dispatchers", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      timeoutMs: 123_456,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(agentCtor).toHaveBeenCalledWith({
+      connect: expect.objectContaining({
+        lookup: expect.any(Function),
+      }),
+      allowH2: false,
+      bodyTimeout: 123_456,
+      headersTimeout: 123_456,
+    });
+    await result.release();
+  });
+
+  it("inherits the configured global stream timeout for guarded direct dispatchers", async () => {
+    const { getGlobalDispatcher, setGlobalDispatcher } = await import("undici");
+    const previousDispatcher = getGlobalDispatcher();
+    try {
+      ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
+      (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+        Agent: agentCtor,
+        EnvHttpProxyAgent: envHttpProxyAgentCtor,
+        ProxyAgent: proxyAgentCtor,
+        fetch: vi.fn(async () => okResponse()),
+      };
+      const fetchImpl = vi.fn(async () => okResponse());
+
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+      });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(agentCtor).toHaveBeenCalledWith({
+        connect: expect.objectContaining({
+          lookup: expect.any(Function),
+        }),
+        allowH2: false,
+        bodyTimeout: 1_900_000,
+        headersTimeout: 1_900_000,
+      });
+      await result.release();
+    } finally {
+      setGlobalDispatcher(previousDispatcher);
+      resetGlobalUndiciStreamTimeoutsForTests();
+    }
   });
 
   it("allows explicit proxy on localhost when allowPrivateProxy is true even with restrictive hostnameAllowlist", async () => {

@@ -31,6 +31,7 @@ function createStubPluginRegistry(): PluginRegistry {
     httpRoutes: [],
     cliRegistrars: [],
     services: [],
+    gatewayDiscoveryServices: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],

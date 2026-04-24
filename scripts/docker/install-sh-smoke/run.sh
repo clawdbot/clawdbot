@@ -9,7 +9,7 @@ DEFAULT_PACKAGE="openclaw"
 PACKAGE_NAME="${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
 FRESH_VERSION="${OPENCLAW_INSTALL_FRESH_VERSION:-}"
 FRESH_TAG_URL="${OPENCLAW_INSTALL_FRESH_TAG_URL:-}"
-UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-2026.4.10}"
+UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-latest}"
 UPDATE_BASELINE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION:-}"
 UPDATE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_TAG_URL:-}"
@@ -124,6 +124,20 @@ npm_install_global() {
       install -g "$@"
 }
 
+resolve_update_baseline_version() {
+  if [[ -n "$UPDATE_BASELINE_TAG_URL" ]]; then
+    return
+  fi
+
+  local resolved_version
+  resolved_version="$(quiet_npm view "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" version 2>/dev/null || true)"
+  if [[ -z "$resolved_version" ]]; then
+    echo "ERROR: failed to resolve ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" >&2
+    return 1
+  fi
+  UPDATE_BASELINE_VERSION="$resolved_version"
+}
+
 run_install_smoke() {
   if [[ -n "$FRESH_VERSION" && -n "$FRESH_TAG_URL" ]]; then
     echo "package=$PACKAGE_NAME latest=$FRESH_VERSION source=$FRESH_TAG_URL"
@@ -215,6 +229,8 @@ run_update_smoke() {
     echo "ERROR: OPENCLAW_INSTALL_UPDATE_TAG_URL is required for update mode" >&2
     return 1
   fi
+
+  resolve_update_baseline_version
 
   echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
   echo "==> Install baseline release"
@@ -338,6 +354,8 @@ run_npm_global_smoke() {
     echo "ERROR: OPENCLAW_INSTALL_UPDATE_TAG_URL is required for npm-global mode" >&2
     return 1
   fi
+
+  resolve_update_baseline_version
 
   echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
   echo "==> Direct npm global install candidate"

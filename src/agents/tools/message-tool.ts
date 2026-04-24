@@ -4,6 +4,7 @@ import {
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
   type ChannelMessageActionDiscoveryInput,
+  listCrossChannelSchemaSupportedMessageActions,
   resolveChannelMessageToolSchemaProperties,
 } from "../../channels/plugins/message-action-discovery.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/message-action-names.js";
@@ -491,7 +492,7 @@ function resolveMessageToolSchemaActions(params: MessageToolDiscoveryParams): st
       if (plugin.id === currentChannel) {
         continue;
       }
-      for (const action of listChannelSupportedActions(
+      for (const action of listCrossChannelSchemaSupportedMessageActions(
         buildMessageActionDiscoveryInput(params, plugin.id),
       )) {
         allActions.add(action);
@@ -603,7 +604,7 @@ function buildMessageToolDescription(options?: {
         if (plugin.id === currentChannel) {
           continue;
         }
-        const actions = listChannelSupportedActions(
+        const actions = listCrossChannelSchemaSupportedMessageActions(
           buildMessageActionDiscoveryInput(messageToolDiscoveryParams, plugin.id),
         );
         if (actions.length > 0) {

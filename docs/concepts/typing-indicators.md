@@ -71,3 +71,8 @@ You can override mode or cadence per session:
   channel does not support typing.
 - `typingIntervalSeconds` controls the **refresh cadence**, not the start time.
   The default is 6 seconds.
+
+## Related
+
+- [Presence](/concepts/presence)
+- [Streaming and chunking](/concepts/streaming)

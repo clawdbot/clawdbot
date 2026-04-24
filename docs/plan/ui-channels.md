@@ -250,3 +250,8 @@ Add or update:
 - Should `delivery.pin` be implemented for Discord, Slack, MS Teams, and Feishu in the first pass, or only Telegram first?
 - Should `delivery` eventually absorb existing fields such as `replyToId`, `replyToCurrent`, `silent`, and `audioAsVoice`, or stay focused on post-send behaviors?
 - Should presentation support images or file references directly, or should media remain separate from UI layout for now?
+
+## Related
+
+- [Channels overview](/channels)
+- [Message presentation](/plugins/message-presentation)

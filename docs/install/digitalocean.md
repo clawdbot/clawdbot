@@ -125,3 +125,10 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
 - [Channels](/channels) -- connect Telegram, WhatsApp, Discord, and more
 - [Gateway configuration](/gateway/configuration) -- all config options
 - [Updating](/install/updating) -- keep OpenClaw up to date
+
+## Related
+
+- [Install overview](/install)
+- [Fly.io](/install/fly)
+- [Hetzner](/install/hetzner)
+- [VPS hosting](/vps)

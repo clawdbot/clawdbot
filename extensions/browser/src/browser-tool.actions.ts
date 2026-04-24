@@ -1,5 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserAct,
@@ -10,10 +9,12 @@ import {
   imageResultFromFile,
   jsonResult,
   loadConfig,
+  normalizeOptionalString,
+  readStringValue,
   resolveBrowserConfig,
   resolveProfile,
   wrapExternalContent,
-} from "./core-api.js";
+} from "./browser-tool.runtime.js";
 
 const browserToolActionDeps = {
   browserAct,

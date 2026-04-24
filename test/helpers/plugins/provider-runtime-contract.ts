@@ -445,7 +445,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
-    it("owns openai gpt-5.5 forward-compat resolution", () => {
+    it("leaves openai gpt-5.5 forward-compat resolution to Pi", () => {
       const provider = requireProviderContractProvider("openai");
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
@@ -463,14 +463,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
-        id: "gpt-5.5",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        contextWindow: 1_000_000,
-        maxTokens: 128_000,
-      });
+      expect(model).toBeUndefined();
     });
 
     it("owns openai gpt-5.4 mini forward-compat resolution", () => {
@@ -570,19 +563,23 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
-    it("owns forward-compat codex gpt-5.5 models", () => {
+    it("uses Pi registry metadata for codex gpt-5.5 models", () => {
       const provider = requireProviderContractProvider("openai-codex");
       const model = provider.resolveDynamicModel?.({
         provider: "openai-codex",
         modelId: "gpt-5.5",
         modelRegistry: {
           find: (_provider: string, id: string) =>
-            id === "gpt-5.4"
+            id === "gpt-5.5"
               ? createModel({
                   id,
                   api: "openai-codex-responses",
                   provider: "openai-codex",
                   baseUrl: "https://chatgpt.com/backend-api",
+                  input: ["text", "image"],
+                  cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                  contextWindow: 400_000,
+                  maxTokens: 128_000,
                 })
               : null,
         } as never,
@@ -592,8 +589,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         id: "gpt-5.5",
         provider: "openai-codex",
         api: "openai-codex-responses",
-        contextWindow: 1_000_000,
-        contextTokens: 272_000,
+        contextWindow: 400_000,
         maxTokens: 128_000,
       });
     });

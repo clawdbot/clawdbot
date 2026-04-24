@@ -149,7 +149,7 @@ Outbound message formatting is centralized in `messages`:
 - `messages.responsePrefix`, `channels.<channel>.responsePrefix`, and `channels.<channel>.accounts.<id>.responsePrefix` (outbound prefix cascade), plus `channels.whatsapp.messagePrefix` (WhatsApp inbound prefix)
 - Reply threading via `replyToMode` and per-channel defaults
 
-Details: [Configuration](/gateway/configuration-reference#messages) and channel docs.
+Details: [Configuration](/gateway/config-agents#messages) and channel docs.
 
 ## Silent replies
 

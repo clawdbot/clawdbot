@@ -185,4 +185,74 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     }
     expect(event.dedupeKey).toBe("telnyx:req:abc");
   });
+
+  it("maps call direction and phone numbers from Call Control callbacks", () => {
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+    const result = provider.parseWebhookEvent(
+      createCtx({
+        rawBody: JSON.stringify({
+          data: {
+            id: "evt-inbound",
+            event_type: "call.initiated",
+            payload: {
+              call_control_id: "call-1",
+              direction: "incoming",
+              from: "+15551111111",
+              to: "+15550000000",
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toEqual(
+      expect.objectContaining({
+        type: "call.initiated",
+        direction: "inbound",
+        from: "+15551111111",
+        to: "+15550000000",
+      }),
+    );
+  });
+
+  it("reads transcription text from Telnyx transcription_data payloads", () => {
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+    const result = provider.parseWebhookEvent(
+      createCtx({
+        rawBody: JSON.stringify({
+          data: {
+            id: "evt-transcription",
+            event_type: "call.transcription",
+            payload: {
+              call_control_id: "call-1",
+              transcription_data: {
+                transcript: "hello this is a test speech",
+                is_final: false,
+                confidence: 0.977219,
+              },
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toEqual(
+      expect.objectContaining({
+        type: "call.speech",
+        transcript: "hello this is a test speech",
+        isFinal: false,
+        confidence: 0.977219,
+      }),
+    );
+  });
 });

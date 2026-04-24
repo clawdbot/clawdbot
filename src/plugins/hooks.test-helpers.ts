@@ -45,6 +45,7 @@ export function createMockPluginRegistry(
     gatewayHandlers: {},
     cliRegistrars: [],
     services: [],
+    gatewayDiscoveryServices: [],
     commands: [],
     diagnostics: [],
   } as unknown as PluginRegistry;

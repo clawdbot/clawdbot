@@ -1,7 +1,10 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeTelegramLookupTarget, parseTelegramTarget } from "./targets.js";
 
 const TELEGRAM_PREFIX_RE = /^(telegram|tg):/i;
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 function normalizeTelegramTargetBody(raw: string): string | undefined {
   const trimmed = raw.trim();

@@ -49,3 +49,8 @@ Examples:
 
 - Keep scripts focused and documented.
 - Add a short entry in the relevant doc (or create one if missing).
+
+## Related
+
+- [Testing](/help/testing)
+- [Testing live](/help/testing-live)

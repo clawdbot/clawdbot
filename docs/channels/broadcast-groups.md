@@ -433,8 +433,10 @@ Planned features:
 - [ ] Dynamic agent selection (choose agents based on message content)
 - [ ] Agent priorities (some agents respond before others)
 
-## See Also
+## Related
 
-- [Multi-Agent Configuration](/tools/multi-agent-sandbox-tools)
-- [Routing Configuration](/channels/channel-routing)
-- [Session Management](/concepts/session)
+- [Groups](/channels/groups)
+- [Channel routing](/channels/channel-routing)
+- [Pairing](/channels/pairing)
+- [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
+- [Session management](/concepts/session)

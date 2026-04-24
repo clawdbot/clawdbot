@@ -10,6 +10,7 @@ import {
   loadChatHistory,
   sendChatMessage,
   sendDetachedChatMessage,
+  sendSteerChatMessage,
   type ChatState,
 } from "./controllers/chat.ts";
 import { loadModels } from "./controllers/models.ts";
@@ -134,9 +135,15 @@ function enqueueChatMessage(
   ];
 }
 
-function enqueuePendingRunMessage(host: ChatHost, text: string, pendingRunId: string) {
+function enqueuePendingRunMessage(
+  host: ChatHost,
+  text: string,
+  pendingRunId: string,
+  attachments?: ChatAttachment[],
+) {
   const trimmed = text.trim();
-  if (!trimmed) {
+  const hasAttachments = Boolean(attachments && attachments.length > 0);
+  if (!trimmed && !hasAttachments) {
     return;
   }
   host.chatQueue = [
@@ -145,6 +152,8 @@ function enqueuePendingRunMessage(host: ChatHost, text: string, pendingRunId: st
       id: generateUUID(),
       text: trimmed,
       createdAt: Date.now(),
+      kind: "steered",
+      attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
       pendingRunId,
     },
   ];
@@ -224,6 +233,43 @@ async function sendDetachedBtwMessage(
     );
   }
   return ok;
+}
+
+export async function steerQueuedChatMessage(host: ChatHost, id: string) {
+  if (!host.connected || !host.chatRunId) {
+    return;
+  }
+  const activeRunId = host.chatRunId;
+  const item = host.chatQueue.find(
+    (entry) => entry.id === id && !entry.pendingRunId && !entry.localCommandName,
+  );
+  if (!item) {
+    return;
+  }
+  const message = item.text.trim();
+  const attachments = item.attachments ?? [];
+  const hasAttachments = attachments.length > 0;
+  if (!message && !hasAttachments) {
+    return;
+  }
+
+  host.chatQueue = host.chatQueue.map((entry) =>
+    entry.id === id ? { ...entry, kind: "steered", pendingRunId: activeRunId } : entry,
+  );
+  const runId = await sendSteerChatMessage(
+    host as unknown as ChatState,
+    message,
+    hasAttachments ? attachments : undefined,
+  );
+  if (!runId) {
+    host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? item : entry));
+    return;
+  }
+  setLastActiveSessionKey(
+    host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
+    host.sessionKey,
+  );
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
 async function flushChatQueue(host: ChatHost) {

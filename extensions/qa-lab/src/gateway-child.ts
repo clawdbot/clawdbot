@@ -54,6 +54,13 @@ export type QaGatewayChildStateMutationContext = {
   tempRoot: string;
 };
 
+export type QaGatewayChildCommand = {
+  executablePath: string;
+  argsPrefix?: string[];
+  cwd?: string;
+  usePackagedPlugins?: boolean;
+};
+
 async function getFreePort() {
   return await new Promise<number>((resolve, reject) => {
     const server = net.createServer();
@@ -435,6 +442,7 @@ export function resolveQaControlUiRoot(params: { repoRoot: string; controlUiEnab
 
 export async function startQaGatewayChild(params: {
   repoRoot: string;
+  command?: QaGatewayChildCommand;
   providerBaseUrl?: string;
   transport: Pick<QaTransportAdapter, "requiredPluginIds" | "createGatewayConfig">;
   transportBaseUrl: string;
@@ -455,6 +463,10 @@ export async function startQaGatewayChild(params: {
   );
   const runtimeCwd = tempRoot;
   const distEntryPath = path.join(params.repoRoot, "dist", "index.js");
+  const gatewayCommand = params.command;
+  const gatewayExecutablePath = gatewayCommand?.executablePath;
+  const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
+  const gatewayCwd = gatewayCommand?.cwd ?? runtimeCwd;
   const workspaceDir = path.join(tempRoot, "workspace");
   const stateDir = path.join(tempRoot, "state");
   const homeDir = path.join(tempRoot, "home");
@@ -558,7 +570,17 @@ export async function startQaGatewayChild(params: {
   let env: NodeJS.ProcessEnv | null = null;
 
   try {
-    const nodeExecPath = await resolveQaNodeExecPath();
+    const nodeExecPath = gatewayExecutablePath ?? (await resolveQaNodeExecPath());
+    const buildGatewayArgs = () => [
+      ...(gatewayExecutablePath ? gatewayArgsPrefix : [distEntryPath, ...gatewayArgsPrefix]),
+      "gateway",
+      "run",
+      "--port",
+      String(gatewayPort),
+      "--bind",
+      "loopback",
+      "--allow-unconfigured",
+    ];
     for (let attempt = 1; attempt <= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS; attempt += 1) {
       gatewayPort = await getFreePort();
       baseUrl = `http://127.0.0.1:${gatewayPort}`;
@@ -574,16 +596,22 @@ export async function startQaGatewayChild(params: {
             );
           },
         );
-        const { bundledPluginsDir, stagedRoot } = await createQaBundledPluginsDir({
-          repoRoot: params.repoRoot,
-          tempRoot,
-          allowedPluginIds,
-        });
-        stagedBundledPluginsRoot = stagedRoot;
-        const runtimeHostVersion = await resolveQaRuntimeHostVersion({
-          repoRoot: params.repoRoot,
-          allowedPluginIds,
-        });
+        const stagedPluginRuntime = gatewayCommand?.usePackagedPlugins
+          ? { bundledPluginsDir: undefined, runtimeHostVersion: undefined }
+          : {
+              ...(await createQaBundledPluginsDir({
+                repoRoot: params.repoRoot,
+                tempRoot,
+                allowedPluginIds,
+              })),
+              runtimeHostVersion: await resolveQaRuntimeHostVersion({
+                repoRoot: params.repoRoot,
+                allowedPluginIds,
+              }),
+            };
+        if ("stagedRoot" in stagedPluginRuntime) {
+          stagedBundledPluginsRoot = stagedPluginRuntime.stagedRoot;
+        }
         env = buildQaRuntimeEnv({
           configPath,
           gatewayToken,
@@ -593,8 +621,8 @@ export async function startQaGatewayChild(params: {
           xdgConfigHome,
           xdgDataHome,
           xdgCacheHome,
-          bundledPluginsDir,
-          compatibilityHostVersion: runtimeHostVersion,
+          bundledPluginsDir: stagedPluginRuntime.bundledPluginsDir,
+          compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
           providerMode,
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
           claudeCliAuthMode: params.claudeCliAuthMode,
@@ -608,25 +636,12 @@ export async function startQaGatewayChild(params: {
         throw new Error("qa gateway runtime env not initialized");
       }
 
-      const attemptChild = spawn(
-        nodeExecPath,
-        [
-          distEntryPath,
-          "gateway",
-          "run",
-          "--port",
-          String(gatewayPort),
-          "--bind",
-          "loopback",
-          "--allow-unconfigured",
-        ],
-        {
-          cwd: runtimeCwd,
-          env,
-          detached: process.platform !== "win32",
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      const attemptChild = spawn(nodeExecPath, buildGatewayArgs(), {
+        cwd: gatewayCwd,
+        env,
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       attemptChild.stdout.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
         stdout.push(buffer);
@@ -714,25 +729,12 @@ export async function startQaGatewayChild(params: {
     const runningEnv = env;
 
     const spawnReplacementGatewayChild = async () => {
-      const nextChild = spawn(
-        nodeExecPath,
-        [
-          distEntryPath,
-          "gateway",
-          "run",
-          "--port",
-          String(gatewayPort),
-          "--bind",
-          "loopback",
-          "--allow-unconfigured",
-        ],
-        {
-          cwd: runtimeCwd,
-          env: runningEnv,
-          detached: process.platform !== "win32",
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      const nextChild = spawn(nodeExecPath, buildGatewayArgs(), {
+        cwd: gatewayCwd,
+        env: runningEnv,
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       nextChild.stdout.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
         stdout.push(buffer);

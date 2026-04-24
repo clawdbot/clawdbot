@@ -81,8 +81,10 @@ the full analysis request and any inline data in one prompt.
 - Do not assume access to local files or your workspace.
 - For fresh X data, use [`x_search`](/tools/web#x_search) first.
 
-## See Also
+## Related
 
+- [Exec tool](/tools/exec)
+- [Exec approvals](/tools/exec-approvals)
+- [apply_patch tool](/tools/apply-patch)
 - [Web tools](/tools/web)
-- [Exec](/tools/exec)
 - [xAI](/providers/xai)

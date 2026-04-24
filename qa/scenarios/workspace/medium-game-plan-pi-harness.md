@@ -9,9 +9,9 @@ coverage:
     - workspace.planning
   secondary:
     - agents.pi-harness
-objective: Verify GPT-5.5 can use the PI harness to plan and build a medium-complex self-contained browser game.
+objective: Verify GPT-5.4 can use the PI harness to plan and build a medium-complex self-contained browser game.
 successCriteria:
-  - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.5.
+  - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.4.
   - The scenario forces the embedded PI harness before the build turn.
   - The prompt explicitly asks the agent to enter plan mode before editing.
   - The agent writes a self-contained HTML game with a canvas loop, controls, scoring, waves, pause, and restart.
@@ -25,10 +25,10 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5 --scenario medium-game-plan-pi-harness`.
+  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.4 --alt-model openai/gpt-5.4 --fast --thinking medium --scenario medium-game-plan-pi-harness`.
   config:
     requiredProvider: openai
-    requiredModel: gpt-5.5
+    requiredModel: gpt-5.4
     harnessRuntime: pi
     harnessFallback: pi
     artifactFile: star-garden-defenders-pi.html
@@ -52,7 +52,7 @@ execution:
 
 ```yaml qa-flow
 steps:
-  - name: confirms GPT-5.5 PI harness target
+  - name: confirms GPT-5.4 PI harness target
     actions:
       - set: selected
         value:

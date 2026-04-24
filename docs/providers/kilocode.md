@@ -55,7 +55,7 @@ upstream routing behind `kilocode/kilo/auto` is owned by Kilo Gateway, not
 hard-coded in OpenClaw.
 </Note>
 
-## Available models
+## Built-in catalog
 
 OpenClaw dynamically discovers available models from the Kilo Gateway at startup. Use
 `/models kilocode` to see the full list of models available with your account.

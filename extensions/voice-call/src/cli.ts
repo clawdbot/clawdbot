@@ -199,6 +199,20 @@ export function registerVoiceCallCli(params: {
     });
 
   root
+    .command("dtmf")
+    .description("Send DTMF digits to an active call")
+    .requiredOption("--call-id <id>", "Call ID")
+    .requiredOption("--digits <digits>", "DTMF digits")
+    .action(async (options: { callId: string; digits: string }) => {
+      const rt = await ensureRuntime();
+      const result = await rt.manager.sendDtmf(options.callId, options.digits);
+      if (!result.success) {
+        throw new Error(result.error || "dtmf failed");
+      }
+      writeStdoutJson(result);
+    });
+
+  root
     .command("end")
     .description("Hang up an active call")
     .requiredOption("--call-id <id>", "Call ID")

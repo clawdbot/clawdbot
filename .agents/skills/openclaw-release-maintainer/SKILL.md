@@ -1,6 +1,6 @@
 ---
 name: openclaw-release-maintainer
-description: Maintainer workflow for OpenClaw releases, prereleases, changelog release notes, and publish validation. Use when Codex needs to prepare or verify stable or beta release steps, align version naming, assemble release notes, check release auth requirements, or validate publish-time commands and artifacts.
+description: Prepare or verify OpenClaw stable/beta releases, changelogs, release notes, publish commands, and artifacts.
 ---
 
 # OpenClaw Release Maintainer

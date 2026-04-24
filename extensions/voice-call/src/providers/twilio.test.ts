@@ -280,6 +280,29 @@ describe("TwilioProvider", () => {
     expect(params.Twiml).toContain("<Say");
   });
 
+  it("sends DTMF by updating the call and redirecting back to the webhook", async () => {
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-dtmf",
+    });
+
+    await expect(
+      provider.sendDtmf({
+        callId: "call-dtmf",
+        providerCallId: "CA-dtmf",
+        digits: "ww123#",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    const call = apiRequest.mock.calls[0];
+    const endpoint = call[0];
+    const params = call[1] as { Twiml?: string };
+    expect(endpoint).toBe("/Calls/CA-dtmf.json");
+    expect(params.Twiml).toContain('<Play digits="ww123#"');
+    expect(params.Twiml).toContain("<Redirect");
+    expect(params.Twiml).toContain("https://example.ngrok.app/voice/twilio");
+  });
+
   it("ignores stale stream unregister requests that do not match current stream SID", () => {
     const provider = createProvider();
     provider.registerCallStream("CA-reconnect", "MZ-new");

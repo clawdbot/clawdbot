@@ -12,8 +12,6 @@ let resetCliCredentialCachesForTest: typeof import("./cli-credentials.js").reset
 let writeClaudeCliKeychainCredentials: typeof import("./cli-credentials.js").writeClaudeCliKeychainCredentials;
 let writeClaudeCliCredentials: typeof import("./cli-credentials.js").writeClaudeCliCredentials;
 let readCodexCliCredentials: typeof import("./cli-credentials.js").readCodexCliCredentials;
-let writeCodexCliCredentials: typeof import("./cli-credentials.js").writeCodexCliCredentials;
-let writeCodexCliFileCredentials: typeof import("./cli-credentials.js").writeCodexCliFileCredentials;
 
 function mockExistingClaudeKeychainItem() {
   execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
@@ -76,8 +74,6 @@ describe("cli credentials", () => {
       writeClaudeCliKeychainCredentials,
       writeClaudeCliCredentials,
       readCodexCliCredentials,
-      writeCodexCliCredentials,
-      writeCodexCliFileCredentials,
     } = await import("./cli-credentials.js"));
   });
 
@@ -362,116 +358,6 @@ describe("cli credentials", () => {
         refresh: "fresh-refresh",
         expires: secondExpiry * 1000,
       });
-    } finally {
-      fs.rmSync(tempHome, { recursive: true, force: true });
-    }
-  });
-
-  it("updates existing Codex auth.json in place", () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-write-"));
-    process.env.CODEX_HOME = tempHome;
-    try {
-      fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
-      const authPath = path.join(tempHome, "auth.json");
-      fs.writeFileSync(
-        authPath,
-        JSON.stringify(
-          {
-            auth_mode: "chatgpt",
-            OPENAI_API_KEY: "sk-existing",
-            tokens: {
-              id_token: "id-token",
-              access_token: "old-access",
-              refresh_token: "old-refresh",
-              account_id: "acct-old",
-            },
-            last_refresh: "2026-03-01T00:00:00.000Z",
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
-
-      const ok = writeCodexCliFileCredentials({
-        access: "new-access",
-        refresh: "new-refresh",
-        expires: Date.now() + 60_000,
-        idToken: "new-id-token",
-        accountId: "acct-new",
-      });
-
-      expect(ok).toBe(true);
-      const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<string, unknown>;
-      expect(persisted).toMatchObject({
-        auth_mode: "chatgpt",
-        OPENAI_API_KEY: "sk-existing",
-      });
-      expect(persisted.tokens).toMatchObject({
-        id_token: "new-id-token",
-        access_token: "new-access",
-        refresh_token: "new-refresh",
-        account_id: "acct-new",
-      });
-      expect(typeof persisted.last_refresh).toBe("string");
-    } finally {
-      fs.rmSync(tempHome, { recursive: true, force: true });
-    }
-  });
-
-  it("prefers the existing Codex keychain entry over auth.json on darwin writes", () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-keychain-write-"));
-    process.env.CODEX_HOME = tempHome;
-    try {
-      const expSeconds = Math.floor(Date.parse("2026-03-26T12:34:56Z") / 1000);
-      execSyncMock.mockImplementation((command: unknown) => {
-        const cmd = String(command);
-        expect(cmd).toContain("Codex Auth");
-        return JSON.stringify({
-          auth_mode: "chatgpt",
-          tokens: {
-            id_token: "id-token",
-            access_token: createJwtWithExp(expSeconds),
-            refresh_token: "old-refresh",
-            account_id: "acct-old",
-          },
-          last_refresh: "2026-03-01T00:00:00.000Z",
-        });
-      });
-
-      const ok = writeCodexCliCredentials(
-        {
-          access: "new-access",
-          refresh: "new-refresh",
-          expires: Date.now() + 60_000,
-          idToken: "new-id-token",
-          accountId: "acct-new",
-        },
-        {
-          platform: "darwin",
-          execSync: execSyncMock,
-          execFileSync: execFileSyncMock,
-        },
-      );
-
-      expect(ok).toBe(true);
-      expect(execFileSyncMock).toHaveBeenCalledTimes(1);
-      const addCall = getAddGenericPasswordCall();
-      expect(addCall?.[0]).toBe("security");
-      const payload = (() => {
-        const args = (addCall?.[1] as string[] | undefined) ?? [];
-        const valueIndex = args.indexOf("-w");
-        return valueIndex >= 0 ? args[valueIndex + 1] : undefined;
-      })();
-      expect(payload).toBeDefined();
-      const parsed = JSON.parse(String(payload)) as Record<string, unknown>;
-      expect(parsed.tokens).toMatchObject({
-        id_token: "new-id-token",
-        access_token: "new-access",
-        refresh_token: "new-refresh",
-        account_id: "acct-new",
-      });
-      expect(parsed.auth_mode).toBe("chatgpt");
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }

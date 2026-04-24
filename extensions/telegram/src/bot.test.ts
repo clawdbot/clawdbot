@@ -31,11 +31,11 @@ const {
 } = await import("./bot.create-telegram-bot.test-harness.js");
 
 let loadSessionStore: typeof import("../../../src/config/sessions.js").loadSessionStore;
-let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
-let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
+let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
+let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
-  opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
-) => ReturnType<typeof import("./bot.js").createTelegramBot>;
+  opts: import("./bot.types.js").TelegramBotOptions,
+) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -83,8 +83,8 @@ const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
   beforeAll(async () => {
     ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
-    ({ createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-      await import("./bot.js"));
+    ({ createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+      await import("./bot-core.js"));
   });
   beforeAll(() => {
     process.env.TZ = "UTC";

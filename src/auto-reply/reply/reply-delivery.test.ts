@@ -13,7 +13,7 @@ type BlockReplyPipelineLike = NonNullable<
 >;
 
 describe("createBlockReplyDeliveryHandler", () => {
-  it("sends media-bearing block replies even when block streaming is disabled", async () => {
+  it("keeps captioned media-bearing block replies buffered when block streaming is disabled", async () => {
     const onBlockReply = vi.fn(async () => {});
     const normalizeStreamingText = vi.fn((payload: { text?: string }) => ({
       text: payload.text,
@@ -40,25 +40,49 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: true,
     });
 
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(directlySentBlockKeys).toEqual(new Set());
+    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
+  });
+
+  it("sends media-only block replies when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({
+      mediaUrls: ["/tmp/generated.png"],
+      replyToCurrent: true,
+    });
+
     expect(onBlockReply).toHaveBeenCalledWith({
-      text: undefined,
       mediaUrl: "/tmp/generated.png",
       mediaUrls: ["/tmp/generated.png"],
       replyToCurrent: true,
       replyToId: undefined,
       replyToTag: undefined,
       audioAsVoice: false,
+      text: undefined,
     });
     expect(directlySentBlockKeys).toEqual(
       new Set([
         createBlockReplyContentKey({
-          text: "here's the vibe",
           mediaUrls: ["/tmp/generated.png"],
           replyToCurrent: true,
         }),
       ]),
     );
-    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
   });
 
   it("keeps text-only block replies buffered when block streaming is disabled", async () => {

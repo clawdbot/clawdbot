@@ -303,3 +303,9 @@ The delegate model works for any small organization:
 6. **Review and adjust** the capability tier as trust builds.
 
 Multiple organizations can share one Gateway server using multi-agent routing — each org gets its own isolated agent, workspace, and credentials.
+
+## Related
+
+- [Agent runtime](/concepts/agent)
+- [Sub-agents](/tools/subagents)
+- [Multi-agent routing](/concepts/multi-agent)

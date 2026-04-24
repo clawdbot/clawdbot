@@ -393,6 +393,12 @@ export type MemorySearchConfig = {
     modelPath?: string;
     /** Optional cache directory for local models. */
     modelCacheDir?: string;
+    /**
+     * Context window size for the local embedding context (default: 4096).
+     * Use `"auto"` to defer to node-llama-cpp, which picks up to the model's
+     * trained maximum — not recommended for 8B+ models.
+     */
+    contextSize?: number | "auto";
   };
   /** Index storage configuration. */
   store?: {

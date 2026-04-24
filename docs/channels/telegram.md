@@ -885,7 +885,7 @@ More help: [Channel troubleshooting](/channels/troubleshooting).
 
 ## Configuration reference
 
-Primary reference: [Configuration reference - Telegram](/gateway/configuration-reference#telegram).
+Primary reference: [Configuration reference - Telegram](/gateway/config-channels#telegram).
 
 <Accordion title="High-signal Telegram fields">
 

@@ -7,8 +7,10 @@ import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
 import { openLocalFileSafely, SafeOpenError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
+import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
@@ -18,7 +20,11 @@ import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  type AuthRateLimiter,
+} from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -44,11 +50,14 @@ import {
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { resolveRequestClientIp } from "./net.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
+const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
+const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 export type ControlUiRequestOptions = {
   basePath?: string;
@@ -247,6 +256,9 @@ async function authorizeControlUiReadRequest(
   const token = resolveControlUiReadAuthToken(req, {
     allowQueryToken: opts.allowQueryToken,
   });
+  const clientIp =
+    resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
+    req.socket?.remoteAddress;
   const authResult = await authorizeHttpGatewayConnect({
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -254,17 +266,42 @@ async function authorizeControlUiReadRequest(
     browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
+    rateLimiter: token ? opts.rateLimiter : undefined,
+    clientIp,
+    rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   });
-  if (!authResult.ok) {
-    sendGatewayAuthFailure(res, authResult);
+  let resolvedAuthResult = authResult;
+  if (
+    !resolvedAuthResult.ok &&
+    token &&
+    opts.auth.mode !== "trusted-proxy" &&
+    opts.auth.mode !== "none"
+  ) {
+    const deviceRateCheck = opts.rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+    if (deviceRateCheck && !deviceRateCheck.allowed) {
+      resolvedAuthResult = {
+        ok: false,
+        reason: "rate_limited",
+        rateLimited: true,
+        retryAfterMs: deviceRateCheck.retryAfterMs,
+      };
+    } else {
+      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token);
+      if (deviceTokenOk) {
+        opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+        opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+        resolvedAuthResult = { ok: true, method: "device-token" };
+      } else {
+        opts.rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+      }
+    }
+  }
+  if (!resolvedAuthResult.ok) {
+    sendGatewayAuthFailure(res, resolvedAuthResult);
     return false;
   }
 
-  const trustDeclaredOperatorScopes =
-    authResult.method !== "token" &&
-    authResult.method !== "password" &&
-    authResult.method !== "none";
+  const trustDeclaredOperatorScopes = resolvedAuthResult.method === "trusted-proxy";
   if (!trustDeclaredOperatorScopes) {
     return true;
   }
@@ -285,6 +322,29 @@ async function authorizeControlUiReadRequest(
   }
 
   return true;
+}
+
+async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean> {
+  const pairing = await listDevicePairing();
+  for (const device of pairing.paired) {
+    const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
+    if (!operatorToken || operatorToken.revokedAtMs) {
+      continue;
+    }
+    if (!verifyPairingToken(token, operatorToken.token)) {
+      continue;
+    }
+    const verified = await verifyDeviceToken({
+      deviceId: device.deviceId,
+      token,
+      role: CONTROL_UI_OPERATOR_ROLE,
+      scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
+    });
+    if (verified.ok) {
+      return true;
+    }
+  }
+  return false;
 }
 
 type AssistantMediaAvailability =

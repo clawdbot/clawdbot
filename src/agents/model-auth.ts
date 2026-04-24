@@ -27,6 +27,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import * as cliCredentials from "./cli-credentials.js";
 import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -652,6 +653,13 @@ export function resolveModelAuthMode(
   const envKey = resolveEnvApiKey(resolved);
   if (envKey?.apiKey) {
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+  }
+
+  if (
+    normalizeProviderId(resolved) === "codex" &&
+    cliCredentials.readCodexCliCredentialsCached({ ttlMs: 5_000 })
+  ) {
+    return "oauth";
   }
 
   if (hasUsableCustomProviderApiKey(cfg, resolved)) {

@@ -409,6 +409,22 @@ export async function resolveModelsCommandReply(params: {
       discoveredProviders: providers,
     });
     if (!validatedProvider.ok) {
+      if (validatedProvider.knownProvider) {
+        return {
+          text: [
+            `${validatedProvider.knownProvider} is available for model selection, but /models add cannot create models for this provider from chat.`,
+            "",
+            "Browse:",
+            `/models ${validatedProvider.knownProvider}`,
+            "",
+            "Switch:",
+            `/model ${validatedProvider.knownProvider}/<modelId>`,
+            "",
+            "To configure providers or auth, run:",
+            "openclaw configure",
+          ].join("\n"),
+        };
+      }
       return {
         text: [
           `Unknown provider: ${parsed.provider}`,

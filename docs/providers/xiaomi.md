@@ -41,7 +41,7 @@ OpenAI-compatible endpoint with API-key authentication.
   </Step>
 </Steps>
 
-## Available models
+## Built-in catalog
 
 | Model ref              | Input       | Context   | Max output | Reasoning | Notes         |
 | ---------------------- | ----------- | --------- | ---------- | --------- | ------------- |

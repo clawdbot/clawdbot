@@ -2,12 +2,11 @@ import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
 } from "openclaw/plugin-sdk/proxy-capture";
+import { extractProviderErrorDetail, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import {
-  asObject,
-  readResponseTextLimited,
-  trimToUndefined,
-  truncateErrorDetail,
-} from "openclaw/plugin-sdk/speech";
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -69,43 +68,8 @@ export function resolveOpenAITtsInstructions(
   return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
 }
 
-function formatOpenAiErrorPayload(payload: unknown): string | undefined {
-  const root = asObject(payload);
-  const subject = asObject(root?.error) ?? root;
-  if (!subject) {
-    return undefined;
-  }
-  const message =
-    trimToUndefined(subject.message) ??
-    trimToUndefined(subject.detail) ??
-    trimToUndefined(root?.message);
-  const type = trimToUndefined(subject.type);
-  const code = trimToUndefined(subject.code);
-  const metadata = [type ? `type=${type}` : undefined, code ? `code=${code}` : undefined]
-    .filter((value): value is string => Boolean(value))
-    .join(", ");
-  if (message && metadata) {
-    return `${truncateErrorDetail(message)} [${metadata}]`;
-  }
-  if (message) {
-    return truncateErrorDetail(message);
-  }
-  if (metadata) {
-    return `[${metadata}]`;
-  }
-  return undefined;
-}
-
 async function extractOpenAiErrorDetail(response: Response): Promise<string | undefined> {
-  const rawBody = trimToUndefined(await readResponseTextLimited(response));
-  if (!rawBody) {
-    return undefined;
-  }
-  try {
-    return formatOpenAiErrorPayload(JSON.parse(rawBody)) ?? truncateErrorDetail(rawBody);
-  } catch {
-    return truncateErrorDetail(rawBody);
-  }
+  return await extractProviderErrorDetail(response);
 }
 
 export async function openaiTTS(params: {
@@ -130,31 +94,37 @@ export async function openaiTTS(params: {
     throw new Error(`Invalid voice: ${voice}`);
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const requestHeaders = {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    };
-    const requestBody = JSON.stringify({
-      model,
-      input: text,
-      voice,
-      response_format: responseFormat,
-      ...(speed != null && { speed }),
-      ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
-    });
-    const response = await fetch(`${baseUrl}/audio/speech`, {
+  const requestHeaders = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+  const requestBody = JSON.stringify({
+    model,
+    input: text,
+    voice,
+    response_format: responseFormat,
+    ...(speed != null && { speed }),
+    ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+  });
+  const requestUrl = `${baseUrl}/audio/speech`;
+  const debugProxyFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();
+  const { response, release } = await fetchWithSsrFGuard({
+    url: requestUrl,
+    init: {
       method: "POST",
       headers: requestHeaders,
       body: requestBody,
-      signal: controller.signal,
-    });
-    if (!isDebugProxyGlobalFetchPatchInstalled()) {
+    },
+    timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    capture: false,
+    pinDns: debugProxyFetchPatchInstalled ? false : undefined,
+    auditContext: "openai-tts",
+  });
+  try {
+    if (!debugProxyFetchPatchInstalled) {
       captureHttpExchange({
-        url: `${baseUrl}/audio/speech`,
+        url: requestUrl,
         method: "POST",
         requestHeaders,
         requestBody,
@@ -181,6 +151,6 @@ export async function openaiTTS(params: {
 
     return Buffer.from(await response.arrayBuffer());
   } finally {
-    clearTimeout(timeout);
+    await release();
   }
 }

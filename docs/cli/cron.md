@@ -174,3 +174,8 @@ Failure-delivery note:
   delivery mode is `webhook`.
 - If you do not set any failure destination and the job already announces to a
   channel, failure notifications reuse that same announce target.
+
+## Related
+
+- [CLI reference](/cli)
+- [Scheduled tasks](/automation/cron-jobs)

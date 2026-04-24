@@ -3,6 +3,17 @@
   "name": "Codex",
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
+  "contracts": {
+    "mediaUnderstandingProviders": ["codex"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "codex": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "gpt-5.5"
+      }
+    }
+  },
   "providerDiscoveryEntry": "./provider-discovery.ts",
   "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],
@@ -80,9 +91,12 @@
           },
           "approvalsReviewer": {
             "type": "string",
-            "enum": ["user", "guardian_subagent"]
+            "enum": ["user", "auto_review", "guardian_subagent"]
           },
-          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] }
+          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] },
+          "defaultWorkspaceDir": {
+            "type": "string"
+          }
         }
       }
     }
@@ -159,12 +173,17 @@
     },
     "appServer.approvalsReviewer": {
       "label": "Approvals Reviewer",
-      "help": "Use user approvals or the Codex guardian subagent for native app-server approvals.",
+      "help": "Use user approvals or Codex auto_review for native app-server approvals. guardian_subagent remains accepted for compatibility.",
       "advanced": true
     },
     "appServer.serviceTier": {
       "label": "Service Tier",
       "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
+      "advanced": true
+    },
+    "appServer.defaultWorkspaceDir": {
+      "label": "Default Workspace",
+      "help": "Workspace used by /codex bind when --cwd is omitted.",
       "advanced": true
     }
   }

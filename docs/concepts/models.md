@@ -70,7 +70,7 @@ Provider configuration examples (including OpenCode) live in
 Use additive writes when updating `agents.defaults.models` by hand:
 
 ```bash
-openclaw config set agents.defaults.models '{"openai/gpt-5.5":{}}' --strict-json --merge
+openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 ```
 
 `openclaw config set` protects model/provider maps from accidental clobbers. A
@@ -122,7 +122,7 @@ You can switch models for the current session without restarting:
 /model
 /model list
 /model 3
-/model openai/gpt-5.5
+/model openai/gpt-5.4
 /model status
 ```
 
@@ -288,4 +288,4 @@ This applies whenever OpenClaw regenerates `models.json`, including command-driv
 - [Image Generation](/tools/image-generation) — image model configuration
 - [Music Generation](/tools/music-generation) — music model configuration
 - [Video Generation](/tools/video-generation) — video model configuration
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — model config keys
+- [Configuration Reference](/gateway/config-agents#agent-defaults) — model config keys

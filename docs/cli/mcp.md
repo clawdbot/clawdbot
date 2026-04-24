@@ -516,3 +516,8 @@ Current limits:
 - HTTP/SSE/streamable-http transport connects to a single remote server; no multiplexed upstream yet
 - `permissions_list_open` only includes approvals observed while the bridge is
   connected
+
+## Related
+
+- [CLI reference](/cli)
+- [Plugins](/cli/plugins)

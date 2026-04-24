@@ -9,8 +9,8 @@ sidebarTitle: "Install and Configure"
 ---
 
 Plugins extend OpenClaw with new capabilities: channels, model providers,
-tools, skills, speech, realtime transcription, realtime voice,
-media-understanding, image generation, video generation, web fetch, web
+agent harnesses, tools, skills, speech, realtime transcription, realtime
+voice, media-understanding, image generation, video generation, web fetch, web
 search, and more. Some plugins are **core** (shipped with OpenClaw), others
 are **external** (published on npm by the community).
 
@@ -189,6 +189,13 @@ OpenClaw scans for plugins in this order (first match wins):
 - Workspace-origin plugins are **disabled by default** (must be explicitly enabled)
 - Bundled plugins follow the built-in default-on set unless overridden
 - Exclusive slots can force-enable the selected plugin for that slot
+- Some bundled opt-in plugins are enabled automatically when config names a
+  plugin-owned surface, such as a provider model ref, channel config, or harness
+  runtime
+- OpenAI-family Codex routes keep separate plugin boundaries:
+  `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
+  app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
+  `codex/*` model refs
 
 ## Plugin slots (exclusive categories)
 

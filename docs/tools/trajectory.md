@@ -180,3 +180,9 @@ If the command rejects the output path:
 
 If the export fails with a size error, the session or sidecar exceeded the
 export safety limits. Start a new session or export a smaller reproduction.
+
+## Related
+
+- [Diffs](/tools/diffs)
+- [Session management](/concepts/session)
+- [Exec tool](/tools/exec)

@@ -3,6 +3,7 @@ summary: "Use OpenRouter's unified API to access many models in OpenClaw"
 read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
+  - You want to use OpenRouter for image generation
 title: "OpenRouter"
 ---
 
@@ -58,6 +59,25 @@ Bundled fallback examples:
 | `openrouter/moonshotai/kimi-k2.6`    | Kimi K2.6 via MoonshotAI      |
 | `openrouter/openrouter/healer-alpha` | OpenRouter Healer Alpha route |
 | `openrouter/openrouter/hunter-alpha` | OpenRouter Hunter Alpha route |
+
+## Image generation
+
+OpenRouter can also back the `image_generate` tool. Use an OpenRouter image model under `agents.defaults.imageGenerationModel`:
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "openrouter/google/gemini-3.1-flash-image-preview",
+      },
+    },
+  },
+}
+```
+
+OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`.
 
 ## Authentication and headers
 

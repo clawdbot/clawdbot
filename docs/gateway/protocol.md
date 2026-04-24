@@ -615,3 +615,8 @@ Migration target:
 This protocol exposes the **full gateway API** (status, channels, models, chat,
 agent, sessions, nodes, approvals, etc.). The exact surface is defined by the
 TypeBox schemas in `src/gateway/protocol/schema.ts`.
+
+## Related
+
+- [Bridge protocol](/gateway/bridge-protocol)
+- [Gateway runbook](/gateway)

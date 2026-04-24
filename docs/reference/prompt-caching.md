@@ -340,3 +340,8 @@ Related docs:
 - [Token Use and Costs](/reference/token-use)
 - [Session Pruning](/concepts/session-pruning)
 - [Gateway Configuration Reference](/gateway/configuration-reference)
+
+## Related
+
+- [Token use and costs](/reference/token-use)
+- [API usage and costs](/reference/api-usage-costs)

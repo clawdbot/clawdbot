@@ -63,7 +63,7 @@ Set config under `plugins.entries.voice-call.config`:
         enabled: true,
         config: {
           provider: "twilio", // or "telnyx" | "plivo" | "mock"
-          fromNumber: "+15550001234",
+          fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER for Twilio
           toNumber: "+15550005678",
 
           twilio: {
@@ -468,6 +468,7 @@ openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
 openclaw voicecall start --to "+15555550123"   # alias for call
 openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall speak --call-id <id> --message "One moment"
+openclaw voicecall dtmf --call-id <id> --digits "ww123456#"
 openclaw voicecall end --call-id <id>
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
@@ -489,6 +490,7 @@ Actions:
 - `initiate_call` (message, to?, mode?)
 - `continue_call` (callId, message)
 - `speak_to_user` (callId, message)
+- `send_dtmf` (callId, digits)
 - `end_call` (callId)
 - `get_status` (callId)
 
@@ -499,5 +501,12 @@ This repo ships a matching skill doc at `skills/voice-call/SKILL.md`.
 - `voicecall.initiate` (`to?`, `message`, `mode?`)
 - `voicecall.continue` (`callId`, `message`)
 - `voicecall.speak` (`callId`, `message`)
+- `voicecall.dtmf` (`callId`, `digits`)
 - `voicecall.end` (`callId`)
 - `voicecall.status` (`callId`)
+
+## Related
+
+- [Text-to-speech](/tools/tts)
+- [Talk mode](/nodes/talk)
+- [Voice wake](/nodes/voicewake)

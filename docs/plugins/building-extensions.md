@@ -6,3 +6,8 @@ read_when:
 ---
 
 This page has moved to [Building Plugins](/plugins/building-plugins).
+
+## Related
+
+- [Building plugins](/plugins/building-plugins)
+- [Plugin architecture](/plugins/architecture)

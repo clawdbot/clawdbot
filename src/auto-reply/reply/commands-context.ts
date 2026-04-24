@@ -1,5 +1,9 @@
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { MsgContext } from "../templating.js";
@@ -22,8 +26,15 @@ export function buildCommandContext(params: {
     commandAuthorized: params.commandAuthorized,
   });
   const surface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
-  const channel = normalizeLowercaseStringOrEmpty(ctx.Provider ?? surface);
-  const abortKey = sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
+  const channel = normalizeLowercaseStringOrEmpty(
+    ctx.OriginatingChannel ?? ctx.Provider ?? surface,
+  );
+  const from = auth.from ?? normalizeOptionalString(ctx.SenderId);
+  const to = auth.to ?? normalizeOptionalString(ctx.OriginatingTo);
+  const abortKey = sessionKey ?? from ?? to;
+  const channelId =
+    normalizeAnyChannelId(channel) ??
+    (channel ? (channel as CommandContext["channelId"]) : undefined);
   const rawBodyNormalized = triggerBodyNormalized;
   const commandBodyNormalized = normalizeCommandBody(
     isGroup ? stripMentions(rawBodyNormalized, ctx, cfg, agentId) : rawBodyNormalized,
@@ -33,7 +44,7 @@ export function buildCommandContext(params: {
   return {
     surface,
     channel,
-    channelId: auth.providerId,
+    channelId: channelId ?? auth.providerId,
     ownerList: auth.ownerList,
     senderIsOwner: auth.senderIsOwner,
     isAuthorizedSender: auth.isAuthorizedSender,
@@ -41,7 +52,7 @@ export function buildCommandContext(params: {
     abortKey,
     rawBodyNormalized,
     commandBodyNormalized,
-    from: auth.from,
-    to: auth.to,
+    from,
+    to,
   };
 }

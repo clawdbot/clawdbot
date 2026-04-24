@@ -156,7 +156,7 @@ read_when:
         "defaults": {
           "model": {
             "primary": "anthropic/claude-opus-4-6",
-            "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"]
+            "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]
           },
           "maxConcurrent": 4
         },
@@ -502,3 +502,10 @@ See [Fly.io pricing](https://fly.io/docs/about/pricing/) for details.
 - Set up messaging channels: [Channels](/channels)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
 - Keep OpenClaw up to date: [Updating](/install/updating)
+
+## Related
+
+- [Install overview](/install)
+- [Hetzner](/install/hetzner)
+- [Docker](/install/docker)
+- [VPS hosting](/vps)

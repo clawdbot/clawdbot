@@ -641,6 +641,35 @@ function Stop-OpenClawUpdateProcesses {
     }
 }
 
+function Remove-FuturePluginEntries {
+  $configPath = Join-Path $env:USERPROFILE '.openclaw\openclaw.json'
+  if (-not (Test-Path $configPath)) {
+    return
+  }
+  try {
+    $config = Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable
+  } catch {
+    return
+  }
+  $plugins = $config['plugins']
+  if (-not ($plugins -is [hashtable])) {
+    return
+  }
+  $entries = $plugins['entries']
+  if ($entries -is [hashtable]) {
+    foreach ($pluginId in @('feishu', 'whatsapp')) {
+      if ($entries.ContainsKey($pluginId)) {
+        $entries.Remove($pluginId)
+      }
+    }
+  }
+  $allow = $plugins['allow']
+  if ($allow -is [array]) {
+    $plugins['allow'] = @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp') })
+  }
+  $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding UTF8
+}
+
 function Invoke-OpenClawUpdateWithTimeout {
   param(
     [Parameter(Mandatory = $true)][string]$OpenClawPath,
@@ -650,6 +679,7 @@ function Invoke-OpenClawUpdateWithTimeout {
 
   $updateJob = Start-Job -ScriptBlock {
     param([string]$Path, [string]$Target)
+    $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
     $output = & $Path update --tag $Target --yes --json *>&1
     [pscustomobject]@{
       ExitCode = $LASTEXITCODE
@@ -785,6 +815,7 @@ try {
   }
   Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  Remove-FuturePluginEntries
   Stop-OpenClawGatewayProcesses
   Write-ProgressLog 'update.openclaw-update'
   Invoke-OpenClawUpdateWithTimeout -OpenClawPath $openclaw -UpdateTarget $UpdateTarget
@@ -1375,8 +1406,35 @@ if [ -z "\${$API_KEY_ENV:-}" ]; then
   exit 1
 fi
 cd "\$HOME"
+scrub_future_plugin_entries() {
+  node - <<'JS' || true
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const configPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+if (!fs.existsSync(configPath)) process.exit(0);
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+} catch {
+  process.exit(0);
+}
+const plugins = config?.plugins;
+if (!plugins || typeof plugins !== "object" || Array.isArray(plugins)) process.exit(0);
+const entries = plugins.entries;
+if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+  delete entries.feishu;
+  delete entries.whatsapp;
+}
+if (Array.isArray(plugins.allow)) {
+  plugins.allow = plugins.allow.filter((pluginId) => pluginId !== "feishu" && pluginId !== "whatsapp");
+}
+fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
+JS
+}
 stop_openclaw_gateway_processes() {
-  /opt/homebrew/bin/openclaw gateway stop >/dev/null 2>&1 || true
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw gateway stop >/dev/null 2>&1 || true
   /usr/bin/pkill -9 -f openclaw-gateway || true
   /usr/bin/pkill -9 -f 'openclaw gateway run' || true
   /usr/bin/pkill -9 -f 'openclaw.mjs gateway' || true
@@ -1386,8 +1444,9 @@ stop_openclaw_gateway_processes() {
 }
 # Stop the pre-update gateway before replacing the package. Otherwise the old
 # host can observe new plugin metadata mid-update and abort config validation.
+scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-/opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
+OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
 # Same-guest npm upgrades can leave the old gateway process holding the old
 # bundled plugin host version. Stop it before post-update config commands.
 stop_openclaw_gateway_processes
@@ -1473,8 +1532,35 @@ run_linux_update() {
 set -euo pipefail
 export HOME=/root
 cd "\$HOME"
+scrub_future_plugin_entries() {
+  node - <<'JS' || true
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const configPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+if (!fs.existsSync(configPath)) process.exit(0);
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+} catch {
+  process.exit(0);
+}
+const plugins = config?.plugins;
+if (!plugins || typeof plugins !== "object" || Array.isArray(plugins)) process.exit(0);
+const entries = plugins.entries;
+if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+  delete entries.feishu;
+  delete entries.whatsapp;
+}
+if (Array.isArray(plugins.allow)) {
+  plugins.allow = plugins.allow.filter((pluginId) => pluginId !== "feishu" && pluginId !== "whatsapp");
+}
+fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
+JS
+}
 stop_openclaw_gateway_processes() {
-  openclaw gateway stop >/dev/null 2>&1 || true
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw gateway stop >/dev/null 2>&1 || true
   pkill -9 -f openclaw-gateway || true
   pkill -9 -f 'openclaw gateway run' || true
   pkill -9 -f 'openclaw.mjs gateway' || true
@@ -1489,8 +1575,9 @@ stop_openclaw_gateway_processes() {
 }
 # Stop the pre-update manual gateway before replacing the package. Otherwise
 # the old host can observe new plugin metadata mid-update and abort validation.
+scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-openclaw update --tag "$update_target" --yes --json
+OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag "$update_target" --yes --json
 # The fresh Linux lane starts a manual gateway; stop the old process before
 # post-update config validation sees mixed old-host/new-plugin metadata.
 stop_openclaw_gateway_processes

@@ -7,6 +7,7 @@ import {
   buildProviderRequestDispatcherPolicy,
   normalizeBaseUrl,
   resolveProviderRequestPolicyConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
@@ -17,6 +18,7 @@ import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
+export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;

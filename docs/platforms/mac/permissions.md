@@ -7,8 +7,6 @@ read_when:
 title: "macOS permissions"
 ---
 
-# macOS permissions (TCC)
-
 macOS permission grants are fragile. TCC associates a permission grant with the
 app's code signature, bundle identifier, and on-disk path. If any of those change,
 macOS treats the app as new and may drop or hide prompts.
@@ -48,3 +46,8 @@ Workaround: move files into the OpenClaw workspace (`~/.openclaw/workspace`) if 
 
 If you are testing permissions, always sign with a real certificate. Ad-hoc
 builds are only acceptable for quick local runs where permissions do not matter.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [macOS signing](/platforms/mac/signing)

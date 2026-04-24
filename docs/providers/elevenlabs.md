@@ -107,3 +107,8 @@ Voice Call receives Twilio media as 8 kHz G.711 u-law. The ElevenLabs realtime
 provider defaults to `ulaw_8000`, so telephony frames can be forwarded without
 transcoding.
 </Note>
+
+## Related
+
+- [Text-to-speech](/tools/tts)
+- [Model selection](/concepts/model-providers)

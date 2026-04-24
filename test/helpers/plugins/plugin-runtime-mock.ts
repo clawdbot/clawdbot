@@ -441,6 +441,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSession: vi.fn(),
       deleteSession: vi.fn(),
     },
+    nodes: {
+      list: vi.fn(async () => ({ nodes: [] })),
+      invoke: vi.fn(),
+    },
   };
 
   return mergeDeep(base, overrides);

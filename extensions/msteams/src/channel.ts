@@ -388,6 +388,7 @@ function describeMSTeamsMessageTool({
     capabilities: enabled ? ["presentation"] : [],
     schema: enabled
       ? {
+          actions: ["unpin"],
           properties: {
             pinnedMessageId: Type.Optional(
               Type.String({

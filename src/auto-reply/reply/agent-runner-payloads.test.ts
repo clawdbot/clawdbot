@@ -103,7 +103,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
-  it("applies media filter after text filter", async () => {
+  it("drops duplicate caption text after matching media is stripped", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!", mediaUrl: "file:///tmp/photo.jpg" }],
@@ -111,8 +111,22 @@ describe("buildReplyPayloads media filter integration", () => {
       messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
     });
 
-    // Text filter removes the payload entirely (text matched), so nothing remains.
     expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps captioned media when only the caption matches a messaging tool send", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello world!", mediaUrl: "file:///tmp/photo.jpg" }],
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentMediaUrls: ["file:///tmp/other.jpg"],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "hello world!",
+      mediaUrl: "file:///tmp/photo.jpg",
+    });
   });
 
   it("does not dedupe text for cross-target messaging sends", async () => {
@@ -246,6 +260,63 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("suppresses warning text when silent media payloads fail normalization", async () => {
+    const normalizeMediaPaths = async () => {
+      throw new Error("file not found");
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "NO_REPLY\nMEDIA: ./missing.png" }],
+      normalizeMediaPaths,
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("extracts markdown image replies into final payload media urls", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "Here you go\n\n![chart](https://example.com/chart.png)" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "Here you go",
+      mediaUrl: "https://example.com/chart.png",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
+  it("preserves inline caption text when lifting markdown image replies into media", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: 'Look ![chart](https://example.com/chart.png "Quarterly chart") now' }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "Look now",
+      mediaUrl: "https://example.com/chart.png",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
+  it("keeps markdown local file images as plain text in final replies", async () => {
+    const text = "Look ![chart](file:///etc/passwd) now";
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text,
+    });
+    expect(replyPayloads[0]?.mediaUrl).toBeUndefined();
+    expect(replyPayloads[0]?.mediaUrls).toBeUndefined();
+  });
+
   it("deduplicates final payloads against directly sent block keys regardless of replyToId", async () => {
     // When block streaming is not active but directlySentBlockKeys has entries
     // (e.g. from pre-tool flush), the key should match even if replyToId differs.
@@ -258,6 +329,25 @@ describe("buildReplyPayloads media filter integration", () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      replyToMode: "off",
+      payloads: [{ text: "response" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("deduplicates final payloads against directly sent block keys when streaming is enabled without a pipeline", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>();
+    directlySentBlockKeys.add(
+      createBlockReplyContentKey({ text: "response", replyToId: "post-1" }),
+    );
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
       blockReplyPipeline: null,
       directlySentBlockKeys,
       replyToMode: "off",

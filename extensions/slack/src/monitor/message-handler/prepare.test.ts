@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { App } from "@slack/bolt";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   registerSessionBindingAdapter,
@@ -9,11 +10,11 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resetSlackThreadStarterCacheForTest } from "../media.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
@@ -27,6 +28,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   beforeAll(() => {
     storeFixture.setup();
+  });
+
+  beforeEach(() => {
+    resetSlackThreadStarterCacheForTest();
   });
 
   afterAll(() => {
@@ -124,6 +129,102 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   function prepareThreadMessage(ctx: SlackMonitorContext, overrides: Partial<SlackMessageEvent>) {
     return prepareMessageWith(ctx, createThreadAccount(), createThreadReplyMessage(overrides));
+  }
+
+  type ThreadContextAllowlistCaseParams = {
+    channel: string;
+    channelType: SlackMessageEvent["channel_type"];
+    user: string;
+    userName: string;
+    starterText: string;
+    followUpText: string;
+    startTs: string;
+    replyTs: string;
+    followUpTs: string;
+    currentTs: string;
+    channelsConfig?: Parameters<typeof createInboundSlackCtx>[0]["channelsConfig"];
+    resolveChannelName?: (channelId: string) => Promise<{
+      name?: string;
+      type?: SlackMessageEvent["channel_type"];
+      topic?: string;
+      purpose?: string;
+    }>;
+  };
+
+  async function prepareThreadContextAllowlistCase(params: ThreadContextAllowlistCaseParams) {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: params.starterText, user: params.user, ts: params.startTs }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: params.starterText, user: params.user, ts: params.startTs },
+          { text: "assistant reply", bot_id: "B1", ts: params.replyTs },
+          { text: params.followUpText, user: params.user, ts: params.followUpTs },
+          { text: "current message", user: params.user, ts: params.currentTs },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "all",
+            groupPolicy: "open",
+            contextVisibility: "allowlist",
+          },
+        },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      defaultRequireMention: false,
+      replyToMode: "all",
+      channelsConfig: params.channelsConfig,
+    });
+    ctx.allowFrom = ["u-owner"];
+    ctx.resolveUserName = async (id: string) => ({
+      name: id === params.user ? params.userName : "Owner",
+    });
+    if (params.resolveChannelName) {
+      ctx.resolveChannelName = params.resolveChannelName;
+    }
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackAccount({
+        replyToMode: "all",
+        thread: { initialHistoryLimit: 20 },
+      }),
+      message: {
+        channel: params.channel,
+        channel_type: params.channelType,
+        user: params.user,
+        text: "current message",
+        ts: params.currentTs,
+        thread_ts: params.startTs,
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    return { prepared, replies };
+  }
+
+  function expectThreadContextAllowsHumanHistory(
+    prepared: Awaited<ReturnType<typeof prepareSlackMessage>>,
+    replies: ReturnType<typeof vi.fn>,
+    starterText: string,
+    followUpText: string,
+  ) {
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.ThreadStarterBody).toBe(starterText);
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain(starterText);
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain(followUpText);
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
+    expect(replies).toHaveBeenCalledTimes(2);
   }
 
   function createDmScopeMainSlackCtx(): SlackMonitorContext {
@@ -405,6 +506,22 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
   });
 
+  it("classifies MPIM group DMs as group chat context", async () => {
+    const prepared = await prepareMessageWith(
+      createReplyToAllSlackCtx(),
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "G123",
+        channel_type: "mpim",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.isRoomish).toBe(true);
+    expect(prepared!.ctxPayload.ChatType).toBe("group");
+    expect(prepared!.ctxPayload.From).toBe("slack:group:G123");
+  });
+
   it("respects replyToModeByChatType.direct override for DMs", async () => {
     const prepared = await prepareMessageWith(
       createReplyToAllSlackCtx(),
@@ -484,6 +601,102 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses room users allowlist for thread context filtering", async () => {
+    const { prepared, replies } = await prepareThreadContextAllowlistCase({
+      channel: "C123",
+      channelType: "channel",
+      user: "U1",
+      userName: "Alice",
+      starterText: "starter from room user",
+      followUpText: "allowed follow-up",
+      startTs: "100.000",
+      replyTs: "100.500",
+      followUpTs: "100.800",
+      currentTs: "101.000",
+      channelsConfig: {
+        C123: {
+          users: ["U1"],
+          requireMention: false,
+        },
+      },
+      resolveChannelName: async () => ({ name: "general", type: "channel" }),
+    });
+
+    expectThreadContextAllowsHumanHistory(
+      prepared,
+      replies,
+      "starter from room user",
+      "allowed follow-up",
+    );
+  });
+
+  it("does not apply the owner allowlist to open-room thread context", async () => {
+    const { prepared, replies } = await prepareThreadContextAllowlistCase({
+      channel: "C124",
+      channelType: "channel",
+      user: "U2",
+      userName: "Bob",
+      starterText: "starter from open room",
+      followUpText: "open-room follow-up",
+      startTs: "200.000",
+      replyTs: "200.500",
+      followUpTs: "200.800",
+      currentTs: "201.000",
+      channelsConfig: {
+        C124: {
+          requireMention: false,
+        },
+      },
+      resolveChannelName: async () => ({ name: "general", type: "channel" }),
+    });
+
+    expectThreadContextAllowsHumanHistory(
+      prepared,
+      replies,
+      "starter from open room",
+      "open-room follow-up",
+    );
+  });
+
+  it("does not apply the owner allowlist to open DMs when dmPolicy is open", async () => {
+    const { prepared, replies } = await prepareThreadContextAllowlistCase({
+      channel: "D300",
+      channelType: "im",
+      user: "U3",
+      userName: "Dana",
+      starterText: "starter from open dm",
+      followUpText: "dm follow-up",
+      startTs: "300.000",
+      replyTs: "300.500",
+      followUpTs: "300.800",
+      currentTs: "301.000",
+    });
+
+    expectThreadContextAllowsHumanHistory(
+      prepared,
+      replies,
+      "starter from open dm",
+      "dm follow-up",
+    );
+  });
+
+  it("does not apply the owner allowlist to MPIM thread context", async () => {
+    const { prepared, replies } = await prepareThreadContextAllowlistCase({
+      channel: "G400",
+      channelType: "mpim",
+      user: "U4",
+      userName: "Evan",
+      starterText: "starter from mpim",
+      followUpText: "mpim follow-up",
+      startTs: "400.000",
+      replyTs: "400.500",
+      followUpTs: "400.800",
+      currentTs: "401.000",
+    });
+
+    expectThreadContextAllowsHumanHistory(prepared, replies, "starter from mpim", "mpim follow-up");
   });
 
   it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {

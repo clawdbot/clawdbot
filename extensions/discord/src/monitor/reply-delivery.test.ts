@@ -10,6 +10,9 @@ const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendWebhookMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendDiscordTextMock = vi.hoisted(() => vi.fn());
+const buildDiscordSendErrorMock = vi.hoisted(() =>
+  vi.fn<(err: unknown, ctx?: unknown) => Promise<unknown>>(async (err: unknown) => err),
+);
 const retryAsyncMock = vi.hoisted(() =>
   vi.fn(
     async (
@@ -47,6 +50,7 @@ vi.mock("../send.js", async () => {
 });
 
 vi.mock("../send.shared.js", () => ({
+  buildDiscordSendError: (err: unknown, ctx: unknown) => buildDiscordSendErrorMock(err, ctx),
   sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
 
@@ -135,6 +139,7 @@ describe("deliverDiscordReply", () => {
       id: "msg-direct-1",
       channel_id: "channel-1",
     });
+    buildDiscordSendErrorMock.mockClear().mockImplementation(async (err: unknown) => err);
     retryAsyncMock.mockClear();
     threadBindingTesting.resetThreadBindingsForTests();
   });
@@ -483,6 +488,40 @@ describe("deliverDiscordReply", () => {
     ).rejects.toThrow("bad request");
 
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("wraps direct REST permission errors with channel context", async () => {
+    const apiErr = Object.assign(new Error("Missing Permissions"), {
+      code: 50013,
+      status: 403,
+    });
+    const wrappedErr = new Error(
+      "discord missing permissions in channel 789; permission probe did not identify missing ViewChannel/SendMessages (code=50013 status=403)",
+    );
+    sendDiscordTextMock.mockRejectedValueOnce(apiErr);
+    buildDiscordSendErrorMock.mockResolvedValueOnce(wrappedErr);
+
+    const fakeRest = {
+      post: vi.fn(),
+      get: vi.fn(),
+    } as unknown as import("@buape/carbon").RequestClient;
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "fail" }],
+        target: "channel:789",
+        token: "token",
+        rest: fakeRest,
+        runtime,
+        cfg,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("discord missing permissions in channel 789");
+
+    expect(buildDiscordSendErrorMock).toHaveBeenCalledWith(
+      apiErr,
+      expect.objectContaining({ channelId: "789", hasMedia: false }),
+    );
   });
 
   it("throws after exhausting retry attempts", async () => {

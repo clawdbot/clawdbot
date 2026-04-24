@@ -50,6 +50,9 @@ steps:
           expr: "tools.has('image_generate')"
           message: image_generate not present after imageGenerationModel patch
       - call: reset
+      - set: generationStartedAt
+        value:
+          expr: Date.now()
       - call: runAgentPrompt
         args:
           - ref: env
@@ -70,17 +73,18 @@ steps:
           expr: "!env.mock || ((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))?.plannedToolName === 'image_generate')"
           message:
             expr: "`expected image_generate, got ${String((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))?.plannedToolName ?? '')}`"
-      - call: waitForCondition
-        saveAs: generated
+      - call: resolveGeneratedImagePath
+        saveAs: generatedPath
         args:
-          - lambda:
-              async: true
-              expr: "!env.mock ? true : (await fetchJson(`${env.mock.baseUrl}/debug/image-generations`)).find((request) => request.model === 'gpt-image-1' && String(request.prompt ?? '').includes(config.generatedNeedle))"
-          - 15000
-          - 250
+          - env:
+              ref: env
+            promptSnippet:
+              expr: config.promptSnippet
+            startedAtMs:
+              ref: generationStartedAt
+            timeoutMs: 15000
       - assert:
-          expr: "!env.mock || Boolean(generated)"
-          message:
-            expr: "`image provider was never invoked`"
-    detailsExpr: "env.mock ? `${outbound.text}\\nIMAGE_PROMPT:${generated.prompt ?? ''}` : outbound.text"
+          expr: "typeof generatedPath === 'string' && generatedPath.length > 0"
+          message: image generation did not produce a saved media path
+    detailsExpr: "`${outbound.text}\\nIMAGE_PATH:${generatedPath}`"
 ```

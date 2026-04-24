@@ -75,6 +75,11 @@ const PROVIDER_CASES: LiveProviderCase[] = [
     providerId: "openai",
   },
   {
+    pluginId: "openrouter",
+    pluginName: "OpenRouter Provider",
+    providerId: "openrouter",
+  },
+  {
     pluginId: "vydra",
     pluginName: "Vydra Provider",
     providerId: "vydra",

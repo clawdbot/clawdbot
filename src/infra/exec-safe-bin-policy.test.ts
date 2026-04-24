@@ -16,6 +16,7 @@ const SAFE_BIN_DOC_DEFAULTS_START = '[//]: # "SAFE_BIN_DEFAULTS:START"';
 const SAFE_BIN_DOC_DEFAULTS_END = '[//]: # "SAFE_BIN_DEFAULTS:END"';
 const SAFE_BIN_DOC_DENIED_FLAGS_START = '[//]: # "SAFE_BIN_DENIED_FLAGS:START"';
 const SAFE_BIN_DOC_DENIED_FLAGS_END = '[//]: # "SAFE_BIN_DENIED_FLAGS:END"';
+const SAFE_BIN_DOC_PATH = "docs/tools/exec-approvals-advanced.md";
 
 function normalizeGeneratedDocBlock(block: string): string {
   const lines = block.split("\n");
@@ -187,7 +188,7 @@ describe("exec safe bin policy denied-flag matrix", () => {
 
 describe("exec safe bin policy docs parity", () => {
   it("keeps default safe-bin docs in sync with policy defaults", () => {
-    const docsPath = path.resolve(process.cwd(), "docs/tools/exec-approvals.md");
+    const docsPath = path.resolve(process.cwd(), SAFE_BIN_DOC_PATH);
     const docs = fs.readFileSync(docsPath, "utf8").replaceAll("\r\n", "\n");
     const start = docs.indexOf(SAFE_BIN_DOC_DEFAULTS_START);
     const end = docs.indexOf(SAFE_BIN_DOC_DEFAULTS_END);
@@ -199,7 +200,7 @@ describe("exec safe bin policy docs parity", () => {
   });
 
   it("keeps denied-flag docs in sync with policy fixtures", () => {
-    const docsPath = path.resolve(process.cwd(), "docs/tools/exec-approvals.md");
+    const docsPath = path.resolve(process.cwd(), SAFE_BIN_DOC_PATH);
     const docs = fs.readFileSync(docsPath, "utf8").replaceAll("\r\n", "\n");
     const start = docs.indexOf(SAFE_BIN_DOC_DENIED_FLAGS_START);
     const end = docs.indexOf(SAFE_BIN_DOC_DENIED_FLAGS_END);

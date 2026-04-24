@@ -55,3 +55,8 @@ Notes:
 ## Prefer
 
 Use [`openclaw gateway`](/cli/gateway) for current docs and examples.
+
+## Related
+
+- [CLI reference](/cli)
+- [Gateway runbook](/gateway)

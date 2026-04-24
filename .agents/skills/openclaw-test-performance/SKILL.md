@@ -1,6 +1,6 @@
 ---
 name: openclaw-test-performance
-description: Benchmark, diagnose, and optimize OpenClaw test performance without losing coverage. Use when Codex needs to reassess `pnpm test`, compare grouped Vitest reports, identify CPU/memory/import hotspots, fix slow tests or cold runtime paths, preserve behavior proofs, update the performance report, add AGENTS guardrails, and make scoped commits/pushes for OpenClaw test-speed work.
+description: Benchmark, diagnose, and optimize OpenClaw test runtime, import hotspots, CPU/RSS, and slow coverage paths.
 ---
 
 # OpenClaw Test Performance

@@ -23,7 +23,7 @@ Allowed paths:
 Required workflow:
 
 1. Run `pnpm docs:list` if available and read relevant docs based on `read_when` hints.
-2. Inspect the triggering event via `$GITHUB_EVENT_PATH`, then review the relevant commit range and changed files.
+2. Inspect the triggering event via `$GITHUB_EVENT_PATH`, then review `$DOCS_AGENT_BASE_SHA..$DOCS_AGENT_HEAD_SHA` and its changed files. If either env var is missing, fall back to the event payload.
 3. Update stale existing documentation, if needed.
 4. Run `pnpm check:docs` if dependencies are available.
 5. Leave the worktree clean if no docs need changes.

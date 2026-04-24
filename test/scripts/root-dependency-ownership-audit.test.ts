@@ -40,6 +40,26 @@ describe("collectModuleSpecifiers", () => {
       `),
     ]).toEqual(["gaxios", "openshell/package.json"]);
   });
+
+  it("resolves simple string constants used by lazy runtime imports", () => {
+    expect([
+      ...collectModuleSpecifiers(`
+        const READABILITY_MODULE = "@mozilla/readability";
+        const PDFJS_MODULE = "pdfjs-dist/legacy/build/pdf.mjs";
+        const CIAO_MODULE_ID = "@homebridge/ciao";
+        let SQLITE_VEC_MODULE_ID = "sqlite-vec";
+        import(READABILITY_MODULE);
+        import(PDFJS_MODULE);
+        require(CIAO_MODULE_ID);
+        require.resolve(SQLITE_VEC_MODULE_ID);
+      `),
+    ]).toEqual([
+      "@mozilla/readability",
+      "pdfjs-dist/legacy/build/pdf.mjs",
+      "@homebridge/ciao",
+      "sqlite-vec",
+    ]);
+  });
 });
 
 describe("classifyRootDependencyOwnership", () => {
@@ -129,6 +149,55 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
 
     expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([
       "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: qqbot:dependencies; sample imports: extensions/qqbot/src/setup.ts",
+    ]);
+  });
+
+  it("classifies root dependencies referenced through constant dynamic imports", () => {
+    const repoRoot = makeTempRepo();
+    writeRepoFile(
+      repoRoot,
+      "package.json",
+      JSON.stringify({ dependencies: { "pdfjs-dist": "^5.0.0", "sqlite-vec": "0.1.9" } }),
+    );
+    writeRepoFile(
+      repoRoot,
+      "src/media/pdf-extract.ts",
+      `
+        const PDFJS_MODULE = "pdfjs-dist/legacy/build/pdf.mjs";
+        export async function loadPdf() {
+          return import(PDFJS_MODULE);
+        }
+      `,
+    );
+    writeRepoFile(
+      repoRoot,
+      "packages/memory-host-sdk/src/host/sqlite-vec.ts",
+      `
+        const SQLITE_VEC_MODULE_ID = "sqlite-vec";
+        export async function loadSqliteVecModule() {
+          return import(SQLITE_VEC_MODULE_ID);
+        }
+      `,
+    );
+
+    const records = collectRootDependencyOwnershipAudit({
+      repoRoot,
+      scanRoots: ["src", "packages"],
+    });
+
+    expect(records).toMatchObject([
+      {
+        category: "core_runtime",
+        depName: "pdfjs-dist",
+        sampleFiles: ["src/media/pdf-extract.ts"],
+        sections: ["src"],
+      },
+      {
+        category: "core_runtime",
+        depName: "sqlite-vec",
+        sampleFiles: ["packages/memory-host-sdk/src/host/sqlite-vec.ts"],
+        sections: ["packages"],
+      },
     ]);
   });
 

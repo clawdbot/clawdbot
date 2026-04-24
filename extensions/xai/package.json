@@ -5,7 +5,7 @@
   "description": "OpenClaw xAI plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.69.0",
+    "@mariozechner/pi-ai": "0.70.0",
     "typebox": "1.1.28",
     "ws": "^8.20.0"
   },

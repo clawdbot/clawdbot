@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { deleteMediaBuffer } from "../media/store.js";
 import {
   buildMessageWithAttachments,
   type ChatAttachment,
@@ -14,6 +15,10 @@ async function parseWithWarnings(message: string, attachments: ChatAttachment[])
     log: { warn: (warning) => logs.push(warning) },
   });
   return { parsed, logs };
+}
+
+async function cleanupOffloadedRefs(refs: { id: string }[]) {
+  await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
 }
 
 describe("buildMessageWithAttachments", () => {
@@ -136,6 +141,68 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
     expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
+  });
+
+  it("offloads images for text-only models instead of dropping them", async () => {
+    const logs: string[] = [];
+    const infos: string[] = [];
+    const parsed = await parseMessageWithAttachments(
+      "see this",
+      [
+        {
+          type: "image",
+          mimeType: "image/png",
+          fileName: "dot.png",
+          content: PNG_1x1,
+        },
+      ],
+      {
+        log: { info: (message) => infos.push(message), warn: (warning) => logs.push(warning) },
+        supportsImages: false,
+      },
+    );
+
+    try {
+      expect(parsed.images).toHaveLength(0);
+      expect(parsed.imageOrder).toEqual(["offloaded"]);
+      expect(parsed.offloadedRefs).toHaveLength(1);
+      expect(parsed.offloadedRefs[0]?.mimeType).toBe("image/png");
+      expect(parsed.message).toMatch(/^see this\n\[media attached: media:\/\/inbound\//);
+      expect(infos[0]).toMatch(/Offloaded image for text-only model/i);
+      expect(logs).toHaveLength(0);
+    } finally {
+      await cleanupOffloadedRefs(parsed.offloadedRefs);
+    }
+  });
+
+  it("caps text-only image offloads", async () => {
+    const logs: string[] = [];
+    const attachments = Array.from(
+      { length: 11 },
+      (_, index): ChatAttachment => ({
+        type: "image",
+        mimeType: "image/png",
+        fileName: `dot-${index}.png`,
+        content: PNG_1x1,
+      }),
+    );
+    const parsed = await parseMessageWithAttachments("see these", attachments, {
+      log: { warn: (warning) => logs.push(warning) },
+      supportsImages: false,
+    });
+
+    try {
+      expect(parsed.images).toHaveLength(0);
+      expect(parsed.offloadedRefs).toHaveLength(10);
+      expect(parsed.imageOrder).toHaveLength(10);
+      expect(parsed.message.match(/\[media attached: media:\/\/inbound\//g)).toHaveLength(10);
+      expect(parsed.message).toContain(
+        "[image attachment omitted: text-only attachment limit reached]",
+      );
+      expect(logs.some((line) => /offload limit 10/i.test(line))).toBe(true);
+    } finally {
+      await cleanupOffloadedRefs(parsed.offloadedRefs);
+    }
   });
 });
 

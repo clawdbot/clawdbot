@@ -509,12 +509,22 @@ export class QmdMemoryManager implements MemorySearchManager {
       } catch (err) {
         const message = formatErrorMessage(err);
         if (this.isCollectionAlreadyExistsError(message)) {
-          const rebound = await this.tryRebindConflictingCollection({
-            collection,
-            existing,
-            addErrorMessage: message,
-          });
-          if (!rebound) {
+          const rebound =
+            (await this.tryRebindSameNameCollection({
+              collection,
+              addErrorMessage: message,
+            })) ||
+            (await this.tryRebindConflictingCollection({
+              collection,
+              existing,
+              addErrorMessage: message,
+            }));
+          if (rebound) {
+            existing.set(collection.name, {
+              path: collection.path,
+              pattern: collection.pattern,
+            });
+          } else {
             log.warn(`qmd collection add skipped for ${collection.name}: ${message}`);
           }
           continue;
@@ -522,6 +532,49 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+  }
+
+  private async tryRebindSameNameCollection(params: {
+    collection: ManagedCollection;
+    addErrorMessage: string;
+  }): Promise<boolean> {
+    const { collection, addErrorMessage } = params;
+    if (!this.isSameNameCollectionAlreadyExistsError(collection.name, addErrorMessage)) {
+      return false;
+    }
+    log.warn(
+      `qmd collection add conflict for ${collection.name}: collection name already exists; recreating managed collection`,
+    );
+    try {
+      await this.removeCollection(collection.name);
+    } catch (removeErr) {
+      const removeMessage = formatErrorMessage(removeErr);
+      if (!this.isCollectionMissingError(removeMessage)) {
+        log.warn(`qmd collection remove failed for ${collection.name}: ${removeMessage}`);
+        return false;
+      }
+    }
+
+    try {
+      await this.ensureCollectionPath(collection);
+      await this.addCollection(collection.path, collection.name, collection.pattern);
+      return true;
+    } catch (retryErr) {
+      const retryMessage = formatErrorMessage(retryErr);
+      log.warn(
+        `qmd collection add failed for ${collection.name} after recreating same-name collection: ${retryMessage} (initial: ${addErrorMessage})`,
+      );
+      return false;
+    }
+  }
+
+  private isSameNameCollectionAlreadyExistsError(name: string, message: string): boolean {
+    const lowerName = normalizeLowercaseStringOrEmpty(name);
+    const lowerMessage = normalizeLowercaseStringOrEmpty(message);
+    return (
+      lowerMessage.includes(`collection '${lowerName}' already exists`) ||
+      lowerMessage.includes(`collection "${lowerName}" already exists`)
+    );
   }
 
   private async listCollectionsBestEffort(): Promise<Map<string, ListedCollection>> {

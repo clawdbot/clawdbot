@@ -9,6 +9,7 @@ let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
+let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
   shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
@@ -59,8 +60,9 @@ function mockSingleOpenAiCatalogModel() {
 
 describe("loadModelCatalog", () => {
   beforeAll(async () => {
+    ensureOpenClawModelsJsonMock = vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false });
     vi.doMock("./models-config.js", () => ({
-      ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
+      ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
     }));
     vi.doMock("./agent-paths.js", () => ({
       resolveOpenClawAgentDir: () => "/tmp/openclaw",
@@ -81,6 +83,7 @@ describe("loadModelCatalog", () => {
 
   beforeEach(() => {
     resetModelCatalogCacheForTest();
+    ensureOpenClawModelsJsonMock.mockClear();
   });
 
   afterEach(() => {
@@ -144,6 +147,28 @@ describe("loadModelCatalog", () => {
       setLoggerOverride(null);
       resetLogger();
     }
+  });
+
+  it("does not prepare models.json when loading catalog in read-only mode", async () => {
+    const discoverAuthStorage = vi.fn(() => ({}));
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage,
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(discoverAuthStorage).toHaveBeenCalledWith("/tmp/openclaw", { readOnly: true });
   });
 
   it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {

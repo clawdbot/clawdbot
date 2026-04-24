@@ -5,6 +5,7 @@ import {
   normalizeClaudeBackendConfig,
   normalizeClaudePermissionArgs,
   normalizeClaudeSettingSourcesArgs,
+  resolveClaudePermissionMode,
 } from "./cli-shared.js";
 
 describe("normalizeClaudePermissionArgs", () => {
@@ -89,6 +90,8 @@ describe("normalizeClaudeBackendConfig", () => {
       "--verbose",
       "--setting-sources",
       "user",
+      "--permission-mode",
+      "bypassPermissions",
     ]);
     expect(normalized.resumeArgs).toEqual([
       "-p",
@@ -99,10 +102,65 @@ describe("normalizeClaudeBackendConfig", () => {
       "{sessionId}",
       "--setting-sources",
       "user",
+      "--permission-mode",
+      "bypassPermissions",
     ]);
     expect(normalized.output).toBe("jsonl");
     expect(normalized.liveSession).toBe("claude-stdio");
     expect(normalized.input).toBe("stdin");
+  });
+
+  it("derives Claude bypass from OpenClaw YOLO policy and disables it for safer policy", () => {
+    expect(resolveClaudePermissionMode({ backendId: "claude-cli" })).toEqual({
+      mode: "bypassPermissions",
+      overrideExisting: false,
+    });
+    expect(
+      resolveClaudePermissionMode({
+        backendId: "claude-cli",
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      }),
+    ).toEqual({ overrideExisting: false });
+  });
+
+  it("derives Claude bypass from per-agent OpenClaw exec policy", () => {
+    expect(
+      resolveClaudePermissionMode({
+        backendId: "claude-cli",
+        agentId: "safe-agent",
+        config: {
+          tools: { exec: { security: "full", ask: "off" } },
+          agents: {
+            list: [
+              {
+                id: "safe-agent",
+                tools: { exec: { security: "allowlist", ask: "on-miss" } },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({ overrideExisting: false });
+    expect(
+      resolveClaudePermissionMode({
+        backendId: "claude-cli",
+        agentId: "yolo-agent",
+        config: {
+          tools: { exec: { security: "allowlist", ask: "on-miss" } },
+          agents: {
+            list: [
+              {
+                id: "yolo-agent",
+                tools: { exec: { security: "full", ask: "off" } },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      mode: "bypassPermissions",
+      overrideExisting: false,
+    });
   });
 
   it("does not infer live stdio when explicit transport overrides are incompatible", () => {
@@ -131,8 +189,12 @@ describe("normalizeClaudeBackendConfig", () => {
 
     expect(normalized?.args).toContain("--setting-sources");
     expect(normalized?.args).toContain("user");
+    expect(normalized?.args).toContain("--permission-mode");
+    expect(normalized?.args).toContain("bypassPermissions");
     expect(normalized?.resumeArgs).toContain("--setting-sources");
     expect(normalized?.resumeArgs).toContain("user");
+    expect(normalized?.resumeArgs).toContain("--permission-mode");
+    expect(normalized?.resumeArgs).toContain("bypassPermissions");
     expect(normalized?.liveSession).toBe("claude-stdio");
   });
 

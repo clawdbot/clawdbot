@@ -1,6 +1,6 @@
 ---
 name: openclaw-test-heap-leaks
-description: Investigate `pnpm test` memory growth, Vitest worker OOMs, and suspicious RSS increases in OpenClaw using the `scripts/test-parallel.mjs` heap snapshot tooling. Use when Codex needs to reproduce test-lane memory growth, collect repeated `.heapsnapshot` files, compare snapshots from the same worker PID, triage likely transformed-module retention versus likely runtime leaks, and fix or reduce the impact by patching cleanup logic or isolating hotspot tests.
+description: Investigate OpenClaw pnpm test memory growth, Vitest OOMs, RSS spikes, and heap snapshot deltas.
 ---
 
 # OpenClaw Test Heap Leaks

@@ -124,9 +124,8 @@ OpenClaw. The harness then claims that provider in `supports(...)`.
 The bundled Codex plugin follows this pattern:
 
 - provider id: `codex`
-- user model refs: canonical `openai/gpt-5.5` plus
-  `embeddedHarness.runtime: "codex"`; legacy `codex/gpt-*` refs remain accepted
-  for compatibility
+- user model refs: `openai/gpt-5.5` plus `embeddedHarness.runtime: "codex"`;
+  legacy `codex/gpt-*` refs remain accepted for compatibility
 - harness id: `codex`
 - auth: synthetic provider availability, because the Codex harness owns the
   native Codex login/session
@@ -158,9 +157,10 @@ into the OpenClaw transcript.
 
 The bundled `codex` harness is the native Codex mode for embedded OpenClaw
 agent turns. Enable the bundled `codex` plugin first, and include `codex` in
-`plugins.allow` if your config uses a restrictive allowlist. New configs should
-use `openai/gpt-*` with `embeddedHarness.runtime: "codex"`. Legacy
-`openai-codex/*` and `codex/*` model refs remain compatibility aliases.
+`plugins.allow` if your config uses a restrictive allowlist. Native app-server
+configs should use `openai/gpt-*` with `embeddedHarness.runtime: "codex"`.
+Use `openai-codex/*` for Codex OAuth through PI instead. Legacy `codex/*`
+model refs remain compatibility aliases for the native harness.
 
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,

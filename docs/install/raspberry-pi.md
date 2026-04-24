@@ -155,3 +155,9 @@ sudo systemctl disable bluetooth
 - [Channels](/channels) -- connect Telegram, WhatsApp, Discord, and more
 - [Gateway configuration](/gateway/configuration) -- all config options
 - [Updating](/install/updating) -- keep OpenClaw up to date
+
+## Related
+
+- [Install overview](/install)
+- [Linux server](/vps)
+- [Platforms](/platforms)

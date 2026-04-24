@@ -94,6 +94,22 @@ describe("startQaLiveLaneGateway", () => {
     expect(mockStop).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards gateway stop options to the child harness", async () => {
+    const harness = await startQaLiveLaneGateway({
+      repoRoot: "/tmp/openclaw-repo",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.4",
+      alternateModel: "mock-openai/gpt-5.4-alt",
+      controlUiEnabled: false,
+    });
+
+    await harness.stop({ preserveToDir: ".artifacts/qa-e2e/debug" });
+    expect(gatewayStop).toHaveBeenCalledWith({ preserveToDir: ".artifacts/qa-e2e/debug" });
+    expect(mockStop).toHaveBeenCalledTimes(1);
+  });
+
   it("skips mock bootstrap for live frontier runs", async () => {
     const harness = await startQaLiveLaneGateway({
       repoRoot: "/tmp/openclaw-repo",

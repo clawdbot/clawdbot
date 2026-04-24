@@ -55,3 +55,8 @@ openclaw agent --agent ops --message "Run locally" --local
 - `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not session routing.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), not resolved secret plaintext.
 - Marker writes are source-authoritative: OpenClaw persists markers from the active source config snapshot, not from resolved runtime secret values.
+
+## Related
+
+- [CLI reference](/cli)
+- [Agent runtime](/concepts/agent)

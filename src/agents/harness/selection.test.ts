@@ -138,6 +138,34 @@ describe("runAgentHarnessAttemptWithFallback", () => {
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
+  it("annotates non-ok harness result classifications for outer model fallback", async () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
+    const classify = vi.fn(() => "empty" as const);
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Classifying Codex",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        classify,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    const params = createAttemptParams();
+    const result = await runAgentHarnessAttemptWithFallback(params);
+
+    expect(classify).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionIdUsed: "codex" }),
+      params,
+    );
+    expect(result).toMatchObject({
+      agentHarnessId: "codex",
+      agentHarnessResultClassification: "empty",
+    });
+  });
+
   it("honors env fallback override over config fallback", async () => {
     process.env.OPENCLAW_AGENT_RUNTIME = "auto";
     process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";

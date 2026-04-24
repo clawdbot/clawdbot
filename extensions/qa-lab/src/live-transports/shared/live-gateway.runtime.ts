@@ -1,17 +1,24 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { startQaGatewayChild, type QaCliBackendAuthMode } from "../../gateway-child.js";
+import {
+  startQaGatewayChild,
+  type QaCliBackendAuthMode,
+  type QaGatewayChildCommand,
+} from "../../gateway-child.js";
 import type { QaProviderMode } from "../../model-selection.js";
 import { startQaProviderServer } from "../../providers/server-runtime.js";
 import type { QaThinkingLevel } from "../../qa-gateway-config.js";
 import { appendLiveLaneIssue } from "./live-lane-helpers.js";
 
-async function stopQaLiveLaneResources(resources: {
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
-  mock: { baseUrl: string; stop(): Promise<void> } | null;
-}) {
+async function stopQaLiveLaneResources(
+  resources: {
+    gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+    mock: { baseUrl: string; stop(): Promise<void> } | null;
+  },
+  opts?: { keepTemp?: boolean; preserveToDir?: string },
+) {
   const errors: string[] = [];
   try {
-    await resources.gateway.stop();
+    await resources.gateway.stop(opts);
   } catch (error) {
     appendLiveLaneIssue(errors, "gateway stop failed", error);
   }
@@ -29,6 +36,7 @@ async function stopQaLiveLaneResources(resources: {
 
 export async function startQaLiveLaneGateway(params: {
   repoRoot: string;
+  command?: QaGatewayChildCommand;
   transport: {
     requiredPluginIds: readonly string[];
     createGatewayConfig: (params: {
@@ -50,6 +58,7 @@ export async function startQaLiveLaneGateway(params: {
   try {
     const gateway = await startQaGatewayChild({
       repoRoot: params.repoRoot,
+      command: params.command,
       providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
       transport: params.transport,
       transportBaseUrl: params.transportBaseUrl,
@@ -66,8 +75,8 @@ export async function startQaLiveLaneGateway(params: {
     return {
       gateway,
       mock,
-      async stop() {
-        await stopQaLiveLaneResources({ gateway, mock });
+      async stop(opts?: { keepTemp?: boolean; preserveToDir?: string }) {
+        await stopQaLiveLaneResources({ gateway, mock }, opts);
       },
     };
   } catch (error) {

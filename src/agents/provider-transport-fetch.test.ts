@@ -75,6 +75,25 @@ describe("buildGuardedModelFetch", () => {
     );
   });
 
+  it("threads explicit transport timeouts into the shared guarded fetch seam", async () => {
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const fetcher = buildGuardedModelFetch(model, 123_456);
+    await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 123_456,
+      }),
+    );
+  });
+
   it("does not force explicit debug proxy overrides onto plain HTTP model transports", async () => {
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
     process.env.OPENCLAW_DEBUG_PROXY_URL = "http://127.0.0.1:7799";

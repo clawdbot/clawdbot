@@ -5,8 +5,6 @@ read_when:
 title: "Thinking levels"
 ---
 
-# Thinking Levels (/think directives)
-
 ## What it does
 
 - Inline directive in any inbound body: `/t <level>`, `/think:<level>`, or `/thinking <level>`.
@@ -15,7 +13,7 @@ title: "Thinking levels"
   - low → “think hard”
   - medium → “think harder”
   - high → “ultrathink” (max budget)
-  - xhigh → “ultrathink+” (GPT-5.2 + Codex models and Anthropic Claude Opus 4.7 effort)
+  - xhigh → “ultrathink+” (GPT-5.2+ and Codex models, plus Anthropic Claude Opus 4.7 effort)
   - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock and Anthropic Claude Opus 4.7)
   - max → provider max reasoning (currently Anthropic Claude Opus 4.7)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.

@@ -1,6 +1,6 @@
 ---
 name: openclaw-qa-testing
-description: Run, watch, debug, and extend OpenClaw QA testing with qa-lab and qa-channel. Use when Codex needs to execute the repo-backed QA suite, inspect live QA artifacts, debug failing scenarios, add new QA scenarios, or explain the OpenClaw QA workflow. Prefer the live OpenAI lane with regular openai/gpt-5.4 in fast mode; do not use gpt-5.4-pro or gpt-5.4-mini unless the user explicitly overrides that policy.
+description: Run, watch, debug, extend, or explain OpenClaw qa-lab and qa-channel scenarios, artifacts, and live lanes.
 ---
 
 # OpenClaw QA Testing
@@ -48,6 +48,66 @@ pnpm openclaw qa suite \
    - report: `.artifacts/qa-e2e/run-all-live-frontier-<tag>/qa-suite-report.md`
 5. If the user wants to watch the live UI, find the current `openclaw-qa` listen port and report `http://127.0.0.1:<port>`.
 6. If a scenario fails, fix the product or harness root cause, then rerun the full lane.
+
+## QA credentials and 1Password
+
+- Use `op` only inside `tmux` for QA secret lookup in this repo.
+- Quick auth check inside tmux:
+
+```bash
+op account list
+```
+
+- Direct Telegram npm live test secrets currently live in 1Password item:
+  - vault: `OpenClaw`
+  - item: `Telegram E2E`
+- That item is the first place to look for:
+  - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
+  - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
+  - `OPENCLAW_QA_PROVIDER_MODE`
+  - `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC`
+- Convex QA secrets currently live in 1Password items:
+  - vault: `OpenClaw`
+  - item: `OPENCLAW_QA_CONVEX_SITE_URL`
+  - item: `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
+  - item: `OPENCLAW_QA_CONVEX_SECRET_CI`
+- Additional related notes/login items seen during QA credential work:
+  - vault: `Private`
+  - items: `OPENCLAW QA`, `Convex`, `Telegram`
+- If a required value is missing from those notes:
+  - do not guess
+  - ask the maintainer/operator for the current value or the current 1Password item name
+  - for Telegram direct runs, `OPENCLAW_QA_TELEGRAM_GROUP_ID` may be stored separately from `Telegram E2E`
+  - for Convex runs, the leased Telegram credential should provide the Telegram group id and bot tokens together; do not require a separate `OPENCLAW_QA_TELEGRAM_GROUP_ID`
+  - for Convex runs, prefer `OpenClaw/OPENCLAW_QA_CONVEX_SITE_URL`; if that is stale or unclear, ask for the active pool URL before running
+- Prefer direct Telegram envs for the npm Telegram Docker lane when available:
+
+```bash
+OPENCLAW_QA_TELEGRAM_GROUP_ID="..." \
+OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN="..." \
+OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN="..." \
+OPENCLAW_QA_PROVIDER_MODE="mock-openai" \
+OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="openclaw@beta" \
+pnpm test:docker:npm-telegram-live
+```
+
+- Prefer Convex mode when the goal is stable shared QA infra:
+  - round-robin credential leasing
+  - thinner wrapper for channel-specific setup
+  - CLI/admin flows around the pooled credentials
+- Live npm Telegram Docker lane note:
+  - `scripts/e2e/npm-telegram-live-runner.ts` reads `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE`
+  - do not assume `OPENCLAW_QA_PROVIDER_MODE` is consumed by that wrapper
+  - if a 1Password note only gives `OPENCLAW_QA_PROVIDER_MODE`, map it explicitly to `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE` before running the Docker lane
+- Verified live shape:
+  - Convex mode can pass the real Docker lane without direct Telegram env vars
+  - leased Telegram payload includes the group id coupled to the driver/SUT tokens
+  - a real run of `pnpm test:docker:npm-telegram-live` passed with:
+    - `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`
+    - `OPENCLAW_QA_CREDENTIAL_ROLE=maintainer`
+    - `OPENCLAW_QA_CONVEX_SITE_URL`
+    - `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
+    - `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE=mock-openai`
 
 ## Character evals
 

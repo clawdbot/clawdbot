@@ -1,6 +1,7 @@
 {
   "id": "volcengine",
   "enabledByDefault": true,
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["volcengine", "volcengine-plan"],
   "providerAuthEnvVars": {
     "volcengine": ["VOLCANO_ENGINE_API_KEY"]

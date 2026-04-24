@@ -90,7 +90,7 @@ These are the standard files OpenClaw expects inside the workspace:
   - Keep it short to avoid token burn.
 
 - `BOOT.md`
-  - Optional startup checklist executed on gateway restart when internal hooks are enabled.
+  - Optional startup checklist run automatically on gateway restart (when [internal hooks](/automation/hooks) are enabled).
   - Keep it short; use the message tool for outbound sends.
 
 - `BOOTSTRAP.md`

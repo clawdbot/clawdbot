@@ -101,6 +101,7 @@ describe("trajectory metadata", () => {
       gatewayMethods: [],
       cliCommands: [],
       services: [],
+      gatewayDiscoveryServiceIds: [],
       commands: [],
       httpRoutes: 0,
       hookCount: 0,

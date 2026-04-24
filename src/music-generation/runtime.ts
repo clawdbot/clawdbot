@@ -82,6 +82,7 @@ export async function generateMusic(
         durationSeconds: sanitized.durationSeconds,
         format: sanitized.format,
         inputImages: params.inputImages,
+        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       });
       if (!Array.isArray(result.tracks) || result.tracks.length === 0) {
         throw new Error("Music generation provider returned no tracks.");

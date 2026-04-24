@@ -231,6 +231,48 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   return Array.from(actions);
 }
 
+export function listCrossChannelSchemaSupportedMessageActions(
+  params: ChannelMessageActionDiscoveryParams & {
+    channel?: string;
+  },
+): ChannelMessageActionName[] {
+  const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
+  if (!channelId) {
+    return [];
+  }
+  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(channelId);
+  if (!pluginActions?.actions) {
+    return [];
+  }
+  const resolved = resolveMessageActionDiscoveryForPlugin({
+    pluginId: pluginActions.pluginId,
+    actions: pluginActions.actions,
+    context: createMessageActionDiscoveryContext(params),
+    includeActions: true,
+    includeSchema: true,
+  });
+  const schemaBlockedActions = new Set<ChannelMessageActionName>();
+  for (const contribution of resolved.schemaContributions) {
+    if ((contribution.visibility ?? "current-channel") !== "current-channel") {
+      continue;
+    }
+    if (!Object.hasOwn(contribution, "actions")) {
+      return [];
+    }
+    const actions = contribution.actions;
+    if (!Array.isArray(actions)) {
+      return [];
+    }
+    if (actions.length === 0) {
+      continue;
+    }
+    for (const action of actions) {
+      schemaBlockedActions.add(action);
+    }
+  }
+  return resolved.actions.filter((action) => !schemaBlockedActions.has(action));
+}
+
 export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
   const capabilities = new Set<ChannelMessageCapability>();
   for (const plugin of listChannelPlugins()) {

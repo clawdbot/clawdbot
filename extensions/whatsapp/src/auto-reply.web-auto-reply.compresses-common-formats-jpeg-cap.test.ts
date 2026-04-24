@@ -379,7 +379,7 @@ describe("web auto-reply", () => {
     const fallback = reply.mock.calls[0]?.[0] as string;
     expect(fallback).toContain("caption");
     expect(fallback).toContain("Media failed");
-    expect(fallback).toContain("404");
+    expect(fallback).not.toContain("404");
 
     fetchMock.mockRestore();
   });

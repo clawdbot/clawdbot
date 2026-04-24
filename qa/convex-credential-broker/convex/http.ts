@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { httpAction } from "./_generated/server";
+import { normalizeCredentialPayloadForKind } from "./payload-validation";
 
 type ActorRole = "ci" | "maintainer";
 
@@ -201,50 +202,6 @@ function optionalListStatus(body: Record<string, unknown>, key: string) {
   return value;
 }
 
-function requirePayloadString(payload: Record<string, unknown>, key: string, kind: string): string {
-  const raw = payload[key];
-  if (typeof raw !== "string") {
-    throw new BrokerHttpError(
-      400,
-      "INVALID_PAYLOAD",
-      `Credential payload for kind "${kind}" must include "${key}" as a string.`,
-    );
-  }
-  const value = raw.trim();
-  if (!value) {
-    throw new BrokerHttpError(
-      400,
-      "INVALID_PAYLOAD",
-      `Credential payload for kind "${kind}" must include a non-empty "${key}" value.`,
-    );
-  }
-  return value;
-}
-
-function normalizeCredentialPayloadForKind(kind: string, payload: Record<string, unknown>) {
-  if (kind !== "telegram") {
-    return payload;
-  }
-
-  const groupId = requirePayloadString(payload, "groupId", "telegram");
-  if (!/^-?\d+$/u.test(groupId)) {
-    throw new BrokerHttpError(
-      400,
-      "INVALID_PAYLOAD",
-      'Credential payload for kind "telegram" must include a numeric "groupId" string.',
-    );
-  }
-
-  const driverToken = requirePayloadString(payload, "driverToken", "telegram");
-  const sutToken = requirePayloadString(payload, "sutToken", "telegram");
-
-  return {
-    groupId,
-    driverToken,
-    sutToken,
-  } satisfies Record<string, unknown>;
-}
-
 function parseActorRole(body: Record<string, unknown>) {
   const actorRole = requireString(body, "actorRole");
   if (actorRole !== "ci" && actorRole !== "maintainer") {
@@ -396,7 +353,11 @@ http.route({
       assertMaintainerAdminAuth(parseBearerToken(request));
       const body = await parseJsonObject(request);
       const kind = requireString(body, "kind");
-      const payload = normalizeCredentialPayloadForKind(kind, requireObject(body, "payload"));
+      const payload = normalizeCredentialPayloadForKind(
+        kind,
+        requireObject(body, "payload"),
+        (httpStatus, code, message) => new BrokerHttpError(httpStatus, code, message),
+      );
       const result = await ctx.runMutation(internal.credentials.addCredentialSet, {
         kind,
         payload,

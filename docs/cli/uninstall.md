@@ -37,3 +37,8 @@ Notes:
 - Run `openclaw backup create` first if you want a restorable snapshot before removing state or workspaces.
 - `--all` is shorthand for removing service, state, workspace, and app together.
 - `--non-interactive` requires `--yes`.
+
+## Related
+
+- [CLI reference](/cli)
+- [Uninstall](/install/uninstall)

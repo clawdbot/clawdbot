@@ -732,7 +732,7 @@ describe("openai transport stream", () => {
       compat: {
         supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
       },
-    } satisfies Model<"openai-responses">;
+    } as unknown as Model<"openai-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -770,7 +770,7 @@ describe("openai transport stream", () => {
       compat: {
         supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
       },
-    } satisfies Model<"openai-responses">;
+    } as unknown as Model<"openai-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -1051,6 +1051,80 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean }> };
 
     expect(params.tools?.[0]).not.toHaveProperty("strict");
+  });
+
+  it("still normalizes responses tool parameters when strict is omitted", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: {},
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ strict?: boolean; parameters?: Record<string, unknown> }> };
+
+    expect(params.tools?.[0]).not.toHaveProperty("strict");
+    expect(params.tools?.[0]?.parameters).toMatchObject({
+      type: "object",
+      properties: {},
+    });
+  });
+
+  it("normalizes responses tool parameters while downgrading native strict:false", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: {
+              properties: { path: { type: "string" } },
+              required: [],
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ strict?: boolean; parameters?: Record<string, unknown> }> };
+
+    expect(params.tools?.[0]?.strict).toBe(false);
+    expect(params.tools?.[0]?.parameters).toMatchObject({
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: [],
+    });
   });
 
   it("adds native OpenAI turn metadata on direct Responses routes", () => {

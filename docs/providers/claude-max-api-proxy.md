@@ -95,7 +95,7 @@ The proxy:
   </Step>
 </Steps>
 
-## Available models
+## Built-in catalog
 
 | Model ID          | Maps To         |
 | ----------------- | --------------- |

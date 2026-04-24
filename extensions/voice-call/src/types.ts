@@ -235,6 +235,12 @@ export type PlayTtsInput = {
   locale?: string;
 };
 
+export type SendDtmfInput = {
+  callId: CallId;
+  providerCallId: ProviderCallId;
+  digits: string;
+};
+
 export type StartListeningInput = {
   callId: CallId;
   providerCallId: ProviderCallId;
@@ -274,6 +280,8 @@ export type OutboundCallOptions = {
   message?: string;
   /** Call mode (overrides config default) */
   mode?: CallMode;
+  /** DTMF digits to send after the call is connected */
+  dtmfSequence?: string;
 };
 
 // -----------------------------------------------------------------------------

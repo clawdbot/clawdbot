@@ -32,6 +32,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     nodeHostCommands: [],
     securityAuditCollectors: [],
     services: [],
+    gatewayDiscoveryServices: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],

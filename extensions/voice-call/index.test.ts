@@ -12,6 +12,7 @@ let runtimeStub: {
     initiateCall: ReturnType<typeof vi.fn>;
     continueCall: ReturnType<typeof vi.fn>;
     speak: ReturnType<typeof vi.fn>;
+    sendDtmf: ReturnType<typeof vi.fn>;
     endCall: ReturnType<typeof vi.fn>;
     getCall: ReturnType<typeof vi.fn>;
     getCallByProviderCallId: ReturnType<typeof vi.fn>;
@@ -123,6 +124,7 @@ describe("voice-call plugin", () => {
           transcript: "hello",
         })),
         speak: vi.fn(async () => ({ success: true })),
+        sendDtmf: vi.fn(async () => ({ success: true })),
         endCall: vi.fn(async () => ({ success: true })),
         getCall: vi.fn((id: string) => (id === "call-1" ? { callId: "call-1" } : undefined)),
         getCallByProviderCallId: vi.fn(() => undefined),
@@ -162,6 +164,22 @@ describe("voice-call plugin", () => {
     const [ok, payload] = respond.mock.calls[0];
     expect(ok).toBe(true);
     expect(payload.found).toBe(true);
+  });
+
+  it("sends DTMF via voicecall.dtmf", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.dtmf") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { callId: "call-1", digits: "ww123#" }, respond });
+
+    expect(runtimeStub.manager.sendDtmf).toHaveBeenCalledWith("call-1", "ww123#");
+    expect(respond.mock.calls[0]).toEqual([true, { success: true }]);
   });
 
   it("normalizes legacy config through runtime creation and warns to run doctor", async () => {
@@ -217,6 +235,20 @@ describe("voice-call plugin", () => {
       callId: "call-1",
     })) as { details: { found?: boolean } };
     expect(result.details.found).toBe(true);
+  });
+
+  it("tool send_dtmf returns json payload", async () => {
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+    const result = (await tool.execute("id", {
+      action: "send_dtmf",
+      callId: "call-1",
+      digits: "ww123#",
+    })) as { details: { success?: boolean } };
+    expect(runtimeStub.manager.sendDtmf).toHaveBeenCalledWith("call-1", "ww123#");
+    expect(result.details.success).toBe(true);
   });
 
   it("legacy tool status without sid returns error payload", async () => {

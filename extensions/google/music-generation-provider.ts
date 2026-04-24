@@ -1,4 +1,3 @@
-import { GoogleGenAI } from "@google/genai";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type {
   GeneratedMusicAsset,
@@ -14,6 +13,7 @@ import {
   GOOGLE_MAX_INPUT_IMAGES,
   GOOGLE_PRO_MUSIC_MODEL,
 } from "./generation-provider-metadata.js";
+import { createGoogleGenAI } from "./google-genai-runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 
@@ -128,7 +128,7 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
         }
       }
 
-      const client = new GoogleGenAI({
+      const client = createGoogleGenAI({
         apiKey: auth.apiKey,
         httpOptions: {
           ...(resolveConfiguredGoogleMusicBaseUrl(req)

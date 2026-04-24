@@ -1,4 +1,7 @@
-import type { CliBackendConfig } from "openclaw/plugin-sdk/cli-backend";
+import type {
+  CliBackendConfig,
+  CliBackendNormalizeConfigContext,
+} from "openclaw/plugin-sdk/cli-backend";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
@@ -58,16 +61,40 @@ const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
 const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
+const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
 
-export function normalizeClaudePermissionArgs(args?: string[]): string[] | undefined {
+function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): boolean {
+  const agentExec = context?.agentId
+    ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
+    : undefined;
+  const exec = agentExec ?? context?.config?.tools?.exec;
+  const security = exec?.security ?? "full";
+  const ask = exec?.ask ?? "off";
+  return security === "full" && ask === "off";
+}
+
+export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
+  mode?: string;
+  overrideExisting: boolean;
+} {
+  return isOpenClawRequestedYolo(context)
+    ? { mode: CLAUDE_BYPASS_PERMISSION_MODE, overrideExisting: false }
+    : { overrideExisting: false };
+}
+
+export function normalizeClaudePermissionArgs(
+  args?: string[],
+  options?: { mode?: string; overrideExisting?: boolean },
+): string[] | undefined {
   if (!args) {
-    return args;
+    return options?.mode ? [CLAUDE_PERMISSION_MODE_ARG, options.mode] : args;
   }
   const normalized: string[] = [];
+  let hasPermissionMode = false;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG) {
@@ -80,8 +107,11 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
         maybeValue.trim().length > 0 &&
         !maybeValue.startsWith("-")
       ) {
-        normalized.push(arg);
-        normalized.push(maybeValue);
+        hasPermissionMode = true;
+        if (!options?.overrideExisting) {
+          normalized.push(arg);
+          normalized.push(maybeValue);
+        }
         i += 1;
       }
       continue;
@@ -89,11 +119,17 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
     if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_ARG}=`)) {
       const maybeValue = arg.slice(`${CLAUDE_PERMISSION_MODE_ARG}=`.length).trim();
       if (maybeValue.length > 0 && !maybeValue.startsWith("-")) {
-        normalized.push(`${CLAUDE_PERMISSION_MODE_ARG}=${maybeValue}`);
+        hasPermissionMode = true;
+        if (!options?.overrideExisting) {
+          normalized.push(`${CLAUDE_PERMISSION_MODE_ARG}=${maybeValue}`);
+        }
       }
       continue;
     }
     normalized.push(arg);
+  }
+  if (options?.mode && (!hasPermissionMode || options.overrideExisting)) {
+    normalized.push(CLAUDE_PERMISSION_MODE_ARG, options.mode);
   }
   return normalized;
 }
@@ -132,13 +168,20 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
   return normalized;
 }
 
-export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+export function normalizeClaudeBackendConfig(
+  config: CliBackendConfig,
+  context?: CliBackendNormalizeConfigContext,
+): CliBackendConfig {
   const output = config.output ?? "jsonl";
   const input = config.input ?? "stdin";
+  const permission = resolveClaudePermissionMode(context);
   return {
     ...config,
-    args: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args)),
-    resumeArgs: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.resumeArgs)),
+    args: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args), permission),
+    resumeArgs: normalizeClaudePermissionArgs(
+      normalizeClaudeSettingSourcesArgs(config.resumeArgs),
+      permission,
+    ),
     output,
     liveSession:
       config.liveSession ?? (output === "jsonl" && input === "stdin" ? "claude-stdio" : undefined),

@@ -213,6 +213,30 @@ export async function applyInlineDirectiveOverrides(params: {
     };
   }
 
+  const directivePersistenceContext = {
+    directives,
+    effectiveModelDirective,
+    cfg,
+    agentDir,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    elevatedEnabled,
+    elevatedAllowed,
+    defaultProvider,
+    defaultModel,
+    aliasIndex,
+    allowedModelKeys: modelState.allowedModelKeys,
+    initialModelLabel,
+    formatModelSwitchEvent,
+    agentCfg,
+    messageProvider: ctx.Provider,
+    surface: ctx.Surface,
+    gatewayClientScopes: ctx.GatewayClientScopes,
+    senderIsOwner: command.senderIsOwner,
+  };
+
   if (
     isDirectiveOnly({
       directives,
@@ -251,29 +275,9 @@ export async function applyInlineDirectiveOverrides(params: {
         const persisted = await (
           await loadDirectivePersist()
         ).persistInlineDirectives({
-          directives,
-          effectiveModelDirective,
-          cfg,
-          agentDir,
-          sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
-          elevatedEnabled,
-          elevatedAllowed,
-          defaultProvider,
-          defaultModel,
-          aliasIndex,
-          allowedModelKeys: modelState.allowedModelKeys,
+          ...directivePersistenceContext,
           provider,
           model,
-          initialModelLabel,
-          formatModelSwitchEvent,
-          agentCfg,
-          messageProvider: ctx.Provider,
-          surface: ctx.Surface,
-          gatewayClientScopes: ctx.GatewayClientScopes,
-          senderIsOwner: command.senderIsOwner,
           markLiveSwitchPending: true,
         });
         const label = `${modelSelection.provider}/${modelSelection.model}`;
@@ -399,29 +403,9 @@ export async function applyInlineDirectiveOverrides(params: {
   const persisted = await (
     await loadDirectivePersist()
   ).persistInlineDirectives({
-    directives,
-    effectiveModelDirective,
-    cfg,
-    agentDir,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    elevatedEnabled,
-    elevatedAllowed,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    allowedModelKeys: modelState.allowedModelKeys,
+    ...directivePersistenceContext,
     provider,
     model,
-    initialModelLabel,
-    formatModelSwitchEvent,
-    agentCfg,
-    messageProvider: ctx.Provider,
-    surface: ctx.Surface,
-    gatewayClientScopes: ctx.GatewayClientScopes,
-    senderIsOwner: command.senderIsOwner,
   });
   provider = persisted.provider;
   model = persisted.model;

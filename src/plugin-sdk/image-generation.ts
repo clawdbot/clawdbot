@@ -2,8 +2,14 @@
 
 export type {
   GeneratedImageAsset,
+  ImageGenerationOpenAIBackground,
+  ImageGenerationOpenAIModeration,
+  ImageGenerationOpenAIOptions,
+  ImageGenerationOutputFormat,
   ImageGenerationProvider,
   ImageGenerationProviderConfiguredContext,
+  ImageGenerationProviderOptions,
+  ImageGenerationQuality,
   ImageGenerationResolution,
   ImageGenerationRequest,
   ImageGenerationResult,

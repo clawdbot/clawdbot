@@ -9,6 +9,8 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
+import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
+import type { EmbeddedPiRunResult } from "./pi-embedded-runner/types.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 vi.mock("../infra/file-lock.js", () => ({
@@ -414,6 +416,189 @@ describe("runWithModelFallback", () => {
         }),
       ]),
     });
+  });
+
+  it("uses optional result classification to continue to configured fallbacks", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ payloads: [] })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "fallback ok" }],
+      });
+    const classifyResult = vi.fn(({ result }) =>
+      Array.isArray(result.payloads) && result.payloads.length === 0
+        ? {
+            message: "terminal result contained no visible assistant reply",
+            reason: "format" as const,
+            code: "empty_result",
+          }
+        : null,
+    );
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      run,
+      classifyResult,
+    });
+
+    expect(result.result).toEqual({ payloads: [{ text: "fallback ok" }] });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]).toEqual(["anthropic", "claude-haiku-3-5"]);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      reason: "format",
+      code: "empty_result",
+    });
+  });
+
+  it("surfaces classified terminal results when no fallback remains", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.4",
+            fallbacks: [],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce({ payloads: [] });
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        run,
+        classifyResult: ({ result }) => {
+          const payloads = (result as { payloads?: unknown[] }).payloads;
+          return Array.isArray(payloads) && payloads.length === 0
+            ? {
+                message: "terminal result contained no visible assistant reply",
+                reason: "format",
+                code: "empty_result",
+              }
+            : null;
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "format",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      code: "empty_result",
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not classify successful results when the optional classifier returns null", async () => {
+    const cfg = makeProviderFallbackCfg("openai-codex");
+    const run = vi.fn().mockResolvedValueOnce({ payloads: [{ text: "ok" }] });
+    const classifyResult = vi.fn(() => null);
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai-codex",
+      model: "m1",
+      run,
+      classifyResult,
+    });
+
+    expect(result.result).toEqual({ payloads: [{ text: "ok" }] });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(result.attempts).toEqual([]);
+  });
+
+  it("keeps tool-executing empty GPT-5 runs out of fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        toolSummary: {
+          calls: 1,
+          tools: ["mcp_write"],
+        },
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps normalized silent GPT-5 terminal replies out of fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        finalAssistantRawText: "NO_REPLY",
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toBeNull();
+  });
+
+  it("uses harness-owned terminal classification for GPT-5 fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        agentHarnessResultClassification: "planning-only",
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "codex",
+        model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toMatchObject({
+      code: "planning_only_result",
+      reason: "format",
+    });
+  });
+
+  it("keeps aborted harness-classified GPT-5 runs out of fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        aborted: true,
+        agentHarnessResultClassification: "empty",
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "codex",
+        model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toBeNull();
   });
 
   it("passes original unknown errors to onError during fallback", async () => {

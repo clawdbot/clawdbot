@@ -24,10 +24,6 @@ const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
   readCodexCliCredentialsCachedMock: vi.fn<() => OAuthCredential | null>(() => null),
 }));
 
-const { writeCodexCliCredentialsMock } = vi.hoisted(() => ({
-  writeCodexCliCredentialsMock: vi.fn(() => true),
-}));
-
 const {
   refreshProviderOAuthCredentialWithPluginMock,
   formatProviderAuthProfileApiKeyWithPluginMock,
@@ -42,7 +38,6 @@ const {
 
 vi.mock("../cli-credentials.js", () => ({
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
-  writeCodexCliCredentials: writeCodexCliCredentialsMock,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
 }));
@@ -116,8 +111,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
     readCodexCliCredentialsCachedMock.mockReset();
     readCodexCliCredentialsCachedMock.mockReturnValue(null);
-    writeCodexCliCredentialsMock.mockReset();
-    writeCodexCliCredentialsMock.mockReturnValue(true);
     refreshProviderOAuthCredentialWithPluginMock.mockReset();
     refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
     formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
@@ -274,8 +267,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       provider: "openai-codex",
       email: undefined,
     });
-    expect(writeCodexCliCredentialsMock).not.toHaveBeenCalled();
-
     const persisted = await readPersistedStore(agentDir);
     expect(persisted.profiles[profileId]).toMatchObject({
       type: "oauth",

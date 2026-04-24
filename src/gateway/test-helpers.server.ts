@@ -20,7 +20,7 @@ import {
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeMainKey,

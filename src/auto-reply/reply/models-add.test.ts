@@ -110,6 +110,59 @@ describe("models-add", () => {
           queryOllamaModelShowInfo: ollamaMocks.queryOllamaModelShowInfo,
         };
       }
+      if (
+        params &&
+        typeof params === "object" &&
+        "dirName" in params &&
+        params.dirName === "openai" &&
+        "artifactBasename" in params &&
+        params.artifactBasename === "api.js"
+      ) {
+        return {
+          buildOpenAICodexProvider: () => ({
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [],
+          }),
+          buildOpenAICodexProviderPlugin: () => ({
+            resolveDynamicModel: ({ modelId }: { modelId: string }) => {
+              const common = {
+                id: modelId,
+                name: modelId,
+                api: "openai-codex-responses",
+                provider: "openai-codex",
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+                reasoning: true,
+                input: ["text", "image"],
+                contextTokens: 272_000,
+                maxTokens: 128_000,
+              } as const;
+              switch (modelId) {
+                case "gpt-5.4":
+                  return {
+                    ...common,
+                    contextWindow: 1_050_000,
+                    cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+                  };
+                case "gpt-5.5":
+                  return {
+                    ...common,
+                    contextWindow: 1_000_000,
+                    cost: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 },
+                  };
+                case "gpt-5.5-pro":
+                  return {
+                    ...common,
+                    contextWindow: 1_000_000,
+                    cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+                  };
+                default:
+                  return undefined;
+              }
+            },
+          }),
+        };
+      }
       throw new Error(`Unexpected facade load: ${JSON.stringify(params)}`);
     });
     ollamaMocks.buildOllamaModelDefinition.mockClear();
@@ -132,9 +185,9 @@ describe("models-add", () => {
     expect(
       listAddableProviders({
         cfg,
-        discoveredProviders: ["openai", "ollama"],
+        discoveredProviders: ["openai", "openai-codex", "ollama"],
       }),
-    ).toEqual(["lmstudio", "ollama"]);
+    ).toEqual(["lmstudio", "ollama", "openai-codex"]);
   });
 
   it("validates add providers against addable providers", () => {
@@ -146,6 +199,27 @@ describe("models-add", () => {
     expect(validateAddProvider({ cfg, provider: "missing", discoveredProviders: [] })).toEqual({
       ok: false,
       providers: ["lmstudio", "ollama"],
+    });
+  });
+
+  it("only bootstraps openai-codex when the provider is discovered", () => {
+    const cfg = {} as OpenClawConfig;
+
+    expect(validateAddProvider({ cfg, provider: "openai-codex", discoveredProviders: [] })).toEqual(
+      {
+        ok: false,
+        providers: ["lmstudio", "ollama"],
+      },
+    );
+    expect(
+      validateAddProvider({
+        cfg,
+        provider: "openai-codex",
+        discoveredProviders: ["openai-codex"],
+      }),
+    ).toEqual({
+      ok: true,
+      provider: "openai-codex",
     });
   });
 
@@ -161,6 +235,7 @@ describe("models-add", () => {
     ).toEqual({
       ok: false,
       providers: ["lmstudio", "ollama"],
+      knownProvider: "openai",
     });
   });
 
@@ -372,6 +447,89 @@ describe("models-add", () => {
       }),
     ]);
   });
+
+  it.each([
+    [
+      "gpt-5.4",
+      {
+        contextWindow: 1_050_000,
+        cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+      },
+    ],
+    [
+      "gpt-5.5",
+      {
+        contextWindow: 1_000_000,
+        cost: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 },
+      },
+    ],
+    [
+      "gpt-5.5-pro",
+      {
+        contextWindow: 1_000_000,
+        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+      },
+    ],
+  ])(
+    "bootstraps openai-codex metadata for %s from the provider plugin",
+    async (modelId, expected) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.4" },
+            models: {
+              "openai-codex/gpt-5.3": {},
+            },
+          },
+        },
+        models: { providers: {} },
+      } as OpenClawConfig;
+      configMocks.readConfigFileSnapshot.mockResolvedValue({
+        valid: true,
+        parsed: cfg,
+      });
+      configMocks.validateConfigObjectWithPlugins.mockImplementation((config: OpenClawConfig) => ({
+        ok: true,
+        config,
+      }));
+
+      const result = await addModelToConfig({
+        cfg,
+        provider: "openai-codex",
+        modelId,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.result.allowlistAdded).toBe(true);
+      expect(result.result.warnings).toEqual([
+        "OpenAI Codex model metadata was saved from provider defaults; provider availability still depends on your Codex account.",
+      ]);
+      const written = configMocks.replaceConfigFile.mock.calls[0]?.[0]
+        ?.nextConfig as OpenClawConfig;
+      expect(written.models?.providers?.["openai-codex"]).toMatchObject({
+        baseUrl: "https://chatgpt.com/backend-api",
+        api: "openai-codex-responses",
+        models: [
+          expect.objectContaining({
+            id: modelId,
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: expected.contextWindow,
+            contextTokens: 272_000,
+            maxTokens: 128_000,
+            cost: expected.cost,
+            metadataSource: "models-add",
+          }),
+        ],
+      });
+      expect(written.agents?.defaults?.models?.[`openai-codex/${modelId}`]).toEqual({});
+    },
+  );
 
   it("returns a generic validation error when config validation fails without issue details", async () => {
     const cfg = {

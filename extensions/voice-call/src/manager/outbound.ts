@@ -102,6 +102,12 @@ function requireConnectedCall(ctx: ConnectedCallContext, callId: CallId): Connec
   };
 }
 
+function validateDtmfDigits(digits: string): string | null {
+  return /^[0-9*#wWpP,]+$/.test(digits)
+    ? null
+    : "digits may only contain digits, *, #, comma, w, p";
+}
+
 export async function initiateCall(
   ctx: InitiateContext,
   to: string,
@@ -223,6 +229,35 @@ export async function speak(
     // A failed playback should not leave the call stuck in speaking state.
     transitionState(call, "listening");
     persistCallRecord(ctx.storePath, call);
+    return { success: false, error: formatErrorMessage(err) };
+  }
+}
+
+export async function sendDtmf(
+  ctx: SpeakContext,
+  callId: CallId,
+  digits: string,
+): Promise<{ success: boolean; error?: string }> {
+  const validationError = validateDtmfDigits(digits);
+  if (validationError) {
+    return { success: false, error: validationError };
+  }
+  const connected = requireConnectedCall(ctx, callId);
+  if (!connected.ok) {
+    return { success: false, error: connected.error };
+  }
+  if (!connected.provider.sendDtmf) {
+    return { success: false, error: `${connected.provider.name} does not support outbound DTMF` };
+  }
+
+  try {
+    await connected.provider.sendDtmf({
+      callId,
+      providerCallId: connected.providerCallId,
+      digits,
+    });
+    return { success: true };
+  } catch (err) {
     return { success: false, error: formatErrorMessage(err) };
   }
 }

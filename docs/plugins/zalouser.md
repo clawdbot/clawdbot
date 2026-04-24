@@ -76,3 +76,8 @@ Tool name: `zalouser`
 Actions: `send`, `image`, `link`, `friends`, `groups`, `me`, `status`
 
 Channel message actions also support `react` for message reactions.
+
+## Related
+
+- [Building plugins](/plugins/building-plugins)
+- [Community plugins](/plugins/community)

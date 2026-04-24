@@ -70,6 +70,38 @@ function isPreGemini3ModelId(id: string): boolean {
   return Number.isFinite(major) && major < 3;
 }
 
+function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(id);
+  const modelName = normalized.split("/").pop() ?? "";
+  if (provider === "openrouter") {
+    return normalized.startsWith("openai/");
+  }
+  if (provider === "opencode") {
+    return modelName.startsWith("gpt-");
+  }
+  return (
+    provider === "openai" ||
+    provider === "openai-codex" ||
+    provider === "codex-cli" ||
+    provider === "opencode" ||
+    provider === "github-copilot" ||
+    provider === "microsoft-foundry"
+  );
+}
+
+function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean {
+  if (!isOpenAiFamilyLiveModel(provider, id)) {
+    return false;
+  }
+  const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  return !modelName.startsWith("gpt-5.2");
+}
+
+function isOldMiniMaxLiveModelRef(id: string): boolean {
+  const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  return modelName === "minimax-m2.1" || modelName.startsWith("minimax-m2.1:");
+}
+
 export function isModernModelRef(ref: ModelRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
@@ -91,11 +123,18 @@ export function isModernModelRef(ref: ModelRef): boolean {
 }
 
 export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
+  const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
   if (!isModernModelRef(ref) || !id) {
     return false;
   }
   if (isPreGemini3ModelId(id)) {
+    return false;
+  }
+  if (isUnsupportedOpenAiLiveModelRef(provider, id)) {
+    return false;
+  }
+  if (isOldMiniMaxLiveModelRef(id)) {
     return false;
   }
   return isHighSignalClaudeModelId(id);

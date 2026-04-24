@@ -603,6 +603,8 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(subagent.run.mock.calls[0][0]).toMatchObject({
       idempotencyKey: expectedSessionKey,
       sessionKey: expectedSessionKey,
+      lane: `dreaming-narrative:${expectedSessionKey}`,
+      lightContext: true,
       deliver: false,
     });
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
@@ -655,12 +657,10 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(exists).toBe(false);
   });
 
-  it("waits once more before cleanup after timeout and logs cleanup failures", async () => {
+  it("skips extra settle waits after timeout and still attempts cleanup", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("");
-    subagent.waitForRun
-      .mockResolvedValueOnce({ status: "timeout" })
-      .mockResolvedValueOnce({ status: "ok" });
+    subagent.waitForRun.mockResolvedValueOnce({ status: "timeout" });
     subagent.deleteSession.mockRejectedValue(new Error("still active"));
     const logger = createMockLogger();
 
@@ -671,8 +671,8 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    expect(subagent.waitForRun).toHaveBeenCalledTimes(2);
-    expect(subagent.waitForRun.mock.calls[1][0]).toMatchObject({ timeoutMs: 120_000 });
+    expect(subagent.waitForRun).toHaveBeenCalledOnce();
+    expect(subagent.waitForRun.mock.calls[0][0]).toMatchObject({ timeoutMs: 15_000 });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("narrative session cleanup failed for rem phase"),
     );

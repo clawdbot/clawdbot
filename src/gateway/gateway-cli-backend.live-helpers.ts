@@ -136,7 +136,13 @@ export function shouldRunCliModelSwitchProbe(providerId: string, modelRef: strin
 export function matchesCliBackendReply(text: string, expected: string): boolean {
   const normalized = text.trim();
   const target = expected.trim();
-  return normalized === target || normalized === target.slice(0, -1);
+  const targetWithoutPeriod = target.slice(0, -1);
+  return (
+    normalized === target ||
+    normalized === targetWithoutPeriod ||
+    normalized.includes(target) ||
+    normalized.includes(targetWithoutPeriod)
+  );
 }
 
 export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {

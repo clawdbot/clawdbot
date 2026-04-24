@@ -6,6 +6,10 @@ export type ContentPart =
   | {
       type: "input_image";
       source: { type: "url"; url: string } | { type: "base64"; media_type: string; data: string };
+    }
+  | {
+      type: "image_url";
+      image_url: { url: string };
     };
 
 export type InputItem =

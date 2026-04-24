@@ -667,7 +667,6 @@ export function createTaskFlowWebhookRequestHandler(params: {
   targetsByPath: Map<string, TaskFlowWebhookTarget[]>;
   inFlightLimiter?: WebhookInFlightLimiter;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
-  const secretByTarget = new WeakMap<TaskFlowWebhookTarget, Promise<string | undefined>>();
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
     maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
@@ -679,19 +678,19 @@ export function createTaskFlowWebhookRequestHandler(params: {
       maxInFlightPerKey: WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
       maxTrackedKeys: WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     });
-  const resolveTargetSecret = (target: TaskFlowWebhookTarget): Promise<string | undefined> => {
-    const cached = secretByTarget.get(target);
-    if (cached) {
-      return cached;
+  const resolveTargetSecret = async (
+    target: TaskFlowWebhookTarget,
+  ): Promise<string | undefined> => {
+    if (typeof target.secretInput === "string") {
+      return target.secretInput;
     }
-    const pending = resolveConfiguredSecretInputString({
+    const resolved = await resolveConfiguredSecretInputString({
       config: params.cfg,
       env: process.env,
       value: target.secretInput,
       path: target.secretConfigPath,
-    }).then((resolved) => resolved.value);
-    secretByTarget.set(target, pending);
-    return pending;
+    });
+    return resolved.value;
   };
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {

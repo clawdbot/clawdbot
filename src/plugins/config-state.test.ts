@@ -70,10 +70,12 @@ describe("normalizePluginsConfig", () => {
       entry: {
         hooks: {
           allowPromptInjection: false,
+          allowConversationAccess: true,
         },
       },
       expectedHooks: {
         allowPromptInjection: false,
+        allowConversationAccess: true,
       },
     },
     {
@@ -81,7 +83,8 @@ describe("normalizePluginsConfig", () => {
       entry: {
         hooks: {
           allowPromptInjection: "nope",
-        } as unknown as { allowPromptInjection: boolean },
+          allowConversationAccess: "nope",
+        } as unknown as { allowPromptInjection: boolean; allowConversationAccess: boolean },
       },
       expectedHooks: undefined,
     },

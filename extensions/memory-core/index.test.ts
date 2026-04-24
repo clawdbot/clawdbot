@@ -2,11 +2,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
 import { describe, expect, it } from "vitest";
 import {
   buildMemoryFlushPlan,
-  buildPromptSection,
   DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
   DEFAULT_MEMORY_FLUSH_PROMPT,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
-} from "./index.js";
+} from "./src/flush-plan.js";
+import { buildPromptSection } from "./src/prompt-section.js";
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {

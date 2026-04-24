@@ -1,6 +1,9 @@
 {
   "id": "memory-core",
   "kind": "memory",
+  "contracts": {
+    "memoryEmbeddingProviders": ["local"]
+  },
   "commandAliases": [
     {
       "name": "dreaming",

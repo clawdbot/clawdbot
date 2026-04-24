@@ -19,6 +19,10 @@ vi.mock("./sandbox/prune.js", () => ({
   maybePruneSandboxes: vi.fn(async () => undefined),
 }));
 
+vi.mock("./sandbox/registry.js", () => ({
+  updateRegistry: vi.fn(async () => undefined),
+}));
+
 describe("sandbox skill mirroring", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempRoot = "";

@@ -1,0 +1,379 @@
+{
+  "id": "google-meet",
+  "name": "Google Meet",
+  "description": "Join Google Meet calls through Chrome or Twilio transports.",
+  "enabledByDefault": false,
+  "commandAliases": [{ "name": "googlemeet" }],
+  "activation": {
+    "onCommands": ["googlemeet"],
+    "onCapabilities": ["tool"]
+  },
+  "uiHints": {
+    "defaults.meeting": {
+      "label": "Default Meeting",
+      "help": "Meet URL, meeting code, or spaces/{id} used when commands omit a meeting."
+    },
+    "preview.enrollmentAcknowledged": {
+      "label": "Preview Acknowledged",
+      "help": "Confirms you understand the Google Meet Media API is still Developer Preview.",
+      "advanced": true
+    },
+    "defaultTransport": {
+      "label": "Default Transport",
+      "help": "Chrome uses a signed-in browser profile. Chrome-node runs Chrome on a paired node. Twilio uses Meet dial-in numbers."
+    },
+    "defaultMode": {
+      "label": "Default Mode",
+      "help": "Realtime voice is the default."
+    },
+    "chrome.audioBackend": {
+      "label": "Chrome Audio Backend",
+      "help": "BlackHole 2ch is required for local duplex audio routing."
+    },
+    "chrome.launch": {
+      "label": "Launch Chrome"
+    },
+    "chrome.browserProfile": {
+      "label": "Chrome Profile",
+      "advanced": true
+    },
+    "chrome.audioInputCommand": {
+      "label": "Audio Input Command",
+      "help": "Command that writes 8 kHz G.711 mu-law meeting audio to stdout.",
+      "advanced": true
+    },
+    "chrome.audioOutputCommand": {
+      "label": "Audio Output Command",
+      "help": "Command that reads 8 kHz G.711 mu-law assistant audio from stdin.",
+      "advanced": true
+    },
+    "chrome.audioBridgeCommand": {
+      "label": "Audio Bridge Command",
+      "advanced": true
+    },
+    "chrome.audioBridgeHealthCommand": {
+      "label": "Audio Bridge Health Command",
+      "advanced": true
+    },
+    "chromeNode.node": {
+      "label": "Chrome Node",
+      "help": "Node id/name/IP that owns Chrome, BlackHole, and SoX for chrome-node transport.",
+      "advanced": true
+    },
+    "twilio.defaultDialInNumber": {
+      "label": "Default Dial-In Number",
+      "placeholder": "+15551234567"
+    },
+    "twilio.defaultPin": {
+      "label": "Default PIN",
+      "advanced": true
+    },
+    "twilio.defaultDtmfSequence": {
+      "label": "Default DTMF Sequence",
+      "advanced": true
+    },
+    "voiceCall.enabled": {
+      "label": "Delegate To Voice Call"
+    },
+    "voiceCall.gatewayUrl": {
+      "label": "Voice Call Gateway URL",
+      "advanced": true
+    },
+    "voiceCall.token": {
+      "label": "Voice Call Gateway Token",
+      "sensitive": true,
+      "advanced": true
+    },
+    "voiceCall.requestTimeoutMs": {
+      "label": "Voice Call Request Timeout (ms)",
+      "advanced": true
+    },
+    "voiceCall.dtmfDelayMs": {
+      "label": "DTMF Delay (ms)",
+      "advanced": true
+    },
+    "voiceCall.introMessage": {
+      "label": "Voice Call Intro Message",
+      "advanced": true
+    },
+    "realtime.provider": {
+      "label": "Realtime Provider",
+      "help": "Defaults to OpenAI; uses OPENAI_API_KEY when no provider config is set."
+    },
+    "realtime.model": {
+      "label": "Realtime Model",
+      "advanced": true
+    },
+    "realtime.instructions": {
+      "label": "Realtime Instructions",
+      "advanced": true
+    },
+    "realtime.introMessage": {
+      "label": "Realtime Intro Message",
+      "help": "Spoken once when the realtime bridge is ready. Set to an empty string to join silently."
+    },
+    "realtime.toolPolicy": {
+      "label": "Realtime Tool Policy",
+      "help": "Safe read-only tools are available by default; owner requests can unlock broader tools.",
+      "advanced": true
+    },
+    "oauth.clientId": {
+      "label": "OAuth Client ID"
+    },
+    "oauth.clientSecret": {
+      "label": "OAuth Client Secret",
+      "sensitive": true
+    },
+    "oauth.refreshToken": {
+      "label": "OAuth Refresh Token",
+      "sensitive": true
+    },
+    "oauth.accessToken": {
+      "label": "Cached Access Token",
+      "sensitive": true,
+      "advanced": true
+    },
+    "oauth.expiresAt": {
+      "label": "Cached Access Token Expiry",
+      "help": "Unix epoch milliseconds used only for the cached access-token fast path.",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "defaults": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "meeting": {
+            "type": "string"
+          }
+        }
+      },
+      "preview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enrollmentAcknowledged": {
+            "type": "boolean"
+          }
+        }
+      },
+      "defaultTransport": {
+        "type": "string",
+        "enum": ["chrome", "chrome-node", "twilio"],
+        "default": "chrome"
+      },
+      "defaultMode": {
+        "type": "string",
+        "enum": ["realtime", "transcribe"],
+        "default": "realtime"
+      },
+      "chrome": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "audioBackend": {
+            "type": "string",
+            "enum": ["blackhole-2ch"],
+            "default": "blackhole-2ch"
+          },
+          "launch": {
+            "type": "boolean",
+            "default": true
+          },
+          "browserProfile": {
+            "type": "string"
+          },
+          "joinTimeoutMs": {
+            "type": "number",
+            "default": 30000
+          },
+          "audioInputCommand": {
+            "type": "array",
+            "default": [
+              "rec",
+              "-q",
+              "-t",
+              "raw",
+              "-r",
+              "8000",
+              "-c",
+              "1",
+              "-e",
+              "mu-law",
+              "-b",
+              "8",
+              "-"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "audioOutputCommand": {
+            "type": "array",
+            "default": [
+              "play",
+              "-q",
+              "-t",
+              "raw",
+              "-r",
+              "8000",
+              "-c",
+              "1",
+              "-e",
+              "mu-law",
+              "-b",
+              "8",
+              "-"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "audioBridgeCommand": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "audioBridgeHealthCommand": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "chromeNode": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "node": {
+            "type": "string"
+          }
+        }
+      },
+      "twilio": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultDialInNumber": {
+            "type": "string"
+          },
+          "defaultPin": {
+            "type": "string"
+          },
+          "defaultDtmfSequence": {
+            "type": "string"
+          }
+        }
+      },
+      "voiceCall": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "gatewayUrl": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "requestTimeoutMs": {
+            "type": "number",
+            "default": 30000
+          },
+          "dtmfDelayMs": {
+            "type": "number",
+            "default": 2500
+          },
+          "introMessage": {
+            "type": "string"
+          }
+        }
+      },
+      "realtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "default": "openai"
+          },
+          "model": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string",
+            "default": "You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call openclaw_agent_consult before answering."
+          },
+          "introMessage": {
+            "type": "string",
+            "default": "Say exactly: I'm here and listening."
+          },
+          "toolPolicy": {
+            "type": "string",
+            "enum": ["safe-read-only", "owner", "none"],
+            "default": "safe-read-only"
+          },
+          "providers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "oauth": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "clientId": {
+            "type": "string"
+          },
+          "clientSecret": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "accessToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "number"
+          }
+        }
+      },
+      "auth": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["google-oauth"]
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "clientSecret": {
+            "type": "string"
+          },
+          "tokenPath": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

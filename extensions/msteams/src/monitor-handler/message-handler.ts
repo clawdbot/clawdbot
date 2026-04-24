@@ -1,5 +1,4 @@
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -95,6 +94,7 @@ import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
+import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 function buildStoredConversationReference(params: {
   activity: MSTeamsTurnContext["activity"];
@@ -476,15 +476,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // ;messageid= portion of conversation.id, i.e. the thread root) over
     // activity.replyToId (which may point to a non-root parent in deep threads).
     // DMs and group chats are unaffected — only channel thread replies fork.
-    const channelThreadId = isChannel
-      ? (conversationMessageId ?? activity.replyToId ?? undefined)
-      : undefined;
-    const threadKeys = resolveThreadSessionKeys({
+    route.sessionKey = resolveMSTeamsRouteSessionKey({
       baseSessionKey: route.sessionKey,
-      threadId: channelThreadId,
-      parentSessionKey: channelThreadId ? route.sessionKey : undefined,
+      isChannel,
+      conversationMessageId,
+      replyToId: activity.replyToId,
     });
-    route.sessionKey = threadKeys.sessionKey;
 
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isDirectMessage

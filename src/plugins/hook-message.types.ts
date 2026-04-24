@@ -1,3 +1,5 @@
+import type { PluginConversationBinding } from "./conversation-binding.types.js";
+
 export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
@@ -8,6 +10,7 @@ export type PluginHookInboundClaimContext = PluginHookMessageContext & {
   parentConversationId?: string;
   senderId?: string;
   messageId?: string;
+  pluginBinding?: PluginConversationBinding;
 };
 
 export type PluginHookInboundClaimEvent = {

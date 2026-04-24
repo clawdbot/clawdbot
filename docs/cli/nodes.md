@@ -64,3 +64,8 @@ Invoke flags:
 For shell execution on a node, use the `exec` tool with `host=node` instead of `openclaw nodes run`.
 The `nodes` CLI is now capability-focused: direct RPC via `nodes invoke`, plus pairing, camera,
 screen, location, canvas, and notifications.
+
+## Related
+
+- [CLI reference](/cli)
+- [Nodes](/nodes)

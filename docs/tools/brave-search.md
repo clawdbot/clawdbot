@@ -54,17 +54,41 @@ Legacy `tools.web.search.apiKey` still loads through the compatibility shim, but
 
 ## Tool parameters
 
-| Parameter     | Description                                                         |
-| ------------- | ------------------------------------------------------------------- |
-| `query`       | Search query (required)                                             |
-| `count`       | Number of results to return (1-10, default: 5)                      |
-| `country`     | 2-letter ISO country code (e.g., "US", "DE")                        |
-| `language`    | ISO 639-1 language code for search results (e.g., "en", "de", "fr") |
-| `search_lang` | Brave search-language code (e.g., `en`, `en-gb`, `zh-hans`)         |
-| `ui_lang`     | ISO language code for UI elements                                   |
-| `freshness`   | Time filter: `day` (24h), `week`, `month`, or `year`                |
-| `date_after`  | Only results published after this date (YYYY-MM-DD)                 |
-| `date_before` | Only results published before this date (YYYY-MM-DD)                |
+<ParamField path="query" type="string" required>
+Search query.
+</ParamField>
+
+<ParamField path="count" type="number" default="5">
+Number of results to return (1–10).
+</ParamField>
+
+<ParamField path="country" type="string">
+2-letter ISO country code (e.g. `US`, `DE`).
+</ParamField>
+
+<ParamField path="language" type="string">
+ISO 639-1 language code for search results (e.g. `en`, `de`, `fr`).
+</ParamField>
+
+<ParamField path="search_lang" type="string">
+Brave search-language code (e.g. `en`, `en-gb`, `zh-hans`).
+</ParamField>
+
+<ParamField path="ui_lang" type="string">
+ISO language code for UI elements.
+</ParamField>
+
+<ParamField path="freshness" type="'day' | 'week' | 'month' | 'year'">
+Time filter — `day` is 24 hours.
+</ParamField>
+
+<ParamField path="date_after" type="string">
+Only results published after this date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField path="date_before" type="string">
+Only results published before this date (`YYYY-MM-DD`).
+</ParamField>
 
 **Examples:**
 

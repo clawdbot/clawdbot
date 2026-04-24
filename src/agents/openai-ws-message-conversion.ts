@@ -23,7 +23,7 @@ import { normalizeUsage } from "./usage.js";
 
 type AnyMessage = Message & { role: string; content: unknown };
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
-export type ReplayModelInfo = { input?: ReadonlyArray<string> };
+export type ReplayModelInfo = { input?: ReadonlyArray<string>; api?: string };
 type ReplayableReasoningItem = Extract<InputItem, { type: "reasoning" }>;
 type ReplayableReasoningSignature = {
   type: "reasoning" | `reasoning.${string}`;
@@ -46,6 +46,14 @@ function toNonEmptyString(value: unknown): string | null {
 
 function supportsImageInput(modelOverride?: ReplayModelInfo): boolean {
   return !Array.isArray(modelOverride?.input) || modelOverride.input.includes("image");
+}
+
+function usesOpenAICompletionsImageParts(modelOverride?: ReplayModelInfo): boolean {
+  return modelOverride?.api === "openai-completions";
+}
+
+function toImageUrlFromBase64(params: { mediaType?: string; data: string }): string {
+  return `data:${params.mediaType ?? "image/jpeg"};base64,${params.data}`;
 }
 
 function contentToText(content: unknown): string {
@@ -77,6 +85,7 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
   }
 
   const includeImages = supportsImageInput(modelOverride);
+  const useImageUrl = usesOpenAICompletionsImageParts(modelOverride);
   const parts: ContentPart[] = [];
   for (const part of content as Array<{
     type?: string;
@@ -98,6 +107,15 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
     }
 
     if (part.type === "image" && typeof part.data === "string") {
+      if (useImageUrl) {
+        parts.push({
+          type: "image_url",
+          image_url: {
+            url: toImageUrlFromBase64({ mediaType: part.mimeType, data: part.data }),
+          },
+        });
+        continue;
+      }
       parts.push({
         type: "input_image",
         source: {
@@ -115,11 +133,24 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
       typeof part.source === "object" &&
       typeof (part.source as { type?: unknown }).type === "string"
     ) {
+      const source = part.source as
+        | { type: "url"; url: string }
+        | { type: "base64"; media_type: string; data: string };
+      if (useImageUrl) {
+        parts.push({
+          type: "image_url",
+          image_url: {
+            url:
+              source.type === "url"
+                ? source.url
+                : toImageUrlFromBase64({ mediaType: source.media_type, data: source.data }),
+          },
+        });
+        continue;
+      }
       parts.push({
         type: "input_image",
-        source: part.source as
-          | { type: "url"; url: string }
-          | { type: "base64"; media_type: string; data: string },
+        source,
       });
     }
   }
@@ -441,7 +472,9 @@ export function convertMessagesToInputItems(
     }
     const parts = Array.isArray(m.content) ? contentToOpenAIParts(m.content, modelOverride) : [];
     const textOutput = contentToText(m.content);
-    const imageParts = parts.filter((part) => part.type === "input_image");
+    const imageParts = parts.filter(
+      (part) => part.type === "input_image" || part.type === "image_url",
+    );
     items.push({
       type: "function_call_output",
       call_id: replayId.callId,

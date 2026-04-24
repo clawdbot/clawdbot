@@ -2,6 +2,8 @@ export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceCloseReason,
   RealtimeVoiceProviderConfig,
@@ -13,8 +15,31 @@ export type {
   RealtimeVoiceToolCallEvent,
 } from "../realtime-voice/provider-types.js";
 export {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+} from "../realtime-voice/agent-consult-tool.js";
+export {
   canonicalizeRealtimeVoiceProviderId,
   getRealtimeVoiceProvider,
   listRealtimeVoiceProviders,
   normalizeRealtimeVoiceProviderId,
 } from "../realtime-voice/provider-registry.js";
+export {
+  resolveConfiguredRealtimeVoiceProvider,
+  type ResolvedRealtimeVoiceProvider,
+  type ResolveConfiguredRealtimeVoiceProviderParams,
+} from "../realtime-voice/provider-resolver.js";
+export {
+  createRealtimeVoiceBridgeSession,
+  type RealtimeVoiceAudioSink,
+  type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceBridgeSessionParams,
+  type RealtimeVoiceMarkStrategy,
+} from "../realtime-voice/session-runtime.js";
+export {
+  convertPcmToMulaw8k,
+  mulawToPcm,
+  pcmToMulaw,
+  resamplePcm,
+  resamplePcmTo8k,
+} from "../realtime-voice/audio-codec.js";

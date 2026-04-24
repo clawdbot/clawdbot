@@ -16,7 +16,7 @@ Feishu/Lark is an all-in-one collaboration platform where teams chat, share docu
 
 ## Quick start
 
-> **Requires OpenClaw 2026.4.23 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
+> **Requires OpenClaw 2026.4.24 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
 
 <Steps>
   <Step title="Run the channel setup wizard">

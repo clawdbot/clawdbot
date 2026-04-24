@@ -63,3 +63,9 @@ The prompt renderer treats `LocationName`, `LocationAddress`, and `LocationCapti
 - **Telegram**: venues map to `LocationName/LocationAddress`; live locations use `live_period`.
 - **WhatsApp**: `locationMessage.comment` and `liveLocationMessage.caption` populate `LocationCaption`.
 - **Matrix**: `geo_uri` is parsed as a pin location; altitude is ignored and `LocationIsLive` is always false.
+
+## Related
+
+- [Location command (nodes)](/nodes/location-command)
+- [Camera capture](/nodes/camera)
+- [Media understanding](/nodes/media-understanding)

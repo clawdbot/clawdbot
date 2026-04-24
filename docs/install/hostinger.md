@@ -90,3 +90,9 @@ Send "Hi" to your assistant on the channel you connected. OpenClaw will reply an
 
 - [Channels](/channels) -- connect Telegram, WhatsApp, Discord, and more
 - [Gateway configuration](/gateway/configuration) -- all config options
+
+## Related
+
+- [Install overview](/install)
+- [VPS hosting](/vps)
+- [DigitalOcean](/install/digitalocean)

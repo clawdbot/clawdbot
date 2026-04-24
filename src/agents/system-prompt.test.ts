@@ -320,7 +320,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
+      'For requests like "do this in claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
+    );
+    expect(prompt).toContain(
+      "For Codex conversation binding/control, prefer the native Codex app-server plugin path",
     );
     expect(prompt).toContain(
       'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
@@ -515,7 +518,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       modelAliasLines: [
         "- Opus: anthropic/claude-opus-4-5",
-        "- Sonnet: anthropic/claude-sonnet-4-5",
+        "- Sonnet: anthropic/claude-sonnet-4-6",
       ],
     });
 

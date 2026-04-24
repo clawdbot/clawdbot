@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexAppServerApprovalPolicy, CodexAppServerSandboxMode } from "./config.js";
+import type { CodexServiceTier } from "./protocol.js";
 
 export type CodexAppServerThreadBinding = {
   schemaVersion: 1;
@@ -9,6 +11,9 @@ export type CodexAppServerThreadBinding = {
   authProfileId?: string;
   model?: string;
   modelProvider?: string;
+  approvalPolicy?: CodexAppServerApprovalPolicy;
+  sandbox?: CodexAppServerSandboxMode;
+  serviceTier?: CodexServiceTier;
   dynamicToolsFingerprint?: string;
   createdAt: string;
   updatedAt: string;
@@ -45,6 +50,9 @@ export async function readCodexAppServerBinding(
       authProfileId: typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined,
       model: typeof parsed.model === "string" ? parsed.model : undefined,
       modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+      approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
+      sandbox: readSandboxMode(parsed.sandbox),
+      serviceTier: readServiceTier(parsed.serviceTier),
       dynamicToolsFingerprint:
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
@@ -76,6 +84,9 @@ export async function writeCodexAppServerBinding(
     authProfileId: binding.authProfileId,
     model: binding.model,
     modelProvider: binding.modelProvider,
+    approvalPolicy: binding.approvalPolicy,
+    sandbox: binding.sandbox,
+    serviceTier: binding.serviceTier,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
@@ -98,4 +109,23 @@ export async function clearCodexAppServerBinding(sessionFile: string): Promise<v
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+function readApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
+  return value === "never" ||
+    value === "on-request" ||
+    value === "on-failure" ||
+    value === "untrusted"
+    ? value
+    : undefined;
+}
+
+function readSandboxMode(value: unknown): CodexAppServerSandboxMode | undefined {
+  return value === "read-only" || value === "workspace-write" || value === "danger-full-access"
+    ? value
+    : undefined;
+}
+
+function readServiceTier(value: unknown): CodexServiceTier | undefined {
+  return value === "fast" || value === "flex" ? value : undefined;
 }

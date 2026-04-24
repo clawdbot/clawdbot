@@ -69,6 +69,7 @@ export type TtsRequestParams = {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
+  timeoutMs?: number;
 };
 
 export type TtsTelephonyRequestParams = {

@@ -9,7 +9,7 @@ import {
   waitForWhatsAppLoginResult,
   WHATSAPP_LOGGED_OUT_QR_MESSAGE,
 } from "./connection-controller.js";
-import { renderQrPngBase64 } from "./qr-image.js";
+import { renderQrPngDataUrl } from "./qr-image.js";
 import {
   createWaSocket,
   readWebAuthExistsForDecision,
@@ -278,8 +278,7 @@ export async function startWebLoginWithQr(
     };
   }
 
-  const base64 = await renderQrPngBase64(loginStartResult.qr);
-  login.qrDataUrl = `data:image/png;base64,${base64}`;
+  login.qrDataUrl = await renderQrPngDataUrl(loginStartResult.qr);
   return {
     qrDataUrl: login.qrDataUrl,
     message: "Scan this QR in WhatsApp → Linked Devices.",

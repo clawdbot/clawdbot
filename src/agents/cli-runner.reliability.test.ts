@@ -18,6 +18,7 @@ import {
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import { MAX_CLI_SESSION_HISTORY_MESSAGES } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
@@ -510,6 +511,34 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("does not emit llm_output when the CLI run returns no assistant text", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "   ",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(buildPreparedContext());
+
+    expect(result.payloads).toBeUndefined();
+    expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
+  });
+
   it("emits agent_end with failure details when the CLI run fails", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
@@ -632,6 +661,41 @@ describe("runCliAgent reliability", () => {
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips transcript loading when only llm_output hooks are active", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    const historySpy = vi.spyOn(sessionHistoryModule, "loadCliSessionHistoryMessages");
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runPreparedCliAgent(buildPreparedContext());
+
+      expect(historySpy).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      historySpy.mockRestore();
     }
   });
 });

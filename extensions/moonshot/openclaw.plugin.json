@@ -1,9 +1,10 @@
 {
   "id": "moonshot",
   "enabledByDefault": true,
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["moonshot"],
   "providerAuthEnvVars": {
-    "moonshot": ["MOONSHOT_API_KEY"]
+    "moonshot": ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
   },
   "providerAuthChoices": [
     {

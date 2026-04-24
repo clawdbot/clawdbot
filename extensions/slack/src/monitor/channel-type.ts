@@ -1,6 +1,8 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackMessageEvent } from "../types.js";
 
+export type SlackChatType = "direct" | "group" | "channel";
+
 export function inferSlackChannelType(
   channelId?: string | null,
 ): SlackMessageEvent["channel_type"] | undefined {
@@ -39,4 +41,16 @@ export function normalizeSlackChannelType(
     return normalized;
   }
   return inferred ?? "channel";
+}
+
+export function resolveSlackChatType(
+  channelType: SlackMessageEvent["channel_type"],
+): SlackChatType {
+  if (channelType === "im") {
+    return "direct";
+  }
+  if (channelType === "mpim") {
+    return "group";
+  }
+  return "channel";
 }

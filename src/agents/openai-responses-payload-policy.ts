@@ -9,7 +9,7 @@ type OpenAIResponsesPayloadModel = {
   id?: unknown;
   provider?: unknown;
   contextWindow?: unknown;
-  compat?: { supportsStore?: boolean };
+  compat?: unknown;
 };
 
 type OpenAIResponsesPayloadPolicyOptions = {
@@ -48,6 +48,14 @@ function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown
     return Math.max(1_000, Math.floor(contextWindow * 0.7));
   }
   return 80_000;
+}
+
+function readCompatBoolean(compat: unknown, key: "supportsStore"): boolean | undefined {
+  if (!compat || typeof compat !== "object") {
+    return undefined;
+  }
+  const value = (compat as Record<string, unknown>)[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function shouldEnableOpenAIResponsesServerCompaction(
@@ -90,11 +98,15 @@ export function resolveOpenAIResponsesPayloadPolicy(
   model: OpenAIResponsesPayloadModel,
   options: OpenAIResponsesPayloadPolicyOptions = {},
 ): OpenAIResponsesPayloadPolicy {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { supportsStore?: boolean })
+      : undefined;
   const capabilities = resolveProviderRequestPolicyConfig({
     provider: readStringValue(model.provider),
     api: readStringValue(model.api),
     baseUrl: readStringValue(model.baseUrl),
-    compat: model.compat,
+    compat,
     capability: "llm",
     transport: "stream",
   }).capabilities;
@@ -124,7 +136,9 @@ export function resolveOpenAIResponsesPayloadPolicy(
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:
-      explicitStore !== true && model.compat?.supportsStore === false && isResponsesApi,
+      explicitStore !== true &&
+      readCompatBoolean(model.compat, "supportsStore") === false &&
+      isResponsesApi,
     useServerCompaction:
       options.enableServerCompaction === true &&
       shouldEnableOpenAIResponsesServerCompaction(

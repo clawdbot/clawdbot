@@ -1,7 +1,9 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { parseBooleanValue } from "../../utils/boolean.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteHandler } from "./types.js";
+
+function normalizeOptionalString(value: string): string | undefined {
+  return value.trim() || undefined;
+}
 
 export function asyncBrowserRoute(handler: BrowserRouteHandler): BrowserRouteHandler {
   return (req, res) => handler(req, res);
@@ -61,10 +63,20 @@ export function toNumber(value: unknown) {
 }
 
 export function toBoolean(value: unknown) {
-  return parseBooleanValue(value, {
-    truthy: ["true", "1", "yes"],
-    falsy: ["false", "0", "no"],
-  });
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value !== "string" && typeof value !== "number") {
+    return undefined;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0" || normalized === "no") {
+    return false;
+  }
+  return undefined;
 }
 
 export function toStringArray(value: unknown): string[] | undefined {

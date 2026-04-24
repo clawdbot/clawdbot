@@ -57,19 +57,19 @@ export type PluginManifestActivationCapability = "provider" | "channel" | "tool"
 
 export type PluginManifestActivation = {
   /**
-   * Provider ids that should activate this plugin when explicitly requested.
-   * This is metadata only; runtime loading still happens through the loader.
+   * Provider ids that should include this plugin in activation/load plans.
+   * This is planner metadata only; runtime behavior still comes from register().
    */
   onProviders?: string[];
-  /** Agent harness runtime ids that should activate this plugin. */
+  /** Agent harness runtime ids that should include this plugin in activation/load plans. */
   onAgentHarnesses?: string[];
-  /** Command ids that should activate this plugin. */
+  /** Command ids that should include this plugin in activation/load plans. */
   onCommands?: string[];
-  /** Channel ids that should activate this plugin. */
+  /** Channel ids that should include this plugin in activation/load plans. */
   onChannels?: string[];
-  /** Route kinds that should activate this plugin. */
+  /** Route kinds that should include this plugin in activation/load plans. */
   onRoutes?: string[];
-  /** Cheap capability hints used by future activation planning. */
+  /** Broad capability hints for activation/load plans. Prefer narrower ownership metadata. */
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
@@ -205,7 +205,7 @@ export type PluginManifest = {
    * and non-runtime auth-choice routing before provider runtime loads.
    */
   providerAuthChoices?: PluginManifestProviderAuthChoice[];
-  /** Cheap activation hints exposed before plugin runtime loads. */
+  /** Cheap activation planner metadata exposed before plugin runtime loads. */
   activation?: PluginManifestActivation;
   /** Cheap setup/onboarding metadata exposed before plugin runtime loads. */
   setup?: PluginManifestSetup;

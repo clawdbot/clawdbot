@@ -99,6 +99,7 @@ function createMatrixExposedActions(params: {
 
 function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery["schema"]> {
   return {
+    actions: ["set-profile"],
     properties: {
       displayName: Type.Optional(
         Type.String({

@@ -96,6 +96,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
+  gatewayDiscoveryServices: [],
   conversationBindingResolvedHandlers: [],
   diagnostics,
 });
@@ -525,6 +526,29 @@ describe("loadGatewayPlugins", () => {
     expect(typeof subagent?.getSession).toBe("function");
   });
 
+  test("filters connected plugin nodes locally without sending unsupported node.list params", async () => {
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("nodes-list-filter"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.req.method).toBe("node.list");
+      opts.respond(true, {
+        nodes: [
+          { nodeId: "connected", connected: true },
+          { nodeId: "offline", connected: false },
+        ],
+      });
+    });
+
+    const runtime = runtimeModule.createPluginRuntime({
+      allowGatewaySubagentBinding: true,
+    });
+    const result = await runtime.nodes.list({ connected: true });
+
+    expect(getLastDispatchedParams()).toEqual({});
+    expect(result.nodes).toEqual([{ nodeId: "connected", connected: true }]);
+  });
+
   test("forwards provider and model overrides when the request scope is authorized", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
@@ -573,6 +597,28 @@ describe("loadGatewayPlugins", () => {
       sessionKey: "s-idem-forward",
       message: "hello",
       idempotencyKey: "caller-provided-key",
+    });
+  });
+
+  test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("light-context-forward"));
+
+    await runtime.run({
+      sessionKey: "s-light-context",
+      message: "hello",
+      lightContext: true,
+      lane: "dreaming-narrative:s-light-context",
+      deliver: false,
+    });
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-light-context",
+      message: "hello",
+      lane: "dreaming-narrative:s-light-context",
+      bootstrapContextMode: "lightweight",
+      deliver: false,
     });
   });
 

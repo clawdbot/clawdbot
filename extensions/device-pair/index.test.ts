@@ -17,9 +17,15 @@ const pluginApiMocks = vi.hoisted(() => ({
     expiresAtMs: Date.now() + 10 * 60_000,
   })),
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
-  renderQrPngBase64: vi.fn(async () => "ZmFrZXBuZw=="),
+  renderQrPngDataUrl: vi.fn(async () => "data:image/png;base64,ZmFrZXBuZw=="),
   resolveGatewayPort: vi.fn(() => 18789),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
+  writeQrPngTempFile: vi.fn(async (_data: string, opts: { tmpRoot: string }) => {
+    const dirPath = await fs.mkdtemp(path.join(opts.tmpRoot, "device-pair-qr-"));
+    const filePath = path.join(dirPath, "pair-qr.png");
+    await fs.writeFile(filePath, "fakepng");
+    return { filePath, dirPath, mediaLocalRoots: [dirPath] };
+  }),
 }));
 
 vi.mock("./api.js", () => {
@@ -33,13 +39,14 @@ vi.mock("./api.js", () => {
     definePluginEntry: vi.fn((entry) => entry),
     issueDeviceBootstrapToken: pluginApiMocks.issueDeviceBootstrapToken,
     listDevicePairing: vi.fn(async () => ({ pending: [] })),
-    renderQrPngBase64: pluginApiMocks.renderQrPngBase64,
+    renderQrPngDataUrl: pluginApiMocks.renderQrPngDataUrl,
     revokeDeviceBootstrapToken: pluginApiMocks.revokeDeviceBootstrapToken,
     resolvePreferredOpenClawTmpDir: pluginApiMocks.resolvePreferredOpenClawTmpDir,
     resolveGatewayBindUrl: vi.fn(),
     resolveGatewayPort: pluginApiMocks.resolveGatewayPort,
     resolveTailnetHostWithRunner: vi.fn(),
     runPluginCommandWithTimeout: vi.fn(),
+    writeQrPngTempFile: pluginApiMocks.writeQrPngTempFile,
   };
 });
 
@@ -254,7 +261,7 @@ describe("device-pair /pair qr", () => {
     const payload = result as { text?: string; mediaUrl?: string; sensitiveMedia?: boolean };
     const text = requireText(result);
 
-    expect(pluginApiMocks.renderQrPngBase64).toHaveBeenCalledTimes(1);
+    expect(pluginApiMocks.renderQrPngDataUrl).toHaveBeenCalledTimes(1);
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
         roles: ["node"],
@@ -297,7 +304,7 @@ describe("device-pair /pair qr", () => {
         token: "second-token",
         expiresAtMs: Date.now() + 10 * 60_000,
       });
-    pluginApiMocks.renderQrPngBase64.mockRejectedValueOnce(new Error("render failed"));
+    pluginApiMocks.renderQrPngDataUrl.mockRejectedValueOnce(new Error("render failed"));
 
     const command = registerPairCommand();
     const result = await command.handler(

@@ -171,7 +171,7 @@ title: Image generation roundtrip
 surface: image
 tags: [media, image, roundtrip]
 models:
-  primary: openai/gpt-5.5
+  primary: openai/gpt-5.4
 requires:
   tools: [image_generate]
   plugins: [openai, qa-channel]
@@ -534,3 +534,7 @@ This is the smallest path that proves both goals:
 - whether artifact references should be strongly typed in schema or string-based
 - whether custom handlers should live in one registry or per-surface registries
 - whether the generated JSON compatibility file should remain checked in during migration
+
+## Related
+
+- [QA E2E automation](/concepts/qa-e2e-automation)

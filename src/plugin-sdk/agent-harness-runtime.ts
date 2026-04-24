@@ -2,12 +2,19 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+import { redactToolDetail } from "../logging/redact.js";
+import { truncateUtf16Safe } from "../utils.js";
+
+export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
+  AgentHarnessResultClassification,
   AgentHarnessResetParams,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
@@ -37,6 +44,7 @@ export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js"
 export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
+export { formatToolAggregate } from "../auto-reply/tool-meta.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
 export {
   extractToolResultMediaArtifact,
@@ -62,11 +70,24 @@ export { isSubagentSessionKey } from "../routing/session-key.js";
 export { acquireSessionWriteLock } from "../agents/session-write-lock.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "../agents/pi-tools.before-tool-call.js";
+export {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
 } from "../agents/harness/prompt-compaction-hook-helpers.js";
 export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
+export {
+  assembleHarnessContextEngine,
+  bootstrapHarnessContextEngine,
+  buildHarnessContextEngineRuntimeContext,
+  buildHarnessContextEngineRuntimeContextFromUsage,
+  finalizeHarnessContextEngineTurn,
+  isActiveHarnessContextEngine,
+  runHarnessContextEngineMaintenance,
+} from "../agents/harness/context-engine-lifecycle.js";
 export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
@@ -76,3 +97,30 @@ export {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "../agents/harness/lifecycle-hook-helpers.js";
+
+/**
+ * Derive the same compact user-facing tool detail that Pi uses for progress logs.
+ */
+export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
+  const display = resolveToolDisplay({ name: toolName, args });
+  return formatToolDetail(display);
+}
+
+/**
+ * Prepare verbose tool output for user-facing progress messages.
+ */
+export function formatToolProgressOutput(
+  output: string,
+  options?: { maxChars?: number },
+): string | undefined {
+  const trimmed = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const redacted = redactToolDetail(trimmed);
+  const maxChars = options?.maxChars ?? TOOL_PROGRESS_OUTPUT_MAX_CHARS;
+  if (redacted.length <= maxChars) {
+    return redacted;
+  }
+  return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
+}

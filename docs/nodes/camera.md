@@ -6,8 +6,6 @@ read_when:
 title: "Camera capture"
 ---
 
-# Camera capture (agent)
-
 OpenClaw supports **camera capture** for agent workflows:
 
 - **iOS node** (paired via Gateway): capture a **photo** (`jpg`) or **short video clip** (`mp4`, with optional audio) via `node.invoke`.
@@ -160,3 +158,9 @@ openclaw nodes screen record --node <id> --duration 10s --fps 15   # prints MEDI
 Notes:
 
 - Requires macOS **Screen Recording** permission (TCC).
+
+## Related
+
+- [Image and media support](/nodes/images)
+- [Media understanding](/nodes/media-understanding)
+- [Location command](/nodes/location-command)

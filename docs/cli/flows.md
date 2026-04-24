@@ -16,3 +16,8 @@ openclaw tasks flow cancel <lookup>
 ```
 
 For full documentation see [Task Flow](/automation/taskflow) and the [tasks CLI reference](/cli/tasks).
+
+## Related
+
+- [CLI reference](/cli)
+- [Automation](/automation)

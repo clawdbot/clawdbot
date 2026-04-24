@@ -4,12 +4,11 @@ import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/bind
 import { updateSessionStoreEntry } from "../../config/sessions/store.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
+import { isResetAuthorizedForContext } from "./reset-authorization.js";
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
   const mutableCtx = ctx as Record<string, unknown>;
@@ -23,26 +22,11 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
 }
 
 function isResetAuthorized(params: HandleCommandsParams): boolean {
-  const auth = resolveCommandAuthorization({
+  return isResetAuthorizedForContext({
     ctx: params.ctx,
     cfg: params.cfg,
-    commandAuthorized: params.ctx.CommandAuthorized === true,
+    commandAuthorized: params.command.isAuthorizedSender || params.ctx.CommandAuthorized === true,
   });
-  if (!params.command.isAuthorizedSender && !auth.isAuthorizedSender) {
-    return false;
-  }
-  const provider = params.ctx.Provider;
-  const internalGatewayCaller = provider
-    ? isInternalMessageChannel(provider)
-    : isInternalMessageChannel(params.ctx.Surface);
-  if (!internalGatewayCaller) {
-    return true;
-  }
-  const scopes = params.ctx.GatewayClientScopes;
-  if (!Array.isArray(scopes) || scopes.length === 0) {
-    return true;
-  }
-  return scopes.includes("operator.admin");
 }
 
 export async function maybeHandleResetCommand(

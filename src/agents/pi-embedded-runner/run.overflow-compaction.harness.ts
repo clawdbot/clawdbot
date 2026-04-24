@@ -3,6 +3,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   PluginHookAgentContext,
+  PluginHookBeforeAgentReplyResult,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
@@ -32,6 +33,12 @@ type MockCompactionResult =
 
 export const mockedGlobalHookRunner = {
   hasHooks: vi.fn((_hookName: string) => false),
+  runBeforeAgentReply: vi.fn(
+    async (
+      _event: { cleanedBody: string },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforeAgentReplyResult | undefined> => undefined,
+  ),
   runBeforeAgentStart: vi.fn(
     async (
       _event: { prompt: string; messages?: unknown[] },
@@ -202,6 +209,8 @@ export const overflowBaseRunParams = {
 export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedGlobalHookRunner.hasHooks.mockReset();
   mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+  mockedGlobalHookRunner.runBeforeAgentReply.mockReset();
+  mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
   mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforePromptBuild.mockReset();
@@ -362,6 +371,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),
+    resolveProviderAuthProfileId: vi.fn(() => undefined),
     prepareProviderExtraParams: vi.fn(async () => ({})),
     wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
   }));

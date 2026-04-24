@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
@@ -117,8 +117,11 @@ function makeRunReplyAgentParams(
 }
 
 describe("runReplyAgent media path normalization", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ runReplyAgent } = await import("./agent-runner.js"));
+  });
+
+  beforeEach(() => {
     runEmbeddedPiAgentMock.mockReset();
     runWithModelFallbackMock.mockReset();
     abortEmbeddedPiRunMock.mockReset();
@@ -155,7 +158,6 @@ describe("runReplyAgent media path normalization", () => {
         model,
       }),
     );
-    ({ runReplyAgent } = await import("./agent-runner.js"));
   });
 
   afterEach(() => {
@@ -196,7 +198,7 @@ describe("runReplyAgent media path normalization", () => {
     );
   });
 
-  it("shares one media cache between direct block media and final payload filtering", async () => {
+  it("shares one media cache between block accumulation and final payload delivery", async () => {
     let stagedIndex = 0;
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => {
       stagedIndex += 1;
@@ -233,18 +235,16 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(result).toBeUndefined();
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith({
-      text: undefined,
+    expect(result).toMatchObject({
+      text: "here is the chart",
       mediaUrl: "/tmp/outbound-media/1-chart.png",
       mediaUrls: ["/tmp/outbound-media/1-chart.png"],
-      replyToCurrent: undefined,
       replyToId: "msg-1",
       replyToTag: false,
       audioAsVoice: false,
     });
+    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("does not create a second media context inside runAgentTurnWithFallback when onBlockReply is provided", async () => {

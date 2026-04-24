@@ -69,6 +69,25 @@ Feature/channel plugin:
 - calls `api.runtime.*` or the matching `plugin-sdk/*-runtime` helper
 - never calls a vendor implementation directly
 
+## Provider and Harness Seams
+
+Use provider hooks when the behavior belongs to the model provider contract
+rather than the generic agent loop. Examples include provider-specific request
+params after transport selection, auth-profile preference, prompt overlays, and
+follow-up fallback routing after model/profile failover.
+
+Use agent harness hooks when the behavior belongs to the runtime that is
+executing a turn. Harnesses can classify successful-but-unusable attempt results
+such as empty, reasoning-only, or planning-only responses so the outer model
+fallback policy can make the retry decision.
+
+Keep both seams narrow:
+
+- core owns the retry/fallback policy
+- provider plugins own provider-specific request/auth/routing hints
+- harness plugins own runtime-specific attempt classification
+- third-party plugins return hints, not direct mutations of core state
+
 ## File checklist
 
 For a new capability, expect to touch these areas:
@@ -115,3 +134,9 @@ Before shipping a new capability, verify:
 
 If a PR skips the capability layer and hardcodes vendor behavior into a
 channel/tool, send it back and define the contract first.
+
+## Related
+
+- [Plugin](/tools/plugin)
+- [Creating skills](/tools/creating-skills)
+- [Tools and plugins](/tools)

@@ -61,6 +61,10 @@
       "destination": "/providers/qwen"
     },
     {
+      "source": "/providers/qwen_modelstudio",
+      "destination": "/providers/qwen"
+    },
+    {
       "source": "/platforms/oracle",
       "destination": "/install/oracle"
     },
@@ -1004,6 +1008,10 @@
                   "install/uninstall",
                   "install/development-channels"
                 ]
+              },
+              {
+                "group": "Advanced setup",
+                "pages": ["start/setup", "pi-dev"]
               }
             ]
           },
@@ -1015,30 +1023,40 @@
                 "pages": ["channels/index"]
               },
               {
-                "group": "Messaging platforms",
+                "group": "Mainstream messaging",
                 "pages": [
-                  "channels/bluebubbles",
                   "channels/discord",
-                  "channels/feishu",
+                  "channels/slack",
+                  "channels/telegram",
+                  "channels/whatsapp",
+                  "channels/signal",
+                  "channels/msteams",
                   "channels/googlechat",
                   "channels/imessage",
-                  "channels/irc",
-                  "channels/line",
+                  "channels/bluebubbles",
                   "channels/matrix",
-                  "channels/matrix-push-rules",
+                  "channels/matrix-push-rules"
+                ]
+              },
+              {
+                "group": "Developer and self-hosted",
+                "pages": [
+                  "channels/irc",
                   "channels/mattermost",
-                  "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
-                  "channels/qqbot",
-                  "channels/signal",
-                  "channels/slack",
-                  "channels/synology-chat",
-                  "channels/telegram",
                   "channels/tlon",
-                  "channels/twitch",
+                  "channels/synology-chat",
+                  "channels/twitch"
+                ]
+              },
+              {
+                "group": "Regional platforms",
+                "pages": [
+                  "channels/line",
                   "channels/wechat",
-                  "channels/whatsapp",
+                  "channels/qqbot",
+                  "channels/feishu",
                   "channels/zalo",
                   "channels/zalouser"
                 ]
@@ -1052,7 +1070,8 @@
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
-                  "channels/troubleshooting"
+                  "channels/troubleshooting",
+                  "channels/qa-channel"
                 ]
               }
             ]
@@ -1130,12 +1149,13 @@
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/codex-harness",
+                  "plugins/google-meet",
                   "plugins/webhooks",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
                   "plugins/zalouser",
                   {
-                    "group": "Building Plugins",
+                    "group": "Building plugins",
                     "pages": [
                       "plugins/building-plugins",
                       "plugins/sdk-channel-plugins",
@@ -1144,16 +1164,18 @@
                     ]
                   },
                   {
-                    "group": "SDK Reference",
+                    "group": "SDK reference",
                     "pages": [
                       "plugins/sdk-overview",
+                      "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
                       "plugins/sdk-agent-harness",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
                       "plugins/manifest",
-                      "plugins/architecture"
+                      "plugins/architecture",
+                      "plugins/architecture-internals"
                     ]
                   }
                 ]
@@ -1170,7 +1192,7 @@
                 ]
               },
               {
-                "group": "Automation & Tasks",
+                "group": "Automation and tasks",
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
@@ -1189,6 +1211,7 @@
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec-approvals",
+                  "tools/exec-approvals-advanced",
                   "tools/exec",
                   "tools/image-generation",
                   "tools/llm-task",
@@ -1203,16 +1226,17 @@
                   "tools/trajectory",
                   "tools/video-generation",
                   {
-                    "group": "Web Browser",
+                    "group": "Web browser",
                     "pages": [
                       "tools/browser",
+                      "tools/browser-control",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
                       "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
                     ]
                   },
                   {
-                    "group": "Web Tools",
+                    "group": "Web tools",
                     "pages": [
                       "tools/web-fetch",
                       "tools/web",
@@ -1238,6 +1262,7 @@
                   "tools/agent-send",
                   "tools/subagents",
                   "tools/acp-agents",
+                  "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
                 ]
               }
@@ -1327,23 +1352,38 @@
               {
                 "group": "macOS companion app",
                 "pages": [
-                  "platforms/mac/dev-setup",
-                  "platforms/mac/menu-bar",
-                  "platforms/mac/voicewake",
-                  "platforms/mac/voice-overlay",
-                  "platforms/mac/webchat",
-                  "platforms/mac/canvas",
-                  "platforms/mac/child-process",
-                  "platforms/mac/health",
-                  "platforms/mac/icon",
-                  "platforms/mac/logging",
-                  "platforms/mac/permissions",
-                  "platforms/mac/remote",
-                  "platforms/mac/signing",
-                  "platforms/mac/bundled-gateway",
-                  "platforms/mac/xpc",
-                  "platforms/mac/skills",
-                  "platforms/mac/peekaboo"
+                  {
+                    "group": "Setup",
+                    "pages": [
+                      "platforms/mac/dev-setup",
+                      "platforms/mac/menu-bar",
+                      "platforms/mac/icon",
+                      "platforms/mac/permissions",
+                      "platforms/mac/signing"
+                    ]
+                  },
+                  {
+                    "group": "Runtime",
+                    "pages": [
+                      "platforms/mac/bundled-gateway",
+                      "platforms/mac/child-process",
+                      "platforms/mac/health",
+                      "platforms/mac/logging",
+                      "platforms/mac/remote",
+                      "platforms/mac/xpc"
+                    ]
+                  },
+                  {
+                    "group": "Features",
+                    "pages": [
+                      "platforms/mac/voicewake",
+                      "platforms/mac/voice-overlay",
+                      "platforms/mac/webchat",
+                      "platforms/mac/canvas",
+                      "platforms/mac/skills",
+                      "platforms/mac/peekaboo"
+                    ]
+                  }
                 ]
               }
             ]
@@ -1356,26 +1396,44 @@
                 "pages": [
                   "gateway/index",
                   {
-                    "group": "Configuration and operations",
+                    "group": "Configuration",
                     "pages": [
                       "gateway/configuration",
                       "gateway/configuration-reference",
-                      "gateway/configuration-examples",
+                      "gateway/config-agents",
+                      "gateway/config-channels",
+                      "gateway/config-tools",
+                      "gateway/configuration-examples"
+                    ]
+                  },
+                  {
+                    "group": "Authentication and secrets",
+                    "pages": [
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
                       "gateway/secrets-plan-contract",
-                      "gateway/trusted-proxy-auth",
+                      "gateway/trusted-proxy-auth"
+                    ]
+                  },
+                  {
+                    "group": "Health and diagnostics",
+                    "pages": [
                       "gateway/health",
                       "gateway/diagnostics",
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/logging",
                       "logging",
+                      "gateway/troubleshooting"
+                    ]
+                  },
+                  {
+                    "group": "Scaling and operations",
+                    "pages": [
                       "gateway/gateway-lock",
                       "gateway/background-process",
-                      "gateway/multiple-gateways",
-                      "gateway/troubleshooting"
+                      "gateway/multiple-gateways"
                     ]
                   },
                   {
@@ -1571,6 +1629,7 @@
                   "reference/transcript-hygiene",
                   "reference/memory-config",
                   "reference/rich-output-protocol",
+                  "reference/session-management-compaction",
                   "date-time"
                 ]
               },
@@ -1589,8 +1648,8 @@
                 "pages": ["reference/credits"]
               },
               {
-                "group": "Release policy",
-                "pages": ["reference/RELEASING", "reference/test"]
+                "group": "Release and CI",
+                "pages": ["reference/RELEASING", "reference/test", "ci", "help/scripts"]
               }
             ]
           },
@@ -1598,39 +1657,24 @@
             "tab": "Help",
             "groups": [
               {
-                "group": "Help",
-                "pages": ["help/index", "help/troubleshooting", "help/faq"]
+                "group": "Start here",
+                "pages": ["help/index", "help/troubleshooting", "help/debugging"]
               },
               {
-                "group": "Community",
-                "pages": ["start/lore"]
+                "group": "FAQ",
+                "pages": ["help/faq", "help/faq-first-run", "help/faq-models"]
               },
               {
-                "group": "Environment and debugging",
-                "pages": [
-                  "help/environment",
-                  "help/debugging",
-                  "help/testing",
-                  "help/scripts",
-                  "debug/node-issue",
-                  "diagnostics/flags"
-                ]
+                "group": "Testing",
+                "pages": ["help/testing", "help/testing-live"]
               },
               {
-                "group": "Compaction internals",
-                "pages": ["reference/session-management-compaction"]
+                "group": "Diagnostics",
+                "pages": ["help/environment", "diagnostics/flags", "debug/node-issue"]
               },
               {
-                "group": "Developer setup",
-                "pages": ["start/setup", "pi-dev"]
-              },
-              {
-                "group": "Contributing",
-                "pages": ["ci"]
-              },
-              {
-                "group": "Docs meta",
-                "pages": ["start/hubs", "start/docs-directory"]
+                "group": "Community and meta",
+                "pages": ["start/lore", "start/hubs", "start/docs-directory"]
               }
             ]
           }

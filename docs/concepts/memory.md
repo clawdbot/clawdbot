@@ -186,3 +186,10 @@ openclaw memory index --force   # Rebuild the index
   from short-term recall to long-term memory
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
 - [Compaction](/concepts/compaction) -- how compaction interacts with memory
+
+## Related
+
+- [Active memory](/concepts/active-memory)
+- [Memory search](/concepts/memory-search)
+- [Builtin memory engine](/concepts/memory-builtin)
+- [Honcho memory](/concepts/memory-honcho)

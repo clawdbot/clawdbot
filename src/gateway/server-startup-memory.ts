@@ -11,6 +11,7 @@ export async function startGatewayMemoryBackend(params: {
   log: { info?: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<void> {
   const agentIds = listAgentIds(params.cfg);
+  const armedAgentIds: string[] = [];
   for (const agentId of agentIds) {
     if (!resolveMemorySearchConfig(params.cfg, agentId)) {
       continue;
@@ -30,6 +31,17 @@ export async function startGatewayMemoryBackend(params: {
       );
       continue;
     }
-    params.log.info?.(`qmd memory startup initialization armed for agent "${agentId}"`);
+    armedAgentIds.push(agentId);
   }
+  if (armedAgentIds.length > 0) {
+    params.log.info?.(
+      `qmd memory startup initialization armed for ${formatAgentCount(armedAgentIds.length)}: ${armedAgentIds
+        .map((agentId) => `"${agentId}"`)
+        .join(", ")}`,
+    );
+  }
+}
+
+function formatAgentCount(count: number): string {
+  return count === 1 ? "1 agent" : `${count} agents`;
 }

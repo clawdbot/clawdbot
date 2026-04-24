@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { __testing } from "./run-attempt.js";
+import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 describe("Codex dynamic tool filtering", () => {
   it("drops the image tool when the model already has inbound vision input", () => {
-    const toolNames = __testing
-      .filterToolsForVisionInputs([{ name: "image" }, { name: "read" }, { name: "write" }], {
+    const toolNames = filterToolsForVisionInputs(
+      [{ name: "image" }, { name: "read" }, { name: "write" }],
+      {
         modelHasVision: true,
         hasInboundImages: true,
-      })
-      .map((tool) => tool.name);
+      },
+    ).map((tool) => tool.name);
 
     expect(toolNames).toContain("read");
     expect(toolNames).toContain("write");
@@ -19,13 +20,13 @@ describe("Codex dynamic tool filtering", () => {
     const tools = [{ name: "image" }, { name: "read" }];
 
     expect(
-      __testing.filterToolsForVisionInputs(tools, {
+      filterToolsForVisionInputs(tools, {
         modelHasVision: false,
         hasInboundImages: true,
       }),
     ).toBe(tools);
     expect(
-      __testing.filterToolsForVisionInputs(tools, {
+      filterToolsForVisionInputs(tools, {
         modelHasVision: true,
         hasInboundImages: false,
       }),

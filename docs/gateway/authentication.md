@@ -202,3 +202,9 @@ openclaw models status
 Run `openclaw models status` to confirm which profile is expiring. If an
 Anthropic token profile is missing or expired, refresh that setup via
 setup-token or migrate to an Anthropic API key.
+
+## Related
+
+- [Secrets management](/gateway/secrets)
+- [Remote access](/gateway/remote)
+- [Auth storage](/concepts/oauth)

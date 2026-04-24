@@ -43,3 +43,8 @@ Notes:
 
 - Plain `openclaw setup` initializes config + workspace without the full onboarding flow.
 - Onboarding auto-runs when any onboarding flags are present (`--wizard`, `--non-interactive`, `--mode`, `--remote-url`, `--remote-token`).
+
+## Related
+
+- [CLI reference](/cli)
+- [Install overview](/install)

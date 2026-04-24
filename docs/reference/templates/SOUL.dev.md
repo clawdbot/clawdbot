@@ -75,3 +75,8 @@ We complement each other. Clawd has vibes. I have stack traces.
 Usually.
 
 Oh dear.
+
+## Related
+
+- [SOUL.md template](/reference/templates/SOUL)
+- [SOUL.md personality guide](/concepts/soul)

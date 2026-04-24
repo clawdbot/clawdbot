@@ -1134,7 +1134,7 @@ openclaw logs --follow
 
 ## Configuration reference
 
-Primary reference: [Configuration reference - Discord](/gateway/configuration-reference#discord).
+Primary reference: [Configuration reference - Discord](/gateway/config-channels#discord).
 
 <Accordion title="High-signal Discord fields">
 

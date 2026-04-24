@@ -346,7 +346,7 @@ for _ in $(seq 1 360); do
   if node "$entry" gateway health \
     --url "ws://127.0.0.1:$PORT" \
     --token "$TOKEN" \
-    --timeout 30000 \
+    --timeout 120000 \
     --json >/dev/null 2>&1; then
     break
   fi
@@ -355,7 +355,7 @@ done
 node "$entry" gateway health \
   --url "ws://127.0.0.1:$PORT" \
   --token "$TOKEN" \
-  --timeout 30000 \
+  --timeout 120000 \
   --json >/dev/null
 
 cat >/tmp/openclaw-openai-web-search-minimal-client.mjs <<'NODE'

@@ -57,3 +57,8 @@ Notes:
 - `list`, `info`, and `check` write their rendered output to stdout. With
   `--json`, that means the machine-readable payload stays on stdout for pipes
   and scripts.
+
+## Related
+
+- [CLI reference](/cli)
+- [Skills](/tools/skills)

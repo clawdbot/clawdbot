@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
@@ -264,6 +265,33 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
+  async function withPairedOperatorDeviceToken<T>(params: { fn: (token: string) => Promise<T> }) {
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-device-token-"));
+    vi.stubEnv("OPENCLAW_HOME", tempHome);
+    try {
+      const deviceId = "control-ui-device";
+      const requested = await requestDevicePairing({
+        deviceId,
+        publicKey: "test-public-key",
+        role: "operator",
+        scopes: ["operator.read"],
+        clientId: "openclaw-control-ui",
+        clientMode: "webchat",
+      });
+      const approved = await approveDevicePairing(requested.request.requestId, {
+        callerScopes: ["operator.read"],
+      });
+      expect(approved?.status).toBe("approved");
+      const operatorToken =
+        approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      expect(typeof operatorToken).toBe("string");
+      return await params.fn(operatorToken ?? "");
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  }
+
   it("sets security headers for Control UI responses", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -366,6 +394,51 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
         expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+      },
+    });
+  });
+
+  it("accepts paired operator device tokens on assistant media requests", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-device-token-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "photo.png");
+            await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+            const { res, handled } = await runAssistantMediaRequest({
+              url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+              method: "GET",
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: {
+                authorization: `Bearer ${operatorToken}`,
+              },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+          },
+        });
+      },
+    });
+  });
+
+  it("accepts paired operator device tokens in assistant media query auth", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-device-token-query-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "photo.png");
+            await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+            const { res, handled } = await runAssistantMediaRequest({
+              url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=${encodeURIComponent(operatorToken)}`,
+              method: "GET",
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+          },
+        });
       },
     });
   });
@@ -526,6 +599,28 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves bootstrap config JSON when paired device-token auth is valid", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            const { res, handled, end } = await runBootstrapConfigRequest({
+              rootPath: tmp,
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: {
+                authorization: `Bearer ${operatorToken}`,
+              },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            const parsed = parseBootstrapPayload(end);
+            expect(parsed.assistantAgentId).toBe("main");
+          },
+        });
+      },
+    });
+  });
+
   it("serves bootstrap config JSON under basePath", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -616,6 +711,34 @@ describe("handleControlUiHttpRequest", () => {
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("serves local avatar bytes when paired device-token auth is valid", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-device-token-"));
+        try {
+          const avatarPath = path.join(tmp, "main.png");
+          await fs.writeFile(avatarPath, "avatar-bytes\n");
+
+          const { res, handled, end } = await runAvatarRequest({
+            url: "/avatar/main",
+            method: "GET",
+            auth: { mode: "token", token: "shared-token", allowTailscale: false },
+            headers: {
+              authorization: `Bearer ${operatorToken}`,
+            },
+            resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("avatar-bytes\n");
+        } finally {
+          await fs.rm(tmp, { recursive: true, force: true });
+        }
+      },
+    });
   });
 
   it("returns avatar metadata when auth is enabled and the token is valid", async () => {

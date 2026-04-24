@@ -138,7 +138,9 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
 
 - **Loopback + SSH/Tailscale Serve** is the safest default (no public exposure).
 - Plaintext `ws://` is loopback-only by default. For trusted private networks,
-  set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
+  set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
+  break-glass. There is no `openclaw.json` equivalent; this must be process
+  environment for the client making the WebSocket connection.
 - **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use gateway auth: token, password, or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
 - `gateway.remote.token` / `.password` are client credential sources. They do **not** configure server auth by themselves.
 - Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
@@ -249,3 +251,9 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 | `ssh -N`                             | SSH without executing remote commands (port-forwarding only) |
 | `KeepAlive`                          | Automatically restarts the tunnel if it crashes              |
 | `RunAtLoad`                          | Starts the tunnel when the LaunchAgent loads at login        |
+
+## Related
+
+- [Tailscale](/gateway/tailscale)
+- [Authentication](/gateway/authentication)
+- [Remote gateway setup](/gateway/remote-gateway-readme)

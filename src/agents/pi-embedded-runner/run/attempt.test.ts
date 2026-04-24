@@ -317,6 +317,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
+      removeLeaf: true,
       prompt:
         "[Queued user message that arrived while the previous turn was still active]\n" +
         "older active-turn message\n\nnewest inbound message",
@@ -334,11 +335,124 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: false,
+      removeLeaf: true,
       prompt: "summary\nolder active-turn message\nnewest inbound message",
     });
   });
 
-  it("skips orphan prompt merging for non-user triggers", () => {
+  it("does not treat short orphan text as duplicate from a substring match", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "please inspect this token",
+        trigger: "user",
+        leafMessage: {
+          content: "ok",
+        } as never,
+      }),
+    ).toEqual({
+      merged: true,
+      removeLeaf: true,
+      prompt:
+        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "ok\n\nplease inspect this token",
+    });
+  });
+
+  it("preserves structured orphaned user content before removing the leaf", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: [
+            { type: "text", text: "please inspect this" },
+            { type: "image_url", image_url: { url: "https://example.test/cat.png" } },
+            { type: "input_audio", audio_url: "https://example.test/cat.wav" },
+          ],
+        } as never,
+      }),
+    ).toEqual({
+      merged: true,
+      removeLeaf: true,
+      prompt:
+        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "please inspect this\n" +
+        "[image_url] https://example.test/cat.png\n" +
+        "[input_audio] https://example.test/cat.wav\n\n" +
+        "newest inbound message",
+    });
+  });
+
+  it("summarizes inline structured media without embedding data URIs", () => {
+    const dataUri = `data:image/png;base64,${"a".repeat(4096)}`;
+
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: "newest inbound message",
+      trigger: "user",
+      leafMessage: {
+        content: [
+          { type: "text", text: "please inspect this inline image" },
+          { type: "image_url", image_url: { url: dataUri } },
+        ],
+      } as never,
+    });
+
+    expect(result).toMatchObject({
+      merged: true,
+      removeLeaf: true,
+    });
+    expect(result.prompt).toContain("please inspect this inline image");
+    expect(result.prompt).toContain("[image_url] inline data URI (image/png, 4118 chars)");
+    expect(result.prompt).not.toContain("base64");
+    expect(result.prompt).not.toContain("aaaa");
+  });
+
+  it("summarizes unknown structured data before JSON serialization", () => {
+    const dataUri = `data:image/png;base64,${"a".repeat(10_000)}`;
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: "newest inbound message",
+      trigger: "user",
+      leafMessage: {
+        content: [
+          {
+            type: "unknown_content",
+            nested: {
+              inline: dataUri,
+              longText: "b".repeat(2_000),
+            },
+          },
+        ],
+      } as never,
+    });
+
+    expect(result).toMatchObject({
+      merged: true,
+      removeLeaf: true,
+    });
+    expect(result.prompt).toContain("[value] inline data URI (image/png, 10022 chars)");
+    expect(result.prompt).toContain("bbbb");
+    expect(result.prompt).toContain("(2000 chars)");
+    expect(result.prompt).not.toContain("base64");
+    expect(result.prompt).not.toContain("aaaa");
+  });
+
+  it("removes an empty orphaned user leaf to prevent consecutive user turns", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: [],
+        } as never,
+      }),
+    ).toEqual({
+      merged: false,
+      removeLeaf: true,
+      prompt: "newest inbound message",
+    });
+  });
+
+  it("merges orphan prompt text for non-user triggers without warning policy changes", () => {
     expect(
       mergeOrphanedTrailingUserPrompt({
         prompt: "HEARTBEAT_OK",
@@ -348,8 +462,11 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
         } as never,
       }),
     ).toEqual({
-      merged: false,
-      prompt: "HEARTBEAT_OK",
+      merged: true,
+      removeLeaf: true,
+      prompt:
+        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "older active-turn message\n\nHEARTBEAT_OK",
     });
   });
 });

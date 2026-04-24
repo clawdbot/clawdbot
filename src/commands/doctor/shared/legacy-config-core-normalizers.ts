@@ -1,3 +1,4 @@
+import { isLegacyModelsAddCodexMetadataModel } from "../../../agents/openai-codex-models-add-legacy.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
@@ -170,6 +171,70 @@ type ModelProviderEntry = Partial<
   NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
 >;
 type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
+type ModelDefinitionEntry = NonNullable<ModelProviderEntry["models"]>[number];
+
+export function normalizeLegacyOpenAICodexModelsAddMetadata(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawModels = cfg.models;
+  if (!isRecord(rawModels) || !isRecord(rawModels.providers)) {
+    return cfg;
+  }
+
+  let providersChanged = false;
+  const nextProviders = { ...rawModels.providers };
+  for (const [providerId, rawProvider] of Object.entries(rawModels.providers)) {
+    if (normalizeProviderId(providerId) !== "openai-codex" || !isRecord(rawProvider)) {
+      continue;
+    }
+    const rawProviderModels = rawProvider.models;
+    if (!Array.isArray(rawProviderModels)) {
+      continue;
+    }
+    let providerChanged = false;
+    const nextModels: typeof rawProviderModels = [];
+    for (const model of rawProviderModels) {
+      if (
+        isRecord(model) &&
+        !("metadataSource" in model) &&
+        isLegacyModelsAddCodexMetadataModel({
+          provider: providerId,
+          model: model as Partial<ModelDefinitionEntry>,
+        })
+      ) {
+        providerChanged = true;
+        changes.push(
+          `Marked models.providers.${providerId}.models.${model.id} as /models add metadata so official OpenAI Codex metadata can override it.`,
+        );
+        nextModels.push(Object.assign({}, model, { metadataSource: "models-add" }));
+      } else {
+        nextModels.push(model);
+      }
+    }
+
+    if (!providerChanged) {
+      continue;
+    }
+    nextProviders[providerId] = {
+      ...rawProvider,
+      models: nextModels,
+    } as (typeof nextProviders)[string];
+    providersChanged = true;
+  }
+
+  if (!providersChanged) {
+    return cfg;
+  }
+
+  return {
+    ...cfg,
+    models: {
+      ...rawModels,
+      providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
+    },
+  };
+}
 
 export function normalizeLegacyNanoBananaSkill(
   cfg: OpenClawConfig,

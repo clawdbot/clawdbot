@@ -7,6 +7,7 @@ import {
   refreshRemoteBinsForConnectedNodes,
   setSkillsRemoteRegistry,
 } from "../infra/skills-remote.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { startTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
@@ -26,6 +27,7 @@ export async function startGatewayEarlyRuntime(params: {
     warn: (msg: string) => void;
   };
   nodeRegistry: Parameters<typeof setSkillsRemoteRegistry>[0];
+  pluginRegistry?: PluginRegistry;
   broadcast: Parameters<typeof startGatewayMaintenanceTimers>[0]["broadcast"];
   nodeSendToAllSubscribed: Parameters<
     typeof startGatewayMaintenanceTimers
@@ -66,6 +68,7 @@ export async function startGatewayEarlyRuntime(params: {
       wideAreaDiscoveryDomain: params.cfgAtStart.discovery?.wideArea?.domain,
       tailscaleMode: params.tailscaleMode,
       mdnsMode: params.cfgAtStart.discovery?.mdns?.mode,
+      gatewayDiscoveryServices: params.pluginRegistry?.gatewayDiscoveryServices,
       logDiscovery: params.logDiscovery,
     });
     bonjourStop = discovery.bonjourStop;

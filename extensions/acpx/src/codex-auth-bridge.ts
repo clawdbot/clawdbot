@@ -1,89 +1,11 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/provider-auth";
-import { prepareCodexAuthBridge } from "openclaw/plugin-sdk/provider-auth-runtime";
-import type { PluginLogger } from "../runtime-api.js";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
-
-const CODEX_AGENT_ID = "codex";
-const DEFAULT_CODEX_AUTH_PROFILE_ID = "openai-codex:default";
-// acpx selects ACP auth methods from the OpenClaw process env before the wrapper
-// launches. Keep those env vars visible to the child so its auth method matches.
-const CODEX_AUTH_ENV_CLEAR_KEYS: string[] = [];
-
-function shellArg(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-async function writeCodexAcpWrapper(params: {
-  wrapperPath: string;
-  codexHome: string;
-  clearEnv: string[];
-}): Promise<string> {
-  await fs.mkdir(path.dirname(params.wrapperPath), { recursive: true, mode: 0o700 });
-  const content = `#!/usr/bin/env node
-import { spawn } from "node:child_process";
-
-const env = { ...process.env, CODEX_HOME: ${JSON.stringify(params.codexHome)} };
-for (const key of ${JSON.stringify(params.clearEnv)}) {
-  delete env[key];
-}
-
-const child = spawn("npx", ["@zed-industries/codex-acp@^0.11.1"], {
-  stdio: "inherit",
-  env,
-});
-
-child.on("exit", (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
-  }
-  process.exit(code ?? 1);
-});
-
-child.on("error", (error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
-`;
-  await fs.writeFile(params.wrapperPath, content, { mode: 0o700 });
-  await fs.chmod(params.wrapperPath, 0o700);
-  return shellArg(params.wrapperPath);
-}
 
 export async function prepareAcpxCodexAuthConfig(params: {
   pluginConfig: ResolvedAcpxPluginConfig;
   stateDir: string;
-  logger?: PluginLogger;
+  logger?: unknown;
 }): Promise<ResolvedAcpxPluginConfig> {
-  if (params.pluginConfig.agents[CODEX_AGENT_ID]) {
-    return params.pluginConfig;
-  }
-
-  const agentDir = resolveOpenClawAgentDir();
-  const bridge = await prepareCodexAuthBridge({
-    agentDir,
-    bridgeDir: "acp-auth",
-    profileId: DEFAULT_CODEX_AUTH_PROFILE_ID,
-  });
-
-  if (!bridge) {
-    params.logger?.debug?.("codex ACP auth bridge skipped: no canonical OpenClaw OAuth found");
-    return params.pluginConfig;
-  }
-
-  const wrapperCommand = await writeCodexAcpWrapper({
-    wrapperPath: path.join(params.stateDir, "acpx", "codex-acp-wrapper.mjs"),
-    codexHome: bridge.codexHome,
-    clearEnv: [...CODEX_AUTH_ENV_CLEAR_KEYS],
-  });
-
-  return {
-    ...params.pluginConfig,
-    agents: {
-      ...params.pluginConfig.agents,
-      [CODEX_AGENT_ID]: wrapperCommand,
-    },
-  };
+  void params.stateDir;
+  void params.logger;
+  return params.pluginConfig;
 }

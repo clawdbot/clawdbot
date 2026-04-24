@@ -183,28 +183,7 @@ export async function handleAssistantFailover(params: {
 
   if (decision.action === "fallback_model") {
     await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
-    const message =
-      (params.lastAssistant
-        ? formatAssistantErrorText(params.lastAssistant, {
-            cfg: params.config,
-            sessionKey: params.sessionKey,
-            provider: params.activeErrorContext.provider,
-            model: params.activeErrorContext.model,
-          })
-        : undefined) ||
-      params.lastAssistant?.errorMessage?.trim() ||
-      (params.timedOut
-        ? "LLM request timed out."
-        : params.rateLimitFailure
-          ? "LLM request rate limited."
-          : params.billingFailure
-            ? formatBillingErrorMessage(
-                params.activeErrorContext.provider,
-                params.activeErrorContext.model,
-              )
-            : params.authFailure
-              ? "LLM request unauthorized."
-              : "LLM request failed.");
+    const message = resolveAssistantFailoverErrorMessage(params);
     const status =
       resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
     params.logAssistantFailoverDecision("fallback_model", { status });
@@ -227,10 +206,109 @@ export async function handleAssistantFailover(params: {
       return sameModelIdleTimeoutRetry();
     }
     params.logAssistantFailoverDecision("surface_error");
+    // Two surface_error shapes already have downstream synthesis and
+    // must keep falling through to `continue_normal`:
+    //   1. External abort (user pressed stop) — partial assistant
+    //      output carries the turn; no provider error to synthesize.
+    //   2. Timeout without an idle-retry — run.ts emits a dedicated
+    //      timeout payload when buildEmbeddedRunPayloads produces no
+    //      assistant content (see the `timedOut &&
+    //      !timedOutDuringCompaction && !payloadsWithToolMedia.length`
+    //      block in run.ts). Throwing here would short-circuit that
+    //      synthesis and break timeout-compaction retry coverage.
+    // Every other surface_error is a concrete provider failure that
+    // continue_normal would silently drop before the payload builder
+    // sees it (openclaw#70124: billing errors reached the gateway
+    // but never the webchat because stopReason was not "error" and
+    // no other synthesis path caught them). Throw a FailoverError so
+    // the client surface can render it the same way it already
+    // renders fallback_model failures.
+    if (!params.externalAbort && !params.timedOut) {
+      const message = resolveAssistantFailoverErrorMessage(params);
+      const reason = resolveSurfaceErrorReason(decision.reason, params);
+      const status =
+        resolveFailoverStatus(reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
+      return {
+        action: "throw",
+        overloadProfileRotations,
+        error: new FailoverError(message, {
+          reason,
+          provider: params.activeErrorContext.provider,
+          model: params.activeErrorContext.model,
+          profileId: params.lastProfileId,
+          status,
+          rawError: params.lastAssistant?.errorMessage?.trim(),
+        }),
+      };
+    }
   }
 
   return {
     action: "continue_normal",
     overloadProfileRotations,
   };
+}
+
+function resolveAssistantFailoverErrorMessage(params: {
+  lastAssistant: AssistantMessage | undefined;
+  config: OpenClawConfig | undefined;
+  sessionKey?: string;
+  activeErrorContext: { provider: string; model: string };
+  timedOut: boolean;
+  rateLimitFailure: boolean;
+  billingFailure: boolean;
+  authFailure: boolean;
+}): string {
+  return (
+    (params.lastAssistant
+      ? formatAssistantErrorText(params.lastAssistant, {
+          cfg: params.config,
+          sessionKey: params.sessionKey,
+          provider: params.activeErrorContext.provider,
+          model: params.activeErrorContext.model,
+        })
+      : undefined) ||
+    params.lastAssistant?.errorMessage?.trim() ||
+    (params.timedOut
+      ? "LLM request timed out."
+      : params.rateLimitFailure
+        ? "LLM request rate limited."
+        : params.billingFailure
+          ? formatBillingErrorMessage(
+              params.activeErrorContext.provider,
+              params.activeErrorContext.model,
+            )
+          : params.authFailure
+            ? "LLM request unauthorized."
+            : "LLM request failed.")
+  );
+}
+
+// surface_error decisions can arrive with `reason: null` when
+// shouldRotateAssistant fired on `failoverFailure` without a classified
+// upstream reason. FailoverError requires a concrete reason, so map
+// null onto the most specific failure the run observed, falling back
+// to "unknown" when no signal is set. Callers only hit this helper on
+// the non-timeout throw branch, so timeouts don't need a case here.
+function resolveSurfaceErrorReason(
+  declared: FailoverReason | null,
+  params: {
+    billingFailure: boolean;
+    authFailure: boolean;
+    rateLimitFailure: boolean;
+  },
+): FailoverReason {
+  if (declared) {
+    return declared;
+  }
+  if (params.billingFailure) {
+    return "billing";
+  }
+  if (params.authFailure) {
+    return "auth";
+  }
+  if (params.rateLimitFailure) {
+    return "rate_limit";
+  }
+  return "unknown";
 }

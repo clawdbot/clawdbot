@@ -1,11 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stripInternalRuntimeContext } from "../../agents/internal-runtime-context.js";
+import { isHeartbeatUserMessage } from "../../auto-reply/heartbeat-filter.js";
+import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
-import { isUsageCountedSessionTranscriptFileName } from "../../config/sessions/artifacts.js";
+import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import {
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
+} from "../../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
@@ -15,6 +24,7 @@ const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // toxic line. Wrapped continuation lines still map back to the same JSONL line.
 // This limit applies to content only; the role label adds up to 11 chars.
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
+const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
 
 export type SessionFileEntry = {
   path: string;
@@ -29,12 +39,30 @@ export type SessionFileEntry = {
   messageTimestampsMs: number[];
   /** True when this transcript belongs to an internal dreaming narrative run. */
   generatedByDreamingNarrative?: boolean;
+  /** True when this transcript belongs to an isolated cron run session. */
+  generatedByCronRun?: boolean;
 };
 
 export type BuildSessionEntryOptions = {
   /** Optional preclassification from a caller-managed dreaming transcript lookup. */
   generatedByDreamingNarrative?: boolean;
+  /** Optional preclassification from a caller-managed cron transcript lookup. */
+  generatedByCronRun?: boolean;
 };
+
+export type SessionTranscriptClassification = {
+  dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
+  cronRunTranscriptPaths: ReadonlySet<string>;
+};
+
+function isCheckpointTranscriptFileName(fileName: string): boolean {
+  return fileName.endsWith(".jsonl") && fileName.includes(".checkpoint.");
+}
+
+function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
+  const fileName = path.basename(absPath);
+  return isSessionArchiveArtifactName(fileName) || isCheckpointTranscriptFileName(fileName);
+}
 
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
@@ -133,25 +161,45 @@ function resolveSessionStoreTranscriptPath(
 export function loadDreamingNarrativeTranscriptPathSetForSessionsDir(
   sessionsDir: string,
 ): ReadonlySet<string> {
+  return loadSessionTranscriptClassificationForSessionsDir(sessionsDir)
+    .dreamingNarrativeTranscriptPaths;
+}
+
+export function loadSessionTranscriptClassificationForSessionsDir(
+  sessionsDir: string,
+): SessionTranscriptClassification {
   const storePath = path.join(sessionsDir, "sessions.json");
   const store = loadSessionStore(storePath);
   const dreamingTranscriptPaths = new Set<string>();
+  const cronRunTranscriptPaths = new Set<string>();
   for (const [sessionKey, entry] of Object.entries(store)) {
-    if (!isDreamingNarrativeSessionStoreKey(sessionKey)) {
+    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
+    if (!transcriptPath) {
       continue;
     }
-    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
-    if (transcriptPath) {
+    if (isDreamingNarrativeSessionStoreKey(sessionKey)) {
       dreamingTranscriptPaths.add(transcriptPath);
     }
+    if (isCronRunSessionKey(sessionKey)) {
+      cronRunTranscriptPaths.add(transcriptPath);
+    }
   }
-  return dreamingTranscriptPaths;
+  return {
+    dreamingNarrativeTranscriptPaths: dreamingTranscriptPaths,
+    cronRunTranscriptPaths,
+  };
 }
 
 export function loadDreamingNarrativeTranscriptPathSetForAgent(
   agentId: string,
 ): ReadonlySet<string> {
-  return loadDreamingNarrativeTranscriptPathSetForSessionsDir(
+  return loadSessionTranscriptClassificationForAgent(agentId).dreamingNarrativeTranscriptPaths;
+}
+
+export function loadSessionTranscriptClassificationForAgent(
+  agentId: string,
+): SessionTranscriptClassification {
+  return loadSessionTranscriptClassificationForSessionsDir(
     resolveSessionTranscriptsDirForAgent(agentId),
   );
 }
@@ -159,8 +207,15 @@ export function loadDreamingNarrativeTranscriptPathSetForAgent(
 function isDreamingNarrativeTranscriptFromSessionStore(absPath: string): boolean {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
-  const dreamingTranscriptPaths = loadDreamingNarrativeTranscriptPathSetForSessionsDir(sessionsDir);
-  return dreamingTranscriptPaths.has(normalizedAbsPath);
+  const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+  return classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath);
+}
+
+function isCronRunTranscriptFromSessionStore(absPath: string): boolean {
+  const sessionsDir = path.dirname(absPath);
+  const normalizedAbsPath = normalizeComparablePath(absPath);
+  const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+  return classification.cronRunTranscriptPaths.has(normalizedAbsPath);
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
@@ -287,6 +342,59 @@ function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant
   return stripInboundMetadata(text);
 }
 
+const GENERATED_SYSTEM_MESSAGE_RE = /^System(?: \(untrusted\))?: \[[^\]]+\]\s*/;
+
+function isGeneratedSystemWrapperMessage(text: string, role: "user" | "assistant"): boolean {
+  if (role !== "user") {
+    return false;
+  }
+  return GENERATED_SYSTEM_MESSAGE_RE.test(text);
+}
+
+function isGeneratedCronPromptMessage(text: string, role: "user" | "assistant"): boolean {
+  if (role !== "user") {
+    return false;
+  }
+  return DIRECT_CRON_PROMPT_RE.test(text);
+}
+
+function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assistant"): boolean {
+  return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
+}
+
+function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
+  const strippedInbound = stripInboundMetadataForUserRole(text, role);
+  const strippedInternal = stripInternalRuntimeContext(strippedInbound);
+  const normalized = normalizeSessionText(strippedInternal);
+  if (!normalized) {
+    return null;
+  }
+  if (isGeneratedSystemWrapperMessage(normalized, role)) {
+    return null;
+  }
+  if (isGeneratedCronPromptMessage(normalized, role)) {
+    return null;
+  }
+  if (isGeneratedHeartbeatPromptMessage(normalized, role)) {
+    return null;
+  }
+  if (isSilentReplyPayloadText(normalized)) {
+    return null;
+  }
+  // Assistant-side machinery acks: HEARTBEAT_OK is the canonical "all clear,
+  // nothing to do" reply to a heartbeat tick. Drop on the assistant side
+  // directly so we do not have to rely on cross-message coupling with the
+  // preceding user message (which a real user could spoof).
+  if (role === "assistant" && normalized === HEARTBEAT_TOKEN) {
+    return null;
+  }
+  const withoutSystemEnvelope = normalized.replace(GENERATED_SYSTEM_MESSAGE_RE, "").trim();
+  if (isExecCompletionEvent(withoutSystemEnvelope)) {
+    return null;
+  }
+  return normalized;
+}
+
 export function extractSessionText(
   content: unknown,
   role: "user" | "assistant" = "assistant",
@@ -295,9 +403,7 @@ export function extractSessionText(
   if (rawText === null) {
     return null;
   }
-  const stripped = stripInboundMetadataForUserRole(rawText, role);
-  const normalized = normalizeSessionText(stripped);
-  return normalized ? normalized : null;
+  return sanitizeSessionText(rawText, role);
 }
 
 function parseSessionTimestampMs(
@@ -328,6 +434,18 @@ export async function buildSessionEntry(
 ): Promise<SessionFileEntry | null> {
   try {
     const stat = await fs.stat(absPath);
+    if (shouldSkipTranscriptFileForDreaming(absPath)) {
+      return {
+        path: sessionPathForFile(absPath),
+        absPath,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        hash: hashText("\n\n"),
+        content: "",
+        lineMap: [],
+        messageTimestampsMs: [],
+      };
+    }
     const raw = await fs.readFile(absPath, "utf-8");
     const lines = raw.split("\n");
     const collected: string[] = [];
@@ -335,6 +453,8 @@ export async function buildSessionEntry(
     const messageTimestampsMs: number[] = [];
     let generatedByDreamingNarrative =
       opts.generatedByDreamingNarrative ?? isDreamingNarrativeTranscriptFromSessionStore(absPath);
+    const generatedByCronRun =
+      opts.generatedByCronRun ?? isCronRunTranscriptFromSessionStore(absPath);
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -365,11 +485,22 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
-      const text = extractSessionText(message.content, message.role);
-      if (!text) {
+      const rawText = collectRawSessionText(message.content);
+      if (rawText === null) {
         continue;
       }
-      if (generatedByDreamingNarrative) {
+      const text = sanitizeSessionText(rawText, message.role);
+      if (!text) {
+        // Assistant-side machinery (silent replies, system wrappers) is already
+        // dropped by sanitizeSessionText. We deliberately do NOT use the prior
+        // user message's pattern-match to drop the next assistant message:
+        // user-typed text can match those same patterns (`[cron:...]`,
+        // `System (untrusted): ...`) and a cross-message drop would let users
+        // exfiltrate real assistant replies from the dreaming corpus by
+        // prefixing their own prompt. See PR #70737 review (aisle-research-bot).
+        continue;
+      }
+      if (generatedByDreamingNarrative || generatedByCronRun) {
         continue;
       }
       const safe = redactSensitiveText(text, { mode: "tools" });
@@ -394,6 +525,7 @@ export async function buildSessionEntry(
       lineMap,
       messageTimestampsMs,
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
+      ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
   } catch (err) {
     log.debug(`Failed reading session file ${absPath}: ${String(err)}`);

@@ -82,3 +82,7 @@ Practical limits come from the local machine and destination filesystem:
 Large workspaces are usually the main driver of archive size. If you want a smaller or faster backup, use `--no-include-workspace`.
 
 For the smallest archive, use `--only-config`.
+
+## Related
+
+- [CLI reference](/cli)

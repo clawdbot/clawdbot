@@ -83,16 +83,34 @@ you want artifacts without a failing exit code.
 The Telegram report and summary include per-reply RTT from the driver message
 send request to the observed SUT reply, starting with the canary.
 
+For a transport-real Discord smoke lane, run:
+
+```bash
+pnpm openclaw qa discord
+```
+
+That lane targets one real private Discord guild channel with two bots: a
+driver bot controlled by the harness and a SUT bot started by the child
+OpenClaw gateway through the bundled Discord plugin. It requires
+`OPENCLAW_QA_DISCORD_GUILD_ID`, `OPENCLAW_QA_DISCORD_CHANNEL_ID`,
+`OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN`, `OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN`,
+and `OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID` when using env credentials.
+The lane verifies channel mention handling and checks that the SUT bot has
+registered the native `/help` command with Discord.
+The command exits non-zero when any scenario fails. Use `--allow-failures` when
+you want artifacts without a failing exit code.
+
 Live transport lanes now share one smaller contract instead of each inventing
 their own scenario list shape:
 
 `qa-channel` remains the broad synthetic product-behavior suite and is not part
 of the live transport coverage matrix.
 
-| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
-| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
-| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
-| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
+| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
+| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
+| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |                             |
+| Telegram | x      | x              |                 |                 |                |                  |                  |                      | x            |                             |
+| Discord  | x      | x              |                 |                 |                |                  |                  |                      |              | x                           |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and future live transports share one explicit transport-contract
@@ -207,7 +225,7 @@ refs and write a judged Markdown report:
 
 ```bash
 pnpm openclaw qa character-eval \
-  --model openai/gpt-5.5,thinking=xhigh \
+  --model openai/gpt-5.4,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
   --model anthropic/claude-opus-4-6,thinking=high \
@@ -215,7 +233,7 @@ pnpm openclaw qa character-eval \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
-  --judge-model openai/gpt-5.5,thinking=xhigh,fast \
+  --judge-model openai/gpt-5.4,thinking=xhigh,fast \
   --judge-model anthropic/claude-opus-4-6,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
@@ -227,13 +245,13 @@ scenarios should set the persona through `SOUL.md`, then run ordinary user turns
 such as chat, workspace help, and small file tasks. The candidate model should
 not be told that it is being evaluated. The command preserves each full
 transcript, records basic run stats, then asks the judge models in fast mode with
-`xhigh` reasoning to rank the runs by naturalness, vibe, and humor.
+`xhigh` reasoning where supported to rank the runs by naturalness, vibe, and humor.
 Use `--blind-judge-models` when comparing providers: the judge prompt still gets
 every transcript and run status, but candidate refs are replaced with neutral
 labels such as `candidate-01`; the report maps rankings back to real refs after
 parsing.
-Candidate runs default to `high` thinking, with `xhigh` for OpenAI models that
-support it. Override a specific candidate inline with
+Candidate runs default to `high` thinking, with `medium` for GPT-5.4 and `xhigh`
+for older OpenAI eval refs that support it. Override a specific candidate inline with
 `--model provider/model,thinking=<level>`. `--thinking <level>` still sets a
 global fallback, and the older `--model-thinking <provider/model=level>` form is
 kept for compatibility.
@@ -247,12 +265,12 @@ Candidate and judge model runs both default to concurrency 16. Lower
 `--concurrency` or `--judge-concurrency` when provider limits or local gateway
 pressure make a run too noisy.
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
+`openai/gpt-5.4`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
 `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and
 `google/gemini-3.1-pro-preview` when no `--model` is passed.
 When no `--judge-model` is passed, the judges default to
-`openai/gpt-5.5,thinking=xhigh,fast` and
+`openai/gpt-5.4,thinking=xhigh,fast` and
 `anthropic/claude-opus-4-6,thinking=high`.
 
 ## Related docs

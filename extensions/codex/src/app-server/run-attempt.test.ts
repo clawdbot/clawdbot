@@ -47,11 +47,51 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
 }
 
 function threadStartResult(threadId = "thread-1") {
-  return { thread: { id: threadId }, model: "gpt-5.4-codex", modelProvider: "openai" };
+  return {
+    thread: {
+      id: threadId,
+      forkedFromId: null,
+      preview: "",
+      ephemeral: false,
+      modelProvider: "openai",
+      createdAt: 1,
+      updatedAt: 1,
+      status: { type: "idle" },
+      path: null,
+      cwd: tempDir || "/tmp/openclaw-codex-test",
+      cliVersion: "0.118.0",
+      source: "unknown",
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: null,
+      turns: [],
+    },
+    model: "gpt-5.4-codex",
+    modelProvider: "openai",
+    serviceTier: null,
+    cwd: tempDir || "/tmp/openclaw-codex-test",
+    instructionSources: [],
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+    permissionProfile: null,
+    reasoningEffort: null,
+  };
 }
 
 function turnStartResult(turnId = "turn-1", status = "inProgress") {
-  return { turn: { id: turnId, status } };
+  return {
+    turn: {
+      id: turnId,
+      status,
+      items: [],
+      error: null,
+      startedAt: null,
+      completedAt: null,
+      durationMs: null,
+    },
+  };
 }
 
 function assistantMessage(text: string, timestamp: number) {
@@ -157,7 +197,7 @@ function expectResumeRequest(
 function createResumeHarness() {
   return createAppServerHarness(async (method) => {
     if (method === "thread/resume") {
-      return { thread: { id: "thread-existing" }, modelProvider: "openai" };
+      return threadStartResult("thread-existing");
     }
     if (method === "turn/start") {
       return turnStartResult();
@@ -273,7 +313,7 @@ describe("runCodexAppServerAttempt", () => {
         {
           method: "turn/start",
           params: expect.objectContaining({
-            input: [{ type: "text", text: "queued context\n\nhello" }],
+            input: [{ type: "text", text: "queued context\n\nhello", text_elements: [] }],
           }),
         },
       ]),
@@ -510,7 +550,6 @@ describe("runCodexAppServerAttempt", () => {
           method: "thread/start",
           params: expect.objectContaining({
             model: "gpt-5.4-codex",
-            modelProvider: "openai",
             approvalPolicy: "never",
             sandbox: "danger-full-access",
             approvalsReviewer: "user",
@@ -522,7 +561,7 @@ describe("runCodexAppServerAttempt", () => {
           params: {
             threadId: "thread-1",
             expectedTurnId: "turn-1",
-            input: [{ type: "text", text: "more context" }],
+            input: [{ type: "text", text: "more context", text_elements: [] }],
           },
         },
         {
@@ -614,6 +653,97 @@ describe("runCodexAppServerAttempt", () => {
     await run;
   });
 
+  it("routes request_user_input prompts through the active run follow-up queue", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onBlockReply = vi.fn();
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(
+      () => expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+      { interval: 1 },
+    );
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    const response = handleRequest?.({
+      id: "request-input-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "ask-1",
+        questions: [
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Pick a mode",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Fast", description: "Use less reasoning" },
+              { label: "Deep", description: "Use more reasoning" },
+            ],
+          },
+        ],
+      },
+    });
+
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(queueAgentHarnessMessage("session-1", "2")).toBe(true);
+    await expect(response).resolves.toEqual({
+      answers: { mode: { answers: ["Deep"] } },
+    });
+    expect(request).not.toHaveBeenCalledWith(
+      "turn/steer",
+      expect.objectContaining({ expectedTurnId: "turn-1" }),
+    );
+
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
+  });
+
   it("does not leak unhandled rejections when shutdown closes before interrupt", async () => {
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
@@ -671,7 +801,7 @@ describe("runCodexAppServerAttempt", () => {
           method: "turn/start",
           params: expect.objectContaining({
             input: [
-              { type: "text", text: "hello" },
+              { type: "text", text: "hello", text_elements: [] },
               { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
             ],
           }),
@@ -783,10 +913,10 @@ describe("runCodexAppServerAttempt", () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
-        return { thread: { id: "thread-1" }, model: "gpt-5.4-codex", modelProvider: "openai" };
+        return threadStartResult("thread-1");
       }
       if (method === "turn/start") {
-        return { turn: { id: "turn-1", status: "inProgress" } };
+        return turnStartResult("turn-1", "inProgress");
       }
       return {};
     });
@@ -843,10 +973,10 @@ describe("runCodexAppServerAttempt", () => {
       });
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
-        return { thread: { id: "thread-1" }, model: "gpt-5.4-codex", modelProvider: "openai" };
+        return threadStartResult("thread-1");
       }
       if (method === "turn/start") {
-        return { turn: { id: "turn-1", status: "inProgress" } };
+        return turnStartResult("turn-1", "inProgress");
       }
       return {};
     });
@@ -952,7 +1082,7 @@ describe("runCodexAppServerAttempt", () => {
     const request = vi.fn(
       async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
         if (method === "thread/start") {
-          return { thread: { id: "thread-1" }, model: "gpt-5.4-codex", modelProvider: "openai" };
+          return threadStartResult("thread-1");
         }
         if (method === "turn/start") {
           return await new Promise<never>((_, reject) => {
@@ -994,7 +1124,6 @@ describe("runCodexAppServerAttempt", () => {
     expectResumeRequest(requests, {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
-      modelProvider: "openai",
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
@@ -1013,7 +1142,7 @@ describe("runCodexAppServerAttempt", () => {
         return threadStartResult("thread-existing");
       }
       if (method === "thread/resume") {
-        return { thread: { id: "thread-existing" }, modelProvider: "openai" };
+        return threadStartResult("thread-existing");
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -1096,7 +1225,6 @@ describe("runCodexAppServerAttempt", () => {
     expectResumeRequest(requests, {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
-      modelProvider: "openai",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
@@ -1111,6 +1239,7 @@ describe("runCodexAppServerAttempt", () => {
           params: expect.objectContaining({
             approvalPolicy: "on-request",
             approvalsReviewer: "guardian_subagent",
+            sandboxPolicy: { type: "dangerFullAccess" },
             serviceTier: "fast",
             model: "gpt-5.4-codex",
           }),
@@ -1167,7 +1296,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(buildThreadResumeParams(params, { threadId: "thread-1", appServer })).toEqual({
       threadId: "thread-1",
       model: "gpt-5.4-codex",
-      modelProvider: "openai",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
@@ -1184,6 +1312,7 @@ describe("runCodexAppServerAttempt", () => {
         model: "gpt-5.4-codex",
         approvalPolicy: "on-request",
         approvalsReviewer: "guardian_subagent",
+        sandboxPolicy: { type: "dangerFullAccess" },
         serviceTier: "flex",
       }),
     );
@@ -1202,7 +1331,7 @@ describe("runCodexAppServerAttempt", () => {
       client: {
         request: async (method: string) => {
           if (method === "thread/resume") {
-            return { thread: { id: "thread-existing" }, modelProvider: "openai" };
+            return threadStartResult("thread-existing");
           }
           throw new Error(`unexpected method: ${method}`);
         },
@@ -1238,7 +1367,7 @@ describe("runCodexAppServerAttempt", () => {
     const { requests, waitForMethod, completeTurn } = createAppServerHarness(
       async (method: string) => {
         if (method === "thread/resume") {
-          return { thread: { id: "thread-existing" }, modelProvider: "openai" };
+          return threadStartResult("thread-existing");
         }
         if (method === "turn/start") {
           return turnStartResult();

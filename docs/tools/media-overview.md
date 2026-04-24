@@ -72,3 +72,10 @@ voice contract can represent it.
 - [Music Generation](/tools/music-generation) -- creating music and audio tracks
 - [Text-to-Speech](/tools/tts) -- converting replies to spoken audio
 - [Media Understanding](/nodes/media-understanding) -- understanding inbound images, audio, and video
+
+## Related
+
+- [Image generation](/tools/image-generation)
+- [Video generation](/tools/video-generation)
+- [Music generation](/tools/music-generation)
+- [Text-to-speech](/tools/tts)

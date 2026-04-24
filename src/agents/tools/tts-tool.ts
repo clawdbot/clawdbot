@@ -5,14 +5,34 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { textToSpeech } from "../../tts/tts.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
-import { readStringParam } from "./common.js";
+import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 
 const TtsToolSchema = Type.Object({
   text: Type.String({ description: "Text to convert to speech." }),
   channel: Type.Optional(
     Type.String({ description: "Optional channel id to pick output format." }),
   ),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      description: "Optional provider request timeout in milliseconds.",
+      minimum: 1,
+    }),
+  ),
 });
+
+function readTtsTimeoutMs(args: Record<string, unknown>): number | undefined {
+  const timeoutMs = readNumberParam(args, "timeoutMs", {
+    integer: true,
+    strict: true,
+  });
+  if (timeoutMs === undefined) {
+    return undefined;
+  }
+  if (timeoutMs <= 0) {
+    throw new ToolInputError("timeoutMs must be a positive integer in milliseconds.");
+  }
+  return timeoutMs;
+}
 
 /**
  * Defuse reply-directive tokens inside spoken transcripts before they flow
@@ -48,11 +68,13 @@ export function createTtsTool(opts?: {
       const params = args as Record<string, unknown>;
       const text = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
+      const timeoutMs = readTtsTimeoutMs(params);
       const cfg = opts?.config ?? loadConfig();
       const result = await textToSpeech({
         text,
         cfg,
         channel: channel ?? opts?.agentChannel,
+        timeoutMs,
       });
 
       if (result.success && result.audioPath) {
@@ -66,6 +88,7 @@ export function createTtsTool(opts?: {
           details: {
             audioPath: result.audioPath,
             provider: result.provider,
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
             media: {
               mediaUrl: result.audioPath,
               trustedLocalMedia: true,

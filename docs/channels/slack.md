@@ -785,7 +785,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 
 ## Configuration reference
 
-Primary reference: [Configuration reference - Slack](/gateway/configuration-reference#slack).
+Primary reference: [Configuration reference - Slack](/gateway/config-channels#slack).
 
 <Accordion title="High-signal Slack fields">
 

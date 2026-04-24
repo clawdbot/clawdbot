@@ -18,6 +18,7 @@ Hard limits:
 - Do not update snapshots, generated baselines, inventories, ignore files, lockfiles, package metadata, CI workflows, or release metadata.
 - Do not add dependencies.
 - Do not create, delete, or rename files.
+- Do not do broad refactors or style-only rewrites.
 - Keep changes minimal and focused on the slow or failing tests you can justify from the report.
 - Prefer no edit when a performance improvement is speculative.
 - If `.artifacts/test-perf/baseline-before.json` has `"failed": true`, do not make performance-only edits. First inspect the failed config logs. Edit only when the test failure has an obvious, coverage-preserving fix. If no obvious failure fix exists, leave the worktree clean.
@@ -26,6 +27,7 @@ Good fixes:
 
 - Replace broad partial module mocks, especially `importOriginal()` mocks, with narrow injected dependencies or local runtime seams.
 - Avoid importing heavy barrels in hot tests when a narrow module or helper covers the same behavior.
+- Add or adjust a production lazy/injection seam only when that is the narrowest way to preserve coverage while removing expensive imports or fixing an obvious mock/import failure.
 - Move expensive setup from per-test hooks to shared setup only when state isolation remains correct.
 - Reuse existing fixtures/builders instead of recreating expensive work per case.
 - Mock expensive runtime boundaries directly: filesystem crawls, package registries, provider SDKs, network/process launch, browser/runtime scanners.

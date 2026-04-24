@@ -1,6 +1,7 @@
-import { startGatewayBonjourAdvertiser } from "../infra/bonjour.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
+import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
 import {
   formatBonjourInstanceName,
   resolveBonjourCliPath,
@@ -17,19 +18,20 @@ export async function startGatewayDiscovery(params: {
   tailscaleMode: "off" | "serve" | "funnel";
   /** mDNS/Bonjour discovery mode (default: minimal). */
   mdnsMode?: "off" | "minimal" | "full";
+  gatewayDiscoveryServices?: readonly PluginGatewayDiscoveryServiceRegistration[];
   logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
 }) {
   let bonjourStop: (() => Promise<void>) | null = null;
   const mdnsMode = params.mdnsMode ?? "minimal";
-  // mDNS can be disabled via config (mdnsMode: off) or env var.
-  const bonjourEnabled =
+  // Local discovery can be disabled via config (mdnsMode: off) or env var.
+  const localDiscoveryEnabled =
     mdnsMode !== "off" &&
-    process.env.OPENCLAW_DISABLE_BONJOUR !== "1" &&
+    !isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR) &&
     process.env.NODE_ENV !== "test" &&
     !process.env.VITEST;
   const mdnsMinimal = mdnsMode !== "full";
   const tailscaleEnabled = params.tailscaleMode !== "off";
-  const needsTailnetDns = bonjourEnabled || params.wideAreaDiscoveryEnabled;
+  const needsTailnetDns = localDiscoveryEnabled || params.wideAreaDiscoveryEnabled;
   const tailnetDns = needsTailnetDns
     ? await resolveTailnetDnsHint({ enabled: tailscaleEnabled })
     : undefined;
@@ -38,22 +40,40 @@ export async function startGatewayDiscovery(params: {
   const sshPort = Number.isFinite(sshPortParsed) && sshPortParsed > 0 ? sshPortParsed : undefined;
   const cliPath = mdnsMinimal ? undefined : resolveBonjourCliPath();
 
-  if (bonjourEnabled) {
-    try {
-      const bonjour = await startGatewayBonjourAdvertiser({
-        instanceName: formatBonjourInstanceName(params.machineDisplayName),
-        gatewayPort: params.port,
-        gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
-        gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
-        canvasPort: params.canvasPort,
-        sshPort,
-        tailnetDns,
-        cliPath,
-        minimal: mdnsMinimal,
-      });
-      bonjourStop = bonjour.stop;
-    } catch (err) {
-      params.logDiscovery.warn(`bonjour advertising failed: ${String(err)}`);
+  if (localDiscoveryEnabled) {
+    const stops: Array<() => void | Promise<void>> = [];
+    for (const entry of params.gatewayDiscoveryServices ?? []) {
+      try {
+        const started = await entry.service.advertise({
+          machineDisplayName: params.machineDisplayName,
+          gatewayPort: params.port,
+          gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
+          gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
+          canvasPort: params.canvasPort,
+          sshPort,
+          tailnetDns,
+          cliPath,
+          minimal: mdnsMinimal,
+        });
+        if (started?.stop) {
+          stops.push(started.stop);
+        }
+      } catch (err) {
+        params.logDiscovery.warn(
+          `gateway discovery service failed (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
+        );
+      }
+    }
+    if (stops.length > 0) {
+      bonjourStop = async () => {
+        for (const stop of stops.toReversed()) {
+          try {
+            await stop();
+          } catch (err) {
+            params.logDiscovery.warn(`gateway discovery stop failed: ${String(err)}`);
+          }
+        }
+      };
     }
   }
 

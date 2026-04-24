@@ -53,6 +53,23 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("passes npm specs and optional expected integrity to npm installs with progress", async () => {
+    const npmResolution = {
+      name: "@wecom/wecom-openclaw-plugin",
+      version: "1.2.3",
+      resolvedSpec: "@wecom/wecom-openclaw-plugin@1.2.3",
+      integrity: "sha512-wecom",
+      shasum: "deadbeef",
+      resolvedAt: "2026-04-24T00:00:00.000Z",
+    };
+    const installFields = {
+      resolvedName: npmResolution.name,
+      resolvedVersion: npmResolution.version,
+      resolvedSpec: npmResolution.resolvedSpec,
+      integrity: npmResolution.integrity,
+      shasum: npmResolution.shasum,
+      resolvedAt: npmResolution.resolvedAt,
+    };
+    buildNpmResolutionInstallFields.mockReturnValueOnce(installFields);
     installPluginFromNpmSpec.mockImplementation(async (params) => {
       params.logger?.info?.("Downloading demo-plugin…");
       return {
@@ -60,10 +77,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         pluginId: "demo-plugin",
         targetDir: "/tmp/demo-plugin",
         version: "1.2.3",
-        npmResolution: {
-          resolvedSpec: "@wecom/wecom-openclaw-plugin@1.2.3",
-          integrity: "sha512-wecom",
-        },
+        npmResolution,
       };
     });
     const stop = vi.fn();
@@ -95,6 +109,18 @@ describe("ensureOnboardingPluginInstalled", () => {
     );
     expect(update).toHaveBeenCalledWith("Downloading demo-plugin…");
     expect(stop).toHaveBeenCalledWith("Installed WeCom plugin");
+    expect(buildNpmResolutionInstallFields).toHaveBeenCalledWith(npmResolution);
+    expect(recordPluginInstall).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        pluginId: "demo-plugin",
+        source: "npm",
+        spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+        installPath: "/tmp/demo-plugin",
+        version: "1.2.3",
+        ...installFields,
+      }),
+    );
     expect(result.installed).toBe(true);
     expect(result.status).toBe("installed");
   });
@@ -372,6 +398,143 @@ describe("ensureOnboardingPluginInstalled", () => {
         { value: "skip", label: "Skip for now" },
       ]);
       expect(captured?.initialValue).toBe("local");
+    });
+  });
+
+  it("records local install source metadata when a local path is selected", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-local-record-" }, async (temp) => {
+      const workspaceDir = path.join(temp, "workspace");
+      const pluginDir = path.join(workspaceDir, "plugins", "demo");
+      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+      await fs.mkdir(pluginDir, { recursive: true });
+
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "demo-plugin",
+          label: "Demo Plugin",
+          install: {
+            npmSpec: "@demo/plugin@1.2.3",
+            localPath: "plugins/demo",
+          },
+        },
+        prompter: {
+          select: vi.fn(async () => "local"),
+        } as never,
+        runtime: {} as never,
+        workspaceDir,
+      });
+
+      const realPluginDir = await fs.realpath(pluginDir);
+      expect(recordPluginInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          plugins: {
+            load: {
+              paths: [realPluginDir],
+            },
+          },
+        }),
+        {
+          pluginId: "demo-plugin",
+          source: "path",
+          sourcePath: "./plugins/demo",
+          spec: "@demo/plugin@1.2.3",
+        },
+      );
+      expect(result.installed).toBe(true);
+      expect(result.status).toBe("installed");
+    });
+  });
+
+  it("records local install source metadata when npm install falls back to local", async () => {
+    await withTempDir(
+      { prefix: "openclaw-onboarding-install-npm-fallback-record-" },
+      async (temp) => {
+        const workspaceDir = path.join(temp, "workspace");
+        const pluginDir = path.join(workspaceDir, "plugins", "demo");
+        await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+        await fs.mkdir(pluginDir, { recursive: true });
+        installPluginFromNpmSpec.mockResolvedValueOnce({
+          ok: false,
+          error: "registry unavailable",
+        });
+        const note = vi.fn(async () => {});
+
+        const result = await ensureOnboardingPluginInstalled({
+          cfg: {},
+          entry: {
+            pluginId: "demo-plugin",
+            label: "Demo Plugin",
+            install: {
+              npmSpec: "@demo/plugin@1.2.3",
+              localPath: "plugins/demo",
+            },
+          },
+          prompter: {
+            select: vi.fn(async () => "npm"),
+            note,
+            confirm: vi.fn(async () => true),
+            progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+          } as never,
+          runtime: {} as never,
+          workspaceDir,
+        });
+
+        const realPluginDir = await fs.realpath(pluginDir);
+        expect(note).toHaveBeenCalledWith(
+          "Failed to install @demo/plugin@1.2.3: registry unavailable\nReturning to selection.",
+          "Plugin install",
+        );
+        expect(recordPluginInstall).toHaveBeenCalledWith(
+          expect.objectContaining({
+            plugins: {
+              load: {
+                paths: [realPluginDir],
+              },
+            },
+          }),
+          {
+            pluginId: "demo-plugin",
+            source: "path",
+            sourcePath: "./plugins/demo",
+            spec: "@demo/plugin@1.2.3",
+          },
+        );
+        expect(result.installed).toBe(true);
+        expect(result.status).toBe("installed");
+      },
+    );
+  });
+
+  it("records absolute local catalog paths as workspace-relative source metadata", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-portable-record-" }, async (temp) => {
+      const workspaceDir = path.join(temp, "workspace");
+      const pluginDir = path.join(workspaceDir, "plugins", "demo");
+      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+      await fs.mkdir(pluginDir, { recursive: true });
+      const realPluginDir = await fs.realpath(pluginDir);
+
+      await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "demo-plugin",
+          label: "Demo Plugin",
+          install: {
+            localPath: realPluginDir,
+          },
+        },
+        prompter: {
+          select: vi.fn(async () => "local"),
+        } as never,
+        runtime: {} as never,
+        workspaceDir,
+      });
+
+      expect(recordPluginInstall).toHaveBeenCalledWith(expect.anything(), {
+        pluginId: "demo-plugin",
+        source: "path",
+        sourcePath: "./plugins/demo",
+      });
     });
   });
 

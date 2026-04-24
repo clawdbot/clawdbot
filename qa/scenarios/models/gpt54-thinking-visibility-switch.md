@@ -1,20 +1,20 @@
-# GPT-5.5 thinking visibility switch
+# GPT-5.4 thinking visibility switch
 
 ```yaml qa-scenario
 id: gpt54-thinking-visibility-switch
-title: GPT-5.5 thinking visibility switch
+title: GPT-5.4 thinking visibility switch
 surface: models
 coverage:
   primary:
     - models.thinking
   secondary:
     - runtime.reasoning-visibility
-objective: Verify GPT-5.5 can switch from disabled thinking to max thinking while reasoning display stays enabled.
+objective: Verify GPT-5.4 can switch from disabled thinking to medium thinking while reasoning display stays enabled.
 successCriteria:
-  - Live runs target openai/gpt-5.5, not a mini or pro variant.
+  - Live runs target openai/gpt-5.4, not a mini or pro variant.
   - The session enables reasoning display before the comparison turns.
   - The disabled-thinking turn returns its visible marker without a Reasoning-prefixed message.
-  - The max-thinking turn returns its visible marker and a separate Reasoning-prefixed message.
+  - The medium-thinking turn returns its visible marker and a separate Reasoning-prefixed message.
 docsRefs:
   - docs/tools/thinking.md
   - docs/help/testing.md
@@ -27,12 +27,12 @@ codeRefs:
   - extensions/qa-lab/src/providers/mock-openai/server.ts
 execution:
   kind: flow
-  summary: Toggle reasoning display and GPT-5.5 thinking between off/none and max/high, then verify visible reasoning only on the max turn.
+  summary: Toggle reasoning display and GPT-5.4 thinking between off/none and medium, then verify visible reasoning only on the medium turn.
   config:
     requiredLiveProvider: openai
-    requiredLiveModel: gpt-5.5
+    requiredLiveModel: gpt-5.4
     offDirective: /think off
-    maxDirective: /think max
+    maxDirective: /think medium
     reasoningDirective: /reasoning on
     conversationId: qa-thinking-visibility
     offPrompt: "QA thinking visibility check off: answer exactly THINKING-OFF-OK."
@@ -60,7 +60,7 @@ steps:
       - assert:
           expr: "env.providerMode !== 'live-frontier' || (selected?.provider === config.requiredLiveProvider && selected?.model === config.requiredLiveModel)"
           message:
-            expr: "`expected live GPT-5.5, got ${env.primaryModel}`"
+            expr: "`expected live GPT-5.4, got ${env.primaryModel}`"
       - call: state.addInboundMessage
         args:
           - conversation:
@@ -133,11 +133,11 @@ steps:
               value:
                 expr: "requests.find((request) => String(request.allInputText ?? '').includes(config.offPrompt))"
             - assert:
-                expr: "String(offRequest?.model ?? '').includes('gpt-5.5')"
+                expr: "String(offRequest?.model ?? '').includes('gpt-5.4')"
                 message:
-                  expr: "`expected GPT-5.5 off mock request, got ${String(offRequest?.model ?? '')}`"
+                  expr: "`expected GPT-5.4 off mock request, got ${String(offRequest?.model ?? '')}`"
     detailsExpr: "`off ack=${offAck.text}; off answer=${offAnswer.text}`"
-  - name: switches to max thinking
+  - name: switches to medium thinking
     actions:
       - call: state.addInboundMessage
         args:
@@ -153,10 +153,10 @@ steps:
         saveAs: maxAck
         args:
           - lambda:
-              expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Thinking level set to high/i.test(candidate.text)).at(-1)"
+              expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Thinking level set to medium/i.test(candidate.text)).at(-1)"
           - expr: liveTurnTimeoutMs(env, 20000)
     detailsExpr: "`max ack=${maxAck.text}`"
-  - name: verifies max thinking emits visible reasoning
+  - name: verifies medium thinking emits visible reasoning
     actions:
       - set: maxCursor
         value:
@@ -182,7 +182,7 @@ steps:
           message:
             expr: "`missing max reasoning message near answer: ${recentOutboundSummary(state, 6)}`"
     detailsExpr: "`reasoning=${maxReasoning.text}`"
-  - name: verifies max thinking completes the answer
+  - name: verifies medium thinking completes the answer
     actions:
       - call: waitForCondition
         saveAs: maxAnswer
@@ -204,8 +204,8 @@ steps:
               value:
                 expr: "requests.find((request) => String(request.allInputText ?? '').includes(config.maxPrompt))"
             - assert:
-                expr: "String(maxRequest?.model ?? '').includes('gpt-5.5')"
+                expr: "String(maxRequest?.model ?? '').includes('gpt-5.4')"
                 message:
-                  expr: "`expected GPT-5.5 mock request, got ${String(maxRequest?.model ?? '')}`"
+                  expr: "`expected GPT-5.4 mock request, got ${String(maxRequest?.model ?? '')}`"
     detailsExpr: "`answer=${maxAnswer.text}`"
 ```

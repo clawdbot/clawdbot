@@ -17,14 +17,31 @@ const KNOWN_EMPTY_FILE_PROBE_MODELS = new Set([
   "opencode-go/mimo-v2-omni",
   "opencode-go/mimo-v2-pro",
   "opencode-go/minimax-m2.5",
+  "openrouter/arcee-ai/trinity-mini",
+  "openrouter/deepseek/deepseek-chat-v3.1",
+  "openrouter/minimax/minimax-m2.5",
+  "openrouter/nvidia/llama-3.3-nemotron-super-49b-v1.5",
+  "openrouter/nvidia/nemotron-nano-12b-v2-vl:free",
+  "openrouter/qwen/qwen3.5-9b",
+  "openrouter/tngtech/deepseek-r1t2-chimera",
+  "openrouter/z-ai/glm-4.5",
+  "openrouter/z-ai/glm-4.6",
+  "openrouter/z-ai/glm-4.7",
+  "openrouter/z-ai/glm-4.7-flash",
+  "openrouter/z-ai/glm-5",
+  "openrouter/z-ai/glm-5.1",
 ]);
 const KNOWN_EMPTY_IMAGE_PROBE_MODELS = new Set([
+  "fireworks/accounts/fireworks/models/kimi-k2p5",
   "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "google/gemini-3.1-pro-preview-customtools",
+  "opencode/kimi-k2.6",
+  "opencode-go/mimo-v2-omni",
   "opencode-go/kimi-k2.5",
   "opencode-go/kimi-k2.6",
   "openrouter/amazon/nova-pro-v1",
+  "openrouter/bytedance-seed/seed-1.6",
 ]);
 
 function modelKey(model: Pick<Model<Api>, "id" | "provider">): string {
@@ -78,10 +95,8 @@ export function buildLiveModelFileProbeContext(params: { systemPrompt?: string }
       {
         role: "user",
         content:
-          "Read this file excerpt and reply with only the value after LIVE_FILE_TOKEN.\n\n" +
-          "File: live-model-probe.txt\n" +
-          "MIME: text/plain\n\n" +
-          `LIVE_FILE_TOKEN=${LIVE_MODEL_FILE_PROBE_TOKEN}`,
+          "Read this visible label and reply with only the value after LIVE_LABEL.\n\n" +
+          `LIVE_LABEL=${LIVE_MODEL_FILE_PROBE_TOKEN}`,
         timestamp: Date.now(),
       },
     ],
@@ -95,7 +110,7 @@ export function buildLiveModelFileProbeRetryContext(params: { systemPrompt?: str
       {
         role: "user",
         content:
-          "The file live-model-probe.txt contains exactly this token:\n\n" +
+          "The visible label value is:\n\n" +
           `${LIVE_MODEL_FILE_PROBE_TOKEN}\n\n` +
           `Reply with exactly ${LIVE_MODEL_FILE_PROBE_TOKEN}.`,
         timestamp: Date.now(),
@@ -113,7 +128,7 @@ export function buildLiveModelImageProbeContext(params: { systemPrompt?: string 
         content: [
           {
             type: "text",
-            text: "Reply with exactly the word OK if you received this image.",
+            text: "Reply with exactly OK.",
           },
           {
             type: "image",

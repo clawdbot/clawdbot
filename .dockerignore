@@ -8,6 +8,8 @@
 
 .bun-cache
 .bun
+.artifacts
+**/.artifacts
 .tmp
 **/.tmp
 .DS_Store

@@ -334,4 +334,54 @@ describe("maybeRepairLegacyCronStore", () => {
       threadId: "99",
     });
   });
+
+  it("rewrites stale managed dreaming jobs to the isolated agentTurn shape", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      {
+        id: "memory-dreaming",
+        name: "Memory Dreaming Promotion",
+        description:
+          "[managed-by=memory-core.short-term-promotion] Promote weighted short-term recalls.",
+        enabled: true,
+        createdAtMs: Date.parse("2026-04-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-04-01T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: {
+          kind: "systemEvent",
+          text: "__openclaw_memory_core_short_term_promotion_dream__",
+        },
+        state: {},
+      },
+    ]);
+
+    const noteSpy = noteMock;
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    const [job] = persisted.jobs;
+    expect(job).toMatchObject({
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "__openclaw_memory_core_short_term_promotion_dream__",
+        lightContext: true,
+      },
+      delivery: { mode: "none" },
+    });
+    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining("managed dreaming job"), "Cron");
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Rewrote 1 managed dreaming job"),
+      "Doctor changes",
+    );
+  });
 });

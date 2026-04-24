@@ -16,7 +16,7 @@ provider id `opencode-go` so upstream per-model routing stays correct.
 | Auth             | `OPENCODE_API_KEY`              |
 | Parent setup     | [OpenCode](/providers/opencode) |
 
-## Supported models
+## Built-in catalog
 
 OpenClaw sources the Go catalog from the bundled pi model registry. Run
 `openclaw models list --provider opencode-go` for the current model list.

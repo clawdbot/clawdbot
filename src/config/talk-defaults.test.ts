@@ -19,7 +19,7 @@ describe("talk silence timeout defaults", () => {
     const defaultsDescription = describeTalkSilenceTimeoutDefaults();
 
     expect(FIELD_HELP["talk.silenceTimeoutMs"]).toContain(defaultsDescription);
-    expect(readRepoFile("docs/gateway/configuration-reference.md")).toContain(defaultsDescription);
+    expect(readRepoFile("docs/gateway/config-agents.md")).toContain(defaultsDescription);
     expect(readRepoFile("docs/nodes/talk.md")).toContain(defaultsDescription);
   });
 

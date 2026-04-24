@@ -28,14 +28,12 @@ const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_GPT_54_NANO_MODEL_ID = "gpt-5.4-nano";
-const OPENAI_GPT_55_CONTEXT_TOKENS = 1_000_000;
 const OPENAI_GPT_55_PRO_CONTEXT_TOKENS = 1_000_000;
 const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_PRO_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_NANO_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
-const OPENAI_GPT_55_COST = { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 } as const;
 const OPENAI_GPT_55_PRO_COST = { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 } as const;
 const OPENAI_GPT_54_COST = { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 } as const;
 const OPENAI_GPT_54_PRO_COST = { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 } as const;
@@ -51,7 +49,6 @@ const OPENAI_GPT_54_NANO_COST = {
   cacheRead: 0.02,
   cacheWrite: 0,
 } as const;
-const OPENAI_GPT_55_TEMPLATE_MODEL_IDS = [OPENAI_GPT_54_MODEL_ID, "gpt-5.2"] as const;
 const OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
   OPENAI_GPT_54_PRO_MODEL_ID,
   OPENAI_GPT_54_MODEL_ID,
@@ -63,21 +60,21 @@ const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const
 const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = ["gpt-5-mini"] as const;
 const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = ["gpt-5-nano", "gpt-5-mini"] as const;
 const OPENAI_XHIGH_MODEL_IDS = [
-  "gpt-5.5",
-  "gpt-5.5-pro",
-  "gpt-5.4",
-  "gpt-5.4-pro",
-  "gpt-5.4-mini",
-  "gpt-5.4-nano",
+  OPENAI_GPT_55_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID,
+  OPENAI_GPT_54_MODEL_ID,
+  OPENAI_GPT_54_PRO_MODEL_ID,
+  OPENAI_GPT_54_MINI_MODEL_ID,
+  OPENAI_GPT_54_NANO_MODEL_ID,
   "gpt-5.2",
 ] as const;
 const OPENAI_MODERN_MODEL_IDS = [
-  "gpt-5.5",
-  "gpt-5.5-pro",
-  "gpt-5.4",
-  "gpt-5.4-pro",
-  "gpt-5.4-mini",
-  "gpt-5.4-nano",
+  OPENAI_GPT_55_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID,
+  OPENAI_GPT_54_MODEL_ID,
+  OPENAI_GPT_54_PRO_MODEL_ID,
+  OPENAI_GPT_54_MINI_MODEL_ID,
+  OPENAI_GPT_54_NANO_MODEL_ID,
   "gpt-5.2",
 ] as const;
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
@@ -119,19 +116,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   let templateIds: readonly string[];
   let patch: Partial<ProviderRuntimeModel>;
-  if (lower === OPENAI_GPT_55_MODEL_ID) {
-    templateIds = OPENAI_GPT_55_TEMPLATE_MODEL_IDS;
-    patch = {
-      api: "openai-responses",
-      provider: PROVIDER_ID,
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: OPENAI_GPT_55_COST,
-      contextWindow: OPENAI_GPT_55_CONTEXT_TOKENS,
-      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-    };
-  } else if (lower === OPENAI_GPT_55_PRO_MODEL_ID) {
+  if (lower === OPENAI_GPT_55_PRO_MODEL_ID) {
     templateIds = OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS;
     patch = {
       api: "openai-responses",
@@ -273,7 +258,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
       if (ctx.provider !== PROVIDER_ID || ctx.listProfileIds("openai-codex").length === 0) {
         return undefined;
       }
-      return 'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.';
+      return 'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.5, or set OPENAI_API_KEY for direct OpenAI API access.';
     },
     suppressBuiltInModel: (ctx) => {
       if (
@@ -288,11 +273,6 @@ export function buildOpenAIProvider(): ProviderPlugin {
       };
     },
     augmentModelCatalog: (ctx) => {
-      const openAiGpt55Template = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_55_TEMPLATE_MODEL_IDS,
-      });
       const openAiGpt55ProTemplate = findCatalogTemplate({
         entries: ctx.entries,
         providerId: PROVIDER_ID,
@@ -319,12 +299,6 @@ export function buildOpenAIProvider(): ProviderPlugin {
         templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
       });
       return [
-        buildOpenAISyntheticCatalogEntry(openAiGpt55Template, {
-          id: OPENAI_GPT_55_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
-          contextWindow: OPENAI_GPT_55_CONTEXT_TOKENS,
-        }),
         buildOpenAISyntheticCatalogEntry(openAiGpt55ProTemplate, {
           id: OPENAI_GPT_55_PRO_MODEL_ID,
           reasoning: true,

@@ -158,4 +158,25 @@ describe("createOpenAIThinkingLevelWrapper", () => {
       expect(payloads[0]?.reasoning).toEqual({ effort: level });
     }
   });
+
+  it.each([
+    {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5.5",
+    },
+    {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.5",
+    },
+  ] as const)("preserves xhigh for $provider/$id", (model) => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "high" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "xhigh");
+    void wrapped(model as Model<typeof model.api>, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
+  });
 });

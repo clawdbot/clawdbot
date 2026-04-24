@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
-import type { CliBackendAuthEpochMode, CliBundleMcpMode } from "../plugins/types.js";
+import type {
+  CliBackendAuthEpochMode,
+  CliBackendNormalizeConfigContext,
+  CliBundleMcpMode,
+} from "../plugins/types.js";
 import {
   __testing as cliBackendsTesting,
   resolveCliBackendConfig,
@@ -27,7 +31,10 @@ function createBackendEntry(params: {
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   prepareExecution?: () => Promise<null>;
-  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+  normalizeConfig?: (
+    config: CliBackendConfig,
+    context?: CliBackendNormalizeConfigContext,
+  ) => CliBackendConfig;
 }) {
   return {
     pluginId: params.pluginId,
@@ -111,12 +118,33 @@ const NORMALIZED_CLAUDE_FALLBACK_RESUME_ARGS = [
   "user",
 ];
 
-function normalizeTestClaudeArgs(args?: string[]): string[] | undefined {
+function isTestYoloConfig(context?: CliBackendNormalizeConfigContext): boolean {
+  const agentExec = context?.agentId
+    ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
+    : undefined;
+  const exec = agentExec ?? context?.config?.tools?.exec;
+  return (exec?.security ?? "full") === "full" && (exec?.ask ?? "off") === "off";
+}
+
+function normalizeTestPermissionMode(context?: CliBackendNormalizeConfigContext): {
+  mode?: string;
+  overrideExisting: boolean;
+} {
+  return isTestYoloConfig(context)
+    ? { mode: "bypassPermissions", overrideExisting: false }
+    : { overrideExisting: false };
+}
+
+function normalizeTestClaudeArgs(
+  args: string[] | undefined,
+  permission: { mode?: string; overrideExisting: boolean },
+): string[] | undefined {
   if (!args) {
-    return args;
+    return permission.mode ? ["--permission-mode", permission.mode] : args;
   }
   const normalized: string[] = [];
   let hasSettingSources = false;
+  let hasPermissionMode = false;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--dangerously-skip-permissions") {
@@ -139,7 +167,10 @@ function normalizeTestClaudeArgs(args?: string[]): string[] | undefined {
     if (arg === "--permission-mode") {
       const maybeValue = args[i + 1];
       if (maybeValue && !maybeValue.startsWith("-")) {
-        normalized.push(arg, maybeValue);
+        hasPermissionMode = true;
+        if (!permission.overrideExisting) {
+          normalized.push(arg, maybeValue);
+        }
         i += 1;
       }
       continue;
@@ -147,7 +178,10 @@ function normalizeTestClaudeArgs(args?: string[]): string[] | undefined {
     if (arg.startsWith("--permission-mode=")) {
       const maybeValue = arg.slice("--permission-mode=".length).trim();
       if (maybeValue.length > 0 && !maybeValue.startsWith("-")) {
-        normalized.push(`--permission-mode=${maybeValue}`);
+        hasPermissionMode = true;
+        if (!permission.overrideExisting) {
+          normalized.push(`--permission-mode=${maybeValue}`);
+        }
       }
       continue;
     }
@@ -156,14 +190,21 @@ function normalizeTestClaudeArgs(args?: string[]): string[] | undefined {
   if (!hasSettingSources) {
     normalized.push("--setting-sources", "user");
   }
+  if (permission.mode && (!hasPermissionMode || permission.overrideExisting)) {
+    normalized.push("--permission-mode", permission.mode);
+  }
   return normalized;
 }
 
-function normalizeTestClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+function normalizeTestClaudeBackendConfig(
+  config: CliBackendConfig,
+  context?: CliBackendNormalizeConfigContext,
+): CliBackendConfig {
+  const permission = normalizeTestPermissionMode(context);
   return {
     ...config,
-    args: normalizeTestClaudeArgs(config.args),
-    resumeArgs: normalizeTestClaudeArgs(config.resumeArgs),
+    args: normalizeTestClaudeArgs(config.args, permission),
+    resumeArgs: normalizeTestClaudeArgs(config.resumeArgs, permission),
   };
 }
 
@@ -186,6 +227,8 @@ beforeEach(() => {
           "--verbose",
           "--setting-sources",
           "user",
+          "--allowedTools",
+          "mcp__openclaw__*",
         ],
         resumeArgs: [
           "stream-json",
@@ -193,11 +236,15 @@ beforeEach(() => {
           "--verbose",
           "--setting-sources",
           "user",
+          "--allowedTools",
+          "mcp__openclaw__*",
           "--resume",
           "{sessionId}",
         ],
         output: "jsonl",
         input: "stdin",
+        imageArg: "@",
+        imagePathScope: "workspace",
         clearEnv: [
           "ANTHROPIC_API_KEY",
           "ANTHROPIC_API_KEY_OLD",
@@ -230,9 +277,6 @@ beforeEach(() => {
       id: "codex-cli",
       bundleMcp: true,
       bundleMcpMode: "codex-config-overrides",
-      defaultAuthProfileId: "openai-codex:default",
-      authEpochMode: "profile-only",
-      prepareExecution: async () => null,
       config: {
         command: "codex",
         args: [
@@ -283,8 +327,16 @@ beforeEach(() => {
       bundleMcpMode: "gemini-system-settings",
       config: {
         command: "gemini",
-        args: ["--output-format", "json", "--prompt", "{prompt}"],
-        resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"],
+        args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+        resumeArgs: [
+          "--skip-trust",
+          "--resume",
+          "{sessionId}",
+          "--output-format",
+          "json",
+          "--prompt",
+          "{prompt}",
+        ],
         imageArg: "@",
         imagePathScope: "workspace",
         modelArg: "--model",
@@ -413,7 +465,7 @@ describe("resolveCliBackendLiveTest", () => {
 });
 
 describe("resolveCliBackendConfig claude-cli defaults", () => {
-  it("keeps user-only setting sources without forcing a permission-mode default", () => {
+  it("derives bypassPermissions from OpenClaw's default YOLO exec policy", () => {
     const resolved = resolveCliBackendConfig("claude-cli");
 
     expect(resolved).not.toBeNull();
@@ -425,16 +477,100 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.args).toContain("--verbose");
     expect(resolved?.config.args).toContain("--setting-sources");
     expect(resolved?.config.args).toContain("user");
-    expect(resolved?.config.args).not.toContain("--permission-mode");
+    expect(resolved?.config.args).toContain("--allowedTools");
+    expect(resolved?.config.args).toContain("mcp__openclaw__*");
+    expect(resolved?.config.args).toContain("--permission-mode");
+    expect(resolved?.config.args).toContain("bypassPermissions");
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
     expect(resolved?.config.input).toBe("stdin");
+    expect(resolved?.config.imageArg).toBe("@");
+    expect(resolved?.config.imagePathScope).toBe("workspace");
     expect(resolved?.config.resumeArgs).toContain("stream-json");
     expect(resolved?.config.resumeArgs).toContain("--include-partial-messages");
     expect(resolved?.config.resumeArgs).toContain("--verbose");
     expect(resolved?.config.resumeArgs).toContain("--setting-sources");
     expect(resolved?.config.resumeArgs).toContain("user");
-    expect(resolved?.config.resumeArgs).not.toContain("--permission-mode");
+    expect(resolved?.config.resumeArgs).toContain("--allowedTools");
+    expect(resolved?.config.resumeArgs).toContain("mcp__openclaw__*");
+    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
+    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("keeps Claude permission mode unset when OpenClaw exec policy is not YOLO", () => {
+    const resolved = resolveCliBackendConfig("claude-cli", {
+      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+    });
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.args).not.toContain("--permission-mode");
+    expect(resolved?.config.args).not.toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).not.toContain("--permission-mode");
+    expect(resolved?.config.resumeArgs).not.toContain("bypassPermissions");
+  });
+
+  it("derives Claude permission mode from per-agent exec policy when an agent id is known", () => {
+    const cfg = {
+      tools: { exec: { security: "full", ask: "off" } },
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            tools: { exec: { security: "allowlist", ask: "on-miss" } },
+          },
+          {
+            id: "builder",
+            tools: { exec: { security: "full", ask: "off" } },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const reviewer = resolveCliBackendConfig("claude-cli", cfg, { agentId: "reviewer" });
+    const builder = resolveCliBackendConfig("claude-cli", cfg, { agentId: "builder" });
+
+    expect(reviewer?.config.args).not.toContain("--permission-mode");
+    expect(reviewer?.config.resumeArgs).not.toContain("--permission-mode");
+    expect(builder?.config.args).toContain("--permission-mode");
+    expect(builder?.config.args).toContain("bypassPermissions");
+    expect(builder?.config.resumeArgs).toContain("--permission-mode");
+    expect(builder?.config.resumeArgs).toContain("bypassPermissions");
+  });
+
+  it("uses existing exec policy and raw Claude args as permission overrides", () => {
+    const safe = resolveCliBackendConfig("claude-cli", {
+      tools: { exec: { security: "full", ask: "off" } },
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--permission-mode", "default"],
+              resumeArgs: ["-p", "--permission-mode=default", "--resume", "{sessionId}"],
+            },
+          },
+        },
+      },
+    });
+    const yolo = resolveCliBackendConfig("claude-cli", {
+      tools: { exec: { security: "deny", ask: "always" } },
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--permission-mode", "bypassPermissions"],
+              resumeArgs: ["-p", "--permission-mode=bypassPermissions", "--resume", "{sessionId}"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(safe?.config.args).toContain("default");
+    expect(safe?.config.args).not.toContain("bypassPermissions");
+    expect(yolo?.config.args).toContain("--permission-mode");
+    expect(yolo?.config.args).toContain("bypassPermissions");
   });
 
   it("retains default claude safety args when only command is overridden", () => {
@@ -456,10 +592,12 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.command).toBe("/usr/local/bin/claude");
     expect(resolved?.config.args).toContain("--setting-sources");
     expect(resolved?.config.args).toContain("user");
-    expect(resolved?.config.args).not.toContain("--permission-mode");
+    expect(resolved?.config.args).toContain("--permission-mode");
+    expect(resolved?.config.args).toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).toContain("--setting-sources");
     expect(resolved?.config.resumeArgs).toContain("user");
-    expect(resolved?.config.resumeArgs).not.toContain("--permission-mode");
+    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
+    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
     expect(resolved?.config.env).not.toHaveProperty("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST");
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
@@ -473,7 +611,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_USE_COWORK_PLUGINS");
   });
 
-  it("drops legacy skip-permissions overrides without inventing bypassPermissions", () => {
+  it("drops legacy skip-permissions overrides without inventing bypassPermissions under safe policy", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -493,6 +631,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
           },
         },
       },
+      tools: { exec: { security: "allowlist", ask: "on-miss" } },
     } satisfies OpenClawConfig;
 
     const resolved = resolveCliBackendConfig("claude-cli", cfg);
@@ -590,11 +729,14 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
   });
 
   it("falls back to user-only setting sources when a custom override leaves the flag without a value", () => {
-    const cfg = createClaudeCliOverrideConfig({
-      command: "claude",
-      args: ["-p", "--setting-sources", "--output-format", "stream-json"],
-      resumeArgs: ["-p", "--setting-sources", "--resume", "{sessionId}"],
-    });
+    const cfg = {
+      ...createClaudeCliOverrideConfig({
+        command: "claude",
+        args: ["-p", "--setting-sources", "--output-format", "stream-json"],
+        resumeArgs: ["-p", "--setting-sources", "--resume", "{sessionId}"],
+      }),
+      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+    } satisfies OpenClawConfig;
 
     const resolved = resolveCliBackendConfig("claude-cli", cfg);
 
@@ -603,12 +745,15 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toEqual(NORMALIZED_CLAUDE_FALLBACK_RESUME_ARGS);
   });
 
-  it("drops malformed permission-mode overrides without adding bypassPermissions", () => {
-    const cfg = createClaudeCliOverrideConfig({
-      command: "claude",
-      args: ["-p", "--permission-mode", "--output-format", "stream-json"],
-      resumeArgs: ["-p", "--permission-mode=--resume", "--resume", "{sessionId}"],
-    });
+  it("drops malformed permission-mode overrides without adding bypassPermissions under safe policy", () => {
+    const cfg = {
+      ...createClaudeCliOverrideConfig({
+        command: "claude",
+        args: ["-p", "--permission-mode", "--output-format", "stream-json"],
+        resumeArgs: ["-p", "--permission-mode=--resume", "--resume", "{sessionId}"],
+      }),
+      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+    } satisfies OpenClawConfig;
 
     const resolved = resolveCliBackendConfig("claude-cli", cfg);
 
@@ -617,7 +762,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toEqual(NORMALIZED_CLAUDE_FALLBACK_RESUME_ARGS);
   });
 
-  it("leaves permission-mode unset when custom args omit it", () => {
+  it("leaves permission-mode unset when custom args omit it under safe policy", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -637,6 +782,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
           },
         },
       },
+      tools: { exec: { security: "allowlist", ask: "on-miss" } },
     } satisfies OpenClawConfig;
 
     const resolved = resolveCliBackendConfig("claude-cli", cfg);
@@ -714,6 +860,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "json",
       "--setting-sources",
       "user",
+      "--permission-mode",
+      "bypassPermissions",
     ]);
     expect(resolved?.config.resumeArgs).toEqual([
       "-p",
@@ -723,6 +871,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "{sessionId}",
       "--setting-sources",
       "user",
+      "--permission-mode",
+      "bypassPermissions",
     ]);
     expect(resolved?.config.systemPromptArg).toBe("--append-system-prompt");
     expect(resolved?.config.systemPromptWhen).toBe("first");
@@ -740,8 +890,15 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("gemini-system-settings");
-    expect(resolved?.config.args).toEqual(["--output-format", "json", "--prompt", "{prompt}"]);
+    expect(resolved?.config.args).toEqual([
+      "--skip-trust",
+      "--output-format",
+      "json",
+      "--prompt",
+      "{prompt}",
+    ]);
     expect(resolved?.config.resumeArgs).toEqual([
+      "--skip-trust",
       "--resume",
       "{sessionId}",
       "--output-format",
@@ -761,9 +918,9 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("codex-config-overrides");
-    expect(resolved?.defaultAuthProfileId).toBe("openai-codex:default");
-    expect(resolved?.authEpochMode).toBe("profile-only");
-    expect(typeof resolved?.prepareExecution).toBe("function");
+    expect(resolved?.defaultAuthProfileId).toBeUndefined();
+    expect(resolved?.authEpochMode).toBeUndefined();
+    expect(resolved?.prepareExecution).toBeUndefined();
     expect(resolved?.config.systemPromptFileConfigArg).toBe("-c");
     expect(resolved?.config.systemPromptFileConfigKey).toBe("model_instructions_file");
     expect(resolved?.config.systemPromptWhen).toBe("first");

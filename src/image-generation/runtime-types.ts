@@ -5,7 +5,10 @@ import type {
   GeneratedImageAsset,
   ImageGenerationIgnoredOverride,
   ImageGenerationNormalization,
+  ImageGenerationOutputFormat,
   ImageGenerationProvider,
+  ImageGenerationProviderOptions,
+  ImageGenerationQuality,
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "./types.js";
@@ -20,7 +23,12 @@ export type GenerateImageParams = {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  quality?: ImageGenerationQuality;
+  outputFormat?: ImageGenerationOutputFormat;
   inputImages?: ImageGenerationSourceImage[];
+  /** Optional per-request provider timeout in milliseconds. */
+  timeoutMs?: number;
+  providerOptions?: ImageGenerationProviderOptions;
 };
 
 export type GenerateImageRuntimeResult = {

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { saveAuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { resolveAcpxPluginConfig } from "./config.js";
@@ -28,10 +27,6 @@ function restoreEnv(name: keyof typeof previousEnv): void {
   }
 }
 
-function unquoteCommandPath(command: string): string {
-  return command.replace(/^'|'$/g, "").replace(/'\\''/g, "'");
-}
-
 afterEach(async () => {
   restoreEnv("CODEX_HOME");
   restoreEnv("OPENCLAW_AGENT_DIR");
@@ -42,28 +37,10 @@ afterEach(async () => {
 });
 
 describe("prepareAcpxCodexAuthConfig", () => {
-  it("wraps built-in Codex ACP with an isolated CODEX_HOME from canonical OpenClaw OAuth", async () => {
+  it("does not synthesize a Codex ACP auth home from canonical OpenClaw OAuth", async () => {
     const root = await makeTempDir();
     const agentDir = path.join(root, "agent");
     const stateDir = path.join(root, "state");
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai-codex:default": {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-            accountId: "acct-123",
-            idToken: "id-token",
-          },
-        },
-      },
-      agentDir,
-      { filterExternalAuthProfiles: false },
-    );
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     delete process.env.PI_CODING_AGENT_DIR;
 
@@ -76,44 +53,16 @@ describe("prepareAcpxCodexAuthConfig", () => {
       stateDir,
     });
 
-    const wrapperPath = unquoteCommandPath(resolved.agents.codex ?? "");
-    expect(wrapperPath).toBe(path.join(stateDir, "acpx", "codex-acp-wrapper.mjs"));
-    await expect(fs.access(wrapperPath)).resolves.toBeUndefined();
-
-    const bridgeRoot = path.join(agentDir, "acp-auth", "codex");
-    const bridgeDirs = await fs.readdir(bridgeRoot);
-    expect(bridgeDirs).toHaveLength(1);
-    const bridgeDir = bridgeDirs[0];
-    if (!bridgeDir) {
-      throw new Error("expected one Codex auth bridge directory");
-    }
-    const isolatedAuthPath = path.join(bridgeRoot, bridgeDir, "auth.json");
-    const copiedAuth = JSON.parse(await fs.readFile(isolatedAuthPath, "utf8")) as {
-      auth_mode?: string;
-      tokens?: Record<string, unknown>;
-    };
-    expect(copiedAuth).toEqual({
-      auth_mode: "chatgpt",
-      tokens: {
-        id_token: "id-token",
-        access_token: "access-token",
-        refresh_token: "refresh-token",
-        account_id: "acct-123",
-      },
-      last_refresh: expect.any(String),
-    });
-    expect((await fs.stat(isolatedAuthPath)).mode & 0o777).toBe(0o600);
+    expect(resolved.agents.codex).toBeUndefined();
     await expect(
-      fs.access(path.join(agentDir, "acp-auth", "codex-source", "auth.json")),
+      fs.access(path.join(stateDir, "acpx", "codex-acp-wrapper.mjs")),
     ).rejects.toMatchObject({ code: "ENOENT" });
-
-    const wrapper = await fs.readFile(wrapperPath, "utf8");
-    expect(wrapper).toContain(`CODEX_HOME: ${JSON.stringify(path.dirname(isolatedAuthPath))}`);
-    expect(wrapper).toContain("for (const key of [])");
-    expect(wrapper).not.toContain("access-token");
+    await expect(
+      fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("does not copy source Codex auth when canonical OpenClaw OAuth is unavailable", async () => {
+  it("does not copy source Codex auth", async () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
     const agentDir = path.join(root, "agent");
@@ -138,6 +87,9 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(resolved.agents.codex).toBeUndefined();
     await expect(
       fs.access(path.join(agentDir, "acp-auth", "codex-source", "auth.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 

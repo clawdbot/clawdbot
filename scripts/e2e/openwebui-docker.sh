@@ -54,6 +54,10 @@ docker run -d \
   --network "$NET_NAME" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
   -e "OPENCLAW_OPENWEBUI_MODEL=$MODEL" \
+  -e "OPENCLAW_SKIP_CHANNELS=1" \
+  -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
+  -e "OPENCLAW_SKIP_CRON=1" \
+  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
   -e OPENAI_API_KEY \
   ${OPENAI_BASE_URL_VALUE:+-e OPENAI_BASE_URL} \
   "$IMAGE_NAME" \
@@ -110,7 +114,7 @@ EOF
 
 echo "Waiting for gateway HTTP surface..."
 gateway_ready=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 240); do
   if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
     break
   fi
@@ -128,6 +132,10 @@ done
 
 if [ "$gateway_ready" -ne 1 ]; then
   echo "Gateway failed to start"
+  docker inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
+    docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
+  fi
   docker logs "$GW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi

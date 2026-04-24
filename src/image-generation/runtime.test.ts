@@ -26,6 +26,7 @@ describe("image-generation runtime", () => {
   it("generates images through the active image-generation provider", async () => {
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
+    let seenTimeoutMs: number | undefined;
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("image-plugin/img-v1");
     const provider: ImageGenerationProvider = {
       id: "image-plugin",
@@ -33,8 +34,9 @@ describe("image-generation runtime", () => {
         generate: {},
         edit: { enabled: false },
       },
-      async generateImage(req: { authStore?: unknown }) {
+      async generateImage(req: { authStore?: unknown; timeoutMs?: number }) {
         seenAuthStore = req.authStore;
+        seenTimeoutMs = req.timeoutMs;
         return {
           images: [
             {
@@ -60,12 +62,14 @@ describe("image-generation runtime", () => {
       prompt: "draw a cat",
       agentDir: "/tmp/agent",
       authStore,
+      timeoutMs: 12_345,
     });
 
     expect(result.provider).toBe("image-plugin");
     expect(result.model).toBe("img-v1");
     expect(result.attempts).toEqual([]);
     expect(seenAuthStore).toEqual(authStore);
+    expect(seenTimeoutMs).toBe(12_345);
     expect(result.images).toEqual([
       {
         buffer: Buffer.from("png-bytes"),
@@ -214,6 +218,128 @@ describe("image-generation runtime", () => {
     expect(result.ignoredOverrides).toEqual([
       { key: "aspectRatio", value: "1:1" },
       { key: "resolution", value: "2K" },
+    ]);
+  });
+
+  it("filters image output hints by provider capabilities", async () => {
+    let seenRequest:
+      | {
+          quality?: string;
+          outputFormat?: string;
+          providerOptions?: unknown;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/gpt-image-2");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "openai",
+      capabilities: {
+        generate: {
+          supportsSize: true,
+        },
+        edit: {
+          enabled: true,
+          supportsSize: true,
+        },
+        output: {
+          qualities: ["low", "medium", "high", "auto"],
+          formats: ["png", "jpeg", "webp"],
+        },
+      },
+      async generateImage(req) {
+        seenRequest = {
+          quality: req.quality,
+          outputFormat: req.outputFormat,
+          providerOptions: req.providerOptions,
+        };
+        return {
+          images: [{ buffer: Buffer.from("jpeg-bytes"), mimeType: "image/jpeg" }],
+        };
+      },
+    });
+
+    const result = await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "openai/gpt-image-2" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cheap preview",
+      quality: "low",
+      outputFormat: "jpeg",
+      providerOptions: {
+        openai: {
+          background: "opaque",
+          moderation: "low",
+          outputCompression: 60,
+          user: "end-user-42",
+        },
+      },
+    });
+
+    expect(seenRequest).toEqual({
+      quality: "low",
+      outputFormat: "jpeg",
+      providerOptions: {
+        openai: {
+          background: "opaque",
+          moderation: "low",
+          outputCompression: 60,
+          user: "end-user-42",
+        },
+      },
+    });
+    expect(result.ignoredOverrides).toEqual([]);
+  });
+
+  it("drops unsupported image output hints and reports them", async () => {
+    let seenRequest:
+      | {
+          quality?: string;
+          outputFormat?: string;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("vydra/grok-imagine");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "vydra",
+      capabilities: {
+        generate: {},
+        edit: {
+          enabled: false,
+        },
+      },
+      async generateImage(req) {
+        seenRequest = {
+          quality: req.quality,
+          outputFormat: req.outputFormat,
+        };
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        };
+      },
+    });
+
+    const result = await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "vydra/grok-imagine" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      quality: "low",
+      outputFormat: "jpeg",
+    });
+
+    expect(seenRequest).toEqual({
+      quality: undefined,
+      outputFormat: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "quality", value: "low" },
+      { key: "outputFormat", value: "jpeg" },
     ]);
   });
 

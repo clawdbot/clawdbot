@@ -52,28 +52,19 @@ docker run --rm \
     }
     trap cleanup_inner EXIT
     trap dump_gateway_log_on_error ERR
-    for _ in \$(seq 1 80); do
-      if node --input-type=module -e '
-        import net from \"node:net\";
-        const socket = net.createConnection({ host: \"127.0.0.1\", port: $PORT });
-        const timeout = setTimeout(() => {
-          socket.destroy();
-          process.exit(1);
-        }, 400);
-        socket.on(\"connect\", () => {
-          clearTimeout(timeout);
-          socket.end();
-          process.exit(0);
-        });
-        socket.on(\"error\", () => {
-          clearTimeout(timeout);
-          process.exit(1);
-        });
-      ' >/dev/null 2>&1; then
+    gateway_ready=0
+    for _ in \$(seq 1 160); do
+      if grep -q '\[gateway\] ready' /tmp/mcp-channels-gateway.log 2>/dev/null; then
+        gateway_ready=1
         break
       fi
       sleep 0.25
     done
+    if [ \"\$gateway_ready\" -ne 1 ]; then
+      echo \"Gateway did not become ready\"
+      tail -n 120 /tmp/mcp-channels-gateway.log 2>/dev/null || true
+      exit 1
+    fi
     node --import tsx scripts/e2e/mcp-channels-docker-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}

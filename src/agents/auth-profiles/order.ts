@@ -1,17 +1,17 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import {
   evaluateStoredCredentialEligibility,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
-import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
+import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import type { AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
   isProfileInCooldown,
   resolveProfileUnusableUntil,
-} from "./usage.js";
+} from "./usage-state.js";
 
 export type AuthProfileEligibilityReasonCode =
   | AuthCredentialReasonCode
@@ -78,8 +78,11 @@ export function resolveAuthProfileOrder(params: {
   // get a fresh error count and are not immediately re-penalized on the
   // next transient failure. See #3604.
   clearExpiredCooldowns(store, now);
-  const storedOrder = findNormalizedProviderValue(store.order, providerKey);
-  const configuredOrder = findNormalizedProviderValue(cfg?.auth?.order, providerKey);
+  const storedOrder =
+    resolveAuthOrder(store.order, providerAuthKey) ?? resolveAuthOrder(store.order, providerKey);
+  const configuredOrder =
+    resolveAuthOrder(cfg?.auth?.order, providerAuthKey) ??
+    resolveAuthOrder(cfg?.auth?.order, providerKey);
   const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
@@ -159,6 +162,13 @@ export function resolveAuthProfileOrder(params: {
   }
 
   return sorted;
+}
+
+function resolveAuthOrder(
+  order: Record<string, string[]> | undefined,
+  provider: string,
+): string[] | undefined {
+  return findNormalizedProviderValue(order, provider);
 }
 
 function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {

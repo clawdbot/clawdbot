@@ -6,7 +6,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
-  loadDreamingNarrativeTranscriptPathSetForAgent,
+  loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
@@ -190,6 +190,8 @@ type DailySnippetChunk = {
   endLine: number;
   snippet: string;
 };
+
+const REM_REFLECTION_TAG_BLACKLIST = new Set(["assistant", "user", "system", "subagent", "the"]);
 
 function buildDailyChunkSnippet(
   heading: string | null,
@@ -710,21 +712,26 @@ async function collectSessionIngestionBatches(params: {
     agentId: string;
     absolutePath: string;
     generatedByDreamingNarrative: boolean;
+    generatedByCronRun: boolean;
     sessionPath: string;
   }> = [];
   for (const agentId of agentIds) {
     const files = await listSessionFilesForAgent(agentId);
-    const dreamingTranscriptPaths =
+    const transcriptClassification =
       files.length > 0
-        ? loadDreamingNarrativeTranscriptPathSetForAgent(agentId)
-        : new Set<string>();
+        ? loadSessionTranscriptClassificationForAgent(agentId)
+        : {
+            dreamingNarrativeTranscriptPaths: new Set<string>(),
+            cronRunTranscriptPaths: new Set<string>(),
+          };
     for (const absolutePath of files) {
+      const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
       sessionFiles.push({
         agentId,
         absolutePath,
-        generatedByDreamingNarrative: dreamingTranscriptPaths.has(
-          normalizeSessionTranscriptPathForComparison(absolutePath),
-        ),
+        generatedByDreamingNarrative:
+          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
+        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
         sessionPath: sessionPathForFile(absolutePath),
       });
     }
@@ -783,11 +790,12 @@ async function collectSessionIngestionBatches(params: {
 
     const entry = await buildSessionEntry(file.absolutePath, {
       generatedByDreamingNarrative: file.generatedByDreamingNarrative,
+      generatedByCronRun: file.generatedByCronRun,
     });
     if (!entry) {
       continue;
     }
-    if (entry.generatedByDreamingNarrative) {
+    if (entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
       nextFiles[stateKey] = {
         mtimeMs: fingerprint.mtimeMs,
         size: fingerprint.size,
@@ -1414,7 +1422,7 @@ function buildRemReflections(
   const tagStats = new Map<string, { count: number; evidence: Set<string> }>();
   for (const entry of entries) {
     for (const tag of entry.conceptTags) {
-      if (!tag) {
+      if (!tag || REM_REFLECTION_TAG_BLACKLIST.has(tag.toLowerCase())) {
         continue;
       }
       const stat = tagStats.get(tag) ?? { count: 0, evidence: new Set<string>() };
@@ -1493,6 +1501,7 @@ async function runLightDreaming(params: {
   config: LightDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
@@ -1553,14 +1562,27 @@ async function runLightDreaming(params: {
       snippets: capped.map((e) => e.snippet).filter(Boolean),
       ...(themes.length > 0 ? { themes } : {}),
     };
-    await generateAndAppendDreamNarrative({
-      subagent: params.subagent,
-      workspaceDir: params.workspaceDir,
-      data,
-      nowMs,
-      timezone: params.config.timezone,
-      logger: params.logger,
-    });
+    if (params.detachNarratives) {
+      queueMicrotask(() => {
+        void generateAndAppendDreamNarrative({
+          subagent: params.subagent!,
+          workspaceDir: params.workspaceDir,
+          data,
+          nowMs,
+          timezone: params.config.timezone,
+          logger: params.logger,
+        }).catch(() => undefined);
+      });
+    } else {
+      await generateAndAppendDreamNarrative({
+        subagent: params.subagent,
+        workspaceDir: params.workspaceDir,
+        data,
+        nowMs,
+        timezone: params.config.timezone,
+        logger: params.logger,
+      });
+    }
   }
 }
 
@@ -1570,6 +1592,7 @@ async function runRemDreaming(params: {
   config: RemDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
@@ -1632,14 +1655,27 @@ async function runRemDreaming(params: {
               .filter(Boolean),
       ...(themes.length > 0 ? { themes } : {}),
     };
-    await generateAndAppendDreamNarrative({
-      subagent: params.subagent,
-      workspaceDir: params.workspaceDir,
-      data,
-      nowMs,
-      timezone: params.config.timezone,
-      logger: params.logger,
-    });
+    if (params.detachNarratives) {
+      queueMicrotask(() => {
+        void generateAndAppendDreamNarrative({
+          subagent: params.subagent!,
+          workspaceDir: params.workspaceDir,
+          data,
+          nowMs,
+          timezone: params.config.timezone,
+          logger: params.logger,
+        }).catch(() => undefined);
+      });
+    } else {
+      await generateAndAppendDreamNarrative({
+        subagent: params.subagent,
+        workspaceDir: params.workspaceDir,
+        data,
+        nowMs,
+        timezone: params.config.timezone,
+        logger: params.logger,
+      });
+    }
   }
 }
 
@@ -1660,6 +1696,7 @@ export async function runDreamingSweepPhases(params: {
   cfg?: DreamingHostConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<void> {
   // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
@@ -1677,10 +1714,14 @@ export async function runDreamingSweepPhases(params: {
       logger: params.logger,
       subagent: params.subagent,
       nowMs: sweepNowMs,
+      detachNarratives: params.detachNarratives,
     });
     // Defensive cleanup: ensure the light-phase narrative session is deleted even if
     // generateAndAppendDreamNarrative's primary cleanup was skipped due to an error.
-    if (params.subagent) {
+    // Skip when narratives are detached: the queued subagent run hasn't read the
+    // session yet, so eager cleanup would race the writer and silently drop the
+    // diary entry. The narrative function does its own cleanup in finally{}.
+    if (params.subagent && !params.detachNarratives) {
       const lightSessionKey = buildNarrativeSessionKey({
         workspaceDir: params.workspaceDir,
         phase: "light",
@@ -1702,9 +1743,11 @@ export async function runDreamingSweepPhases(params: {
       logger: params.logger,
       subagent: params.subagent,
       nowMs: sweepNowMs,
+      detachNarratives: params.detachNarratives,
     });
     // Defensive cleanup: ensure the REM-phase narrative session is deleted.
-    if (params.subagent) {
+    // Skip when narratives are detached (see light-phase comment above).
+    if (params.subagent && !params.detachNarratives) {
       const remSessionKey = buildNarrativeSessionKey({
         workspaceDir: params.workspaceDir,
         phase: "rem",
@@ -1777,6 +1820,7 @@ export function registerMemoryDreamingPhases(_api: OpenClawPluginApi): void {
 
 export const __testing = {
   runPhaseIfTriggered,
+  previewRemDreaming,
   constants: {
     LIGHT_SLEEP_EVENT_TEXT,
     REM_SLEEP_EVENT_TEXT,

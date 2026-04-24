@@ -31,6 +31,21 @@ export interface TelnyxProviderOptions {
   skipVerification?: boolean;
 }
 
+function normalizeTelnyxDirection(
+  direction: string | undefined,
+): "inbound" | "outbound" | undefined {
+  switch (direction) {
+    case "incoming":
+    case "inbound":
+      return "inbound";
+    case "outgoing":
+    case "outbound":
+      return "outbound";
+    default:
+      return undefined;
+  }
+}
+
 export class TelnyxProvider implements VoiceCallProvider {
   readonly name = "telnyx" as const;
 
@@ -143,6 +158,9 @@ export class TelnyxProvider implements VoiceCallProvider {
       callId,
       providerCallId: data.payload?.call_control_id,
       timestamp: Date.now(),
+      direction: normalizeTelnyxDirection(data.payload?.direction),
+      from: data.payload?.from,
+      to: data.payload?.to,
     };
 
     switch (data.event_type) {
@@ -169,9 +187,10 @@ export class TelnyxProvider implements VoiceCallProvider {
         return {
           ...baseEvent,
           type: "call.speech",
-          transcript: data.payload?.transcription || "",
-          isFinal: data.payload?.is_final ?? true,
-          confidence: data.payload?.confidence,
+          transcript:
+            data.payload?.transcription_data?.transcript ?? data.payload?.transcription ?? "",
+          isFinal: data.payload?.transcription_data?.is_final ?? data.payload?.is_final ?? true,
+          confidence: data.payload?.transcription_data?.confidence ?? data.payload?.confidence,
         };
 
       case "call.hangup":
@@ -336,10 +355,18 @@ interface TelnyxEvent {
   payload?: {
     call_control_id?: string;
     client_state?: string;
+    direction?: string;
+    from?: string;
+    to?: string;
     text?: string;
     transcription?: string;
     is_final?: boolean;
     confidence?: number;
+    transcription_data?: {
+      transcript?: string;
+      is_final?: boolean;
+      confidence?: number;
+    };
     hangup_cause?: string;
     digit?: string;
     [key: string]: unknown;

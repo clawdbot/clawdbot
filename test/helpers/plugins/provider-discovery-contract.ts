@@ -636,7 +636,7 @@ export function describeCloudflareAiGatewayProviderDiscoveryContract(
           baseUrl: "https://gateway.ai.cloudflare.com/v1/acc-123/gw-456/anthropic",
           api: "anthropic-messages",
           apiKey: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-          models: [expect.objectContaining({ id: "claude-sonnet-4-5" })],
+          models: [expect.objectContaining({ id: "claude-sonnet-4-6" })],
         },
       });
     });

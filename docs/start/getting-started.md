@@ -144,3 +144,9 @@ openclaw dashboard
 
 Full reference: [Environment variables](/help/environment).
 </Accordion>
+
+## Related
+
+- [Install overview](/install)
+- [Channels overview](/channels)
+- [Setup](/start/setup)

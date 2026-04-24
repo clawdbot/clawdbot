@@ -105,6 +105,35 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts the app-server model override list", () => {
+    const texts = [
+      [
+        "Available model overrides in this session:",
+        "",
+        "- `gpt-5.4`",
+        "- `GPT-5.5`",
+        "- `gpt-5.4-mini`",
+      ].join("\n"),
+      ["Available model overrides here:", "", "- `gpt-5.4`"].join("\n"),
+      ["Available model overrides:", "", "- `gpt-5.4`"].join("\n"),
+      ["Available models:", "", "- `gpt-5.4`", "- `gpt-5.4-mini`"].join("\n"),
+      [
+        "Available model overrides exposed in this session are:",
+        "",
+        "- `codex/gpt-5.4` (current)",
+        "- `gpt-5.4-mini`",
+        "",
+        "The local `codex` CLI here does not provide a separate non-interactive `models` listing command; `codex models` dropped into the interactive UI instead of printing a catalog.",
+      ].join("\n"),
+    ];
+
+    for (const text of texts) {
+      expect(
+        EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+      ).toBe(true);
+    }
+  });
+
   it("accepts missing codex shell PATH fallback with current-session model", () => {
     const texts = [
       [

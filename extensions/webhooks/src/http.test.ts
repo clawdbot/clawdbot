@@ -158,9 +158,10 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(res.statusCode).toBe(401);
     expect(res.body).toBe("unauthorized");
     expect(target.taskFlow.list()).toEqual([]);
+    expect(hoisted.resolveConfiguredSecretInputStringMock).not.toHaveBeenCalled();
   });
 
-  it("caches SecretRef resolution across requests for the same route", async () => {
+  it("re-resolves SecretRef-backed secrets across requests", async () => {
     const runtime = createRuntimeTaskFlow();
     const target: TaskFlowWebhookTarget = {
       routeId: "cached",
@@ -176,7 +177,10 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         sessionKey: "agent:main:webhook-cached",
       }),
     };
-    hoisted.resolveConfiguredSecretInputStringMock.mockResolvedValue({ value: "shared-secret" });
+    hoisted.resolveConfiguredSecretInputStringMock
+      .mockResolvedValueOnce({ value: "shared-secret" })
+      .mockResolvedValueOnce({ value: "rotated-secret" })
+      .mockResolvedValueOnce({ value: "rotated-secret" });
     const handler = createHandlerWithTarget(target);
 
     const first = await dispatchJsonRequest({
@@ -195,10 +199,20 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         action: "list_flows",
       },
     });
+    const third = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      secret: "rotated-secret",
+      body: {
+        action: "list_flows",
+      },
+    });
 
     expect(first.statusCode).toBe(200);
-    expect(second.statusCode).toBe(200);
-    expect(hoisted.resolveConfiguredSecretInputStringMock).toHaveBeenCalledTimes(1);
+    expect(second.statusCode).toBe(401);
+    expect(second.body).toBe("unauthorized");
+    expect(third.statusCode).toBe(200);
+    expect(hoisted.resolveConfiguredSecretInputStringMock).toHaveBeenCalledTimes(3);
   });
 
   it("creates flows through the bound session and scrubs owner metadata from responses", async () => {

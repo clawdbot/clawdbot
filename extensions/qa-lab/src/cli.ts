@@ -35,6 +35,7 @@ async function runQaSuite(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinking?: string;
   allowFailures?: boolean;
   cliAuthMode?: string;
   parityPack?: string;
@@ -247,6 +248,10 @@ export function registerQaLabCli(program: Command) {
       false,
     )
     .option("--fast", "Enable provider fast mode where supported", false)
+    .option(
+      "--thinking <level>",
+      "Suite thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
+    )
     .option("--image <alias>", "Multipass image alias")
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
     .option("--memory <size>", "Multipass memory size")
@@ -266,6 +271,7 @@ export function registerQaLabCli(program: Command) {
         concurrency?: number;
         allowFailures?: boolean;
         fast?: boolean;
+        thinking?: string;
         image?: string;
         cpus?: number;
         memory?: string;
@@ -281,6 +287,7 @@ export function registerQaLabCli(program: Command) {
           primaryModel: opts.model,
           alternateModel: opts.altModel,
           fastMode: opts.fast,
+          thinking: opts.thinking,
           cliAuthMode: opts.cliAuthMode,
           parityPack: opts.parityPack,
           scenarioIds: opts.scenario,

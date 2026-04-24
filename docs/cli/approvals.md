@@ -183,3 +183,8 @@ Targeting notes:
 - `--agent` defaults to `"*"`, which applies to all agents.
 - The node host must advertise `system.execApprovals.get/set` (macOS app or headless node host).
 - Approvals files are stored per host at `~/.openclaw/exec-approvals.json`.
+
+## Related
+
+- [CLI reference](/cli)
+- [Exec approvals](/tools/exec-approvals)

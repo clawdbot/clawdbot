@@ -87,3 +87,8 @@ Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 - If commands seem stuck, enable verbose logs and look for “queued for …ms” lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
+
+## Related
+
+- [Session management](/concepts/session)
+- [Retry policy](/concepts/retry)

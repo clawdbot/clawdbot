@@ -7,6 +7,12 @@ read_when:
 title: "Install"
 ---
 
+## System requirements
+
+- **Node 24** (recommended) or Node 22.14+ — the installer script handles this automatically
+- **macOS, Linux, or Windows** — both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
+- `pnpm` is only needed if you build from source
+
 ## Recommended: installer script
 
 The fastest way to install. It detects your OS, installs Node if needed, installs OpenClaw, and launches onboarding.
@@ -40,12 +46,6 @@ To install without running onboarding:
 </Tabs>
 
 For all flags and CI/automation options, see [Installer internals](/install/installer).
-
-## System requirements
-
-- **Node 24** (recommended) or Node 22.14+ — the installer script handles this automatically
-- **macOS, Linux, or Windows** — both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
-- `pnpm` is only needed if you build from source
 
 ## Alternative install methods
 

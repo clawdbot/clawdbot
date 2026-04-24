@@ -10,6 +10,10 @@ const state = vi.hoisted(() => ({
   clearAgentRunContextMock: vi.fn(),
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
+  clearSessionAuthProfileOverrideMock: vi.fn(),
+  authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
+  sessionEntryMock: undefined as unknown,
+  sessionStoreMock: undefined as unknown,
 }));
 
 vi.mock("./model-fallback.js", () => ({
@@ -57,12 +61,12 @@ vi.mock("./command/session.js", () => ({
   resolveSession: () => ({
     sessionId: "session-1",
     sessionKey: "agent:main",
-    sessionEntry: {
+    sessionEntry: state.sessionEntryMock ?? {
       sessionId: "session-1",
       updatedAt: Date.now(),
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     },
-    sessionStore: undefined,
+    sessionStore: state.sessionStoreMock,
     storePath: undefined,
     isNewSession: false,
     persistedThinking: undefined,
@@ -250,8 +254,13 @@ vi.mock("./auth-profiles.js", () => ({
   ensureAuthProfileStore: () => ({ profiles: {} }),
 }));
 
+vi.mock("./auth-profiles/store.js", () => ({
+  ensureAuthProfileStore: () => state.authProfileStoreMock,
+}));
+
 vi.mock("./auth-profiles/session-override.js", () => ({
-  clearSessionAuthProfileOverride: vi.fn(),
+  clearSessionAuthProfileOverride: (...args: unknown[]) =>
+    state.clearSessionAuthProfileOverrideMock(...args),
 }));
 
 vi.mock("./defaults.js", () => ({
@@ -269,7 +278,12 @@ vi.mock("./model-catalog.js", () => ({
 
 vi.mock("./model-selection.js", () => ({
   buildAllowedModelSet: () => ({
-    allowedKeys: new Set<string>(["anthropic/claude", "openai/claude", "openai/gpt-5.4"]),
+    allowedKeys: new Set<string>([
+      "anthropic/claude",
+      "codex-cli/gpt-5.4",
+      "openai/claude",
+      "openai/gpt-5.4",
+    ]),
     allowedCatalog: [],
     allowAny: false,
   }),
@@ -279,6 +293,12 @@ vi.mock("./model-selection.js", () => ({
   resolveConfiguredModelRef: () => ({ provider: "anthropic", model: "claude" }),
   resolveDefaultModelForAgent: () => ({ provider: "anthropic", model: "claude" }),
   resolveThinkingDefault: () => "low",
+}));
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
+  resolveProviderIdForAuth: (provider: string) =>
+    provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
 }));
 
 vi.mock("./skills.js", () => ({
@@ -376,6 +396,9 @@ function expectFallbackOverrideCalls(first: boolean, second: boolean) {
 describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    state.authProfileStoreMock = { profiles: {} };
+    state.sessionEntryMock = undefined;
+    state.sessionStoreMock = undefined;
     state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
   });
@@ -448,6 +471,48 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(capturedAuthProfileProvider).toBe("openai");
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps aliased session auth profiles for codex-cli runs", async () => {
+    let capturedAuthProfileProvider: string | undefined;
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      providerOverride: "codex-cli",
+      modelOverride: "gpt-5.4",
+      authProfileOverride: "openai-codex:work",
+      authProfileOverrideSource: "user",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.authProfileStoreMock = {
+      profiles: {
+        "openai-codex:work": {
+          type: "api_key",
+          provider: "openai-codex",
+          key: "sk-test",
+        },
+      },
+    };
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (...args: unknown[]) => {
+      const attemptParams = args[0] as { authProfileProvider?: string } | undefined;
+      capturedAuthProfileProvider = attemptParams?.authProfileProvider;
+      return makeSuccessResult("codex-cli", "gpt-5.4");
+    });
+
+    await runBasicAgentCommand();
+
+    expect(capturedAuthProfileProvider).toBe("codex-cli");
+    expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
   });
 
   it("updates hasSessionModelOverride for fallback resolution after switch", async () => {

@@ -432,10 +432,8 @@ if (!serialized.includes(token)) {
 }
 NODE
 
-assert_dep_present "$DEP_SENTINEL"
-
-echo "Running doctor after activated plugin dep install..."
-openclaw doctor --non-interactive >/tmp/openclaw-doctor.log 2>&1
+echo "Running doctor after channel activation..."
+openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
 assert_dep_present "$DEP_SENTINEL"
 
 echo "Running local agent turn against mocked OpenAI..."

@@ -74,6 +74,34 @@ async function pollCliCronJobVisible(params: {
   return { pollsUsed: polls };
 }
 
+async function removeCliCronJobBestEffort(params: {
+  id: string;
+  port: number;
+  token: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  try {
+    await runOpenClawCliJson(
+      [
+        "cron",
+        "rm",
+        params.id,
+        "--json",
+        "--url",
+        `ws://127.0.0.1:${params.port}`,
+        "--token",
+        params.token,
+      ],
+      params.env,
+    );
+  } catch (error) {
+    logCliCronProbe("cleanup:cron-rm-failed", {
+      jobId: params.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 type LoopbackJsonRpcResponse = {
   result?: unknown;
   error?: { message?: string };
@@ -291,19 +319,12 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     expectedSessionKey: params.sessionKey,
   });
   if (createdJob.id) {
-    await runOpenClawCliJson(
-      [
-        "cron",
-        "rm",
-        createdJob.id,
-        "--json",
-        "--url",
-        `ws://127.0.0.1:${params.port}`,
-        "--token",
-        params.token,
-      ],
-      params.env,
-    );
+    await removeCliCronJobBestEffort({
+      id: createdJob.id,
+      port: params.port,
+      token: params.token,
+      env: params.env,
+    });
   }
   logCliCronProbe("loopback-preflight:done", { jobName: cronProbe.name });
 }
@@ -431,18 +452,11 @@ export async function verifyCliCronMcpProbe(params: {
     expectedSessionKey: params.sessionKey,
   });
   if (createdJob?.id) {
-    await runOpenClawCliJson(
-      [
-        "cron",
-        "rm",
-        createdJob.id,
-        "--json",
-        "--url",
-        `ws://127.0.0.1:${params.port}`,
-        "--token",
-        params.token,
-      ],
-      params.env,
-    );
+    await removeCliCronJobBestEffort({
+      id: createdJob.id,
+      port: params.port,
+      token: params.token,
+      env: params.env,
+    });
   }
 }

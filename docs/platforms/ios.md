@@ -7,8 +7,6 @@ read_when:
 title: "iOS app"
 ---
 
-# iOS App (Node)
-
 Availability: internal preview. The iOS app is not publicly distributed yet.
 
 ## What it does

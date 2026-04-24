@@ -260,6 +260,7 @@ export async function generateVideo(
         inputVideos: params.inputVideos,
         inputAudios: params.inputAudios,
         providerOptions: params.providerOptions,
+        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       });
       if (!Array.isArray(result.videos) || result.videos.length === 0) {
         throw new Error("Video generation provider returned no videos.");

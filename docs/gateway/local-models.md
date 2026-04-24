@@ -185,3 +185,8 @@ Compatibility notes for stricter OpenAI-compatible backends:
   `compat.supportsTools: false`, then retest. If the server still crashes only
   on larger OpenClaw prompts, treat it as an upstream server/model limitation.
 - Safety: local models skip provider-side filters; keep agents narrow and compaction on to limit prompt injection blast radius.
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [Model failover](/concepts/model-failover)

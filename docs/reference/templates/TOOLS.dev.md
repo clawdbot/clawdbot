@@ -23,3 +23,7 @@ It does not define which tools exist; OpenClaw provides built-in tools internall
 - Text-to-speech: specify voice, target speaker/room, and whether to stream.
 
 Add whatever else you want the assistant to know about your local toolchain.
+
+## Related
+
+- [TOOLS.md template](/reference/templates/TOOLS)

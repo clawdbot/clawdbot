@@ -6,6 +6,7 @@ import {
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
+import { readCodexCliCredentialsCached } from "./cli-credentials.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -62,6 +63,10 @@ export function resolveModelAuthLabel(params: {
       return `oauth (${envKey.source})`;
     }
     return `api-key (${envKey.source})`;
+  }
+
+  if (providerKey === "codex" && readCodexCliCredentialsCached({ ttlMs: 5_000 })) {
+    return "oauth (codex-cli)";
   }
 
   const customKey = resolveUsableCustomProviderApiKey({

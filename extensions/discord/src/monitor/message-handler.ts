@@ -20,7 +20,6 @@ import {
 } from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
-import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
   hasDiscordMessageStickers,
@@ -28,6 +27,9 @@ import {
   resolveDiscordMessageText,
 } from "./message-utils.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
+
+type PreflightDiscordMessage =
+  typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
@@ -40,8 +42,17 @@ type DiscordMessageHandlerParams = Omit<
 };
 
 type DiscordMessageHandlerTestingHooks = DiscordInboundWorkerTestingHooks & {
-  preflightDiscordMessage?: typeof preflightDiscordMessage;
+  preflightDiscordMessage?: PreflightDiscordMessage;
 };
+
+let messagePreflightRuntimePromise:
+  | Promise<typeof import("./message-handler.preflight.js")>
+  | undefined;
+
+async function loadMessagePreflightRuntime() {
+  messagePreflightRuntimePromise ??= import("./message-handler.preflight.js");
+  return await messagePreflightRuntimePromise;
+}
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
@@ -63,8 +74,7 @@ export function createDiscordMessageHandler(
     params.discordConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
-  const preflightDiscordMessageImpl =
-    params.__testing?.preflightDiscordMessage ?? preflightDiscordMessage;
+  const preflightDiscordMessageImpl = params.__testing?.preflightDiscordMessage;
   const replayGuard = createDiscordInboundReplayGuard();
   const inboundWorker = createDiscordInboundWorker({
     runtime: params.runtime,
@@ -130,7 +140,10 @@ export function createDiscordMessageHandler(
       }
       try {
         if (entries.length === 1) {
-          const ctx = await preflightDiscordMessageImpl({
+          const preflight =
+            preflightDiscordMessageImpl ??
+            (await loadMessagePreflightRuntime()).preflightDiscordMessage;
+          const ctx = await preflight({
             ...params,
             ackReactionScope,
             groupPolicy,
@@ -167,7 +180,10 @@ export function createDiscordMessageHandler(
           ...last.data,
           message: syntheticMessage,
         };
-        const ctx = await preflightDiscordMessageImpl({
+        const preflight =
+          preflightDiscordMessageImpl ??
+          (await loadMessagePreflightRuntime()).preflightDiscordMessage;
+        const ctx = await preflight({
           ...params,
           ackReactionScope,
           groupPolicy,

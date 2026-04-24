@@ -1,6 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: async ({
+    url,
+    init,
+  }: {
+    url: string;
+    init?: RequestInit;
+  }): Promise<{ response: Response; release: () => Promise<void> }> => ({
+    response: await globalThis.fetch(url, init),
+    release: vi.fn(async () => {}),
+  }),
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
+}));
+
 function isSpeechRequestBody(value: unknown): value is { response_format?: string } {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

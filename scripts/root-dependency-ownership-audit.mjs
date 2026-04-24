@@ -17,6 +17,12 @@ const IMPORT_PATTERNS = [
   /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
   /\b(?:require|[_$A-Za-z][\w$]*require[\w$]*)\.resolve\s*\(\s*["']([^"']+)["']\s*\)/gi,
 ];
+const STRING_CONSTANT_PATTERN = /\b(?:const|let|var)\s+([_$A-Za-z][\w$]*)\s*=\s*["']([^"']+)["']/g;
+const DYNAMIC_CONSTANT_IMPORT_PATTERNS = [
+  /\bimport\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/g,
+  /\brequire\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/g,
+  /\b(?:require|[_$A-Za-z][\w$]*require[\w$]*)\.resolve\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/gi,
+];
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -70,6 +76,20 @@ export function collectModuleSpecifiers(source) {
     for (const match of source.matchAll(pattern)) {
       if (match[1]) {
         specifiers.add(match[1]);
+      }
+    }
+  }
+  const stringConstants = new Map();
+  for (const match of source.matchAll(STRING_CONSTANT_PATTERN)) {
+    if (match[1] && match[2]) {
+      stringConstants.set(match[1], match[2]);
+    }
+  }
+  for (const pattern of DYNAMIC_CONSTANT_IMPORT_PATTERNS) {
+    for (const match of source.matchAll(pattern)) {
+      const specifier = match[1] ? stringConstants.get(match[1]) : undefined;
+      if (specifier) {
+        specifiers.add(specifier);
       }
     }
   }

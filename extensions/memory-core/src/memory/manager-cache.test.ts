@@ -46,6 +46,25 @@ describe("manager cache", () => {
     );
   });
 
+  it("repairs an invalid singleton cache shape", async () => {
+    const cacheKey = Symbol("openclaw.manager-cache.corrupt-test");
+    (globalThis as Record<PropertyKey, unknown>)[cacheKey] = {};
+
+    const cache = resolveSingletonManagedCache<TestEntry>(cacheKey);
+    cachesForCleanup.push(cache);
+    const entry = await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      key: "same",
+      create: async () => createEntry("repaired"),
+    });
+
+    expect(entry.id).toBe("repaired");
+    expect(cache.cache).toBeInstanceOf(Map);
+    expect(cache.pending).toBeInstanceOf(Map);
+    delete (globalThis as Record<PropertyKey, unknown>)[cacheKey];
+  });
+
   it("deduplicates concurrent creation for the same cache key", async () => {
     const cache = createTestCache();
     cachesForCleanup.push(cache);

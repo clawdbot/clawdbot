@@ -627,6 +627,7 @@ export async function startGatewayServer(
         log,
         logDiscovery,
         nodeRegistry,
+        pluginRegistry,
         broadcast,
         nodeSendToAllSubscribed,
         getPresenceVersion,

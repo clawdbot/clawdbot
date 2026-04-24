@@ -38,7 +38,7 @@ openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
 openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
-openclaw config set agents.defaults.models '{"openai/gpt-5.5":{}}' --strict-json --merge
+openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
 openclaw config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
 openclaw config unset plugins.entries.brave.config.webSearch.apiKey
@@ -115,7 +115,7 @@ you pass `--replace`.
 Use `--merge` when adding entries to those maps:
 
 ```bash
-openclaw config set agents.defaults.models '{"openai/gpt-5.5":{}}' --strict-json --merge
+openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 openclaw config set models.providers.ollama.models '[{"id":"llama3.2","name":"Llama 3.2"}]' --strict-json --merge
 ```
 
@@ -428,3 +428,8 @@ Typical repair loop:
 - Apply targeted edits with `openclaw config set` or `openclaw configure`.
 - Rerun `openclaw config validate` after each change.
 - If validation passes but the runtime is still unhealthy, run `openclaw doctor` or `openclaw doctor --fix` for migration and repair help.
+
+## Related
+
+- [CLI reference](/cli)
+- [Configuration](/gateway/configuration)

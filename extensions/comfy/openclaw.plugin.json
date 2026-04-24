@@ -5,6 +5,23 @@
   "providerAuthEnvVars": {
     "comfy": ["COMFY_API_KEY", "COMFY_CLOUD_API_KEY"]
   },
+  "providerAuthChoices": [
+    {
+      "provider": "comfy",
+      "method": "cloud-api-key",
+      "choiceId": "comfy-cloud-api-key",
+      "choiceLabel": "Comfy Cloud API key",
+      "choiceHint": "Required for cloud workflows",
+      "groupId": "comfy",
+      "groupLabel": "ComfyUI",
+      "groupHint": "Local or cloud workflows",
+      "optionKey": "comfyApiKey",
+      "cliFlag": "--comfy-api-key",
+      "cliOption": "--comfy-api-key <key>",
+      "cliDescription": "Comfy Cloud API key",
+      "onboardingScopes": ["image-generation"]
+    }
+  ],
   "contracts": {
     "imageGenerationProviders": ["comfy"],
     "musicGenerationProviders": ["comfy"],

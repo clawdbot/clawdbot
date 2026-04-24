@@ -37,7 +37,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
   </Step>
 </Steps>
 
-## Available models
+## Built-in catalog
 
 | Model ref                            | Input       | Context | Max output | Reasoning | Notes         |
 | ------------------------------------ | ----------- | ------- | ---------- | --------- | ------------- |

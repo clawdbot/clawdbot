@@ -88,3 +88,8 @@ Onboarding requests TCC permissions needed for:
   what happens on the gateway host during the first agent run.
 </Step>
 </Steps>
+
+## Related
+
+- [Onboarding overview](/start/onboarding-overview)
+- [Getting started](/start/getting-started)

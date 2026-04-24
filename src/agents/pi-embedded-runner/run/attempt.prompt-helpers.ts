@@ -122,7 +122,155 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
-function extractUserMessagePlainText(content: unknown): string | undefined {
+const QUEUED_USER_MESSAGE_MARKER =
+  "[Queued user message that arrived while the previous turn was still active]";
+const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
+const MAX_STRUCTURED_JSON_STRING_CHARS = 300;
+const MAX_STRUCTURED_JSON_DEPTH = 4;
+const MAX_STRUCTURED_JSON_ARRAY_ITEMS = 16;
+const MAX_STRUCTURED_JSON_OBJECT_KEYS = 32;
+
+function summarizeStructuredMediaRef(label: string, value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const dataUriMatch = trimmed.match(/^data:([^;,]+)?(?:;[^,]*)?,/i);
+  if (dataUriMatch) {
+    const mimeType = dataUriMatch[1]?.trim() || "unknown";
+    return `[${label}] inline data URI (${mimeType}, ${trimmed.length} chars)`;
+  }
+  if (trimmed.length > MAX_STRUCTURED_MEDIA_REF_CHARS) {
+    return `[${label}] ${trimmed.slice(0, MAX_STRUCTURED_MEDIA_REF_CHARS)}... (${trimmed.length} chars)`;
+  }
+  return `[${label}] ${trimmed}`;
+}
+
+function summarizeStructuredJsonString(value: string): string {
+  const mediaSummary = summarizeStructuredMediaRef("value", value);
+  if (mediaSummary?.includes("inline data URI")) {
+    return mediaSummary;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > MAX_STRUCTURED_JSON_STRING_CHARS) {
+    return `${trimmed.slice(0, MAX_STRUCTURED_JSON_STRING_CHARS)}... (${trimmed.length} chars)`;
+  }
+  return value;
+}
+
+function sanitizeStructuredJsonValue(
+  value: unknown,
+  depth = 0,
+  seen: WeakSet<object> = new WeakSet(),
+): unknown {
+  if (typeof value === "string") {
+    return summarizeStructuredJsonString(value);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[circular]";
+  }
+  if (depth >= MAX_STRUCTURED_JSON_DEPTH) {
+    return "[max depth]";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const limited = value
+      .slice(0, MAX_STRUCTURED_JSON_ARRAY_ITEMS)
+      .map((item) => sanitizeStructuredJsonValue(item, depth + 1, seen));
+    if (value.length > MAX_STRUCTURED_JSON_ARRAY_ITEMS) {
+      limited.push(`[${value.length - MAX_STRUCTURED_JSON_ARRAY_ITEMS} more items]`);
+    }
+    seen.delete(value);
+    return limited;
+  }
+  const output: Record<string, unknown> = {};
+  let copied = 0;
+  let skipped = 0;
+  for (const key in value as Record<string, unknown>) {
+    if (!Object.hasOwn(value, key)) {
+      continue;
+    }
+    if (copied >= MAX_STRUCTURED_JSON_OBJECT_KEYS) {
+      skipped += 1;
+      continue;
+    }
+    output[key] = sanitizeStructuredJsonValue(
+      (value as Record<string, unknown>)[key],
+      depth + 1,
+      seen,
+    );
+    copied += 1;
+  }
+  if (skipped > 0) {
+    output.__truncated = `${skipped} more keys`;
+  }
+  seen.delete(value);
+  return output;
+}
+
+function stringifyStructuredJsonFallback(part: unknown): string | undefined {
+  try {
+    const serialized = JSON.stringify(sanitizeStructuredJsonValue(part));
+    if (!serialized || serialized === "{}") {
+      return undefined;
+    }
+    const withoutInlineData = serialized.replace(
+      /data:[^"'\\\s]+/gi,
+      (match) => `[inline data URI: ${match.length} chars]`,
+    );
+    return withoutInlineData.length > 1_000
+      ? `${withoutInlineData.slice(0, 1_000)}... (${withoutInlineData.length} chars)`
+      : withoutInlineData;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringifyStructuredContentPart(part: unknown): string | undefined {
+  if (!part || typeof part !== "object") {
+    return undefined;
+  }
+  const record = part as Record<string, unknown>;
+  if (record.type === "text") {
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    return text || undefined;
+  }
+  if (record.type === "image_url") {
+    const imageUrl = record.image_url;
+    const url =
+      typeof imageUrl === "string"
+        ? imageUrl
+        : imageUrl && typeof imageUrl === "object"
+          ? (imageUrl as { url?: unknown }).url
+          : undefined;
+    return summarizeStructuredMediaRef("image_url", url);
+  }
+  if (record.type === "image" || record.type === "input_image") {
+    return (
+      summarizeStructuredMediaRef(record.type, record.url) ??
+      summarizeStructuredMediaRef(record.type, record.source)
+    );
+  }
+  if (typeof record.type === "string") {
+    const typedRef =
+      summarizeStructuredMediaRef(record.type, record.audio_url) ??
+      summarizeStructuredMediaRef(record.type, record.media_url) ??
+      summarizeStructuredMediaRef(record.type, record.url) ??
+      summarizeStructuredMediaRef(record.type, record.source);
+    if (typedRef) {
+      return typedRef;
+    }
+  }
+  return stringifyStructuredJsonFallback(part);
+}
+
+function extractUserMessagePromptText(content: unknown): string | undefined {
   if (typeof content === "string") {
     const trimmed = content.trim();
     return trimmed || undefined;
@@ -131,38 +279,47 @@ function extractUserMessagePlainText(content: unknown): string | undefined {
     return undefined;
   }
   const text = content
-    .flatMap((part) =>
-      part && typeof part === "object" && "type" in part && part.type === "text"
-        ? [typeof part.text === "string" ? part.text : ""]
-        : [],
-    )
+    .flatMap((part) => {
+      const text = stringifyStructuredContentPart(part);
+      return text ? [text] : [];
+    })
     .join("\n")
     .trim();
   return text || undefined;
+}
+
+function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: string): boolean {
+  const normalizedPrompt = prompt.replace(/\r\n/g, "\n");
+  const normalizedOrphanText = orphanText.replace(/\r\n/g, "\n").trim();
+  if (!normalizedOrphanText) {
+    return false;
+  }
+  const queuedBlockPrefix = `${QUEUED_USER_MESSAGE_MARKER}\n${normalizedOrphanText}`;
+  return (
+    normalizedPrompt === queuedBlockPrefix ||
+    normalizedPrompt.startsWith(`${queuedBlockPrefix}\n`) ||
+    normalizedPrompt.includes(`\n${queuedBlockPrefix}\n`) ||
+    `\n${normalizedPrompt}\n`.includes(`\n${normalizedOrphanText}\n`)
+  );
 }
 
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown };
-}): { prompt: string; merged: boolean } {
-  if (!shouldWarnOnOrphanedUserRepair(params.trigger)) {
-    return { prompt: params.prompt, merged: false };
+}): { prompt: string; merged: boolean; removeLeaf: boolean } {
+  const orphanText = extractUserMessagePromptText(params.leafMessage.content);
+  if (!orphanText) {
+    return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
-
-  const orphanText = extractUserMessagePlainText(params.leafMessage.content);
-  if (!orphanText || orphanText.length < 4 || params.prompt.includes(orphanText)) {
-    return { prompt: params.prompt, merged: false };
+  if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
+    return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
 
   return {
-    prompt: [
-      "[Queued user message that arrived while the previous turn was still active]",
-      orphanText,
-      "",
-      params.prompt,
-    ].join("\n"),
+    prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
     merged: true,
+    removeLeaf: true,
   };
 }
 

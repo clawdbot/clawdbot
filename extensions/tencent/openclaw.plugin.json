@@ -1,6 +1,7 @@
 {
   "id": "tencent",
   "enabledByDefault": true,
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["tencent-tokenhub"],
   "providerAuthEnvVars": {
     "tencent-tokenhub": ["TOKENHUB_API_KEY"]

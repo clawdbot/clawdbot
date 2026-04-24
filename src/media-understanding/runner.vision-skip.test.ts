@@ -13,7 +13,14 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { withMediaFixture } from "./runner.test-utils.js";
 
-const baseCatalog = [
+type TestCatalogEntry = {
+  id: string;
+  name: string;
+  provider: string;
+  input: readonly string[];
+};
+
+const baseCatalog: TestCatalogEntry[] = [
   {
     id: "gpt-4.1",
     name: "GPT-4.1",
@@ -21,7 +28,7 @@ const baseCatalog = [
     input: ["text", "image"] as const,
   },
 ];
-let catalog = [...baseCatalog];
+let catalog: TestCatalogEntry[] = [...baseCatalog];
 
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
 
@@ -138,6 +145,117 @@ describe("runCapability image skip", () => {
       );
     } finally {
       await cache.cleanup();
+    }
+  });
+
+  it("uses explicit media image models instead of native vision skip", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-explicit-vision",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const cfg = {} as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "openrouter",
+              {
+                id: "openrouter",
+                capabilities: ["image"],
+                describeImage: async (req) => ({ text: "explicit ok", model: req.model }),
+              },
+            ],
+          ]),
+          config: {
+            models: [{ provider: "openrouter", model: "google/gemini-2.5-flash" }],
+          },
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(result.outputs[0]).toMatchObject({
+          provider: "openrouter",
+          model: "google/gemini-2.5-flash",
+          text: "explicit ok",
+        });
+      },
+    );
+  });
+
+  it("prefers agents.defaults.imageModel over the active model for auto image resolution", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          imageModel: { primary: "openrouter/google/gemini-2.5-flash" },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveAutoImageModel({
+        cfg,
+        activeModel: { provider: "openai", model: "gpt-4.1" },
+      }),
+    ).resolves.toEqual({
+      provider: "openrouter",
+      model: "google/gemini-2.5-flash",
+    });
+  });
+
+  it("falls back from an active text model to the provider image default", async () => {
+    catalog = [
+      {
+        id: "MiniMax-M2.7",
+        name: "MiniMax M2.7",
+        provider: "minimax-portal",
+        input: ["text"] as const,
+      },
+      {
+        id: "MiniMax-VL-01",
+        name: "MiniMax VL 01",
+        provider: "minimax-portal",
+        input: ["text", "image"] as const,
+      },
+    ];
+    vi.stubEnv("MINIMAX_API_KEY", "test-minimax-key");
+    const cfg = {} as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "minimax",
+      pluginName: "MiniMax Provider",
+      source: "test",
+      provider: {
+        id: "minimax-portal",
+        capabilities: ["image"],
+        defaultModels: { image: "MiniMax-VL-01" },
+        describeImage: async () => ({ text: "ok" }),
+      },
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+
+    try {
+      await expect(
+        resolveAutoImageModel({
+          cfg,
+          activeModel: { provider: "minimax-portal", model: "MiniMax-M2.7" },
+        }),
+      ).resolves.toEqual({
+        provider: "minimax-portal",
+        model: "MiniMax-VL-01",
+      });
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      vi.unstubAllEnvs();
     }
   });
 

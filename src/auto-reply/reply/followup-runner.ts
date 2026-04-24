@@ -9,12 +9,14 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { classifyEmbeddedPiRunResultForModelFallback } from "../../agents/pi-embedded-runner/result-fallback-classifier.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveProviderFollowupFallbackRoute } from "../../plugins/provider-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -34,6 +36,8 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+
+type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -71,17 +75,25 @@ export function createFollowupRunner(params: {
    * session's current dispatcher. This ensures replies go back to
    * where the message originated.
    */
-  const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
+  const sendFollowupPayloads = async (
+    payloads: ReplyPayload[],
+    queued: FollowupRun,
+    resolvedRun: { provider: string; modelId: string },
+  ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
-      logVerbose("followup queue: no onBlockReply handler; dropping payloads");
+      defaultRuntime.error?.(
+        "followup queue: completed with payloads but no origin route or visible dispatcher is available",
+      );
       return;
     }
 
+    let crossChannelRouteFailureNeedsNotice = false;
+    let routedAnyCrossChannelPayloadToOrigin = false;
     for (const payload of payloads) {
       if (!payload || !hasOutboundReplyContent(payload)) {
         continue;
@@ -92,10 +104,43 @@ export function createFollowupRunner(params: {
       ) {
         continue;
       }
+      const providerRoute = resolveProviderFollowupFallbackRoute({
+        provider: resolvedRun.provider,
+        config: runtimeConfig,
+        workspaceDir: queued.run.workspaceDir,
+        context: {
+          config: runtimeConfig,
+          agentDir: queued.run.agentDir,
+          workspaceDir: queued.run.workspaceDir,
+          provider: resolvedRun.provider,
+          modelId: resolvedRun.modelId,
+          payload,
+          originatingChannel,
+          originatingTo,
+          originRoutable: Boolean(shouldRouteToOriginating),
+          dispatcherAvailable: Boolean(opts?.onBlockReply),
+        },
+      });
+      if (providerRoute?.route === "drop") {
+        logVerbose(
+          `followup queue: provider hook dropped payload route reason=${providerRoute.reason ?? "unspecified"}`,
+        );
+        continue;
+      }
+      const deliveryRoute =
+        providerRoute?.route === "origin" && shouldRouteToOriginating
+          ? "origin"
+          : providerRoute?.route === "dispatcher" && opts?.onBlockReply
+            ? "dispatcher"
+            : shouldRouteToOriginating
+              ? "origin"
+              : opts?.onBlockReply
+                ? "dispatcher"
+                : undefined;
       await typingSignals.signalTextDelta(payload.text);
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (shouldRouteToOriginating) {
+      if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
         const result = await routeReply({
           payload,
           channel: originatingChannel,
@@ -112,25 +157,48 @@ export function createFollowupRunner(params: {
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fall back to the caller-provided dispatcher only when the
-          // originating channel matches the session's message provider.
-          // In that case onBlockReply was created by the same channel's
-          // handler and delivers to the correct destination.  For true
-          // cross-channel routing (origin !== provider), falling back
-          // would send to the wrong channel, so we drop the payload.
           const provider = resolveOriginMessageProvider({
             provider: queued.run.messageProvider,
           });
           const origin = resolveOriginMessageProvider({
             originatingChannel,
           });
-          if (opts?.onBlockReply && origin && origin === provider) {
-            await opts.onBlockReply(payload);
+          if (opts?.onBlockReply) {
+            if (origin && origin === provider) {
+              await opts.onBlockReply(payload);
+            } else {
+              crossChannelRouteFailureNeedsNotice = true;
+            }
+          } else {
+            defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
+          }
+        } else {
+          const provider = resolveOriginMessageProvider({
+            provider: queued.run.messageProvider,
+          });
+          const origin = resolveOriginMessageProvider({
+            originatingChannel,
+          });
+          if (origin && provider && origin !== provider) {
+            routedAnyCrossChannelPayloadToOrigin = true;
           }
         }
-      } else if (opts?.onBlockReply) {
+      } else if (deliveryRoute === "dispatcher" && opts?.onBlockReply) {
         await opts.onBlockReply(payload);
       }
+    }
+    if (
+      crossChannelRouteFailureNeedsNotice &&
+      !routedAnyCrossChannelPayloadToOrigin &&
+      opts?.onBlockReply
+    ) {
+      await opts.onBlockReply({
+        text:
+          "Follow-up completed, but OpenClaw could not deliver it to the originating " +
+          "channel. The reply content was not forwarded to this channel to avoid " +
+          "cross-channel misdelivery.",
+        isError: true,
+      });
     }
   };
 
@@ -195,7 +263,7 @@ export function createFollowupRunner(params: {
       );
       replyOperation.setPhase("running");
       try {
-        const fallbackResult = await runWithModelFallback({
+        const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
           cfg: runtimeConfig,
           provider: run.provider,
           model: run.model,
@@ -206,8 +274,10 @@ export function createFollowupRunner(params: {
             agentId: run.agentId,
             sessionKey: run.sessionKey,
           }),
+          classifyResult: ({ result, provider, model }) =>
+            classifyEmbeddedPiRunResultForModelFallback({ result, provider, model }),
           run: async (provider, model, runOptions) => {
-            const authProfile = resolveRunAuthProfile(run, provider);
+            const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
             let attemptCompactionCount = 0;
             try {
               const result = await runEmbeddedPiAgent({
@@ -265,6 +335,13 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
                 onAgentEvent: (evt) => {
+                  if (evt.stream.startsWith("codex_app_server.")) {
+                    emitAgentEvent({
+                      runId,
+                      stream: evt.stream,
+                      data: evt.data,
+                    });
+                  }
                   if (evt.stream !== "compaction") {
                     return;
                   }
@@ -399,7 +476,10 @@ export function createFollowupRunner(params: {
         }
       }
 
-      await sendFollowupPayloads(finalPayloads, effectiveQueued);
+      await sendFollowupPayloads(finalPayloads, effectiveQueued, {
+        provider: providerUsed,
+        modelId: modelUsed,
+      });
     } finally {
       replyOperation.complete();
       // Both signals are required for the typing controller to clean up.

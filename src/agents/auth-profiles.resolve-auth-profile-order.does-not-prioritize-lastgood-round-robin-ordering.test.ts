@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveAuthProfileOrder } from "./auth-profiles.js";
 import {
   ANTHROPIC_CFG,
   ANTHROPIC_STORE,
 } from "./auth-profiles.resolve-auth-profile-order.fixtures.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 describe("resolveAuthProfileOrder", () => {

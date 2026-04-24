@@ -376,3 +376,8 @@ Full astronomy gear marketplace. Built with and around the OpenClaw ecosystem.
     We'll add standout projects to this page.
   </Step>
 </Steps>
+
+## Related
+
+- [Getting started](/start/getting-started)
+- [OpenClaw](/start/openclaw)

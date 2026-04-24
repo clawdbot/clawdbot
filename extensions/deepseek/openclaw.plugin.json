@@ -1,6 +1,7 @@
 {
   "id": "deepseek",
   "enabledByDefault": true,
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["deepseek"],
   "providerAuthEnvVars": {
     "deepseek": ["DEEPSEEK_API_KEY"]

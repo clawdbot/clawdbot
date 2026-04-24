@@ -48,6 +48,7 @@ const BASE_METHODS = [
   "wizard.cancel",
   "wizard.status",
   "talk.config",
+  "talk.realtime.session",
   "talk.speak",
   "talk.mode",
   "commands.list",

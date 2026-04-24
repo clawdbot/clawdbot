@@ -12,7 +12,7 @@ coverage:
 objective: Verify a live OpenAI GPT model can use OpenAI native web_search when OpenClaw web search is enabled in auto mode.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary provider is openai.
-  - The selected primary model is GPT-5.5, not a mini or pro variant.
+  - The selected primary model is GPT-5.4, not a mini or pro variant.
   - Web search is enabled without pinning a managed web_search provider.
   - The live reply includes the required marker plus an official OpenAI News URL and headline found through web search.
 gatewayConfigPatch:
@@ -32,10 +32,10 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5 --scenario openai-native-web-search-live`.
+  summary: Run with `OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.4 --alt-model openai/gpt-5.4 --fast --thinking medium --scenario openai-native-web-search-live`.
   config:
     requiredProvider: openai
-    requiredModel: gpt-5.5
+    requiredModel: gpt-5.4
     expectedMarker: WEB-SEARCH-OK
     failureMarker: WEB-SEARCH-FAILED
     searchPrompt: |-
@@ -49,7 +49,7 @@ execution:
 
 ```yaml qa-flow
 steps:
-  - name: confirms live OpenAI GPT-5.5 web search auto mode
+  - name: confirms live OpenAI GPT-5.4 web search auto mode
     actions:
       - call: waitForGatewayHealthy
         args:

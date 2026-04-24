@@ -104,6 +104,22 @@ describe("provider install catalog", () => {
           defaultChoice: "npm",
           expectedIntegrity: "sha512-openai",
         },
+        installSource: {
+          defaultChoice: "npm",
+          npm: {
+            spec: "@openclaw/openai@1.2.3",
+            packageName: "@openclaw/openai",
+            selector: "1.2.3",
+            selectorKind: "exact-version",
+            exactVersion: true,
+            expectedIntegrity: "sha512-openai",
+            pinState: "exact-with-integrity",
+          },
+          local: {
+            path: "extensions/openai",
+          },
+          warnings: [],
+        },
       },
     ]);
   });
@@ -156,6 +172,13 @@ describe("provider install catalog", () => {
         install: {
           localPath: "extensions/demo-provider",
           defaultChoice: "local",
+        },
+        installSource: {
+          defaultChoice: "local",
+          local: {
+            path: "extensions/demo-provider",
+          },
+          warnings: [],
         },
       },
     ]);
@@ -216,6 +239,19 @@ describe("provider install catalog", () => {
         expectedIntegrity: "sha512-vllm",
         defaultChoice: "npm",
       },
+      installSource: {
+        defaultChoice: "npm",
+        npm: {
+          spec: "@openclaw/vllm@2.0.0",
+          packageName: "@openclaw/vllm",
+          selector: "2.0.0",
+          selectorKind: "exact-version",
+          exactVersion: true,
+          expectedIntegrity: "sha512-vllm",
+          pinState: "exact-with-integrity",
+        },
+        warnings: [],
+      },
     });
   });
 
@@ -269,6 +305,17 @@ describe("provider install catalog", () => {
       install: {
         npmSpec: "@openclaw/vllm",
         defaultChoice: "npm",
+      },
+      installSource: {
+        defaultChoice: "npm",
+        npm: {
+          spec: "@openclaw/vllm",
+          packageName: "@openclaw/vllm",
+          selectorKind: "none",
+          exactVersion: false,
+          pinState: "floating-without-integrity",
+        },
+        warnings: ["npm-spec-floating", "npm-spec-missing-integrity"],
       },
     });
   });

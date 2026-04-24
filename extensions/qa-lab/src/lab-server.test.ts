@@ -179,19 +179,22 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
   throw new Error("runner catalog stayed loading");
 }
 
-async function waitForFile(filePath: string, timeoutMs = 5_000) {
+async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      return await readFile(filePath, "utf8");
+      const content = await readFile(filePath, "utf8");
+      if (content === expected) {
+        return content;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
-      await sleep(10);
     }
+    await sleep(10);
   }
-  throw new Error(`file did not appear: ${filePath}`);
+  throw new Error(`file did not reach expected content: ${filePath}`);
 }
 
 async function createQaLabRepoRootFixture(params?: {
@@ -584,11 +587,11 @@ describe("qa-lab server", () => {
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
-    expect(await waitForFile(markerPath)).toBe("0");
+    expect(await waitForFileContent(markerPath, "0")).toBe("0");
 
     await lab.stop();
     stopped = true;
-    expect(await waitForFile(stoppedPath)).toBe("terminated");
+    expect(await waitForFileContent(stoppedPath, "terminated")).toBe("terminated");
   });
 
   it("can disable the embedded echo gateway for real-suite runs", async () => {

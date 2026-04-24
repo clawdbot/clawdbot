@@ -2,17 +2,24 @@ import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
-import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
-import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
-import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
 import type { SlackAttachment, SlackFile } from "../types.js";
+import {
+  type FetchLike,
+  fetchRemoteMedia,
+  fetchWithRuntimeDispatcher,
+  logVerbose,
+  saveMediaBuffer,
+} from "./media.runtime.js";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeOptionalLowercaseString(value: unknown): string | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return normalized || undefined;
+}
 
 function isSlackHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
@@ -88,6 +95,10 @@ function createSlackMediaFetch(): FetchLike {
   };
 }
 
+function resolveSlackFetchForRuntime(): typeof fetch {
+  return isMockedFetch(globalThis.fetch) ? globalThis.fetch : fetchWithRuntimeDispatcher;
+}
+
 /**
  * Fetches a URL with Authorization header while keeping same-origin redirects
  * authenticated and dropping auth once the redirect crosses origins.
@@ -95,8 +106,9 @@ function createSlackMediaFetch(): FetchLike {
 export async function fetchWithSlackAuth(url: string, token: string): Promise<Response> {
   const parsed = assertSlackFileUrl(url);
   const authHeaders = createSlackAuthHeaders(token);
+  const fetchImpl = resolveSlackFetchForRuntime();
 
-  const initialRes = await fetch(parsed.href, {
+  const initialRes = await fetchImpl(parsed.href, {
     headers: authHeaders,
     redirect: "manual",
   });
@@ -115,12 +127,12 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
     return initialRes;
   }
   if (resolvedUrl.origin === parsed.origin) {
-    return fetch(resolvedUrl.toString(), {
+    return fetchImpl(resolvedUrl.toString(), {
       headers: authHeaders,
       redirect: "follow",
     });
   }
-  return fetch(resolvedUrl.toString(), { redirect: "follow" });
+  return fetchImpl(resolvedUrl.toString(), { redirect: "follow" });
 }
 
 const SLACK_MEDIA_SSRF_POLICY = {

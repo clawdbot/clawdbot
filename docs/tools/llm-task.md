@@ -53,7 +53,7 @@ without writing custom OpenClaw code for each workflow.
           "defaultProvider": "openai-codex",
           "defaultModel": "gpt-5.5",
           "defaultAuthProfileId": "main",
-          "allowedModels": ["openai/gpt-5.5"],
+          "allowedModels": ["openai/gpt-5.4"],
           "maxTokens": 800,
           "timeoutMs": 30000
         }
@@ -115,3 +115,9 @@ openclaw.invoke --tool llm-task --action json --args-json '{
 - No tools are exposed to the model for this run.
 - Treat output as untrusted unless you validate with `schema`.
 - Put approvals before any side-effecting step (send, post, exec).
+
+## Related
+
+- [Thinking levels](/tools/thinking)
+- [Sub-agents](/tools/subagents)
+- [Slash commands](/tools/slash-commands)

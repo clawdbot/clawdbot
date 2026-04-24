@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getDmHistoryLimitFromSessionKey } from "./pi-embedded-runner.js";
+import { getDmHistoryLimitFromSessionKey } from "./pi-embedded-runner/history.js";
 
 describe("getDmHistoryLimitFromSessionKey", () => {
   it("returns undefined when sessionKey is undefined", () => {

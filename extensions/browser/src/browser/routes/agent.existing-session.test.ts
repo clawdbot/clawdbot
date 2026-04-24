@@ -12,6 +12,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
+  fillChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
@@ -33,7 +34,7 @@ vi.mock("../chrome-mcp.js", () => ({
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
-  fillChromeMcpElement: vi.fn(async () => {}),
+  fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
   fillChromeMcpForm: vi.fn(async () => {}),
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
@@ -109,6 +110,7 @@ describe("existing-session browser routes", () => {
     routeState.profileCtx.listTabs.mockClear();
     chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.fillChromeMcpElement.mockClear();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
@@ -236,6 +238,25 @@ describe("existing-session browser routes", () => {
       error: expect.stringContaining("loadState=networkidle"),
     });
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for existing-session type timeout overrides", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "type", ref: "input-1", text: "hello", timeoutMs: 1234 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(501);
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining("type does not support timeoutMs"),
+    });
+    expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();
   });
 
   it("supports glob URL waits for existing-session profiles", async () => {

@@ -12,18 +12,53 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 
 ## Parameters
 
-- `command` (required)
-- `workdir` (defaults to cwd)
-- `env` (key/value overrides)
-- `yieldMs` (default 10000): auto-background after delay
-- `background` (bool): background immediately
-- `timeout` (seconds, default 1800): kill on expiry
-- `pty` (bool): run in a pseudo-terminal when available (TTY-only CLIs, coding agents, terminal UIs)
-- `host` (`auto | sandbox | gateway | node`): where to execute
-- `security` (`deny | allowlist | full`): enforcement mode for `gateway`/`node`
-- `ask` (`off | on-miss | always`): approval prompts for `gateway`/`node`
-- `node` (string): node id/name for `host=node`
-- `elevated` (bool): request elevated mode (escape the sandbox onto the configured host path); `security=full` is only forced when elevated resolves to `full`
+<ParamField path="command" type="string" required>
+Shell command to run.
+</ParamField>
+
+<ParamField path="workdir" type="string" default="cwd">
+Working directory for the command.
+</ParamField>
+
+<ParamField path="env" type="object">
+Key/value environment overrides merged on top of the inherited environment.
+</ParamField>
+
+<ParamField path="yieldMs" type="number" default="10000">
+Auto-background the command after this delay (ms).
+</ParamField>
+
+<ParamField path="background" type="boolean" default="false">
+Background the command immediately instead of waiting for `yieldMs`.
+</ParamField>
+
+<ParamField path="timeout" type="number" default="1800">
+Kill the command after this many seconds.
+</ParamField>
+
+<ParamField path="pty" type="boolean" default="false">
+Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, and terminal UIs.
+</ParamField>
+
+<ParamField path="host" type="'auto' | 'sandbox' | 'gateway' | 'node'" default="auto">
+Where to execute. `auto` resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise.
+</ParamField>
+
+<ParamField path="security" type="'deny' | 'allowlist' | 'full'">
+Enforcement mode for `gateway` / `node` execution.
+</ParamField>
+
+<ParamField path="ask" type="'off' | 'on-miss' | 'always'">
+Approval prompt behavior for `gateway` / `node` execution.
+</ParamField>
+
+<ParamField path="node" type="string">
+Node id/name when `host=node`.
+</ParamField>
+
+<ParamField path="elevated" type="boolean" default="false">
+Request elevated mode — escape the sandbox onto the configured host path. `security=full` is forced only when elevated resolves to `full`.
+</ParamField>
 
 Notes:
 
@@ -68,7 +103,7 @@ Notes:
 - `tools.exec.node` (default: unset)
 - `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` always require explicit approval. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms still prompt each time.
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
-- `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
+- `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals-advanced#safe-bins-stdin-only).
 - `tools.exec.safeBinTrustedDirs`: additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted. Built-in defaults are `/bin` and `/usr/bin`.
 - `tools.exec.safeBinProfiles`: optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`).
 
@@ -163,7 +198,7 @@ Do not treat `safeBins` as a generic allowlist, and do not add interpreter/runti
 `openclaw security audit` and `openclaw doctor` also warn when you explicitly add broad-behavior bins such as `jq` back into `safeBins`.
 If you explicitly allowlist interpreters, enable `tools.exec.strictInlineEval` so inline code-eval forms still require a fresh approval.
 
-For full policy details and examples, see [Exec approvals](/tools/exec-approvals#safe-bins-stdin-only) and [Safe bins versus allowlist](/tools/exec-approvals#safe-bins-versus-allowlist).
+For full policy details and examples, see [Exec approvals](/tools/exec-approvals-advanced#safe-bins-stdin-only) and [Safe bins versus allowlist](/tools/exec-approvals-advanced#safe-bins-versus-allowlist).
 
 ## Examples
 

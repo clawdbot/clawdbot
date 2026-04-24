@@ -7,8 +7,6 @@ read_when:
 title: "Text-to-speech"
 ---
 
-# Text-to-speech (TTS)
-
 OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Microsoft, MiniMax, OpenAI, or xAI.
 It works anywhere OpenClaw can send audio.
 
@@ -509,6 +507,8 @@ Notes:
 The `tts` tool converts text to speech and returns an audio attachment for
 reply delivery. When the channel is Feishu, Matrix, Telegram, or WhatsApp,
 the audio is delivered as a voice message rather than a file attachment.
+It accepts optional `channel` and `timeoutMs` fields; `timeoutMs` is a
+per-call provider request timeout in milliseconds.
 
 ## Gateway RPC
 
@@ -520,3 +520,9 @@ Gateway methods:
 - `tts.convert`
 - `tts.setProvider`
 - `tts.providers`
+
+## Related
+
+- [Media overview](/tools/media-overview)
+- [Music generation](/tools/music-generation)
+- [Video generation](/tools/video-generation)

@@ -474,7 +474,7 @@ API key auth, and dynamic model resolution.
       - `resolveConfigApiKey` uses the provider hook when exposed. The bundled `amazon-bedrock` path also has a built-in AWS env-marker resolver here, even though Bedrock runtime auth itself still uses the AWS SDK default chain.
       - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over `before_prompt_build` when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 
-      For detailed descriptions and real-world examples, see [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).
+      For detailed descriptions and real-world examples, see [Internals: Provider Runtime Hooks](/plugins/architecture-internals#provider-runtime-hooks).
     </Accordion>
 
   </Step>
@@ -717,4 +717,10 @@ providers:
 - [Channel Plugins](/plugins/sdk-channel-plugins) — if your plugin also provides a channel
 - [SDK Runtime](/plugins/sdk-runtime) — `api.runtime` helpers (TTS, search, subagent)
 - [SDK Overview](/plugins/sdk-overview) — full subpath import reference
-- [Plugin Internals](/plugins/architecture#provider-runtime-hooks) — hook details and bundled examples
+- [Plugin Internals](/plugins/architecture-internals#provider-runtime-hooks) — hook details and bundled examples
+
+## Related
+
+- [Plugin SDK setup](/plugins/sdk-setup)
+- [Building plugins](/plugins/building-plugins)
+- [Building channel plugins](/plugins/sdk-channel-plugins)

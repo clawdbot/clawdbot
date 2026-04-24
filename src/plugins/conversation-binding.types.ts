@@ -3,6 +3,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export type PluginConversationBindingRequestParams = {
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 };
 
 export type PluginConversationBindingResolutionDecision = "allow-once" | "allow-always" | "deny";
@@ -20,6 +21,7 @@ export type PluginConversationBinding = {
   boundAt: number;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 };
 
 export type PluginConversationBindingRequestResult =
@@ -44,6 +46,7 @@ export type PluginConversationBindingResolvedEvent = {
   request: {
     summary?: string;
     detachHint?: string;
+    data?: Record<string, unknown>;
     requestedBySenderId?: string;
     conversation: {
       channel: string;

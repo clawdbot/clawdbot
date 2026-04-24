@@ -1,26 +1,33 @@
-import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
+import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
-
-const [{ prepareSlackMessage }, helpers] = await Promise.all([
-  import("./prepare.js"),
-  import("./prepare.test-helpers.js"),
-]);
-const { createInboundSlackTestContext, createSlackTestAccount } = helpers;
+import { resolveSlackRoutingContext, type SlackRoutingContextDeps } from "./prepare-routing.js";
 
 function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" }) {
   const replyToMode = overrides?.replyToMode ?? "all";
-  return createInboundSlackTestContext({
+  return {
     cfg: {
       channels: {
         slack: { enabled: true, replyToMode },
       },
     } as OpenClawConfig,
-    appClient: {} as App["client"],
-    defaultRequireMention: false,
+    teamId: "T1",
+    threadInheritParent: false,
+    threadHistoryScope: "thread",
+  } satisfies SlackRoutingContextDeps;
+}
+
+function buildAccount(replyToMode: "all" | "first" | "off"): ResolvedSlackAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    botTokenSource: "config",
+    appTokenSource: "config",
+    userTokenSource: "none",
+    config: { replyToMode },
     replyToMode,
-  });
+  };
 }
 
 function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessageEvent {
@@ -35,36 +42,38 @@ function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessa
 }
 
 describe("thread-level session keys", () => {
-  it("keeps top-level channel turns in one session when replyToMode=off", async () => {
+  it("keeps top-level channel turns in one session when replyToMode=off", () => {
     const ctx = buildCtx({ replyToMode: "off" });
-    ctx.resolveUserName = async () => ({ name: "Alice" });
-    const account = createSlackTestAccount({ replyToMode: "off" });
+    const account = buildAccount("off");
 
-    const first = await prepareSlackMessage({
+    const first = resolveSlackRoutingContext({
       ctx,
       account,
       message: buildChannelMessage({ ts: "1770408518.451689" }),
-      opts: { source: "message" },
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
     });
-    const second = await prepareSlackMessage({
+    const second = resolveSlackRoutingContext({
       ctx,
       account,
       message: buildChannelMessage({ ts: "1770408520.000001" }),
-      opts: { source: "message" },
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
     });
 
-    expect(first).toBeTruthy();
-    expect(second).toBeTruthy();
-    const firstSessionKey = first!.ctxPayload.SessionKey as string;
-    const secondSessionKey = second!.ctxPayload.SessionKey as string;
+    const firstSessionKey = first.sessionKey;
+    const secondSessionKey = second.sessionKey;
     expect(firstSessionKey).toBe(secondSessionKey);
     expect(firstSessionKey).not.toContain(":thread:");
   });
 
-  it("uses parent thread_ts for thread replies even when replyToMode=off", async () => {
+  it("uses parent thread_ts for thread replies even when replyToMode=off", () => {
     const ctx = buildCtx({ replyToMode: "off" });
-    ctx.resolveUserName = async () => ({ name: "Bob" });
-    const account = createSlackTestAccount({ replyToMode: "off" });
+    const account = buildAccount("off");
 
     const message = buildChannelMessage({
       user: "U2",
@@ -73,52 +82,55 @@ describe("thread-level session keys", () => {
       thread_ts: "1770408518.451689",
     });
 
-    const prepared = await prepareSlackMessage({
+    const routing = resolveSlackRoutingContext({
       ctx,
       account,
       message,
-      opts: { source: "message" },
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
     });
 
-    expect(prepared).toBeTruthy();
-    // Thread replies should use the parent thread_ts, not the reply ts
-    const sessionKey = prepared!.ctxPayload.SessionKey as string;
+    const sessionKey = routing.sessionKey;
     expect(sessionKey).toContain(":thread:1770408518.451689");
     expect(sessionKey).not.toContain("1770408522.168859");
   });
 
-  it("keeps top-level channel messages on the per-channel session regardless of replyToMode", async () => {
+  it("keeps top-level channel messages on the per-channel session regardless of replyToMode", () => {
     for (const mode of ["all", "first", "off"] as const) {
       const ctx = buildCtx({ replyToMode: mode });
-      ctx.resolveUserName = async () => ({ name: "Carol" });
-      const account = createSlackTestAccount({ replyToMode: mode });
+      const account = buildAccount(mode);
 
-      const first = await prepareSlackMessage({
+      const first = resolveSlackRoutingContext({
         ctx,
         account,
         message: buildChannelMessage({ ts: "1770408530.000000" }),
-        opts: { source: "message" },
+        isDirectMessage: false,
+        isGroupDm: false,
+        isRoom: true,
+        isRoomish: true,
       });
-      const second = await prepareSlackMessage({
+      const second = resolveSlackRoutingContext({
         ctx,
         account,
         message: buildChannelMessage({ ts: "1770408531.000000" }),
-        opts: { source: "message" },
+        isDirectMessage: false,
+        isGroupDm: false,
+        isRoom: true,
+        isRoomish: true,
       });
 
-      expect(first).toBeTruthy();
-      expect(second).toBeTruthy();
-      const firstKey = first!.ctxPayload.SessionKey as string;
-      const secondKey = second!.ctxPayload.SessionKey as string;
+      const firstKey = first.sessionKey;
+      const secondKey = second.sessionKey;
       expect(firstKey).toBe(secondKey);
       expect(firstKey).not.toContain(":thread:");
     }
   });
 
-  it("does not add thread suffix for DMs when replyToMode=off", async () => {
+  it("does not add thread suffix for DMs when replyToMode=off", () => {
     const ctx = buildCtx({ replyToMode: "off" });
-    ctx.resolveUserName = async () => ({ name: "Carol" });
-    const account = createSlackTestAccount({ replyToMode: "off" });
+    const account = buildAccount("off");
 
     const message: SlackMessageEvent = {
       channel: "D456",
@@ -128,16 +140,17 @@ describe("thread-level session keys", () => {
       ts: "1770408530.000000",
     } as SlackMessageEvent;
 
-    const prepared = await prepareSlackMessage({
+    const routing = resolveSlackRoutingContext({
       ctx,
       account,
       message,
-      opts: { source: "message" },
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
     });
 
-    expect(prepared).toBeTruthy();
-    // DMs should NOT have :thread: in the session key
-    const sessionKey = prepared!.ctxPayload.SessionKey as string;
+    const sessionKey = routing.sessionKey;
     expect(sessionKey).not.toContain(":thread:");
   });
 });

@@ -59,8 +59,7 @@ let runtimeMod: EmbeddedGatewayRuntime | undefined;
 
 async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
   if (!runtimeMod) {
-    const modPath = [".", "embedded-gateway-stub.runtime.js"].join("/");
-    runtimeMod = (await import(modPath)) as EmbeddedGatewayRuntime;
+    runtimeMod = (await import("./embedded-gateway-stub.runtime.js")) as EmbeddedGatewayRuntime;
   }
   return runtimeMod;
 }

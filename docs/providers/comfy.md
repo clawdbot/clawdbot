@@ -346,7 +346,7 @@ The `image` and `video` sections also support:
   <Card title="Provider Directory" href="/providers/index" icon="layers">
     Overview of all providers and model refs.
   </Card>
-  <Card title="Configuration reference" href="/gateway/configuration-reference#agent-defaults" icon="gear">
+  <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
     Full config reference including agent defaults.
   </Card>
 </CardGroup>

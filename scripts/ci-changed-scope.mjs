@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean }} ChangedScope */
+/** @typedef {{ runFastInstallSmoke: boolean; runFullInstallSmoke: boolean }} InstallSmokeScope */
 
 const FULL_SCOPE = {
   runNode: true,
@@ -43,10 +44,11 @@ const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|scripts\/control-ui-i18n\.ts$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const NATIVE_ONLY_RE =
   /^(apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|Swabble\/|appcast\.xml$)/;
-const CHANGED_SMOKE_SCOPE_RE =
-  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/install\.sh$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/test-install-sh-docker\.sh$|scripts\/docker\/|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|.*\.sh)$|src\/plugins\/bundled-runtime-deps\.ts$|extensions\/[^/]+\/package\.json$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
-const CHANGED_SMOKE_RUNTIME_SCOPE_RE =
-  /^(src\/(?:channels|gateway|plugin-sdk|plugins)\/|extensions\/)/;
+const FAST_INSTALL_SMOKE_SCOPE_RE =
+  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|gateway-network-docker\.sh|bundled-channel-runtime-deps-docker\.sh)$|src\/plugins\/bundled-runtime-deps\.ts$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
+const FULL_INSTALL_SMOKE_SCOPE_RE =
+  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/install\.sh$|scripts\/test-install-sh-docker\.sh$|scripts\/docker\/|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|qr-import-docker\.sh|bun-global-install-smoke\.sh)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
+const FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE = /^src\/(?:channels|gateway|plugin-sdk|plugins)\//;
 
 /**
  * @param {string[]} changedPaths
@@ -114,10 +116,7 @@ export function detectChangedScope(changedPaths) {
       runWindows = true;
     }
 
-    if (
-      CHANGED_SMOKE_SCOPE_RE.test(path) ||
-      (CHANGED_SMOKE_RUNTIME_SCOPE_RE.test(path) && !TEST_ONLY_PATH_RE.test(path))
-    ) {
+    if (detectInstallSmokeScopeForPath(path).runFastInstallSmoke) {
       runChangedSmoke = true;
     }
 
@@ -146,6 +145,42 @@ export function detectChangedScope(changedPaths) {
 }
 
 /**
+ * @param {string} path
+ * @returns {InstallSmokeScope}
+ */
+function detectInstallSmokeScopeForPath(path) {
+  const runFullInstallSmoke = FULL_INSTALL_SMOKE_SCOPE_RE.test(path);
+  const runFastInstallSmoke =
+    runFullInstallSmoke ||
+    FAST_INSTALL_SMOKE_SCOPE_RE.test(path) ||
+    (FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE.test(path) && !TEST_ONLY_PATH_RE.test(path));
+  return { runFastInstallSmoke, runFullInstallSmoke };
+}
+
+/**
+ * @param {string[]} changedPaths
+ * @returns {InstallSmokeScope}
+ */
+export function detectInstallSmokeScope(changedPaths) {
+  if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
+    return { runFastInstallSmoke: true, runFullInstallSmoke: true };
+  }
+
+  let runFastInstallSmoke = false;
+  let runFullInstallSmoke = false;
+  for (const rawPath of changedPaths) {
+    const path = rawPath.trim();
+    if (!path || DOCS_PATH_RE.test(path)) {
+      continue;
+    }
+    const pathScope = detectInstallSmokeScopeForPath(path);
+    runFastInstallSmoke ||= pathScope.runFastInstallSmoke;
+    runFullInstallSmoke ||= pathScope.runFullInstallSmoke;
+  }
+  return { runFastInstallSmoke, runFullInstallSmoke };
+}
+
+/**
  * @param {string} base
  * @param {string} [head]
  * @returns {string[]}
@@ -167,8 +202,16 @@ export function listChangedPaths(base, head = "HEAD") {
 /**
  * @param {ChangedScope} scope
  * @param {string} [outputPath]
+ * @param {InstallSmokeScope} [installSmokeScope]
  */
-export function writeGitHubOutput(scope, outputPath = process.env.GITHUB_OUTPUT) {
+export function writeGitHubOutput(
+  scope,
+  outputPath = process.env.GITHUB_OUTPUT,
+  installSmokeScope = {
+    runFastInstallSmoke: scope.runChangedSmoke,
+    runFullInstallSmoke: scope.runChangedSmoke,
+  },
+) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }
@@ -178,6 +221,16 @@ export function writeGitHubOutput(scope, outputPath = process.env.GITHUB_OUTPUT)
   appendFileSync(outputPath, `run_windows=${scope.runWindows}\n`, "utf8");
   appendFileSync(outputPath, `run_skills_python=${scope.runSkillsPython}\n`, "utf8");
   appendFileSync(outputPath, `run_changed_smoke=${scope.runChangedSmoke}\n`, "utf8");
+  appendFileSync(
+    outputPath,
+    `run_fast_install_smoke=${installSmokeScope.runFastInstallSmoke}\n`,
+    "utf8",
+  );
+  appendFileSync(
+    outputPath,
+    `run_full_install_smoke=${installSmokeScope.runFullInstallSmoke}\n`,
+    "utf8",
+  );
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
 }
 
@@ -211,7 +264,11 @@ if (isDirectRun()) {
       writeGitHubOutput(EMPTY_SCOPE);
       process.exit(0);
     }
-    writeGitHubOutput(detectChangedScope(changedPaths));
+    writeGitHubOutput(
+      detectChangedScope(changedPaths),
+      process.env.GITHUB_OUTPUT,
+      detectInstallSmokeScope(changedPaths),
+    );
   } catch {
     writeGitHubOutput(FULL_SCOPE);
   }

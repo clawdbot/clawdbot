@@ -129,3 +129,8 @@ Paste literal text:
 ```json
 { "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }
 ```
+
+## Related
+
+- [Exec tool](/tools/exec)
+- [Exec approvals](/tools/exec-approvals)

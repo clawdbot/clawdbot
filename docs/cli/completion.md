@@ -33,3 +33,7 @@ openclaw completion --shell bash --write-state
 - `--install` writes a small "OpenClaw Completion" block into your shell profile and points it at the cached script.
 - Without `--install` or `--write-state`, the command prints the script to stdout.
 - Completion generation eagerly loads command trees so nested subcommands are included.
+
+## Related
+
+- [CLI reference](/cli)

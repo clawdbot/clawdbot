@@ -95,7 +95,9 @@ export async function prepareCliRunContext(
   }
   const workspaceDir = resolvedWorkspace;
 
-  const backendResolved = resolveCliBackendConfig(params.provider, params.config);
+  const backendResolved = resolveCliBackendConfig(params.provider, params.config, {
+    agentId: params.agentId,
+  });
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }

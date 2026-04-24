@@ -43,6 +43,20 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
       ${props.canAbort
         ? html`
             <button
+              class="chat-send-btn"
+              @click=${() => {
+                if (props.draft.trim()) {
+                  props.onStoreDraft(props.draft);
+                }
+                props.onSend();
+              }}
+              ?disabled=${!props.connected || props.sending}
+              title="Queue"
+              aria-label="Queue message"
+            >
+              ${icons.send}
+            </button>
+            <button
               class="chat-send-btn chat-send-btn--stop"
               @click=${props.onAbort}
               title="Stop"

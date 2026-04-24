@@ -273,4 +273,4 @@ describe("telegram target normalization", () => {
   });
 });
 
-installMaybePersistResolvedTelegramTargetTests();
+installMaybePersistResolvedTelegramTargetTests({ includeGatewayScopeCases: true });

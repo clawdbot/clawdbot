@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AuthProfileStore } from "./auth-profiles.js";
-import { getSoonestCooldownExpiry } from "./auth-profiles.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { getSoonestCooldownExpiry } from "./auth-profiles/usage-state.js";
 
 function makeStore(usageStats?: AuthProfileStore["usageStats"]): AuthProfileStore {
   return {

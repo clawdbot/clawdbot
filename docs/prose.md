@@ -130,3 +130,8 @@ If your tool allowlist blocks these tools, OpenProse programs will fail. See [Sk
 Treat `.prose` files like code. Review before running. Use OpenClaw tool allowlists and approval gates to control side effects.
 
 For deterministic, approval-gated workflows, compare with [Lobster](/tools/lobster).
+
+## Related
+
+- [Text-to-speech](/tools/tts)
+- [Markdown formatting](/concepts/markdown-formatting)

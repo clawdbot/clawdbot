@@ -8,6 +8,13 @@ import {
 import type { TalkConfigResponse, TalkProviderConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+} from "../../realtime-voice/agent-consult-tool.js";
+import { getRealtimeVoiceProvider } from "../../realtime-voice/provider-registry.js";
+import { resolveConfiguredRealtimeVoiceProvider } from "../../realtime-voice/provider-resolver.js";
+import type { RealtimeVoiceProviderConfig } from "../../realtime-voice/provider-types.js";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -22,6 +29,7 @@ import {
   type TalkSpeakParams,
   validateTalkConfigParams,
   validateTalkModeParams,
+  validateTalkRealtimeSessionParams,
   validateTalkSpeakParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
@@ -134,6 +142,61 @@ function buildTalkTtsConfig(
       },
     },
   };
+}
+
+function getRecord(value: unknown): Record<string, unknown> | undefined {
+  return asRecord(value) ?? undefined;
+}
+
+function getVoiceCallRealtimeConfig(config: OpenClawConfig): {
+  provider?: string;
+  providers?: Record<string, RealtimeVoiceProviderConfig>;
+} {
+  const plugins = getRecord(config.plugins);
+  const entries = getRecord(plugins?.entries);
+  const voiceCall = getRecord(entries?.["voice-call"]);
+  const pluginConfig = getRecord(voiceCall?.config);
+  const realtime = getRecord(pluginConfig?.realtime);
+  const providersRaw = getRecord(realtime?.providers);
+  const providers: Record<string, RealtimeVoiceProviderConfig> = {};
+  if (providersRaw) {
+    for (const [providerId, providerConfig] of Object.entries(providersRaw)) {
+      const record = getRecord(providerConfig);
+      if (record) {
+        providers[providerId] = record;
+      }
+    }
+  }
+  return {
+    provider: normalizeOptionalString(realtime?.provider),
+    providers: Object.keys(providers).length > 0 ? providers : undefined,
+  };
+}
+
+function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvider?: string) {
+  const voiceCallRealtime = getVoiceCallRealtimeConfig(config);
+  const talkProviderConfigs = config.talk?.providers as
+    | Record<string, RealtimeVoiceProviderConfig>
+    | undefined;
+  const talkProvider = normalizeOptionalString(config.talk?.provider);
+  const talkProviderSupportsRealtime = talkProvider
+    ? Boolean(getRealtimeVoiceProvider(talkProvider, config))
+    : false;
+  const provider =
+    normalizeOptionalString(requestedProvider) ??
+    (talkProviderSupportsRealtime ? talkProvider : undefined) ??
+    voiceCallRealtime.provider;
+  return {
+    provider,
+    providers: {
+      ...voiceCallRealtime.providers,
+      ...talkProviderConfigs,
+    },
+  };
+}
+
+function buildRealtimeInstructions(): string {
+  return `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
 }
 
 function isFallbackEligibleTalkReason(reason: TalkSpeakReason): boolean {
@@ -333,6 +396,66 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { config: configPayload }, undefined);
+  },
+  "talk.realtime.session": async ({ params, respond }) => {
+    if (!validateTalkRealtimeSessionParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.realtime.session params: ${formatValidationErrors(validateTalkRealtimeSessionParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const typedParams = params as {
+      provider?: string;
+      model?: string;
+      voice?: string;
+    };
+    try {
+      const runtimeConfig = loadConfig();
+      const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, typedParams.provider);
+      const resolution = resolveConfiguredRealtimeVoiceProvider({
+        configuredProviderId: realtimeConfig.provider,
+        providerConfigs: realtimeConfig.providers,
+        cfg: runtimeConfig,
+        cfgForResolve: runtimeConfig,
+        noRegisteredProviderMessage: "No realtime voice provider registered",
+      });
+      if (!resolution.provider.createBrowserSession) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Realtime voice provider "${resolution.provider.id}" does not support browser WebRTC sessions`,
+          ),
+        );
+        return;
+      }
+      const session = await resolution.provider.createBrowserSession({
+        providerConfig: resolution.providerConfig,
+        instructions: buildRealtimeInstructions(),
+        tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
+        model: normalizeOptionalString(typedParams.model),
+        voice: normalizeOptionalString(typedParams.voice),
+      });
+      respond(
+        true,
+        {
+          provider: session.provider,
+          clientSecret: session.clientSecret,
+          ...(session.model ? { model: session.model } : {}),
+          ...(session.voice ? { voice: session.voice } : {}),
+          ...(typeof session.expiresAt === "number" ? { expiresAt: session.expiresAt } : {}),
+        },
+        undefined,
+      );
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
   },
   "talk.speak": async ({ params, respond }) => {
     if (!validateTalkSpeakParams(params)) {

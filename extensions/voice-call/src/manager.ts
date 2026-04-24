@@ -10,6 +10,7 @@ import {
   continueCall as continueCallWithContext,
   endCall as endCallWithContext,
   initiateCall as initiateCallWithContext,
+  sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
 } from "./manager/outbound.js";
@@ -219,6 +220,13 @@ export class CallManager {
    */
   async speak(callId: CallId, text: string): Promise<{ success: boolean; error?: string }> {
     return speakWithContext(this.getContext(), callId, text);
+  }
+
+  /**
+   * Send DTMF digits to an active call.
+   */
+  async sendDtmf(callId: CallId, digits: string): Promise<{ success: boolean; error?: string }> {
+    return sendDtmfWithContext(this.getContext(), callId, digits);
   }
 
   /**

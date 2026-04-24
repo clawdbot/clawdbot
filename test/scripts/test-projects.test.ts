@@ -114,6 +114,21 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes browser extension changes to the browser extension lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "extensions/browser/src/browser/cdp.helpers.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.extension-browser.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/browser/src/browser/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("keeps the broad changed run for shared test helpers", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [

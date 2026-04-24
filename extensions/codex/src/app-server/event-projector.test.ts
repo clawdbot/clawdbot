@@ -208,6 +208,27 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("uses raw assistant response items when turn completion omits items", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-1",
+          role: "assistant",
+          content: [{ type: "output_text", text: "OK from raw" }],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["OK from raw"]);
+    expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "OK from raw" }]);
+  });
+
   it("normalizes snake_case current token usage fields", async () => {
     const projector = await createProjector();
 
@@ -469,7 +490,7 @@ describe("CodexAppServerEventProjector", () => {
         data: expect.objectContaining({ phase: "start", itemId: "compact-1" }),
       }),
     );
-    expect(result.toolMetas).toEqual([{ toolName: "sessions_send", meta: "completed" }]);
+    expect(result.toolMetas).toEqual([{ toolName: "sessions_send" }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -478,6 +499,202 @@ describe("CodexAppServerEventProjector", () => {
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
     expect(result.itemLifecycle).toMatchObject({ compactionCount: 1 });
+  });
+
+  it("emits verbose tool summaries through onToolResult", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "🛠️ Bash: `` run tests (in /workspace), `pnpm test extensions/codex` ``",
+    });
+  });
+
+  it("redacts secrets in verbose command summaries", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "OPENAI_API_KEY=sk-1234567890abcdefZZZZ pnpm test",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    const text = onToolResult.mock.calls[0]?.[0]?.text;
+    expect(text).toContain("sk-123…ZZZZ");
+    expect(text).not.toContain("sk-1234567890abcdefZZZZ");
+  });
+
+  it("uses argument details instead of lifecycle status in verbose tool summaries", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "lcm_grep",
+          arguments: { query: "inProgress text" },
+          status: "inProgress",
+          contentItems: null,
+          success: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "🧩 Lcm Grep: `inProgress text`",
+    });
+  });
+
+  it("emits completed tool output only when verbose full is enabled", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "read",
+          arguments: { path: "README.md" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "file contents" }],
+          success: true,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    expect(onToolResult).toHaveBeenNthCalledWith(1, {
+      text: "📖 Read: `from README.md`",
+    });
+    expect(onToolResult).toHaveBeenNthCalledWith(2, {
+      text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+    });
+  });
+
+  it("uses a safe markdown fence for verbose tool output", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "read",
+          arguments: { path: "README.md" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "line\n```\nMEDIA:/tmp/secret.png" }],
+          success: true,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    expect(onToolResult).toHaveBeenNthCalledWith(2, {
+      text: "📖 Read: `from README.md`\n````txt\nline\n```\nMEDIA:/tmp/secret.png\n````",
+    });
+  });
+
+  it("bounds streamed verbose tool output", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    for (let i = 0; i < 25; i += 1) {
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-1",
+          delta: `line ${i}\n`,
+        }),
+      );
+    }
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "final output should not duplicate streamed output",
+          exitCode: 0,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    expect(onToolResult).toHaveBeenCalledTimes(21);
+    expect(onToolResult.mock.calls[19]?.[0]?.text).toContain("...(truncated)...");
+    expect(JSON.stringify(onToolResult.mock.calls)).not.toContain(
+      "final output should not duplicate",
+    );
   });
 
   it("continues projecting turn completion when an event consumer throws", async () => {
@@ -546,5 +763,106 @@ describe("CodexAppServerEventProjector", () => {
         sessionId: "session-1",
       }),
     );
+  });
+
+  it("projects codex hook started and completed notifications into agent events", async () => {
+    const onAgentEvent = vi.fn();
+    const params = await createParams();
+    const projector = await createProjector({ ...params, onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("hook/started", {
+        run: {
+          id: "hook-1",
+          eventName: "preToolUse",
+          handlerType: "command",
+          executionMode: "sync",
+          scope: "turn",
+          source: "project",
+          sourcePath: "/repo/.codex/hooks.json",
+          status: "running",
+          statusMessage: null,
+          entries: [],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("hook/completed", {
+        run: {
+          id: "hook-1",
+          eventName: "preToolUse",
+          handlerType: "command",
+          executionMode: "sync",
+          scope: "turn",
+          source: "project",
+          sourcePath: "/repo/.codex/hooks.json",
+          status: "blocked",
+          statusMessage: "blocked by hook",
+          durationMs: 42,
+          entries: [{ kind: "stderr", text: "blocked" }],
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.hook",
+      data: expect.objectContaining({
+        phase: "started",
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        hookRunId: "hook-1",
+        eventName: "preToolUse",
+        status: "running",
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.hook",
+      data: expect.objectContaining({
+        phase: "completed",
+        hookRunId: "hook-1",
+        status: "blocked",
+        statusMessage: "blocked by hook",
+        durationMs: 42,
+        entries: [{ kind: "stderr", text: "blocked" }],
+      }),
+    });
+  });
+
+  it("projects thread-scoped codex hook notifications that omit a turn id", async () => {
+    const onAgentEvent = vi.fn();
+    const params = await createParams();
+    const projector = await createProjector({ ...params, onAgentEvent });
+
+    await projector.handleNotification({
+      method: "hook/started",
+      params: {
+        threadId: THREAD_ID,
+        turnId: null,
+        run: {
+          id: "hook-thread-1",
+          eventName: "sessionStart",
+          handlerType: "command",
+          executionMode: "sync",
+          scope: "thread",
+          source: "project",
+          sourcePath: "/repo/.codex/hooks.json",
+          status: "running",
+          statusMessage: null,
+          entries: [],
+        },
+      },
+    });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.hook",
+      data: expect.objectContaining({
+        phase: "started",
+        threadId: THREAD_ID,
+        turnId: null,
+        hookRunId: "hook-thread-1",
+        eventName: "sessionStart",
+        scope: "thread",
+      }),
+    });
   });
 });

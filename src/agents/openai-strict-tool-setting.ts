@@ -8,7 +8,7 @@ type OpenAIStrictToolModel = {
   api?: unknown;
   baseUrl?: unknown;
   id?: unknown;
-  compat?: { supportsStore?: boolean };
+  compat?: unknown;
 };
 
 const optionalString = readStringValue;
@@ -24,10 +24,7 @@ export function resolvesToNativeOpenAIStrictTools(
     capability: "llm",
     transport,
     modelId: optionalString(model.id),
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
+    compat: model.compat,
   });
   if (!capabilities.usesKnownNativeOpenAIRoute) {
     return false;

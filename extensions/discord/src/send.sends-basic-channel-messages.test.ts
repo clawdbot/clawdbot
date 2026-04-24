@@ -355,6 +355,41 @@ describe("sendMessageDiscord", () => {
     expect(String(error)).toMatch(/SendMessages/);
   });
 
+  it("keeps 50013 context when permission probe finds baseline permissions", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    const perms = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages;
+    const apiError = Object.assign(new Error("Missing Permissions"), {
+      code: 50013,
+      status: 403,
+    });
+    postMock.mockRejectedValueOnce(apiError);
+    getMock
+      .mockResolvedValueOnce({ type: ChannelType.GuildText })
+      .mockResolvedValueOnce({
+        id: "789",
+        guild_id: "guild1",
+        type: 0,
+        permission_overwrites: [],
+      })
+      .mockResolvedValueOnce({ id: "bot1" })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [{ id: "guild1", permissions: perms.toString() }],
+      })
+      .mockResolvedValueOnce({ roles: [] });
+
+    let error: unknown;
+    try {
+      await sendMessageDiscord("channel:789", "hello", { rest, token: "t", cfg: DISCORD_TEST_CFG });
+    } catch (err) {
+      error = err;
+    }
+    expect(String(error)).toMatch(
+      /permission probe did not identify missing ViewChannel\/SendMessages/,
+    );
+    expect(String(error)).toMatch(/code=50013 status=403/);
+  });
+
   it("uploads media attachments", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg", channel_id: "789" });

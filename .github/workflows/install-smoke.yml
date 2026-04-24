@@ -1,17 +1,32 @@
 name: Install Smoke
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      run_bun_global_install_smoke:
+        description: Run the Bun global install image-provider smoke
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to validate
+        required: false
+        type: string
+      run_bun_global_install_smoke:
+        description: Run the Bun global install image-provider smoke
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-{1}', github.workflow, github.run_id) || github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
   cancel-in-progress: true
 
 env:
@@ -19,70 +34,54 @@ env:
 
 jobs:
   preflight:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
+      run_fast_install_smoke: ${{ steps.manifest.outputs.run_fast_install_smoke }}
+      run_full_install_smoke: ${{ steps.manifest.outputs.run_full_install_smoke }}
+      run_bun_global_install_smoke: ${{ steps.manifest.outputs.run_bun_global_install_smoke }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
           submodules: false
 
-      - name: Ensure preflight base commit
-        if: github.event_name != 'workflow_dispatch'
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
-      - name: Detect docs-only changes
-        id: docs_scope
-        uses: ./.github/actions/detect-docs-changes
-
-      - name: Detect changed smoke scope
-        id: changed_scope
-        if: github.event_name != 'workflow_dispatch' && steps.docs_scope.outputs.docs_only != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
-          else
-            BASE="${{ github.event.pull_request.base.sha }}"
-          fi
-
-          node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
-
       - name: Build install-smoke CI manifest
         id: manifest
         env:
-          OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
-          OPENCLAW_CI_FORCE_INSTALL_SMOKE: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
-          OPENCLAW_CI_RUN_CHANGED_SMOKE: ${{ steps.changed_scope.outputs.run_changed_smoke || 'false' }}
+          OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
+          OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE: ${{ inputs.run_bun_global_install_smoke || 'false' }}
         run: |
-          docs_only="${OPENCLAW_CI_DOCS_ONLY:-false}"
-          force_install_smoke="${OPENCLAW_CI_FORCE_INSTALL_SMOKE:-false}"
-          run_changed_smoke="${OPENCLAW_CI_RUN_CHANGED_SMOKE:-false}"
-          run_install_smoke=false
-          if [ "$force_install_smoke" = "true" ]; then
-            run_install_smoke=true
-          elif [ "$docs_only" != "true" ] && [ "$run_changed_smoke" = "true" ]; then
-            run_install_smoke=true
+          event_name="${OPENCLAW_CI_EVENT_NAME:-}"
+          workflow_bun_global_install_smoke="${OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:-false}"
+          docs_only=false
+          run_fast_install_smoke=true
+          run_full_install_smoke=true
+          run_bun_global_install_smoke=false
+          run_install_smoke=true
+          if [ "$event_name" = "schedule" ]; then
+            run_bun_global_install_smoke=true
+          elif [ "$event_name" = "workflow_dispatch" ] || [ "$event_name" = "workflow_call" ]; then
+            if [ "$workflow_bun_global_install_smoke" = "true" ]; then
+              run_bun_global_install_smoke=true
+            fi
           fi
           {
             echo "docs_only=$docs_only"
             echo "run_install_smoke=$run_install_smoke"
+            echo "run_fast_install_smoke=$run_fast_install_smoke"
+            echo "run_full_install_smoke=$run_full_install_smoke"
+            echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"
           } >> "$GITHUB_OUTPUT"
 
-  install-smoke:
+  install-smoke-fast:
     needs: [preflight]
-    if: needs.preflight.outputs.run_install_smoke == 'true'
+    if: needs.preflight.outputs.run_fast_install_smoke == 'true' && needs.preflight.outputs.run_full_install_smoke != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     env:
       DOCKER_BUILD_SUMMARY: "false"
@@ -90,6 +89,96 @@ jobs:
     steps:
       - name: Checkout CLI
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+
+      # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
+      # explicit gha cache directives so local tags still load cleanly.
+      - name: Build root Dockerfile smoke image
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+        with:
+          context: .
+          file: ./Dockerfile
+          build-args: |
+            OPENCLAW_DOCKER_APT_UPGRADE=0
+            OPENCLAW_EXTENSIONS=matrix
+          tags: |
+            openclaw-dockerfile-smoke:local
+            openclaw-ext-smoke:local
+          load: true
+          push: false
+          provenance: false
+
+      - name: Run root Dockerfile CLI smoke
+        run: |
+          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
+
+      - name: Run Docker gateway network e2e
+        env:
+          OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
+        run: bash scripts/e2e/gateway-network-docker.sh
+
+      - name: Smoke test Dockerfile with matrix extension build arg
+        run: |
+          docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
+            which openclaw &&
+            openclaw --version &&
+            node -e "
+              const Module = require(\"node:module\");
+              const matrixPackage = require(\"/app/extensions/matrix/package.json\");
+              const requireFromMatrix = Module.createRequire(\"/app/extensions/matrix/package.json\");
+              const runtimeDeps = Object.keys(matrixPackage.dependencies ?? {});
+              if (runtimeDeps.length === 0) {
+                throw new Error(
+                  \"matrix package has no declared runtime dependencies; smoke cannot validate install mirroring\",
+                );
+              }
+              for (const dep of runtimeDeps) {
+                requireFromMatrix.resolve(dep);
+              }
+              const { spawnSync } = require(\"node:child_process\");
+              const run = spawnSync(\"openclaw\", [\"plugins\", \"list\", \"--json\"], { encoding: \"utf8\" });
+              if (run.status !== 0) {
+                process.stderr.write(run.stderr || run.stdout || \"plugins list failed\\n\");
+                process.exit(run.status ?? 1);
+              }
+              const parsed = JSON.parse(run.stdout);
+              const matrix = (parsed.plugins || []).find((entry) => entry.id === \"matrix\");
+              if (!matrix) {
+                throw new Error(\"matrix plugin missing from bundled plugin list\");
+              }
+              const matrixDiag = (parsed.diagnostics || []).filter(
+                (diag) =>
+                  typeof diag.source === \"string\" &&
+                  diag.source.includes(\"/extensions/matrix\") &&
+                  typeof diag.message === \"string\" &&
+                  diag.message.includes(\"extension entry escapes package directory\"),
+              );
+              if (matrixDiag.length > 0) {
+                throw new Error(
+                  \"unexpected matrix diagnostics: \" +
+                    matrixDiag.map((diag) => diag.message).join(\"; \"),
+                );
+              }
+            "
+          '
+
+  install-smoke:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
@@ -184,7 +273,6 @@ jobs:
           provenance: false
 
       - name: Build installer non-root image
-        if: github.event_name != 'pull_request'
         uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: ./scripts/docker
@@ -194,13 +282,14 @@ jobs:
           push: false
           provenance: false
 
-      - name: Setup Node environment for local pack smoke
+      - name: Setup Node environment for installer smoke
         uses: ./.github/actions/setup-node-env
         with:
-          install-bun: "true"
+          install-bun: ${{ needs.preflight.outputs.run_bun_global_install_smoke }}
           install-deps: "true"
 
       - name: Run Bun global install image-provider smoke
+        if: needs.preflight.outputs.run_bun_global_install_smoke == 'true'
         env:
           OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local
           OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
@@ -213,17 +302,18 @@ jobs:
           OPENCLAW_NO_ONBOARD: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_CLI: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD: "1"
-          OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: ${{ github.event_name == 'pull_request' && '0' || '1' }}
-          OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: "1"
+          OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: "0"
           OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
+          OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: latest
           OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: openclaw-dockerfile-smoke:local
           OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
         run: bash scripts/test-install-sh-docker.sh
 
   docker-e2e-fast:
     needs: [preflight]
-    if: needs.preflight.outputs.run_install_smoke == 'true'
+    if: needs.preflight.outputs.run_fast_install_smoke == 'true' || needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 8
     env:
@@ -232,6 +322,8 @@ jobs:
     steps:
       - name: Checkout CLI
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1

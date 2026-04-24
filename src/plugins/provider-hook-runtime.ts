@@ -6,7 +6,11 @@ import { resolvePluginCacheInputs } from "./roots.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import type {
   ProviderPlugin,
+  ProviderExtraParamsForTransportContext,
   ProviderPrepareExtraParamsContext,
+  ProviderResolveAuthProfileIdContext,
+  ProviderFollowupFallbackRouteContext,
+  ProviderFollowupFallbackRouteResult,
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
@@ -180,6 +184,37 @@ export function prepareProviderExtraParams(params: {
   context: ProviderPrepareExtraParamsContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.prepareExtraParams?.(params.context) ?? undefined;
+}
+
+export function resolveProviderExtraParamsForTransport(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderExtraParamsForTransportContext;
+}) {
+  return resolveProviderHookPlugin(params)?.extraParamsForTransport?.(params.context) ?? undefined;
+}
+
+export function resolveProviderAuthProfileId(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveAuthProfileIdContext;
+}): string | undefined {
+  const resolved = resolveProviderHookPlugin(params)?.resolveAuthProfileId?.(params.context);
+  return typeof resolved === "string" && resolved.trim() ? resolved.trim() : undefined;
+}
+
+export function resolveProviderFollowupFallbackRoute(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderFollowupFallbackRouteContext;
+}): ProviderFollowupFallbackRouteResult | undefined {
+  return resolveProviderHookPlugin(params)?.followupFallbackRoute?.(params.context) ?? undefined;
 }
 
 export function wrapProviderStreamFn(params: {

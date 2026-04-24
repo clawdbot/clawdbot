@@ -110,3 +110,9 @@ On the new machine, confirm:
 - [ ] Channels are still connected (no re-pairing needed)
 - [ ] The dashboard opens and shows existing sessions
 - [ ] Workspace files (memory, configs) are present
+
+## Related
+
+- [Install overview](/install)
+- [Matrix migration](/install/migrating-matrix)
+- [Uninstall](/install/uninstall)

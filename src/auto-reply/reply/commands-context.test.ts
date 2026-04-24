@@ -50,4 +50,33 @@ describe("buildCommandContext", () => {
 
     expect(result.commandBodyNormalized).toBe("/reset soft re-read persona files");
   });
+
+  it("maps explicit gateway origin into command context", () => {
+    const ctx = buildTestCtx({
+      Provider: "internal",
+      Surface: "internal",
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U123",
+      SenderId: "gateway-client",
+      From: undefined,
+      To: undefined,
+      Body: "/codex bind",
+      RawBody: "/codex bind",
+      CommandBody: "/codex bind",
+      BodyForCommands: "/codex bind",
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: "/codex bind",
+      commandAuthorized: true,
+    });
+
+    expect(result.channel).toBe("slack");
+    expect(result.channelId).toBe("slack");
+    expect(result.from).toBe("gateway-client");
+    expect(result.to).toBe("user:U123");
+  });
 });

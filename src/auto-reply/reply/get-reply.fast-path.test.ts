@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  buildFastReplyCommandContext,
   initFastReplySessionState,
   markCompleteReplyConfig,
   withFastReplyConfig,
@@ -144,6 +145,30 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     expect(result.sessionKey).toBe("agent:main:main");
     expect(result.sessionCtx.SessionKey).toBe("agent:main:main");
+  });
+
+  it("maps explicit gateway origin into command context", () => {
+    const command = buildFastReplyCommandContext({
+      ctx: buildGetReplyCtx({
+        Provider: "internal",
+        Surface: "internal",
+        OriginatingChannel: "slack",
+        OriginatingTo: "user:U123",
+        From: undefined,
+        To: undefined,
+        SenderId: "gateway-client",
+      }),
+      cfg: {} as OpenClawConfig,
+      sessionKey: "main",
+      isGroup: false,
+      triggerBodyNormalized: "/codex bind",
+      commandAuthorized: true,
+    });
+
+    expect(command.channel).toBe("slack");
+    expect(command.channelId).toBe("slack");
+    expect(command.from).toBe("gateway-client");
+    expect(command.to).toBe("user:U123");
   });
 
   it("keeps the existing session for /reset newline soft during fast bootstrap", async () => {

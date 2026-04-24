@@ -123,7 +123,7 @@ Use the table below to pick the right model for your use case.
 
 </Tip>
 
-## Available models (41 total)
+## Built-in catalog (41 total)
 
 <AccordionGroup>
   <Accordion title="Private models (26) — fully private, no logging">

@@ -218,6 +218,7 @@ function createCodexBindRequest(params: {
   parentConversationId?: string;
   threadId?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 }) {
   return {
     pluginId: params.pluginId ?? "codex",
@@ -234,6 +235,7 @@ function createCodexBindRequest(params: {
     binding: {
       summary: params.summary,
       ...(params.detachHint ? { detachHint: params.detachHint } : {}),
+      ...(params.data ? { data: params.data } : {}),
     },
   } satisfies PluginBindingRequestInput;
 }
@@ -619,6 +621,37 @@ describe("plugin conversation binding approvals", () => {
     });
 
     expect(currentBinding?.detachHint).toBe("/codex_detach");
+  });
+
+  it("persists plugin-owned binding data on approved plugin bindings", async () => {
+    const data = {
+      kind: "codex-app-server-session",
+      version: 1,
+      sessionFile: "/tmp/openclaw/session.jsonl",
+      workspaceDir: "/workspace/openclaw",
+    };
+    const binding = await requestResolvedBinding(
+      createCodexBindRequest({
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:binding-data",
+        summary: "Bind this conversation to Codex thread 999.",
+        data,
+      }),
+    );
+
+    expect(binding.data).toEqual(data);
+
+    const currentBinding = await getCurrentPluginConversationBinding({
+      pluginRoot: "/plugins/codex-a",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:binding-data",
+      },
+    });
+
+    expect(currentBinding?.data).toEqual(data);
   });
 
   it.each([

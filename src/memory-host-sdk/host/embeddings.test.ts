@@ -44,6 +44,53 @@ describe("local embedding provider", () => {
     expect(runtime.getEmbeddingFor).toHaveBeenCalledWith("test query");
   });
 
+  it("passes default contextSize (4096) to createEmbeddingContext when not configured", async () => {
+    const runtime = mockLocalEmbeddingRuntime();
+
+    const provider = await createLocalEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    await provider.embedQuery("context size default test");
+
+    expect(runtime.createEmbeddingContext).toHaveBeenCalledWith({ contextSize: 4096 });
+  });
+
+  it("passes configured contextSize to createEmbeddingContext", async () => {
+    const runtime = mockLocalEmbeddingRuntime();
+
+    const provider = await createLocalEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      local: { contextSize: 2048 },
+    });
+
+    await provider.embedQuery("context size custom test");
+
+    expect(runtime.createEmbeddingContext).toHaveBeenCalledWith({ contextSize: 2048 });
+  });
+
+  it('passes "auto" contextSize to createEmbeddingContext when explicitly set', async () => {
+    const runtime = mockLocalEmbeddingRuntime();
+
+    const provider = await createLocalEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      local: { contextSize: "auto" },
+    });
+
+    await provider.embedQuery("context size auto test");
+
+    expect(runtime.createEmbeddingContext).toHaveBeenCalledWith({ contextSize: "auto" });
+  });
+
   it("trims explicit local model paths and cache directories", async () => {
     const runtime = mockLocalEmbeddingRuntime(new Float32Array([1, 0]));
 

@@ -35,6 +35,8 @@ export {
   asBoolean,
   asFiniteNumber,
   asObject,
+  extractProviderErrorDetail,
+  formatProviderErrorPayload,
   readResponseTextLimited,
   trimToUndefined,
   truncateErrorDetail,

@@ -76,3 +76,8 @@ For script compatibility, probe errors keep this first line unchanged:
 `Auth profile credentials are missing or expired.`
 
 Human-friendly detail and stable reason codes may be added on subsequent lines.
+
+## Related
+
+- [Secrets management](/gateway/secrets)
+- [Auth storage](/concepts/oauth)

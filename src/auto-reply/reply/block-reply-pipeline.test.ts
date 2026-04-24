@@ -100,3 +100,74 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(sent).toEqual(["Alpha", "Beta"]);
   });
 });
+
+describe("createBlockReplyPipeline content coverage dedup", () => {
+  it("matches final assembled text to successfully streamed text chunks after abort", async () => {
+    let callCount = 0;
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {
+        callCount += 1;
+        if (callCount === 3) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      },
+      timeoutMs: 1,
+    });
+
+    pipeline.enqueue({ text: "First paragraph." });
+    pipeline.enqueue({ text: "Second paragraph." });
+    pipeline.enqueue({ text: "Third paragraph." });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.isAborted()).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "First paragraph.\n\nSecond paragraph." })).toBe(true);
+  });
+
+  it("does not match final assembled text with content that was not streamed", async () => {
+    let callCount = 0;
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {
+        callCount += 1;
+        if (callCount === 2) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      },
+      timeoutMs: 1,
+    });
+
+    pipeline.enqueue({ text: "First paragraph." });
+    pipeline.enqueue({ text: "Second paragraph." });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.isAborted()).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "First paragraph.\n\nSecond paragraph." })).toBe(false);
+  });
+
+  it("does not suppress media payloads through streamed text coverage", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "Description" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ text: "Description", mediaUrl: "file:///photo.jpg" })).toBe(
+      false,
+    );
+  });
+
+  it("does not suppress unrelated shorter text that appears inside streamed content", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "Here is a summary." });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ text: "summary" })).toBe(false);
+  });
+});

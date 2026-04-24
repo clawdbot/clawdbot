@@ -32,6 +32,33 @@ describe("openai responses payload policy", () => {
     });
   });
 
+  it("couples native Responses server compaction to provider-managed store", () => {
+    const model = {
+      id: "gpt-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 200_000,
+    } satisfies Pick<
+      Model<"openai-responses">,
+      "api" | "baseUrl" | "contextWindow" | "id" | "provider"
+    >;
+    const payload = {} satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(model, {
+        enableServerCompaction: true,
+        storeMode: "provider-policy",
+      }),
+    );
+
+    expect(payload).toEqual({
+      store: true,
+      context_management: [{ type: "compaction", compact_threshold: 140_000 }],
+    });
+  });
+
   it("strips store and prompt cache for proxy-like responses routes when requested", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {

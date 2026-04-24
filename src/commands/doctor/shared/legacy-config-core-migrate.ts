@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import { normalizeBaseCompatibilityConfigValues } from "./legacy-config-compatibility-base.js";
+import { normalizeLegacyOpenAICodexModelsAddMetadata } from "./legacy-config-core-normalizers.js";
 
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   config: OpenClawConfig;
@@ -23,6 +24,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);
   }
+  next = normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);
 
   return { config: next, changes };
 }

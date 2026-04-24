@@ -72,3 +72,9 @@ Or:
 ```bash
 openclaw plugins disable tokenjuice
 ```
+
+## Related
+
+- [Exec tool](/tools/exec)
+- [Thinking levels](/tools/thinking)
+- [Context engine](/concepts/context-engine)

@@ -37,12 +37,29 @@ Availability notes:
 
 ## Input reference
 
-- `pdf` (`string`): one PDF path or URL
-- `pdfs` (`string[]`): multiple PDF paths or URLs, up to 10 total
-- `prompt` (`string`): analysis prompt, default `Analyze this PDF document.`
-- `pages` (`string`): page filter like `1-5` or `1,3,7-9`
-- `model` (`string`): optional model override (`provider/model`)
-- `maxBytesMb` (`number`): per-PDF size cap in MB
+<ParamField path="pdf" type="string">
+One PDF path or URL.
+</ParamField>
+
+<ParamField path="pdfs" type="string[]">
+Multiple PDF paths or URLs, up to 10 total.
+</ParamField>
+
+<ParamField path="prompt" type="string" default="Analyze this PDF document.">
+Analysis prompt.
+</ParamField>
+
+<ParamField path="pages" type="string">
+Page filter like `1-5` or `1,3,7-9`.
+</ParamField>
+
+<ParamField path="model" type="string">
+Optional model override in `provider/model` form.
+</ParamField>
+
+<ParamField path="maxBytesMb" type="number">
+Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxBytesMb` or `10`.
+</ParamField>
 
 Input notes:
 
@@ -171,4 +188,4 @@ Page-filtered fallback model:
 ## Related
 
 - [Tools Overview](/tools) — all available agent tools
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — pdfMaxBytesMb and pdfMaxPages config
+- [Configuration Reference](/gateway/config-agents#agent-defaults) — pdfMaxBytesMb and pdfMaxPages config

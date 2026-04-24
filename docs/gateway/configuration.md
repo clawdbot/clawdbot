@@ -135,11 +135,11 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
         defaults: {
           model: {
             primary: "anthropic/claude-sonnet-4-6",
-            fallbacks: ["openai/gpt-5.5"],
+            fallbacks: ["openai/gpt-5.4"],
           },
           models: {
             "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            "openai/gpt-5.5": { alias: "GPT" },
+            "openai/gpt-5.4": { alias: "GPT" },
           },
         },
       },
@@ -151,7 +151,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
     - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
     - See [Models CLI](/concepts/models) for switching models in chat and [Model Failover](/concepts/model-failover) for auth rotation and fallback behavior.
-    - For custom/self-hosted providers, see [Custom providers](/gateway/configuration-reference#custom-providers-and-base-urls) in the reference.
+    - For custom/self-hosted providers, see [Custom providers](/gateway/config-tools#custom-providers-and-base-urls) in the reference.
 
   </Accordion>
 
@@ -165,7 +165,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
 
     For groups, use `groupPolicy` + `groupAllowFrom` or channel-specific allowlists.
 
-    See the [full reference](/gateway/configuration-reference#dm-and-group-access) for per-channel details.
+    See the [full reference](/gateway/config-channels#dm-and-group-access) for per-channel details.
 
   </Accordion>
 
@@ -194,7 +194,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
 
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
     - **Text patterns**: safe regex patterns in `mentionPatterns`
-    - See [full reference](/gateway/configuration-reference#group-chat-mention-gating) for per-channel overrides and self-chat mode.
+    - See [full reference](/gateway/config-channels#group-chat-mention-gating) for per-channel overrides and self-chat mode.
 
   </Accordion>
 
@@ -221,7 +221,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
     - Omit `agents.list[].skills` to inherit the defaults.
     - Set `agents.list[].skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/configuration-reference#agents-defaults-skills).
+      the [Configuration Reference](/gateway/config-agents#agents-defaults-skills).
 
   </Accordion>
 
@@ -279,7 +279,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
     - `threadBindings`: global defaults for thread-bound session routing (Discord supports `/focus`, `/unfocus`, `/agents`, `/session idle`, and `/session max-age`).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
-    - See [full reference](/gateway/configuration-reference#session) for all fields.
+    - See [full reference](/gateway/config-agents#session) for all fields.
 
   </Accordion>
 
@@ -301,7 +301,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
 
     Build the image first: `scripts/sandbox-setup.sh`
 
-    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/configuration-reference#agentsdefaultssandbox) for all options.
+    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
 
   </Accordion>
 
@@ -459,7 +459,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
     }
     ```
 
-    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/configuration-reference#multi-agent-routing) for binding rules and per-agent access profiles.
+    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/config-agents#multi-agent-routing) for binding rules and per-agent access profiles.
 
   </Accordion>
 
@@ -685,3 +685,9 @@ For the complete field-by-field reference, see **[Configuration Reference](/gate
 ---
 
 _Related: [Configuration Examples](/gateway/configuration-examples) · [Configuration Reference](/gateway/configuration-reference) · [Doctor](/gateway/doctor)_
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [Configuration examples](/gateway/configuration-examples)
+- [Gateway runbook](/gateway)

@@ -1,6 +1,6 @@
 ---
 name: goplaces
-description: Query Google Places API (New) via the goplaces CLI for text search, place details, resolve, and reviews. Use for human-friendly place lookup or JSON output for scripts.
+description: Query Google Places for text search, place details, resolve, reviews, or scriptable JSON via goplaces.
 homepage: https://github.com/steipete/goplaces
 metadata:
   {

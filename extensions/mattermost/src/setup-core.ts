@@ -1,13 +1,12 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
-import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
-  DEFAULT_ACCOUNT_ID,
   migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
-  type OpenClawConfig,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/setup";
+import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
 import {
   resolveMattermostAccount,
   type ResolvedMattermostAccount,

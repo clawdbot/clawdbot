@@ -1,0 +1,354 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
+
+type MockGoogleLiveSession = {
+  close: ReturnType<typeof vi.fn>;
+  sendClientContent: ReturnType<typeof vi.fn>;
+  sendRealtimeInput: ReturnType<typeof vi.fn>;
+  sendToolResponse: ReturnType<typeof vi.fn>;
+};
+
+type MockGoogleLiveConnectParams = {
+  model: string;
+  config: Record<string, unknown>;
+  callbacks: {
+    onopen: () => void;
+    onmessage: (message: Record<string, unknown>) => void;
+    onerror: (event: { error?: unknown; message?: string }) => void;
+    onclose: () => void;
+  };
+};
+
+const { connectMock, session } = vi.hoisted(() => {
+  const session: MockGoogleLiveSession = {
+    close: vi.fn(),
+    sendClientContent: vi.fn(),
+    sendRealtimeInput: vi.fn(),
+    sendToolResponse: vi.fn(),
+  };
+  const connectMock = vi.fn(async (_params: MockGoogleLiveConnectParams) => session);
+  return { connectMock, session };
+});
+
+vi.mock("./google-genai-runtime.js", () => ({
+  createGoogleGenAI: vi.fn(() => ({
+    live: {
+      connect: connectMock,
+    },
+  })),
+}));
+
+function lastConnectParams(): MockGoogleLiveConnectParams {
+  const params = connectMock.mock.calls.at(-1)?.[0];
+  if (!params) {
+    throw new Error("expected google live connect call");
+  }
+  return params;
+}
+
+describe("buildGoogleRealtimeVoiceProvider", () => {
+  beforeEach(() => {
+    connectMock.mockClear();
+    session.close.mockClear();
+    session.sendClientContent.mockClear();
+    session.sendRealtimeInput.mockClear();
+    session.sendToolResponse.mockClear();
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+  });
+
+  it("normalizes provider config and cfg model-provider key fallback", () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              apiKey: "cfg-key",
+            },
+          },
+        },
+      } as never,
+      rawConfig: {
+        providers: {
+          google: {
+            model: "gemini-live-2.5-flash-preview",
+            voice: "Puck",
+            temperature: 0.4,
+            silenceDurationMs: 700,
+            startSensitivity: "high",
+          },
+        },
+      },
+    });
+
+    expect(resolved).toEqual({
+      apiKey: "cfg-key",
+      model: "gemini-live-2.5-flash-preview",
+      voice: "Puck",
+      temperature: 0.4,
+      apiVersion: undefined,
+      prefixPaddingMs: undefined,
+      silenceDurationMs: 700,
+      startSensitivity: "high",
+      endSensitivity: undefined,
+      enableAffectiveDialog: undefined,
+      thinkingLevel: undefined,
+      thinkingBudget: undefined,
+    });
+  });
+
+  it("connects with Google Live setup config and tool declarations", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        model: "gemini-live-2.5-flash-preview",
+        voice: "Kore",
+        temperature: 0.3,
+        startSensitivity: "low",
+      },
+      instructions: "Speak briefly.",
+      tools: [
+        {
+          type: "function",
+          name: "lookup",
+          description: "Look something up",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+            },
+            required: ["query"],
+          },
+        },
+      ],
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(lastConnectParams()).toMatchObject({
+      model: "gemini-live-2.5-flash-preview",
+      config: {
+        responseModalities: ["AUDIO"],
+        temperature: 0.3,
+        systemInstruction: "Speak briefly.",
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: "Kore",
+            },
+          },
+        },
+        outputAudioTranscription: {},
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "lookup",
+                description: "Look something up",
+                parametersJsonSchema: {
+                  type: "object",
+                  properties: {
+                    query: { type: "string" },
+                  },
+                  required: ["query"],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("omits zero temperature for native audio responses", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        temperature: 0,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("temperature");
+  });
+
+  it("waits for setup completion before draining audio and firing ready", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onReady = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onReady,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    bridge.sendAudio(Buffer.from([0xff, 0xff]));
+
+    expect(session.sendRealtimeInput).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(session.sendRealtimeInput).toHaveBeenCalledTimes(1);
+    expect(session.sendRealtimeInput.mock.calls[0]?.[0].audio).toMatchObject({
+      data: expect.any(String),
+      mimeType: "audio/pcm;rate=16000",
+    });
+  });
+
+  it("marks the Google audio stream complete after sustained telephony silence", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key", silenceDurationMs: 60 },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    const silence20ms = Buffer.alloc(160, 0xff);
+    bridge.sendAudio(silence20ms);
+    bridge.sendAudio(silence20ms);
+    bridge.sendAudio(silence20ms);
+
+    expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
+
+    const callsAfterStreamEnd = session.sendRealtimeInput.mock.calls.length;
+    bridge.sendAudio(silence20ms);
+    expect(session.sendRealtimeInput).toHaveBeenCalledTimes(callsAfterStreamEnd);
+
+    session.sendRealtimeInput.mockClear();
+    bridge.sendAudio(Buffer.alloc(160, 0x7f));
+    bridge.sendAudio(silence20ms);
+    bridge.sendAudio(silence20ms);
+    bridge.sendAudio(silence20ms);
+
+    expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
+  });
+
+  it("sends text prompts as ordered client turns", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    bridge.sendUserMessage?.(" Say hello. ");
+
+    expect(session.sendClientContent).toHaveBeenCalledWith({
+      turns: [{ role: "user", parts: [{ text: "Say hello." }] }],
+      turnComplete: true,
+    });
+  });
+
+  it("converts Google PCM output to mu-law audio", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio,
+      onClearAudio: vi.fn(),
+    });
+    const pcm24k = Buffer.alloc(480);
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      serverContent: {
+        modelTurn: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: "audio/L16;codec=pcm;rate=24000",
+                data: pcm24k.toString("base64"),
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(onAudio).toHaveBeenCalledTimes(1);
+    expect(onAudio.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
+    expect(onAudio.mock.calls[0]?.[0]).toHaveLength(80);
+  });
+
+  it("does not forward Google thought text as assistant transcript", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: {},
+      serverContent: {
+        modelTurn: {
+          parts: [{ text: "internal reasoning", thought: true }],
+        },
+      },
+    });
+
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("forwards Live API tool calls and submits matching function responses", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onToolCall = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "hi" } }],
+      },
+    });
+
+    expect(onToolCall).toHaveBeenCalledWith({
+      itemId: "call-1",
+      callId: "call-1",
+      name: "lookup",
+      args: { query: "hi" },
+    });
+
+    bridge.submitToolResult("call-1", { result: "ok" });
+
+    expect(session.sendToolResponse).toHaveBeenCalledWith({
+      functionResponses: [
+        {
+          id: "call-1",
+          response: { result: "ok" },
+        },
+      ],
+    });
+  });
+});

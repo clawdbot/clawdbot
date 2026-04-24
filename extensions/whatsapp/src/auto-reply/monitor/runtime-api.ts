@@ -1,9 +1,10 @@
 export { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
 export {
   formatInboundEnvelope,
-  resolveInboundSessionEnvelopeContext,
-  toLocationContext,
-} from "openclaw/plugin-sdk/channel-inbound";
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-envelope";
+export { resolveInboundSessionEnvelopeContext } from "openclaw/plugin-sdk/channel-inbound";
+export { toLocationContext } from "openclaw/plugin-sdk/channel-location";
 export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 export { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-detection";
 export {

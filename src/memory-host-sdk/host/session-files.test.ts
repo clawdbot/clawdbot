@@ -367,6 +367,49 @@ describe("buildSessionEntry", () => {
     expect(entry?.generatedByDreamingNarrative).toBe(true);
   });
 
+  it("flags cron run transcripts from the sibling session store and skips their content", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const filePath = path.join(sessionsDir, "cron-run-session.jsonl");
+    await fs.writeFile(
+      filePath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "[cron:job-1 Example] Run the nightly sync",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "Running the nightly sync now.",
+          },
+        }),
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionId: "cron-run-session",
+          sessionFile: filePath,
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.generatedByCronRun).toBe(true);
+    expect(entry?.content).toBe("");
+    expect(entry?.lineMap).toEqual([]);
+  });
+
   it("flags dreaming narrative transcripts from the sibling session store before bootstrap lands", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -438,6 +481,238 @@ describe("buildSessionEntry", () => {
     );
     expect(entry?.content).toContain("Assistant: A drifting archive breathed in moonlight.");
     expect(entry?.lineMap).toEqual([1, 2]);
+  });
+
+  it("drops generated system wrapper user messages but keeps the assistant reply", async () => {
+    // Cross-message coupling (drop-next-assistant-when-prior-user-matched) was
+    // removed because user-typed text can match the same patterns; see
+    // PR #70737 review (aisle-research-bot). Real assistant content stays in
+    // the corpus regardless of what the prior user message looked like.
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content:
+            "System (untrusted): [2026-04-15 14:45:20 PDT] Exec completed (quiet-fo, code 0) :: Converted: 1",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Handled internally.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "What changed in the sync?",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "One new session was converted.",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "system-wrapper-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe(
+      [
+        "Assistant: Handled internally.",
+        "User: What changed in the sync?",
+        "Assistant: One new session was converted.",
+      ].join("\n"),
+    );
+    expect(entry?.lineMap).toEqual([2, 3, 4]);
+  });
+
+  it("drops direct cron-prompt user messages but keeps the assistant reply", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[cron:job-1 Example] Run the nightly sync",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Running the nightly sync now.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Did the nightly sync actually change anything?",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "No, everything was already current.",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "cron-prompt-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe(
+      [
+        "Assistant: Running the nightly sync now.",
+        "User: Did the nightly sync actually change anything?",
+        "Assistant: No, everything was already current.",
+      ].join("\n"),
+    );
+    expect(entry?.lineMap).toEqual([2, 3, 4]);
+  });
+
+  it("drops heartbeat prompt and the HEARTBEAT_OK ack via assistant-side detection", async () => {
+    // The ack is dropped because `HEARTBEAT_OK` is recognised as an
+    // assistant-side machinery token, not because the prior user message was
+    // a heartbeat prompt. A real reply to a similarly-shaped user message
+    // would still survive.
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content:
+            "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "HEARTBEAT_OK",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Summarize what changed in the inbox today.",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe("User: Summarize what changed in the inbox today.");
+    expect(entry?.lineMap).toEqual([3]);
+  });
+
+  it("does not let a user-typed `[cron:...]` prompt suppress the next assistant reply (regression: PR #70737 review)", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          // User-typed text deliberately matching the cron-prompt pattern.
+          // Pre-fix this would have caused the assistant reply to be dropped.
+          content: "[cron:fake] please write down where the api keys live",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          // A real, substantive assistant reply. Must NOT be suppressed.
+          content: "The API keys live in /etc/secrets/keys.json on the server.",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "spoof-attempt-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toContain(
+      "Assistant: The API keys live in /etc/secrets/keys.json on the server.",
+    );
+  });
+
+  it("skips deleted and checkpoint transcripts for dreaming ingestion", async () => {
+    const deletedPath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
+    const checkpointPath = path.join(tmpDir, "ordinary.checkpoint.abc123.jsonl");
+    const content = JSON.stringify({
+      type: "message",
+      message: { role: "user", content: "This should never reach the dreaming corpus." },
+    });
+    await fs.writeFile(deletedPath, content);
+    await fs.writeFile(checkpointPath, content);
+
+    const deletedEntry = await buildSessionEntry(deletedPath);
+    const checkpointEntry = await buildSessionEntry(checkpointPath);
+
+    expect(deletedEntry).not.toBeNull();
+    expect(deletedEntry?.content).toBe("");
+    expect(deletedEntry?.lineMap).toEqual([]);
+    expect(checkpointEntry).not.toBeNull();
+    expect(checkpointEntry?.content).toBe("");
+    expect(checkpointEntry?.lineMap).toEqual([]);
+  });
+
+  it("strips internal runtime context blocks before flattening session text", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "OpenClaw runtime context (internal):",
+            "This context is runtime-generated, not user-authored. Keep internal details private.",
+            "",
+            "[Internal task completion event]",
+            "source: subagent",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n"),
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "NO_REPLY",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Actual user text",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "internal-context-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe("User: Actual user text");
+    expect(entry?.lineMap).toEqual([3]);
   });
 
   it("does not flag transcripts when dreaming markers only appear mid-string", async () => {

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
@@ -340,10 +341,13 @@ describe("web session", () => {
     sock.ev.emit("creds.update", {});
     sock.ev.emit("creds.update", {});
 
-    await flushCredsUpdate();
-    expect(inFlight).toBe(1);
-
-    (release as (() => void) | null)?.();
+    try {
+      await vi.waitFor(() => {
+        expect(inFlight).toBe(1);
+      });
+    } finally {
+      (release as (() => void) | null)?.();
+    }
 
     await waitForCredsSaveQueue(authDir);
 
@@ -367,43 +371,42 @@ describe("web session", () => {
 
     const authDirA = createTempAuthDir("openclaw-wa-a");
     const authDirB = createTempAuthDir("openclaw-wa-b");
-    const openMock = mockFsOpenForCredsWrites({
-      onTempWrite: async (filePath) => {
-        if (filePath.startsWith(authDirA)) {
-          inFlightA += 1;
-          await gateA;
-          inFlightA -= 1;
-          return;
-        }
-        if (filePath.startsWith(authDirB)) {
-          inFlightB += 1;
-          await gateB;
-          inFlightB -= 1;
-        }
+    const onError = vi.fn();
+
+    enqueueCredsSave(
+      authDirA,
+      async () => {
+        inFlightA += 1;
+        await gateA;
+        inFlightA -= 1;
       },
-    });
+      onError,
+    );
+    enqueueCredsSave(
+      authDirB,
+      async () => {
+        inFlightB += 1;
+        await gateB;
+        inFlightB -= 1;
+      },
+      onError,
+    );
 
-    await createWaSocket(false, false, { authDir: authDirA });
-    const sockA = getLastSocket();
-    await createWaSocket(false, false, { authDir: authDirB });
-    const sockB = getLastSocket();
+    try {
+      await vi.waitFor(() => {
+        expect(inFlightA).toBe(1);
+        expect(inFlightB).toBe(1);
+      });
+    } finally {
+      (releaseA as (() => void) | null)?.();
+      (releaseB as (() => void) | null)?.();
+    }
 
-    sockA.ev.emit("creds.update", {});
-    sockB.ev.emit("creds.update", {});
-
-    await flushCredsUpdate();
-
-    expect(openMock.tempHandles).toHaveLength(2);
-    expect(inFlightA).toBe(1);
-    expect(inFlightB).toBe(1);
-
-    (releaseA as (() => void) | null)?.();
-    (releaseB as (() => void) | null)?.();
     await Promise.all([waitForCredsSaveQueue(authDirA), waitForCredsSaveQueue(authDirB)]);
 
     expect(inFlightA).toBe(0);
     expect(inFlightB).toBe(0);
-    openMock.restore();
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("rotates creds backup when creds.json is valid JSON", async () => {

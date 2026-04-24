@@ -1,5 +1,4 @@
-export { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
-export { ensureOpenClawModelsJson } from "../../agents/models-config.js";
+export { loadAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 export { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 export { listProfilesForProvider } from "../../agents/auth-profiles.js";
 export {

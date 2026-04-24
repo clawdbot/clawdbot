@@ -1,4 +1,3 @@
-import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   readBody,
@@ -8,6 +7,14 @@ import {
 } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
+
+function readStringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return readStringValue(value)?.trim() || undefined;
+}
 
 type StorageKind = "local" | "session";
 

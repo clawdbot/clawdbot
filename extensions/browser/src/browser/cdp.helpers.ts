@@ -1,5 +1,4 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
@@ -7,7 +6,6 @@ import {
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
-import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -152,12 +150,28 @@ export type CdpSendFn = (
   sessionId?: string,
 ) => Promise<unknown>;
 
+function rawCdpMessageToString(data: WebSocket.RawData): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
+
 export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
   const mergedHeaders = { ...headers };
   try {
     const parsed = new URL(url);
     const hasAuthHeader = Object.keys(mergedHeaders).some(
-      (key) => normalizeLowercaseStringOrEmpty(key) === "authorization",
+      (key) => key.trim().toLowerCase() === "authorization",
     );
     if (hasAuthHeader) {
       return mergedHeaders;
@@ -247,7 +261,7 @@ function createCdpSender(ws: WebSocket) {
 
   ws.on("message", (data) => {
     try {
-      const parsed = JSON.parse(rawDataToString(data)) as CdpResponse;
+      const parsed = JSON.parse(rawCdpMessageToString(data)) as CdpResponse;
       if (typeof parsed.id !== "number") {
         return;
       }

@@ -223,6 +223,8 @@ export type GatewayBrowserClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+export type GatewayEventListener = (evt: GatewayEventFrame) => void;
+
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 
@@ -298,6 +300,7 @@ export class GatewayBrowserClient {
   private pendingConnectError: GatewayErrorInfo | undefined;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private eventListeners = new Set<GatewayEventListener>();
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -549,6 +552,9 @@ export class GatewayBrowserClient {
       }
       try {
         this.opts.onEvent?.(evt);
+        for (const listener of this.eventListeners) {
+          listener(evt);
+        }
       } catch (err) {
         console.error("[gateway] event handler error:", err);
       }
@@ -623,6 +629,13 @@ export class GatewayBrowserClient {
     });
     this.ws.send(JSON.stringify(frame));
     return p;
+  }
+
+  addEventListener(listener: GatewayEventListener): () => void {
+    this.eventListeners.add(listener);
+    return () => {
+      this.eventListeners.delete(listener);
+    };
   }
 
   private queueConnect() {

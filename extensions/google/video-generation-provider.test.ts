@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { GoogleGenAIMock, generateVideosMock, getVideosOperationMock } = vi.hoisted(() => {
+const { createGoogleGenAIMock, generateVideosMock, getVideosOperationMock } = vi.hoisted(() => {
   const generateVideosMock = vi.fn();
   const getVideosOperationMock = vi.fn();
-  const GoogleGenAIMock = vi.fn(function GoogleGenAI() {
+  const createGoogleGenAIMock = vi.fn(() => {
     return {
       models: {
         generateVideos: generateVideosMock,
@@ -16,11 +16,11 @@ const { GoogleGenAIMock, generateVideosMock, getVideosOperationMock } = vi.hoist
       },
     };
   });
-  return { GoogleGenAIMock, generateVideosMock, getVideosOperationMock };
+  return { createGoogleGenAIMock, generateVideosMock, getVideosOperationMock };
 });
 
-vi.mock("@google/genai", () => ({
-  GoogleGenAI: GoogleGenAIMock,
+vi.mock("./google-genai-runtime.js", () => ({
+  createGoogleGenAI: createGoogleGenAIMock,
 }));
 
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -32,7 +32,7 @@ describe("google video generation provider", () => {
     vi.restoreAllMocks();
     generateVideosMock.mockReset();
     getVideosOperationMock.mockReset();
-    GoogleGenAIMock.mockClear();
+    createGoogleGenAIMock.mockClear();
   });
 
   it("declares explicit mode capabilities", () => {
@@ -89,7 +89,7 @@ describe("google video generation provider", () => {
     expect(request?.config).not.toHaveProperty("numberOfVideos");
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         apiKey: "google-key",
         httpOptions: expect.not.objectContaining({

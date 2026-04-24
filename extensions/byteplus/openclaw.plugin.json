@@ -1,6 +1,7 @@
 {
   "id": "byteplus",
   "enabledByDefault": true,
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["byteplus", "byteplus-plan"],
   "providerAuthEnvVars": {
     "byteplus": ["BYTEPLUS_API_KEY"]

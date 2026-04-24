@@ -43,6 +43,26 @@ describe("createTtsTool", () => {
     expect(JSON.stringify(result.content)).not.toContain("MEDIA:");
   });
 
+  it("passes an optional timeout to speech generation", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.opus",
+      provider: "test",
+      voiceCompatible: true,
+    });
+
+    const tool = createTtsTool();
+    const result = await tool.execute("call-1", { text: "hello", timeoutMs: 12_345 });
+
+    expect(textToSpeechSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "hello",
+        timeoutMs: 12_345,
+      }),
+    );
+    expect(result.details).toMatchObject({ timeoutMs: 12_345 });
+  });
+
   it("echoes longer utterances verbatim into the tool-result content", async () => {
     textToSpeechSpy.mockResolvedValue({
       success: true,

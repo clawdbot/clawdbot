@@ -7,8 +7,6 @@ read_when:
 title: "Android app"
 ---
 
-# Android App (Node)
-
 > **Note:** The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
 
 ## Support snapshot
@@ -242,3 +240,9 @@ Example configuration:
 <Note>
 Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.
 </Note>
+
+## Related
+
+- [iOS app](/platforms/ios)
+- [Nodes](/nodes)
+- [Android node troubleshooting](/nodes/troubleshooting)

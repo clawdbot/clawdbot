@@ -28,6 +28,7 @@ export type BuildPluginApiParams = {
       | "registerNodeHostCommand"
       | "registerSecurityAuditCollector"
       | "registerService"
+      | "registerGatewayDiscoveryService"
       | "registerCliBackend"
       | "registerTextTransforms"
       | "registerConfigMigration"
@@ -74,6 +75,8 @@ const noopRegisterNodeHostCommand: OpenClawPluginApi["registerNodeHostCommand"] 
 const noopRegisterSecurityAuditCollector: OpenClawPluginApi["registerSecurityAuditCollector"] =
   () => {};
 const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
+const noopRegisterGatewayDiscoveryService: OpenClawPluginApi["registerGatewayDiscoveryService"] =
+  () => {};
 const noopRegisterCliBackend: OpenClawPluginApi["registerCliBackend"] = () => {};
 const noopRegisterTextTransforms: OpenClawPluginApi["registerTextTransforms"] = () => {};
 const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] = () => {};
@@ -143,6 +146,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerSecurityAuditCollector:
       handlers.registerSecurityAuditCollector ?? noopRegisterSecurityAuditCollector,
     registerService: handlers.registerService ?? noopRegisterService,
+    registerGatewayDiscoveryService:
+      handlers.registerGatewayDiscoveryService ?? noopRegisterGatewayDiscoveryService,
     registerCliBackend: handlers.registerCliBackend ?? noopRegisterCliBackend,
     registerTextTransforms: handlers.registerTextTransforms ?? noopRegisterTextTransforms,
     registerConfigMigration: handlers.registerConfigMigration ?? noopRegisterConfigMigration,

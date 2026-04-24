@@ -50,7 +50,7 @@ openclaw onboard --non-interactive \
   --accept-risk
 ```
 
-## Model catalog
+## Built-in catalog
 
 | Model ref                      | Name                   | Input | Context | Max output | Notes                      |
 | ------------------------------ | ---------------------- | ----- | ------- | ---------- | -------------------------- |

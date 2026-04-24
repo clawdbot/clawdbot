@@ -356,3 +356,10 @@ Related:
 - [Health](/gateway/health)
 - [Doctor](/gateway/doctor)
 - [Authentication](/gateway/authentication)
+
+## Related
+
+- [Configuration](/gateway/configuration)
+- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Remote access](/gateway/remote)
+- [Secrets management](/gateway/secrets)

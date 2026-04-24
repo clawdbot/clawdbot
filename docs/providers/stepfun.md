@@ -24,7 +24,7 @@ Standard and Step Plan are **separate providers** with different endpoints and m
 
 Auth env var: `STEPFUN_API_KEY`
 
-## Built-in catalogs
+## Built-in catalog
 
 Standard (`stepfun`):
 

@@ -172,3 +172,9 @@ Interpretation:
 
 - `gateway status --deep` helps catch stale launchd/systemd/schtasks services from older installs.
 - `gateway probe` warning text such as `multiple reachable gateways detected` is expected only when you intentionally run more than one isolated gateway.
+
+## Related
+
+- [Gateway runbook](/gateway)
+- [Gateway lock](/gateway/gateway-lock)
+- [Configuration](/gateway/configuration)

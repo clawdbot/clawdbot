@@ -151,6 +151,10 @@ const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
   "The previous attempt did not produce a user-visible answer.";
+const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
+  /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
+const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
+const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
@@ -727,6 +731,16 @@ function buildAssistantText(
   if (/(image generation check|capability flip image check)/i.test(prompt) && mediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
   }
+  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
+    return [
+      "Animated GIF QA checklist ready.",
+      "- Confirm true animation, not a static preview.",
+      "- Verify dimensions and product UI fit.",
+      "- Record attribution and license.",
+      "- Keep a local copy before using the asset.",
+      "- Re-open the copied file for final verification.",
+    ].join("\n");
+  }
   if (/roundtrip image inspection check/i.test(prompt) && imageInputCount > 0) {
     return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
   }
@@ -806,6 +820,79 @@ function buildAssistantText(
 function buildToolCallEvents(prompt: string): StreamEvent[] {
   const targetPath = readTargetFromPrompt(prompt);
   return buildToolCallEventsWithArgs("read", { path: targetPath });
+}
+
+function buildReleaseAuditJson() {
+  return `${JSON.stringify(
+    {
+      verified: true,
+      findings: [
+        {
+          id: "REL-GATEWAY-417",
+          source: "src/gateway/reconnect.ts",
+          status: "retry jitter verified, resume token fallback still needs manual spot check",
+        },
+        {
+          id: "REL-CHANNEL-238",
+          source: "src/channels/delivery.ts",
+          status: "thread replies preserve ordering, root-channel fallback needs handoff note",
+        },
+        {
+          id: "REL-CRON-904",
+          source: "src/scheduling/cron.ts",
+          status: "single-run lock verified for restart wakeups",
+        },
+        {
+          id: "REL-MEMORY-552",
+          source: "src/memory/recall.ts",
+          status:
+            "fallback summary survives empty memory search; ranking sample needs second reviewer",
+        },
+        {
+          id: "REL-PLUGIN-319",
+          source: "src/plugins/runtime.ts",
+          status: "bundled runtime manifest loads cleanly after restart",
+        },
+        {
+          id: "REL-INSTALL-846",
+          source: "install/update.ts",
+          status: "update smoke passed from previous stable tag",
+        },
+        {
+          id: "REL-DOCS-611",
+          source: "docs/operator-notes.md",
+          status:
+            "docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff",
+        },
+        {
+          id: "REL-UI-BLOCKED",
+          source: "ui/control-panel.ts",
+          status: "blocked: source file was referenced by checklist but missing from the fixture",
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+function buildReleaseHandoffMarkdown() {
+  return [
+    "# Release Handoff",
+    "",
+    "Ready:",
+    "- REL-GATEWAY-417: gateway reconnect handling checked in `src/gateway/reconnect.ts`.",
+    "- REL-CRON-904: cron duplicate prevention checked in `src/scheduling/cron.ts`.",
+    "- REL-PLUGIN-319: plugin runtime loading checked in `src/plugins/runtime.ts`.",
+    "- REL-INSTALL-846: installer update path checked in `install/update.ts`.",
+    "",
+    "Follow-up:",
+    "- REL-CHANNEL-238: channel delivery ordering needs maintainer handoff.",
+    "- REL-MEMORY-552: memory recall fallback ranking sample needs a second reviewer.",
+    "- REL-DOCS-611: docs update status needs channel ordering and UI notes.",
+    "- `ui/control-panel.ts` is blocked/not found in the fixture.",
+    "",
+  ].join("\n");
 }
 
 function extractPlannedToolName(events: StreamEvent[]) {
@@ -1127,6 +1214,63 @@ async function buildResponsesPayload(
         text: secondExactMarkerDirective,
       },
     ]);
+  }
+  if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
+    return buildAssistantEvents(
+      JSON.stringify({
+        action: "create",
+        skillName: "animated-gif-workflow",
+        title: "Animated GIF Workflow",
+        reason: "Transcript captured a reusable animated media QA checklist.",
+        description: "Reusable workflow notes for animated GIF QA tasks.",
+        body: [
+          "- Confirm the asset has true animation, not a static preview.",
+          "- Check dimensions against the target product UI slot.",
+          "- Record attribution and license before using the file.",
+          "- Keep a local copy under the workspace before integration.",
+          "- Re-open the local copy for final verification.",
+        ].join("\n"),
+      }),
+    );
+  }
+  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && !toolOutput) {
+    return buildToolCallEventsWithArgs("write", {
+      path: "animated-gif-qa-checklist.md",
+      content: [
+        "# Animated GIF QA Checklist",
+        "",
+        "- Confirm true animation.",
+        "- Verify dimensions.",
+        "- Record attribution.",
+        "- Keep a local copy.",
+        "- Perform final verification.",
+      ].join("\n"),
+    });
+  }
+  if (QA_RELEASE_AUDIT_PROMPT_RE.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "audit-fixture/README.md" });
+    }
+    if (/Release readiness task|current checklist/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("read", {
+        path: "audit-fixture/docs/current-readiness-checklist.md",
+      });
+    }
+    if (/Current release readiness requires checking eight areas/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "audit-fixture/release-audit.json",
+        content: buildReleaseAuditJson(),
+      });
+    }
+    if (/release-audit\.json/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "audit-fixture/release-handoff.md",
+        content: buildReleaseHandoffMarkdown(),
+      });
+    }
+    if (/release-handoff\.md/i.test(toolOutput)) {
+      return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
+    }
   }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {

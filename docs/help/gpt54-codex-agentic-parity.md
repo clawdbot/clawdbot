@@ -226,3 +226,7 @@ Keep the default contract when:
 - you want the existing looser behavior
 - you are not using GPT-5-family models
 - you are testing prompts rather than runtime enforcement
+
+## Related
+
+- [GPT-5.4 / Codex parity maintainer notes](/help/gpt54-codex-agentic-parity-maintainers)

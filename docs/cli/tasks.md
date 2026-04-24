@@ -94,3 +94,8 @@ openclaw tasks flow cancel <lookup>
 ```
 
 Inspects or cancels durable Task Flow state under the task ledger.
+
+## Related
+
+- [CLI reference](/cli)
+- [Background tasks](/automation/tasks)

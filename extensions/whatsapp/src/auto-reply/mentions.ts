@@ -1,4 +1,7 @@
-import { buildMentionRegexes, normalizeMentionText } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildMentionRegexes,
+  normalizeMentionText,
+} from "openclaw/plugin-sdk/channel-mention-gating";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   getComparableIdentityValues,

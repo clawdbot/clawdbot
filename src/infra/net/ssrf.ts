@@ -448,34 +448,39 @@ export function createPinnedDispatcher(
   pinned: PinnedHostname,
   policy?: PinnedDispatcherPolicy,
   ssrfPolicy?: SsrFPolicy,
+  timeoutMs?: number,
 ): Dispatcher {
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
-    return createHttp1Agent({
-      connect: withPinnedLookup(lookup, policy?.connect),
-    });
+    return createHttp1Agent({ connect: withPinnedLookup(lookup, policy?.connect) }, timeoutMs);
   }
 
   if (policy.mode === "env-proxy") {
-    return createHttp1EnvHttpProxyAgent({
-      connect: withPinnedLookup(lookup, policy.connect),
-      ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
-    });
+    return createHttp1EnvHttpProxyAgent(
+      {
+        connect: withPinnedLookup(lookup, policy.connect),
+        ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
+      },
+      timeoutMs,
+    );
   }
 
   const proxyUrl = policy.proxyUrl.trim();
   const requestTls = withPinnedLookup(lookup, policy.proxyTls);
   if (!requestTls) {
-    return createHttp1ProxyAgent({ uri: proxyUrl });
+    return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
   }
-  return createHttp1ProxyAgent({
-    uri: proxyUrl,
-    // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
-    // transport hints for explicit proxies. Translate that to undici's
-    // `requestTls` so HTTPS proxy tunnels keep the pinned DNS lookup.
-    requestTls,
-  });
+  return createHttp1ProxyAgent(
+    {
+      uri: proxyUrl,
+      // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
+      // transport hints for explicit proxies. Translate that to undici's
+      // `requestTls` so HTTPS proxy tunnels keep the pinned DNS lookup.
+      requestTls,
+    },
+    timeoutMs,
+  );
 }
 
 export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {

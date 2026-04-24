@@ -59,6 +59,22 @@ describe("concept vocabulary", () => {
     expect(classifyConceptTagScript("qmd路由器")).toBe("mixed");
   });
 
+  it("drops chat scaffolding stop words from derived concept tags", () => {
+    const tags = deriveConceptTags({
+      path: "memory/.dreams/session-corpus/2026-04-16.txt",
+      snippet:
+        "Assistant: the system should remind you about the Ollama provider setup in your workspace.",
+    });
+
+    expect(tags).toContain("ollama");
+    expect(tags).toContain("provider");
+    expect(tags).not.toContain("assistant");
+    expect(tags).not.toContain("system");
+    expect(tags).not.toContain("the");
+    expect(tags).not.toContain("you");
+    expect(tags).not.toContain("your");
+  });
+
   it("summarizes entry coverage across latin, cjk, and mixed tags", () => {
     expect(
       summarizeConceptTagScriptCoverage([

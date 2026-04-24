@@ -5,10 +5,12 @@ export {
   buildSessionEntry,
   listSessionFilesForAgent,
   loadDreamingNarrativeTranscriptPathSetForAgent,
+  loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
   sessionPathForFile,
   type BuildSessionEntryOptions,
   type SessionFileEntry,
+  type SessionTranscriptClassification,
 } from "./host/session-files.js";
 export { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
 export { parseQmdQueryJson, type QmdQueryResult } from "./host/qmd-query-parser.js";

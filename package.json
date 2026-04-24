@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.23",
+  "version": "2026.4.24",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -185,6 +185,10 @@
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"
     },
+    "./plugin-sdk/reply-dedupe": {
+      "types": "./dist/plugin-sdk/reply-dedupe.d.ts",
+      "default": "./dist/plugin-sdk/reply-dedupe.js"
+    },
     "./plugin-sdk/reply-dispatch-runtime": {
       "types": "./dist/plugin-sdk/reply-dispatch-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-dispatch-runtime.js"
@@ -264,6 +268,10 @@
     "./plugin-sdk/media-runtime": {
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
+    },
+    "./plugin-sdk/media-store": {
+      "types": "./dist/plugin-sdk/media-store.d.ts",
+      "default": "./dist/plugin-sdk/media-store.js"
     },
     "./plugin-sdk/media-mime": {
       "types": "./dist/plugin-sdk/media-mime.d.ts",
@@ -509,6 +517,10 @@
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
     },
+    "./plugin-sdk/channel-contract-testing": {
+      "types": "./dist/plugin-sdk/channel-contract-testing.d.ts",
+      "default": "./dist/plugin-sdk/channel-contract-testing.js"
+    },
     "./plugin-sdk/dangerous-name-runtime": {
       "types": "./dist/plugin-sdk/dangerous-name-runtime.d.ts",
       "default": "./dist/plugin-sdk/dangerous-name-runtime.js"
@@ -524,6 +536,10 @@
     "./plugin-sdk/command-gating": {
       "types": "./dist/plugin-sdk/command-gating.d.ts",
       "default": "./dist/plugin-sdk/command-gating.js"
+    },
+    "./plugin-sdk/command-primitives-runtime": {
+      "types": "./dist/plugin-sdk/command-primitives-runtime.d.ts",
+      "default": "./dist/plugin-sdk/command-primitives-runtime.js"
     },
     "./plugin-sdk/command-status": {
       "types": "./dist/plugin-sdk/command-status.d.ts",
@@ -621,6 +637,10 @@
       "types": "./dist/plugin-sdk/channel-contract.d.ts",
       "default": "./dist/plugin-sdk/channel-contract.js"
     },
+    "./plugin-sdk/channel-envelope": {
+      "types": "./dist/plugin-sdk/channel-envelope.d.ts",
+      "default": "./dist/plugin-sdk/channel-envelope.js"
+    },
     "./plugin-sdk/channel-feedback": {
       "types": "./dist/plugin-sdk/channel-feedback.d.ts",
       "default": "./dist/plugin-sdk/channel-feedback.js"
@@ -628,6 +648,10 @@
     "./plugin-sdk/channel-inbound": {
       "types": "./dist/plugin-sdk/channel-inbound.d.ts",
       "default": "./dist/plugin-sdk/channel-inbound.js"
+    },
+    "./plugin-sdk/channel-inbound-debounce": {
+      "types": "./dist/plugin-sdk/channel-inbound-debounce.d.ts",
+      "default": "./dist/plugin-sdk/channel-inbound-debounce.js"
     },
     "./plugin-sdk/channel-inbound-roots": {
       "types": "./dist/plugin-sdk/channel-inbound-roots.d.ts",
@@ -720,6 +744,10 @@
     "./plugin-sdk/string-coerce-runtime": {
       "types": "./dist/plugin-sdk/string-coerce-runtime.d.ts",
       "default": "./dist/plugin-sdk/string-coerce-runtime.js"
+    },
+    "./plugin-sdk/group-activation": {
+      "types": "./dist/plugin-sdk/group-activation.d.ts",
+      "default": "./dist/plugin-sdk/group-activation.js"
     },
     "./plugin-sdk/group-access": {
       "types": "./dist/plugin-sdk/group-access.d.ts",
@@ -1025,6 +1053,10 @@
       "types": "./dist/plugin-sdk/provider-auth-login.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-login.js"
     },
+    "./plugin-sdk/provider-selection-runtime": {
+      "types": "./dist/plugin-sdk/provider-selection-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-selection-runtime.js"
+    },
     "./plugin-sdk/plugin-entry": {
       "types": "./dist/plugin-sdk/plugin-entry.d.ts",
       "default": "./dist/plugin-sdk/plugin-entry.js"
@@ -1277,6 +1309,7 @@
     "check:timed:all-types": "node scripts/check-timed.mjs --include-test-types",
     "check:timed:architecture": "node scripts/check-timed.mjs --include-architecture",
     "codex-app-server:protocol:check": "node --import tsx scripts/check-codex-app-server-protocol.ts",
+    "codex-app-server:protocol:sync": "node --import tsx scripts/sync-codex-app-server-protocol.ts",
     "config:channels:check": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "config:channels:gen": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --write",
     "config:docs:check": "node --import tsx scripts/generate-config-doc-baseline.ts --check",
@@ -1303,8 +1336,8 @@
     "docs:list": "node scripts/docs-list.js",
     "docs:spellcheck": "bash scripts/docs-spellcheck.sh",
     "docs:spellcheck:fix": "bash scripts/docs-spellcheck.sh --write",
-    "dup:check": "jscpd src extensions test scripts --format typescript,javascript --pattern \"**/*.{ts,tsx,js,mjs,cjs}\" --gitignore --noSymlinks --ignore \"**/node_modules/**,**/dist/**,**/.git/**,**/coverage/**,**/build/**,**/.build/**,**/.artifacts/**\" --min-lines 12 --min-tokens 80 --reporters console",
-    "dup:check:json": "jscpd src extensions test scripts --format typescript,javascript --pattern \"**/*.{ts,tsx,js,mjs,cjs}\" --gitignore --noSymlinks --ignore \"**/node_modules/**,**/dist/**,**/.git/**,**/coverage/**,**/build/**,**/.build/**,**/.artifacts/**\" --min-lines 12 --min-tokens 80 --reporters json --output .artifacts/jscpd",
+    "dup:check": "jscpd src extensions scripts --format typescript,javascript --pattern \"**/*.{ts,tsx,js,mjs,cjs}\" --gitignore --noSymlinks --ignore \"**/*.test.ts,**/*.test.tsx,**/*.test.js,extensions/qa-matrix/src/shared/**,extensions/qa-matrix/src/report.ts,extensions/qa-matrix/src/docker-runtime.ts,extensions/qa-matrix/src/cli-paths.ts,**/node_modules/**,**/dist/**,**/.git/**,**/coverage/**,**/build/**,**/.build/**,**/.artifacts/**\" --min-lines 50 --min-tokens 300 --reporters console",
+    "dup:check:json": "jscpd src extensions scripts --format typescript,javascript --pattern \"**/*.{ts,tsx,js,mjs,cjs}\" --gitignore --noSymlinks --ignore \"**/*.test.ts,**/*.test.tsx,**/*.test.js,extensions/qa-matrix/src/shared/**,extensions/qa-matrix/src/report.ts,extensions/qa-matrix/src/docker-runtime.ts,extensions/qa-matrix/src/cli-paths.ts,**/node_modules/**,**/dist/**,**/.git/**,**/coverage/**,**/build/**,**/.build/**,**/.artifacts/**\" --min-lines 50 --min-tokens 300 --reporters json --output .artifacts/jscpd",
     "format": "oxfmt --write --threads=1",
     "format:all": "pnpm format && pnpm format:swift",
     "format:check": "oxfmt --check --threads=1",
@@ -1437,20 +1470,23 @@
     "test:docker:live-cli-backend": "bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude-subscription": "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=1 OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE=0 OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1 OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=0 OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE=0 bash scripts/test-live-cli-backend-docker.sh",
-    "test:docker:live-cli-backend:codex": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5 bash scripts/test-live-cli-backend-docker.sh",
+    "test:docker:live-cli-backend:codex": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.2 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:gemini": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview bash scripts/test-live-cli-backend-docker.sh",
+    "test:docker:live-codex-bind": "OPENCLAW_LIVE_CODEX_BIND=1 OPENCLAW_LIVE_CODEX_TEST_FILES=src/gateway/gateway-codex-bind.live.test.ts bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-codex-harness": "bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:claude": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli OPENCLAW_LIVE_GATEWAY_MODELS=claude-cli/claude-sonnet-4-6 bash scripts/test-live-gateway-models-docker.sh",
-    "test:docker:live-gateway:codex": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=codex-cli OPENCLAW_LIVE_GATEWAY_MODELS=codex-cli/gpt-5.5 bash scripts/test-live-gateway-models-docker.sh",
+    "test:docker:live-gateway:codex": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=codex-cli OPENCLAW_LIVE_GATEWAY_MODELS=codex-cli/gpt-5.2 bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:gemini": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=google-gemini-cli OPENCLAW_LIVE_GATEWAY_MODELS=google-gemini-cli/gemini-3.1-pro-preview bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-models": "bash scripts/test-live-models-docker.sh",
     "test:docker:live-models:claude": "OPENCLAW_LIVE_PROVIDERS=claude-cli OPENCLAW_LIVE_MODELS=claude-cli/claude-sonnet-4-6 bash scripts/test-live-models-docker.sh",
-    "test:docker:live-models:codex": "OPENCLAW_LIVE_PROVIDERS=codex-cli OPENCLAW_LIVE_MODELS=codex-cli/gpt-5.5 bash scripts/test-live-models-docker.sh",
+    "test:docker:live-models:codex": "OPENCLAW_LIVE_PROVIDERS=codex-cli OPENCLAW_LIVE_MODELS=codex-cli/gpt-5.2 bash scripts/test-live-models-docker.sh",
     "test:docker:live-models:gemini": "OPENCLAW_LIVE_PROVIDERS=google-gemini-cli OPENCLAW_LIVE_MODELS=google-gemini-cli/gemini-3.1-pro-preview bash scripts/test-live-models-docker.sh",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
     "test:docker:npm-onboard-channel-agent": "bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
+    "test:docker:npm-telegram-live": "bash scripts/e2e/npm-telegram-live-docker.sh",
     "test:docker:onboard": "bash scripts/e2e/onboard-docker.sh",
+    "test:docker:openai-image-auth": "bash scripts/e2e/openai-image-auth-docker.sh",
     "test:docker:openai-web-search-minimal": "bash scripts/e2e/openai-web-search-minimal-docker.sh",
     "test:docker:openwebui": "bash scripts/e2e/openwebui-docker.sh",
     "test:docker:pi-bundle-mcp-tools": "bash scripts/e2e/pi-bundle-mcp-tools-docker.sh",
@@ -1545,12 +1581,11 @@
     "@agentclientprotocol/sdk": "0.19.0",
     "@anthropic-ai/vertex-sdk": "^0.16.0",
     "@clack/prompts": "^1.2.0",
-    "@homebridge/ciao": "^1.3.6",
     "@lydell/node-pty": "1.2.0-beta.12",
-    "@mariozechner/pi-agent-core": "0.69.0",
-    "@mariozechner/pi-ai": "0.69.0",
-    "@mariozechner/pi-coding-agent": "0.69.0",
-    "@mariozechner/pi-tui": "0.69.0",
+    "@mariozechner/pi-agent-core": "0.70.0",
+    "@mariozechner/pi-ai": "0.70.0",
+    "@mariozechner/pi-coding-agent": "0.70.0",
+    "@mariozechner/pi-tui": "0.70.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@vincentkoc/qrcode-tui": "0.2.1",

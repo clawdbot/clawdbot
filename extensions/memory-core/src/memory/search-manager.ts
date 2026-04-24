@@ -42,15 +42,30 @@ type MemorySearchManagerCacheStore = {
   pendingQmdManagerCreates: Map<string, PendingQmdManagerCreate>;
 };
 
+function createMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
+  return {
+    qmdManagerCache: new Map<string, CachedQmdManagerEntry>(),
+    pendingQmdManagerCreates: new Map<string, PendingQmdManagerCreate>(),
+  };
+}
+
 function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
   // Keep caches reachable across `vi.resetModules()` so later cleanup can close older instances.
-  return resolveGlobalSingleton<MemorySearchManagerCacheStore>(
+  const resolved = resolveGlobalSingleton<unknown>(
     MEMORY_SEARCH_MANAGER_CACHE_KEY,
-    () => ({
-      qmdManagerCache: new Map<string, CachedQmdManagerEntry>(),
-      pendingQmdManagerCreates: new Map<string, PendingQmdManagerCreate>(),
-    }),
+    createMemorySearchManagerCacheStore,
   );
+  if (
+    typeof resolved === "object" &&
+    resolved !== null &&
+    (resolved as Partial<MemorySearchManagerCacheStore>).qmdManagerCache instanceof Map &&
+    (resolved as Partial<MemorySearchManagerCacheStore>).pendingQmdManagerCreates instanceof Map
+  ) {
+    return resolved as MemorySearchManagerCacheStore;
+  }
+  const repaired = createMemorySearchManagerCacheStore();
+  (globalThis as Record<PropertyKey, unknown>)[MEMORY_SEARCH_MANAGER_CACHE_KEY] = repaired;
+  return repaired;
 }
 
 const log = createSubsystemLogger("memory");

@@ -149,6 +149,66 @@ vi.mock("../../../src/agents/tools/common.js", async () => {
   };
 });
 
+vi.mock("./browser-tool.runtime.js", () => {
+  const readStringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const readStringParam = (
+    params: Record<string, unknown>,
+    key: string,
+    opts?: { required?: boolean; label?: string },
+  ) => {
+    const value = readStringValue(params[key])?.trim();
+    if (value) {
+      return value;
+    }
+    if (opts?.required) {
+      throw new Error(`${opts.label ?? key} required`);
+    }
+    return undefined;
+  };
+
+  return {
+    DEFAULT_AI_SNAPSHOT_MAX_CHARS: 40_000,
+    DEFAULT_UPLOAD_DIR: "/tmp/openclaw-browser-uploads",
+    BrowserToolSchema: {},
+    ...browserActionsMocks,
+    ...browserClientMocks,
+    ...browserConfigMocks,
+    ...configMocks,
+    ...gatewayMocks,
+    ...sessionTabRegistryMocks,
+    applyBrowserProxyPaths: vi.fn(),
+    getBrowserProfileCapabilities: (profile: Record<string, unknown>) => ({
+      usesChromeMcp: profile.driver === "existing-session",
+    }),
+    imageResultFromFile: toolCommonMocks.imageResultFromFile,
+    jsonResult: (result: unknown) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      details: result,
+    }),
+    listNodes: nodesUtilsMocks.listNodes,
+    normalizeOptionalString: (value: unknown) => readStringValue(value)?.trim() || undefined,
+    persistBrowserProxyFiles: vi.fn(async () => new Map<string, string>()),
+    readStringParam,
+    readStringValue,
+    resolveExistingPathsWithinRoot: vi.fn(async ({ requestedPaths }) => ({
+      ok: true,
+      paths: requestedPaths,
+    })),
+    resolveNodeIdFromList: (nodes: Array<Record<string, unknown>>, requested: string) => {
+      const node = nodes.find(
+        (entry) => entry.nodeId === requested || entry.displayName === requested,
+      );
+      if (!node?.nodeId || typeof node.nodeId !== "string") {
+        throw new Error(`Node not found: ${requested}`);
+      }
+      return node.nodeId;
+    },
+    selectDefaultNodeFromList: (nodes: Array<Record<string, unknown>>) => nodes[0] ?? null,
+    wrapExternalContent: (text: string) =>
+      `<<<EXTERNAL_UNTRUSTED_CONTENT source="browser">>>\n${text}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>`,
+  };
+});
+
 import { __testing as browserToolActionsTesting } from "./browser-tool.actions.js";
 import { __testing as browserToolTesting, createBrowserTool } from "./browser-tool.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
@@ -238,6 +298,16 @@ async function runSnapshotToolCall(params: {
   const tool = createBrowserTool();
   await tool.execute?.("call-1", { action: "snapshot", target: "host", ...params });
 }
+
+describe("browser tool description", () => {
+  it("warns agents about existing-session act timeout limits", () => {
+    const tool = createBrowserTool();
+
+    expect(tool.description).toContain('profile="user"');
+    expect(tool.description).toContain("omit timeoutMs on act:type");
+    expect(tool.description).toContain("existing-session profiles");
+  });
+});
 
 describe("browser tool snapshot maxChars", () => {
   registerBrowserToolAfterEachReset();

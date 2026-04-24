@@ -250,4 +250,32 @@ describe("qa suite planning helpers", () => {
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "claude-subscription"]);
   });
+
+  it("filters provider-mode-specific scenarios from implicit suite selections", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("live-only", {
+        config: { requiredProviderMode: "live-frontier" },
+      }),
+      makeQaSuiteTestScenario("mock-only", {
+        config: { requiredProviderMode: "mock-openai" },
+      }),
+    ];
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.4",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic", "mock-only"]);
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.4",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic", "live-only"]);
+  });
 });

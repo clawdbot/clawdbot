@@ -296,7 +296,7 @@ openclaw backup create
 
 ---
 
-## See Also
+## Related
 
 - [Gateway remote access](/gateway/remote) — other remote access patterns
 - [Tailscale integration](/gateway/tailscale) — full Tailscale docs

@@ -40,9 +40,12 @@ function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig 
 }
 
 async function waitForStartedAccount(started: string[], accountId: string) {
-  for (let i = 0; i < 10 && !started.includes(accountId); i += 1) {
-    await Promise.resolve();
-  }
+  await vi.waitFor(
+    () => {
+      expect(started).toContain(accountId);
+    },
+    { timeout: 10_000 },
+  );
 }
 
 afterEach(() => {
@@ -74,9 +77,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     try {
-      await Promise.resolve();
-      await Promise.resolve();
-
+      await waitForStartedAccount(started, "alpha");
       expect(started).toEqual(["alpha"]);
       expect(maxInFlight).toBe(1);
     } finally {
@@ -177,7 +178,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     try {
-      await Promise.resolve();
+      await waitForStartedAccount(started, "alpha");
       expect(started).toEqual(["alpha"]);
 
       abortController.abort();

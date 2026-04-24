@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import SlackBolt, * as SlackBoltNamespace from "@slack/bolt";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -68,11 +67,12 @@ import type { MonitorSlackOpts } from "./types.js";
 
 let slackBoltInterop: SlackBoltResolvedExports | undefined;
 
-function getSlackBoltInterop(): SlackBoltResolvedExports {
+async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
   if (!slackBoltInterop) {
+    const slackBoltModule = await import("@slack/bolt");
     slackBoltInterop = resolveSlackBoltInterop({
-      defaultImport: SlackBolt,
-      namespaceImport: SlackBoltNamespace,
+      defaultImport: slackBoltModule.default,
+      namespaceImport: slackBoltModule,
     });
   }
   return slackBoltInterop;
@@ -185,7 +185,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const clientOptions = resolveSlackWebClientOptions();
   const { app, receiver } = createSlackBoltApp({
-    interop: getSlackBoltInterop(),
+    interop: await getSlackBoltInterop(),
     slackMode,
     botToken,
     appToken: appToken ?? undefined,

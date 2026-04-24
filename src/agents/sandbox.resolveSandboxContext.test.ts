@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+
+const updateRegistryMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./sandbox/registry.js", () => ({
+  updateRegistry: updateRegistryMock,
+}));
 
 describe("resolveSandboxContext", () => {
   it("does not sandbox the agent main session in non-main mode", async () => {
@@ -111,6 +117,7 @@ describe("resolveSandboxContext", () => {
               mode: "all",
               backend: "test-backend",
               scope: "session",
+              workspaceAccess: "rw",
               prune: { idleHours: 0, maxAgeDays: 0 },
             },
           },

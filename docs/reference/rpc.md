@@ -39,3 +39,7 @@ See [iMessage](/channels/imessage) for legacy setup and addressing (`chat_id` pr
 - Gateway owns the process (start/stop tied to provider lifecycle).
 - Keep RPC clients resilient: timeouts, restart on exit.
 - Prefer stable IDs (e.g., `chat_id`) over display strings.
+
+## Related
+
+- [Gateway protocol](/gateway/protocol)

@@ -76,3 +76,7 @@ If you only want to reset sessions, delete `agents/<agentId>/sessions/` for that
 
 - [Testing](/help/testing)
 - [Getting Started](/start/getting-started)
+
+## Related
+
+- [Pi integration architecture](/pi)

@@ -109,22 +109,31 @@ describe("message hook mappers", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({
         MediaPath: undefined,
+        MediaUrl: undefined,
         MediaType: undefined,
         MediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+        MediaUrls: ["https://example.test/tree.jpg", "https://example.test/ramp.jpg"],
         MediaTypes: ["image/jpeg", "image/jpeg"],
       }),
     );
 
     expect(canonical.mediaPath).toBe("/tmp/tree.jpg");
+    expect(canonical.mediaUrl).toBe("https://example.test/tree.jpg");
     expect(canonical.mediaType).toBe("image/jpeg");
     expect(canonical.mediaPaths).toEqual(["/tmp/tree.jpg", "/tmp/ramp.jpg"]);
+    expect(canonical.mediaUrls).toEqual([
+      "https://example.test/tree.jpg",
+      "https://example.test/ramp.jpg",
+    ]);
     expect(canonical.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
     expect(toPluginInboundClaimEvent(canonical)).toEqual(
       expect.objectContaining({
         metadata: expect.objectContaining({
           mediaPath: "/tmp/tree.jpg",
+          mediaUrl: "https://example.test/tree.jpg",
           mediaType: "image/jpeg",
           mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+          mediaUrls: ["https://example.test/tree.jpg", "https://example.test/ramp.jpg"],
           mediaTypes: ["image/jpeg", "image/jpeg"],
         }),
       }),

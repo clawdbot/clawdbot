@@ -126,3 +126,8 @@ If a fix is wanted, the smallest high-value change is:
 - or add a dedicated dedupe in `server-node-events` for `exec.finished` keyed by `(sessionKey, runId, event kind)`.
 
 That would directly block replayed `exec.finished` duplicates before they become session turns.
+
+## Related
+
+- [Exec tool](/tools/exec)
+- [Session management](/concepts/session)

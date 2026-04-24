@@ -1,6 +1,5 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { GoogleGenAI } from "@google/genai";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
@@ -22,6 +21,7 @@ import {
   GOOGLE_VIDEO_MAX_DURATION_SECONDS,
   GOOGLE_VIDEO_MIN_DURATION_SECONDS,
 } from "./generation-provider-metadata.js";
+import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
@@ -126,7 +126,7 @@ function resolveInputVideo(req: VideoGenerationRequest) {
 }
 
 async function downloadGeneratedVideo(params: {
-  client: GoogleGenAI;
+  client: GoogleGenAIClient;
   file: unknown;
   index: number;
 }): Promise<GeneratedVideoAsset> {
@@ -181,7 +181,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         timeoutMs: req.timeoutMs,
         label: "Google video generation",
       });
-      const client = new GoogleGenAI({
+      const client = createGoogleGenAI({
         apiKey: auth.apiKey,
         httpOptions: {
           ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),

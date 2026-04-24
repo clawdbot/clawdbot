@@ -12,6 +12,7 @@ export type SubagentRunParams = {
   model?: string;
   extraSystemPrompt?: string;
   lane?: string;
+  lightContext?: boolean;
   deliver?: boolean;
   idempotencyKey?: string;
 };
@@ -50,6 +51,29 @@ export type SubagentDeleteSessionParams = {
   deleteTranscript?: boolean;
 };
 
+export type RuntimeNodeListParams = {
+  connected?: boolean;
+};
+
+export type RuntimeNodeListResult = {
+  nodes: Array<{
+    nodeId: string;
+    displayName?: string;
+    remoteIp?: string;
+    connected?: boolean;
+    caps?: string[];
+    commands?: string[];
+  }>;
+};
+
+export type RuntimeNodeInvokeParams = {
+  nodeId: string;
+  command: string;
+  params?: unknown;
+  timeoutMs?: number;
+  idempotencyKey?: string;
+};
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
   subagent: {
@@ -61,6 +85,10 @@ export type PluginRuntime = PluginRuntimeCore & {
     /** @deprecated Use getSessionMessages. */
     getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
+  };
+  nodes: {
+    list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;
+    invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
   };
   channel: PluginRuntimeChannel;
 };

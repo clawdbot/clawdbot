@@ -1,7 +1,11 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowHttpError,
+  postJsonRequest,
+  sanitizeConfiguredModelProviderRequest,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
 
@@ -132,6 +136,9 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         resolveGoogleGenerativeAiHttpRequestConfig({
           apiKey: auth.apiKey,
           baseUrl: req.cfg?.models?.providers?.google?.baseUrl,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.google?.request,
+          ),
           capability: "image",
           transport: "http",
         });
@@ -165,7 +172,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
               : {}),
           },
         },
-        timeoutMs: 60_000,
+        timeoutMs: req.timeoutMs ?? 60_000,
         fetchFn: fetch,
         pinDns: false,
         allowPrivateNetwork,

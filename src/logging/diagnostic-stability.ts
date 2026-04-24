@@ -235,6 +235,18 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.count = event.count;
       record.pairedToolName = event.pairedToolName;
       break;
+    case "tool.execution.started":
+      record.toolName = event.toolName;
+      break;
+    case "tool.execution.completed":
+      record.toolName = event.toolName;
+      record.durationMs = event.durationMs;
+      break;
+    case "tool.execution.error":
+      record.toolName = event.toolName;
+      record.durationMs = event.durationMs;
+      record.reason = event.errorCategory;
+      break;
     case "diagnostic.memory.sample":
       record.memory = copyMemory(event.memory);
       break;

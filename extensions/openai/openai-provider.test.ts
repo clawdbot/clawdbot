@@ -229,7 +229,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("resolves gpt-5.5 and gpt-5.5-pro with launch metadata", () => {
+  it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
     const provider = buildOpenAIProvider();
 
     const model = provider.resolveDynamicModel?.({
@@ -275,15 +275,7 @@ describe("buildOpenAIProvider", () => {
       } as never,
     });
 
-    expect(model).toMatchObject({
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      cost: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 },
-    });
+    expect(model).toBeUndefined();
     expect(pro).toMatchObject({
       provider: "openai",
       id: "gpt-5.5-pro",
@@ -295,7 +287,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("surfaces gpt-5.5 in xhigh and augmented catalog metadata", () => {
+  it("surfaces gpt-5.5 in xhigh without synthetic catalog metadata", () => {
     const provider = buildOpenAIProvider();
 
     expect(
@@ -312,14 +304,10 @@ describe("buildOpenAIProvider", () => {
       entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4" }],
     } as never);
 
-    expect(entries).toContainEqual(
+    expect(entries).not.toContainEqual(
       expect.objectContaining({
         provider: "openai",
         id: "gpt-5.5",
-        name: "gpt-5.5",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 1_000_000,
       }),
     );
   });
@@ -459,6 +447,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai",
         id: "gpt-5.4",
         baseUrl: "https://api.openai.com/v1",
+        contextWindow: 200_000,
       } as Model<"openai-responses">,
       payload: {
         reasoning: { effort: "none" },
@@ -469,6 +458,10 @@ describe("buildOpenAIProvider", () => {
       transport: "auto",
       openaiWsWarmup: true,
     });
+    expect(result.payload.store).toBe(true);
+    expect(result.payload.context_management).toEqual([
+      { type: "compaction", compact_threshold: 140_000 },
+    ]);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "low" });
     expect(result.payload.reasoning).toEqual({ effort: "none" });

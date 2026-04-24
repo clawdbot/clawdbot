@@ -95,6 +95,7 @@ export type { ReplyPayload } from "./reply-payload.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
+export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export type {
   AssembleResult,
   BootstrapResult,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAuthProfileOrder } from "./auth-profiles.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 
 describe("resolveAuthProfileOrder", () => {
   it("orders by lastUsed when no explicit order exists", () => {

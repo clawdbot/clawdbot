@@ -115,13 +115,15 @@ async function createCronCasePaths(tempPrefix: string): Promise<{
 }
 
 async function cleanupCronTestRun(params: {
-  ws: { close: () => void };
-  server: { close: () => Promise<void> };
+  ws?: { close: () => void };
+  server?: { close: () => Promise<void> };
+  cronState?: DirectCronState;
   prevSkipCron: string | undefined;
   clearSessionConfig?: boolean;
 }) {
-  params.ws.close();
-  await params.server.close();
+  params.ws?.close();
+  await params.server?.close();
+  params.cronState?.cron.stop();
   testState.cronStorePath = undefined;
   if (params.clearSessionConfig) {
     testState.sessionConfig = undefined;
@@ -151,6 +153,60 @@ async function setupCronTestRun(params: {
     params.jobs ? JSON.stringify({ version: 1, jobs: params.jobs }) : EMPTY_CRON_STORE_CONTENT,
   );
   return { prevSkipCron, dir };
+}
+
+type DirectCronState = {
+  cron: { stop: () => void };
+  storePath: string;
+};
+
+async function createDirectCronState(): Promise<DirectCronState> {
+  const [{ loadConfig }, { buildGatewayCronService }] = await Promise.all([
+    import("../config/config.js"),
+    import("./server-cron.js"),
+  ]);
+  return buildGatewayCronService({
+    cfg: loadConfig(),
+    deps: {} as never,
+    broadcast: vi.fn(),
+  });
+}
+
+async function directCronReq(
+  cronState: DirectCronState,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<{ ok: boolean; payload?: unknown; error?: { code?: string; message?: string } }> {
+  const { cronHandlers } = await import("./server-methods/cron.js");
+  let result:
+    | { ok: boolean; payload?: unknown; error?: { code?: string; message?: string } }
+    | undefined;
+  await cronHandlers[method]({
+    req: {} as never,
+    params,
+    respond: (ok, payload, error) => {
+      result = {
+        ok,
+        payload,
+        error,
+      };
+    },
+    context: {
+      cron: cronState.cron,
+      cronStorePath: cronState.storePath,
+      logGateway: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    } as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  if (!result) {
+    throw new Error(`${method} did not respond`);
+  }
+  return result;
 }
 
 function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {
@@ -499,11 +555,10 @@ describe("gateway server cron", () => {
       cronEnabled: false,
     });
 
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const cronState = await createDirectCronState();
 
     try {
-      const addRes = await rpcReq(ws, "cron.add", {
+      const addRes = await directCronReq(cronState, "cron.add", {
         name: "bad custom session",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
@@ -514,7 +569,7 @@ describe("gateway server cron", () => {
       expect(addRes.ok).toBe(false);
       expect(addRes.error?.message).toContain("invalid cron sessionTarget session id");
 
-      const validRes = await rpcReq(ws, "cron.add", {
+      const validRes = await directCronReq(cronState, "cron.add", {
         name: "good custom session",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
@@ -526,7 +581,7 @@ describe("gateway server cron", () => {
       const jobId = (validRes.payload as { id?: unknown } | null)?.id;
       expect(typeof jobId).toBe("string");
 
-      const updateRes = await rpcReq(ws, "cron.update", {
+      const updateRes = await directCronReq(cronState, "cron.update", {
         id: jobId,
         patch: {
           sessionTarget: "session:..\\outside",
@@ -535,7 +590,7 @@ describe("gateway server cron", () => {
       expect(updateRes.ok).toBe(false);
       expect(updateRes.error?.message).toContain("invalid cron sessionTarget session id");
     } finally {
-      await cleanupCronTestRun({ ws, server, prevSkipCron });
+      await cleanupCronTestRun({ cronState, prevSkipCron });
     }
   });
 
@@ -614,11 +669,10 @@ describe("gateway server cron", () => {
       },
     });
 
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const cronState = await createDirectCronState();
 
     try {
-      const addRes = await rpcReq(ws, "cron.add", {
+      const addRes = await directCronReq(cronState, "cron.add", {
         name: "disabled extra channel",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
@@ -633,7 +687,7 @@ describe("gateway server cron", () => {
       }
       expect(addRes.ok).toBe(true);
     } finally {
-      await cleanupCronTestRun({ ws, server, prevSkipCron });
+      await cleanupCronTestRun({ cronState, prevSkipCron });
     }
   });
 
@@ -738,11 +792,10 @@ describe("gateway server cron", () => {
       },
     });
 
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const cronState = await createDirectCronState();
 
     try {
-      const addRes = await rpcReq(ws, "cron.add", {
+      const addRes = await directCronReq(cronState, "cron.add", {
         name: "ambient disabled announce",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
@@ -754,7 +807,7 @@ describe("gateway server cron", () => {
 
       expect(addRes.ok).toBe(true);
     } finally {
-      await cleanupCronTestRun({ ws, server, prevSkipCron });
+      await cleanupCronTestRun({ cronState, prevSkipCron });
     }
   });
 

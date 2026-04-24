@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
@@ -47,6 +48,24 @@ describe("CodexAppServerClient", () => {
 
     await expect(request).resolves.toEqual({ models: [] });
     expect(outbound.method).toBe("model/list");
+  });
+
+  it("logs a redacted preview for malformed app-server messages", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    harness.process.stdout.write('{"token":"secret-value"} trailing\n');
+
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "failed to parse codex app-server message",
+        expect.objectContaining({
+          linePreview: '{"token":"<redacted>"} trailing',
+        }),
+      ),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
   });
 
   it("preserves JSON-RPC error codes", async () => {

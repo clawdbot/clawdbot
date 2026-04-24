@@ -104,3 +104,9 @@ Follow-up work will add:
 - provider/model matrix execution
 - richer scenario discovery
 - OpenClaw-native orchestration later
+
+## Related
+
+- [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Channels overview](/channels)

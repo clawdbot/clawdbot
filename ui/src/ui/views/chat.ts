@@ -18,6 +18,7 @@ import {
 import { InputHistory } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
+import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
 import { renderSideResult } from "../chat/side-result-render.ts";
@@ -65,6 +66,10 @@ export type ChatProps = {
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
+  realtimeTalkActive?: boolean;
+  realtimeTalkStatus?: RealtimeTalkStatus;
+  realtimeTalkDetail?: string | null;
+  realtimeTalkTranscript?: string | null;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -95,8 +100,10 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
   onSend: () => void;
+  onToggleRealtimeTalk?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onQueueSteer?: (id: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
@@ -572,6 +579,7 @@ function renderPinnedSection(
     <div class="agent-chat__pinned">
       <button
         class="agent-chat__pinned-toggle"
+        aria-expanded=${vs.pinnedExpanded}
         @click=${() => {
           vs.pinnedExpanded = !vs.pinnedExpanded;
           requestUpdate();
@@ -1130,19 +1138,47 @@ export function renderChat(props: ChatProps) {
               <div class="chat-queue__list">
                 ${props.queue.map(
                   (item) => html`
-                    <div class="chat-queue__item">
-                      <div class="chat-queue__text">
-                        ${item.text ||
-                        (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                    <div
+                      class="chat-queue__item ${item.kind === "steered"
+                        ? "chat-queue__item--steered"
+                        : ""}"
+                    >
+                      <div class="chat-queue__main">
+                        ${item.kind === "steered"
+                          ? html`<span class="chat-queue__badge">Steered</span>`
+                          : nothing}
+                        <div class="chat-queue__text">
+                          ${item.text ||
+                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                        </div>
                       </div>
-                      <button
-                        class="btn chat-queue__remove"
-                        type="button"
-                        aria-label="Remove queued message"
-                        @click=${() => props.onQueueRemove(item.id)}
-                      >
-                        ${icons.x}
-                      </button>
+                      <div class="chat-queue__actions">
+                        ${props.canAbort &&
+                        props.onQueueSteer &&
+                        item.kind !== "steered" &&
+                        !item.localCommandName
+                          ? html`
+                              <button
+                                class="btn chat-queue__steer"
+                                type="button"
+                                title="Steer now"
+                                aria-label="Steer queued message"
+                                @click=${() => props.onQueueSteer?.(item.id)}
+                              >
+                                ${icons.cornerDownRight}
+                                <span>Steer</span>
+                              </button>
+                            `
+                          : nothing}
+                        <button
+                          class="btn chat-queue__remove"
+                          type="button"
+                          aria-label="Remove queued message"
+                          @click=${() => props.onQueueRemove(item.id)}
+                        >
+                          ${icons.x}
+                        </button>
+                      </div>
                     </div>
                   `,
                 )}
@@ -1176,6 +1212,19 @@ export function renderChat(props: ChatProps) {
 
         ${vs.sttRecording && vs.sttInterimText
           ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
+          : nothing}
+        ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
+          ? html`
+              <div class="agent-chat__stt-interim agent-chat__talk-status">
+                ${props.realtimeTalkDetail ??
+                props.realtimeTalkTranscript ??
+                (props.realtimeTalkStatus === "thinking"
+                  ? "Asking OpenClaw..."
+                  : props.realtimeTalkStatus === "connecting"
+                    ? "Connecting Talk..."
+                    : "Talk live")}
+              </div>
+            `
           : nothing}
 
         <textarea
@@ -1251,9 +1300,25 @@ export function renderChat(props: ChatProps) {
                       }
                     }}
                     title=${vs.sttRecording ? "Stop recording" : "Voice input"}
+                    aria-label=${vs.sttRecording ? "Stop recording" : "Voice input"}
                     ?disabled=${!props.connected}
                   >
                     ${vs.sttRecording ? icons.micOff : icons.mic}
+                  </button>
+                `
+              : nothing}
+            ${props.onToggleRealtimeTalk
+              ? html`
+                  <button
+                    class="agent-chat__input-btn ${props.realtimeTalkActive
+                      ? "agent-chat__input-btn--talk"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalk}
+                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    ?disabled=${!props.connected}
+                  >
+                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
                   </button>
                 `
               : nothing}

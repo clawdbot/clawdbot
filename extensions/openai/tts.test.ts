@@ -13,6 +13,20 @@ import {
   resolveOpenAITtsInstructions,
 } from "./tts.js";
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: async ({
+    url,
+    init,
+  }: {
+    url: string;
+    init?: RequestInit;
+  }): Promise<{ response: Response; release: () => Promise<void> }> => ({
+    response: await globalThis.fetch(url, init),
+    release: vi.fn(async () => {}),
+  }),
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
+}));
+
 describe("openai tts", () => {
   const proxyReset = installDebugProxyTestResetHooks();
 

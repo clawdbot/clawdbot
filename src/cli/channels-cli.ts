@@ -169,12 +169,16 @@ export function registerChannelsCli(program: Command) {
       .option("--name <name>", "Display name for this account")
       .option("--token <token>", "Channel token or credential payload")
       .option("--token-file <path>", "Read channel token or credential payload from file")
+      .option("--secret <secret>", "Channel shared secret")
+      .option("--secret-file <path>", "Read channel shared secret from file")
       .option("--bot-token <token>", "Bot token")
       .option("--app-token <token>", "App token")
       .option("--password <password>", "Channel password or login secret")
       .option("--cli-path <path>", "Channel CLI path")
       .option("--url <url>", "Channel setup URL")
+      .option("--base-url <url>", "Channel base URL")
       .option("--http-url <url>", "Channel HTTP service URL")
+      .option("--auth-dir <path>", "Channel auth directory override")
       .option("--use-env", "Use env-backed credentials when supported", false),
   ).action(async (opts, command) => {
     await runChannelsCommand(async () => {

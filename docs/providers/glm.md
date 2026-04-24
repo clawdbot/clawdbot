@@ -61,7 +61,7 @@ apply the correct base URL automatically. Use the explicit regional choices when
 you want to force a specific Coding Plan or general API surface.
 </Tip>
 
-## Bundled GLM models
+## Built-in catalog
 
 OpenClaw currently seeds the bundled `zai` provider with these GLM refs:
 

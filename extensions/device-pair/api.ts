@@ -17,4 +17,4 @@ export {
   resolvePreferredOpenClawTmpDir,
   runPluginCommandWithTimeout,
 } from "openclaw/plugin-sdk/sandbox";
-export { renderQrPngBase64 } from "./qr-image.js";
+export { renderQrPngBase64, renderQrPngDataUrl, writeQrPngTempFile } from "./qr-image.js";

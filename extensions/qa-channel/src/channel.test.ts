@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { extractToolPayload } from "../../../src/infra/outbound/tool-payload.js";
 import { createTestRegistry } from "../../../test/helpers/plugins/plugin-registry.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
-import { createQaBusState, startQaBusServer } from "../../qa-lab/api.js";
+import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 
 afterEach(() => {

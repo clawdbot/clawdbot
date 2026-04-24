@@ -1,6 +1,6 @@
 ---
 name: security-triage
-description: Triage GitHub security advisories for OpenClaw with high-confidence close/keep decisions, exact tag and commit verification, trust-model checks, optional hardening notes, and a final reply ready to post and copy to clipboard.
+description: Triage OpenClaw security advisories, drafts, and GHSA reports with shipped-tag and trust-model proof.
 ---
 
 # Security Triage

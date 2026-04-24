@@ -124,3 +124,8 @@ If you run from a repo checkout (`git clone` + `openclaw ...` / `bun run opencla
 1. Uninstall the gateway service **before** deleting the repo (use the easy path above or manual service removal).
 2. Delete the repo directory.
 3. Remove state + workspace as shown above.
+
+## Related
+
+- [Install overview](/install)
+- [Migration guide](/install/migrating)

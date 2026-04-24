@@ -72,3 +72,8 @@ title: "Features"
 - Web search (Brave, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web Search, Perplexity, SearXNG, Tavily)
 - Cron jobs and heartbeat scheduling
 - Skills, plugins, and workflow pipelines (Lobster)
+
+## Related
+
+- [Experimental features](/concepts/experimental-features)
+- [Agent runtime](/concepts/agent)

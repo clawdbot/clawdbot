@@ -327,3 +327,9 @@ Marketplace list accepts a local marketplace path, a `marketplace.json` path, a
 GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json`
 prints the resolved source label plus the parsed marketplace manifest and
 plugin entries.
+
+## Related
+
+- [CLI reference](/cli)
+- [Building plugins](/plugins/building-plugins)
+- [Community plugins](/plugins/community)

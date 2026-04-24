@@ -1,0 +1,210 @@
+name: NPM Telegram Beta E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_spec:
+        description: Published OpenClaw package spec to test
+        required: true
+        default: openclaw@beta
+        type: string
+      provider_mode:
+        description: QA provider mode
+        required: true
+        default: mock-openai
+        type: choice
+        options:
+          - mock-openai
+          - live-frontier
+      scenario:
+        description: Optional comma-separated Telegram scenario ids
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-telegram-beta-e2e-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.33.0"
+
+jobs:
+  validate_dispatch_ref:
+    name: Validate dispatch ref
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - name: Require main workflow ref
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "NPM Telegram beta E2E must be dispatched from main so workflow logic stays controlled." >&2
+            exit 1
+          fi
+
+  approve_release_manager:
+    name: Approve npm Telegram beta E2E
+    needs: validate_dispatch_ref
+    runs-on: ubuntu-latest
+    environment: npm-release
+    steps:
+      - name: Record approval
+        env:
+          PACKAGE_SPEC: ${{ inputs.package_spec }}
+        run: echo "Approved npm Telegram beta E2E for ${PACKAGE_SPEC}"
+
+  prepare_docker_e2e_image:
+    name: Prepare Docker E2E image
+    needs: validate_dispatch_ref
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Resolve Docker E2E image tag
+        id: image
+        shell: bash
+        env:
+          SELECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          image="ghcr.io/${repository}-docker-e2e:${SELECTED_SHA}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "Docker E2E image: \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push Docker E2E image
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+        with:
+          context: .
+          file: ./scripts/e2e/Dockerfile
+          target: build
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.image }}
+          provenance: false
+          push: true
+
+  run_npm_telegram_beta_e2e:
+    name: Run published npm Telegram E2E
+    needs: [approve_release_manager, prepare_docker_e2e_image]
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 60
+    environment: qa-live-shared
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate inputs and secrets
+        env:
+          PACKAGE_SPEC: ${{ inputs.package_spec }}
+          PROVIDER_MODE: ${{ inputs.provider_mode }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
+            echo "package_spec must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
+            exit 1
+          fi
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+          if [[ "${PROVIDER_MODE}" == "live-frontier" ]]; then
+            require_var OPENAI_API_KEY
+          fi
+
+      - name: Run npm Telegram beta E2E
+        id: run_lane
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_SKIP_DOCKER_BUILD: "1"
+          OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
+          OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.package_spec }}
+          OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.provider_mode }}
+          OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: convex
+          OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: ci
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          INPUT_SCENARIO: ${{ inputs.scenario }}
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/npm-telegram-beta-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+          export OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="${output_dir}"
+
+          if [[ -n "${INPUT_SCENARIO// }" ]]; then
+            export OPENCLAW_NPM_TELEGRAM_SCENARIOS="${INPUT_SCENARIO}"
+          fi
+
+          pnpm test:docker:npm-telegram-live
+
+      - name: Upload npm Telegram E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-telegram-beta-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn

@@ -116,3 +116,9 @@ Preview with `openclaw sessions cleanup --dry-run`.
 - [Multi-Agent](/concepts/multi-agent) — routing and session isolation across agents
 - [Background Tasks](/automation/tasks) — how detached work creates task records with session references
 - [Channel Routing](/channels/channel-routing) — how inbound messages are routed to sessions
+
+## Related
+
+- [Session pruning](/concepts/session-pruning)
+- [Session tools](/concepts/session-tool)
+- [Command queue](/concepts/queue)

@@ -60,7 +60,7 @@ describe("Codex app-server config", () => {
       expect.objectContaining({
         approvalPolicy: "on-request",
         sandbox: "read-only",
-        approvalsReviewer: "guardian_subagent",
+        approvalsReviewer: "auto_review",
       }),
     );
     expect(runtime).not.toHaveProperty("serviceTier");
@@ -114,7 +114,7 @@ describe("Codex app-server config", () => {
       expect.objectContaining({
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
-        approvalsReviewer: "guardian_subagent",
+        approvalsReviewer: "auto_review",
       }),
     );
   });
@@ -129,9 +129,24 @@ describe("Codex app-server config", () => {
       expect.objectContaining({
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
-        approvalsReviewer: "guardian_subagent",
+        approvalsReviewer: "auto_review",
       }),
     );
+  });
+
+  it("accepts the latest auto_review reviewer and legacy guardian_subagent alias", () => {
+    expect(
+      resolveCodexAppServerRuntimeOptions({
+        pluginConfig: { appServer: { approvalsReviewer: "auto_review" } },
+        env: {},
+      }).approvalsReviewer,
+    ).toBe("auto_review");
+    expect(
+      resolveCodexAppServerRuntimeOptions({
+        pluginConfig: { appServer: { approvalsReviewer: "guardian_subagent" } },
+        env: {},
+      }).approvalsReviewer,
+    ).toBe("guardian_subagent");
   });
 
   it("ignores removed OPENCLAW_CODEX_APP_SERVER_GUARDIAN fallback", () => {

@@ -6,8 +6,6 @@ read_when:
 title: "Control UI"
 ---
 
-# Control UI (browser)
-
 The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 - default: `http://<host>:18789/`
@@ -107,6 +105,11 @@ locale picker lives in the Gateway Access card, not under Appearance.
 ## What it can do (today)
 
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
+- Talk to OpenAI Realtime directly from the browser via WebRTC. The Gateway
+  mints a short-lived Realtime client secret with `talk.realtime.session`; the
+  browser sends microphone audio directly to OpenAI and relays
+  `openclaw_agent_consult` tool calls back through `chat.send` for the larger
+  configured OpenClaw model.
 - Stream tool calls + live tool output cards in Chat (agent events)
 - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
@@ -153,8 +156,22 @@ Cron jobs panel notes:
 - `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply`.
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
+- Talk mode uses a registered realtime voice provider that supports browser
+  WebRTC sessions. Configure OpenAI with `talk.provider: "openai"` plus
+  `talk.providers.openai.apiKey`, or reuse the Voice Call realtime provider
+  config. The browser never receives the standard OpenAI API key; it receives
+  only the ephemeral Realtime client secret. Google Live realtime voice is
+  supported for backend Voice Call and Google Meet bridges, but not this browser
+  WebRTC path yet. The Realtime session prompt is assembled by the Gateway;
+  `talk.realtime.session` does not accept caller-provided instruction overrides.
+- In the Chat composer, the Talk control is the waves button next to the
+  microphone dictation button. When Talk starts, the composer status row shows
+  `Connecting Talk...`, then `Talk live` while audio is connected, or
+  `Asking OpenClaw...` while a realtime tool call is consulting the configured
+  larger model through `chat.send`.
 - Stop:
   - Click **Stop** (calls `chat.abort`)
+  - While a run is active, normal follow-ups queue. Click **Steer** on a queued message to inject that follow-up into the running turn.
   - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band
   - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
 - Abort partial retention:

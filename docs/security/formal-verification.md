@@ -163,3 +163,8 @@ What it means:
 - Red (expected):
   - `make routing-precedence-negative`
   - `make routing-identitylinks-negative`
+
+## Related
+
+- [Threat model](/security/THREAT-MODEL-ATLAS)
+- [Contributing to the threat model](/security/CONTRIBUTING-THREAT-MODEL)

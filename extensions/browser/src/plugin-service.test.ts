@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "./config/config.js";
+import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 import { createBrowserPluginService } from "./plugin-service.js";
 
 const SERVICE_CONTEXT = {
@@ -59,5 +61,25 @@ describe("createBrowserPluginService", () => {
     expect(() => params.validateOverrideSpecifier("node:fs")).toThrow(
       "Refusing unsafe browser control override specifier",
     );
+  });
+});
+
+describe("isDefaultBrowserPluginEnabled", () => {
+  it("defaults to enabled", () => {
+    expect(isDefaultBrowserPluginEnabled({} as OpenClawConfig)).toBe(true);
+  });
+
+  it("respects explicit plugin disablement", () => {
+    expect(
+      isDefaultBrowserPluginEnabled({
+        plugins: {
+          entries: {
+            browser: {
+              enabled: false,
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe(false);
   });
 });

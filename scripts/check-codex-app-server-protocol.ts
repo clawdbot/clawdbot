@@ -5,6 +5,22 @@ const codexRepo = process.env.OPENCLAW_CODEX_REPO
   ? path.resolve(process.env.OPENCLAW_CODEX_REPO)
   : path.resolve(process.cwd(), "../codex");
 const schemaRoot = path.join(codexRepo, "codex-rs/app-server-protocol/schema/typescript");
+const sourceSchemaRoot = path.join(codexRepo, "codex-rs/app-server-protocol/schema");
+const generatedRoot = path.resolve(
+  process.cwd(),
+  "extensions/codex/src/app-server/protocol-generated",
+);
+
+const selectedJsonSchemas = [
+  "DynamicToolCallParams.json",
+  "v2/ErrorNotification.json",
+  "v2/GetAccountResponse.json",
+  "v2/ModelListResponse.json",
+  "v2/ThreadResumeResponse.json",
+  "v2/ThreadStartResponse.json",
+  "v2/TurnCompletedNotification.json",
+  "v2/TurnStartResponse.json",
+] as const;
 
 const checks: Array<{ file: string; snippets: string[] }> = [
   {
@@ -34,6 +50,22 @@ const checks: Array<{ file: string; snippets: string[] }> = [
     snippets: ['"accept"', '"acceptForSession"', '"decline"', '"cancel"'],
   },
   {
+    file: "v2/Account.ts",
+    snippets: ['"type": "apiKey"', '"type": "chatgpt"', '"type": "amazonBedrock"'],
+  },
+  {
+    file: "v2/ThreadStartParams.ts",
+    snippets: [
+      "permissionProfile?: PermissionProfile | null",
+      "experimentalRawEvents: boolean",
+      "persistExtendedHistory: boolean",
+    ],
+  },
+  {
+    file: "v2/TurnStartParams.ts",
+    snippets: ["permissionProfile?: PermissionProfile | null", "serviceTier?: ServiceTier | null"],
+  },
+  {
     file: "ReviewDecision.ts",
     snippets: ['"approved"', '"approved_for_session"', '"denied"', '"abort"'],
   },
@@ -48,6 +80,8 @@ const checks: Array<{ file: string; snippets: string[] }> = [
 ];
 
 const failures: string[] = [];
+
+await compareGeneratedProtocolMirror();
 
 for (const check of checks) {
   const filePath = path.join(schemaRoot, check.file);
@@ -70,9 +104,88 @@ if (failures.length > 0) {
   for (const failure of failures) {
     console.error(`- ${failure}`);
   }
+  console.error("Run `pnpm codex-app-server:protocol:sync` after refreshing ../codex.");
   process.exit(1);
 }
 
 console.log(
   `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${schemaRoot}`,
 );
+
+async function compareGeneratedProtocolMirror(): Promise<void> {
+  const sourceTsRoot = path.join(sourceSchemaRoot, "typescript");
+  const targetTsRoot = path.join(generatedRoot, "typescript");
+  const sourceFiles = await listFiles(sourceTsRoot, ".ts");
+  const targetFiles = await listFiles(targetTsRoot, ".ts");
+  const sourceSet = new Set(sourceFiles);
+  const targetSet = new Set(targetFiles);
+
+  for (const file of sourceFiles) {
+    if (!targetSet.has(file)) {
+      failures.push(`protocol-generated/typescript/${file}: missing local mirror`);
+      continue;
+    }
+    const source = normalizeGeneratedTypeScript(
+      await fs.readFile(path.join(sourceTsRoot, file), "utf8"),
+    );
+    const target = await fs.readFile(path.join(targetTsRoot, file), "utf8");
+    if (source !== target) {
+      failures.push(
+        `protocol-generated/typescript/${file}: differs from normalized ../codex schema`,
+      );
+    }
+  }
+  for (const file of targetFiles) {
+    if (!sourceSet.has(file)) {
+      failures.push(`protocol-generated/typescript/${file}: no longer present in ../codex schema`);
+    }
+  }
+
+  for (const schema of selectedJsonSchemas) {
+    const sourcePath = path.join(sourceSchemaRoot, "json", schema);
+    const targetPath = path.join(generatedRoot, "json", schema);
+    let source: string;
+    let target: string;
+    try {
+      source = await fs.readFile(sourcePath, "utf8");
+    } catch (error) {
+      failures.push(
+        `protocol-generated/json/${schema}: missing upstream schema (${String(error)})`,
+      );
+      continue;
+    }
+    try {
+      target = await fs.readFile(targetPath, "utf8");
+    } catch (error) {
+      failures.push(`protocol-generated/json/${schema}: missing local schema (${String(error)})`);
+      continue;
+    }
+    if (source !== target) {
+      failures.push(`protocol-generated/json/${schema}: differs from ../codex schema`);
+    }
+  }
+}
+
+async function listFiles(root: string, suffix: string): Promise<string[]> {
+  const files: string[] = [];
+  async function visit(dir: string): Promise<void> {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(suffix)) {
+        files.push(path.relative(root, fullPath));
+      }
+    }
+  }
+  await visit(root);
+  return files.toSorted();
+}
+
+function normalizeGeneratedTypeScript(text: string): string {
+  return text
+    .replace(/(from\s+["'])(\.{1,2}\/[^"']+?)(\.js)?(["'])/g, "$1$2.js$4")
+    .replace('export * as v2 from "./v2.js";', 'export * as v2 from "./v2/index.js";')
+    .replaceAll("| null | null", "| null");
+}

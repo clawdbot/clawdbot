@@ -204,3 +204,9 @@ package docs) and also notes the public mirror, source repo, community Discord, 
 ClawHub ([https://clawhub.ai](https://clawhub.ai)) for skills discovery. The prompt instructs the model to consult local docs first
 for OpenClaw behavior, commands, configuration, or architecture, and to run
 `openclaw status` itself when possible (asking the user only when it lacks access).
+
+## Related
+
+- [Agent runtime](/concepts/agent)
+- [Agent workspace](/concepts/agent-workspace)
+- [Context engine](/concepts/context-engine)

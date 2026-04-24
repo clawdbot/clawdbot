@@ -5,6 +5,7 @@ import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { __testing as cliBackendsTesting } from "../cli-backends.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
@@ -51,10 +52,11 @@ const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveMusicGenerationTaskPromptContextForSession,
 );
 
-function createCliBackendConfig(): OpenClawConfig {
+function createCliBackendConfig(params: { systemPromptOverride?: string } = {}): OpenClawConfig {
   return {
     agents: {
       defaults: {
+        systemPromptOverride: params.systemPromptOverride ?? "test system prompt",
         cliBackends: {
           "test-cli": {
             command: "test-cli",
@@ -114,6 +116,10 @@ function appendTranscriptEntry(
 
 describe("shouldSkipLocalCliCredentialEpoch", () => {
   beforeEach(() => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [],
+    });
     setCliRunnerPrepareTestDeps({
       makeBootstrapWarn: vi.fn(() => () => undefined),
       resolveBootstrapContextForRun: vi.fn(async () => ({
@@ -128,6 +134,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
     mockGetGlobalHookRunner.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
@@ -336,12 +343,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-hook-failure",
-        extraSystemPrompt: "base extra system",
-        config: createCliBackendConfig(),
+        config: createCliBackendConfig({ systemPromptOverride: "base extra system" }),
       });
 
       expect(context.params.prompt).toBe("latest ask");
-      expect(context.systemPrompt).toContain("base extra system");
+      expect(context.systemPrompt).toBe("base extra system");
       expect(context.systemPrompt).not.toContain("hook exploded");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
     } finally {

@@ -1,6 +1,5 @@
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { getSharedCodexAppServerClient } from "./shared-client.js";
 
 export type CodexAppServerClientFactory = (
   startOptions?: CodexAppServerStartOptions,
@@ -10,7 +9,10 @@ export type CodexAppServerClientFactory = (
 export const defaultCodexAppServerClientFactory: CodexAppServerClientFactory = (
   startOptions,
   authProfileId,
-) => getSharedCodexAppServerClient({ startOptions, authProfileId });
+) =>
+  import("./shared-client.js").then(({ getSharedCodexAppServerClient }) =>
+    getSharedCodexAppServerClient({ startOptions, authProfileId }),
+  );
 
 export function createCodexAppServerClientFactoryTestHooks(
   setFactory: (factory: CodexAppServerClientFactory) => void,

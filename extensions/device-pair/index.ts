@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -11,7 +11,8 @@ import {
   issueDeviceBootstrapToken,
   listDevicePairing,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  renderQrPngBase64,
+  renderQrPngDataUrl,
+  writeQrPngTempFile,
   revokeDeviceBootstrapToken,
   resolveGatewayBindUrl,
   resolveGatewayPort,
@@ -34,20 +35,6 @@ import {
   buildMissingPairingScopeReply,
   resolvePairingCommandAuthState,
 } from "./pair-command-auth.js";
-
-async function renderQrDataUrl(data: string): Promise<string> {
-  const pngBase64 = await renderQrPngBase64(data);
-  return `data:image/png;base64,${pngBase64}`;
-}
-
-async function writeQrPngTempFile(data: string): Promise<string> {
-  const pngBase64 = await renderQrPngBase64(data);
-  const tmpRoot = resolvePreferredOpenClawTmpDir();
-  const qrDir = await mkdtemp(path.join(tmpRoot, "device-pair-qr-"));
-  const filePath = path.join(qrDir, "pair-qr.png");
-  await writeFile(filePath, Buffer.from(pngBase64, "base64"));
-  return filePath;
-}
 
 function formatDurationMinutes(expiresAtMs: number): string {
   const msRemaining = Math.max(0, expiresAtMs - Date.now());
@@ -671,7 +658,13 @@ export default definePluginEntry({
           if (target && canSendQrPngToChannel(channel)) {
             let qrFilePath: string | undefined;
             try {
-              qrFilePath = await writeQrPngTempFile(setupCode);
+              qrFilePath = (
+                await writeQrPngTempFile(setupCode, {
+                  tmpRoot: resolvePreferredOpenClawTmpDir(),
+                  dirPrefix: "device-pair-qr-",
+                  fileName: "pair-qr.png",
+                })
+              ).filePath;
               const sent = await sendQrPngToSupportedChannel({
                 api,
                 ctx,
@@ -709,7 +702,7 @@ export default definePluginEntry({
           if (channel === "webchat") {
             let qrDataUrl: string;
             try {
-              qrDataUrl = await renderQrDataUrl(setupCode);
+              qrDataUrl = await renderQrPngDataUrl(setupCode);
             } catch (err) {
               api.logger.warn?.(
                 `device-pair: webchat QR render failed, falling back (${(err as Error)?.message ?? err})`,

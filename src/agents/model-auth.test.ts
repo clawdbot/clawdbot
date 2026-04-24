@@ -92,12 +92,14 @@ let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForP
 let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
 let resolveModelAuthMode: typeof import("./model-auth.js").resolveModelAuthMode;
 let resolveUsableCustomProviderApiKey: typeof import("./model-auth.js").resolveUsableCustomProviderApiKey;
+let cliCredentials: typeof import("./cli-credentials.js");
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 
 beforeAll(async () => {
   vi.resetModules();
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
+  cliCredentials = await import("./cli-credentials.js");
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
@@ -258,6 +260,24 @@ describe("resolveModelAuthMode", () => {
     expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
       "aws-sdk",
     );
+  });
+
+  it("returns oauth for codex when Codex CLI auth is available", () => {
+    const readCodexCliCredentialsCached = vi
+      .spyOn(cliCredentials, "readCodexCliCredentialsCached")
+      .mockReturnValue({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "token",
+        refresh: "refresh",
+        expires: Date.now() + 60_000,
+      });
+
+    try {
+      expect(resolveModelAuthMode("codex", undefined, { version: 1, profiles: {} })).toBe("oauth");
+    } finally {
+      readCodexCliCredentialsCached.mockRestore();
+    }
   });
 });
 

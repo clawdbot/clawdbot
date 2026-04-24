@@ -71,7 +71,7 @@ openclaw onboard --non-interactive \
 Both providers are configured from a single API key. Setup registers both automatically.
 </Note>
 
-## Available models
+## Built-in catalog
 
 <Tabs>
   <Tab title="General (volcengine)">

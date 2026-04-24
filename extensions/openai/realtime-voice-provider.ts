@@ -6,12 +6,15 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import {
   asFiniteNumber,
@@ -58,6 +61,8 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   azureDeployment?: string;
   azureApiVersion?: string;
 };
+
+const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-1.5";
 
 type RealtimeEvent = {
   type: string;
@@ -117,7 +122,7 @@ function base64ToBuffer(b64: string): Buffer {
 }
 
 class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
-  private static readonly DEFAULT_MODEL = "gpt-realtime-1.5";
+  private static readonly DEFAULT_MODEL = OPENAI_REALTIME_DEFAULT_MODEL;
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
   private static readonly CONNECT_TIMEOUT_MS = 10_000;
@@ -579,6 +584,87 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 }
 
+function readStringField(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+async function createOpenAIRealtimeBrowserSession(
+  req: RealtimeVoiceBrowserSessionCreateRequest,
+): Promise<RealtimeVoiceBrowserSession> {
+  const config = normalizeProviderConfig(req.providerConfig);
+  const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OpenAI API key missing");
+  }
+  if (config.azureEndpoint || config.azureDeployment) {
+    throw new Error("OpenAI Realtime browser sessions do not support Azure endpoints yet");
+  }
+
+  const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+  const voice = (req.voice ?? config.voice ?? "alloy") as OpenAIRealtimeVoice;
+  const session: Record<string, unknown> = {
+    type: "realtime",
+    model,
+    instructions: req.instructions,
+    audio: {
+      output: { voice },
+    },
+  };
+  if (req.tools && req.tools.length > 0) {
+    session.tools = req.tools;
+    session.tool_choice = "auto";
+  }
+
+  const { response, release } = await fetchWithSsrFGuard({
+    url: "https://api.openai.com/v1/realtime/client_secrets",
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ session }),
+    },
+    auditContext: "openai-realtime-browser-session",
+  });
+  const payload = await (async () => {
+    try {
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(
+          `OpenAI Realtime browser session failed (${response.status}): ${detail || response.statusText}`,
+        );
+      }
+      return (await response.json()) as unknown;
+    } finally {
+      await release();
+    }
+  })();
+  const nestedSecret =
+    payload && typeof payload === "object"
+      ? (payload as Record<string, unknown>).client_secret
+      : undefined;
+  const clientSecret = readStringField(payload, "value") ?? readStringField(nestedSecret, "value");
+  if (!clientSecret) {
+    throw new Error("OpenAI Realtime browser session did not return a client secret");
+  }
+  const expiresAt =
+    payload && typeof payload === "object"
+      ? (payload as Record<string, unknown>).expires_at
+      : undefined;
+  return {
+    provider: "openai",
+    clientSecret,
+    model,
+    voice,
+    ...(typeof expiresAt === "number" ? { expiresAt } : {}),
+  };
+}
+
 export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
   return {
     id: "openai",
@@ -607,6 +693,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         azureApiVersion: config.azureApiVersion,
       });
     },
+    createBrowserSession: createOpenAIRealtimeBrowserSession,
   };
 }
 

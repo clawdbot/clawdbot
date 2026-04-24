@@ -53,6 +53,7 @@ import type { FailoverReason } from "./types.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
+  formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
   sanitizeUserFacingText,

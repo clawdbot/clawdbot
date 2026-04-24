@@ -44,6 +44,9 @@ Probe rows can come from auth profiles, env credentials, or `models.json`.
 Notes:
 
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
+- `models list` is read-only: it reads config, auth profiles, existing catalog
+  state, and provider-owned catalog rows, but it does not rewrite
+  `models.json`.
 - `models list --all` includes bundled provider-owned static catalog rows even
   when you have not authenticated with that provider yet. Those rows still show
   as unavailable until matching auth is configured.
@@ -139,3 +142,9 @@ Notes:
   relative duration such as `365d` or `12h`.
 - Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this integration unless Anthropic publishes a new policy.
 - Anthropic `setup-token` / `paste-token` remain available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
+
+## Related
+
+- [CLI reference](/cli)
+- [Model selection](/concepts/model-providers)
+- [Model failover](/concepts/model-failover)

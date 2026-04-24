@@ -131,3 +131,9 @@ Full troubleshooting: [QQ Bot troubleshooting](/channels/qqbot#troubleshooting)
 | Cross-signing/bootstrap looks wrong | `openclaw matrix verify bootstrap`     | Repair secret storage, cross-signing, and backup state in one pass.       |
 
 Full setup and config: [Matrix](/channels/matrix)
+
+## Related
+
+- [Pairing](/channels/pairing)
+- [Channel routing](/channels/channel-routing)
+- [Gateway troubleshooting](/gateway/troubleshooting)

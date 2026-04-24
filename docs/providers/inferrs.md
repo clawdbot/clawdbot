@@ -193,7 +193,7 @@ This example uses Gemma 4 on a local `inferrs` server.
 For general help, see [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
 </Tip>
 
-## See also
+## Related
 
 <CardGroup cols={2}>
   <Card title="Local models" href="/gateway/local-models" icon="server">

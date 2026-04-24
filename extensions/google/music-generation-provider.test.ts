@@ -1,19 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { GoogleGenAIMock, generateContentMock } = vi.hoisted(() => {
+const { createGoogleGenAIMock, generateContentMock } = vi.hoisted(() => {
   const generateContentMock = vi.fn();
-  const GoogleGenAIMock = vi.fn(function GoogleGenAI() {
+  const createGoogleGenAIMock = vi.fn(() => {
     return {
       models: {
         generateContent: generateContentMock,
       },
     };
   });
-  return { GoogleGenAIMock, generateContentMock };
+  return { createGoogleGenAIMock, generateContentMock };
 });
 
-vi.mock("@google/genai", () => ({
-  GoogleGenAI: GoogleGenAIMock,
+vi.mock("./google-genai-runtime.js", () => ({
+  createGoogleGenAI: createGoogleGenAIMock,
 }));
 
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -24,7 +24,7 @@ describe("google music generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     generateContentMock.mockReset();
-    GoogleGenAIMock.mockClear();
+    createGoogleGenAIMock.mockClear();
   });
 
   it("declares explicit mode capabilities", () => {
@@ -75,7 +75,7 @@ describe("google music generation provider", () => {
     expect(result.tracks).toHaveLength(1);
     expect(result.tracks[0]?.mimeType).toBe("audio/mpeg");
     expect(result.lyrics).toEqual(["wake the city up"]);
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         apiKey: "google-key",
       }),

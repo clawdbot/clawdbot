@@ -1023,6 +1023,22 @@ describe("slack slash commands access groups", () => {
     expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
   });
 
+  it("classifies MPIM slash commands as group chat context", async () => {
+    const harness = createPolicyHarness({
+      channelId: "G_MPIM",
+      channelName: "group-dm",
+      resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+    });
+    await registerAndRunPolicySlash({ harness });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
+      ctx?: { ChatType?: string; From?: string };
+    };
+    expect(dispatchArg?.ctx?.ChatType).toBe("group");
+    expect(dispatchArg?.ctx?.From).toBe("slack:group:G_MPIM");
+  });
+
   it("enforces access-group gating when lookup fails for private channels", async () => {
     const harness = createPolicyHarness({
       allowFrom: [],

@@ -40,6 +40,7 @@ vi.mock("./session.js", async () => {
 
 vi.mock("./qr-image.js", () => ({
   renderQrPngBase64: vi.fn(async () => "base64"),
+  renderQrPngDataUrl: vi.fn(async () => "data:image/png;base64,base64"),
 }));
 
 const createWaSocketMock = vi.mocked(createWaSocket);

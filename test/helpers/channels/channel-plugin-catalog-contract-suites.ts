@@ -264,6 +264,19 @@ export function describeChannelPluginCatalogEntriesContract() {
                 minHostVersion: ">=2026.4.10",
                 expectedIntegrity: "sha512-wecom",
               },
+              installSource: {
+                defaultChoice: "npm",
+                npm: {
+                  spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+                  packageName: "@wecom/wecom-openclaw-plugin",
+                  selector: "1.2.3",
+                  selectorKind: "exact-version",
+                  exactVersion: true,
+                  expectedIntegrity: "sha512-wecom",
+                  pinState: "exact-with-integrity",
+                },
+                warnings: [],
+              },
             },
           };
         },

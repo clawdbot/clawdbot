@@ -502,6 +502,7 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
 
   // Twilio
   if (resolved.provider === "twilio") {
+    resolved.fromNumber = resolved.fromNumber ?? process.env.TWILIO_FROM_NUMBER;
     resolved.twilio = resolved.twilio ?? {};
     resolved.twilio.accountSid = resolved.twilio.accountSid ?? process.env.TWILIO_ACCOUNT_SID;
     resolved.twilio.authToken = resolved.twilio.authToken ?? process.env.TWILIO_AUTH_TOKEN;
@@ -556,7 +557,11 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   }
 
   if (!config.fromNumber && config.provider !== "mock") {
-    errors.push("plugins.entries.voice-call.config.fromNumber is required");
+    errors.push(
+      config.provider === "twilio"
+        ? "plugins.entries.voice-call.config.fromNumber is required (or set TWILIO_FROM_NUMBER env)"
+        : "plugins.entries.voice-call.config.fromNumber is required",
+    );
   }
 
   if (config.provider === "telnyx") {

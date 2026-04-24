@@ -83,6 +83,7 @@ import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
+  isConversationHookName,
   isPluginHookName,
   isPromptInjectionHookName,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -98,6 +99,7 @@ import type {
   OpenClawPluginCommandDefinition,
   PluginConversationBindingResolvedEvent,
   OpenClawPluginGatewayRuntimeScopeSurface,
+  OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -165,6 +167,7 @@ export type {
 
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
+  allowConversationAccess?: boolean;
 };
 
 const constrainLegacyPromptInjectionHook = (
@@ -1116,6 +1119,37 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerGatewayDiscoveryService = (
+    record: PluginRecord,
+    service: OpenClawGatewayDiscoveryService,
+  ) => {
+    const id = service.id.trim();
+    if (!id) {
+      return;
+    }
+    const existing = registry.gatewayDiscoveryServices.find((entry) => entry.service.id === id);
+    if (existing) {
+      if (existing.pluginId === record.id) {
+        return;
+      }
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `gateway discovery service already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.gatewayDiscoveryServiceIds.push(id);
+    registry.gatewayDiscoveryServices.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      service,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
     const name = command.name.trim();
     if (!name) {
@@ -1208,6 +1242,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         effectiveHandler = constrainLegacyPromptInjectionHook(
           handler as PluginHookHandlerMap["before_agent_start"],
         ) as PluginHookHandlerMap[K];
+      }
+    }
+    if (isConversationHookName(hookName)) {
+      const explicitConversationAccess = policy?.allowConversationAccess;
+      if (record.origin !== "bundled" && explicitConversationAccess !== true) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
+            `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
+        });
+        return;
+      }
+      if (record.origin === "bundled" && explicitConversationAccess === false) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+        });
+        return;
       }
     }
     record.hookCount += 1;
@@ -1334,6 +1391,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
+              registerGatewayDiscoveryService: (service) =>
+                registerGatewayDiscoveryService(record, service),
               registerCliBackend: (backend) => registerCliBackend(record, backend),
               registerTextTransforms: (transforms) => registerTextTransforms(record, transforms),
               registerReload: (registration) => registerReload(record, registration),

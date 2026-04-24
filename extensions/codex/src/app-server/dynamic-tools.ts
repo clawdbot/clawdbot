@@ -4,11 +4,13 @@ import {
   createCodexAppServerToolResultExtensionRunner,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
+  isToolWrappedWithBeforeToolCallHook,
   isMessagingTool,
   isMessagingToolSendAction,
   runAgentHarnessAfterToolCallHook,
   type AnyAgentTool,
   type MessagingToolSend,
+  wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type CodexDynamicToolCallOutputContentItem,
@@ -42,7 +44,12 @@ export function createCodexDynamicToolBridge(params: {
     runId?: string;
   };
 }): CodexDynamicToolBridge {
-  const toolMap = new Map(params.tools.map((tool) => [tool.name, tool]));
+  const tools = params.tools.map((tool) =>
+    isToolWrappedWithBeforeToolCallHook(tool)
+      ? tool
+      : wrapToolWithBeforeToolCallHook(tool, params.hookContext),
+  );
+  const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
@@ -54,7 +61,7 @@ export function createCodexDynamicToolBridge(params: {
   const extensionRunner = createCodexAppServerToolResultExtensionRunner(params.hookContext ?? {});
 
   return {
-    specs: params.tools.map((tool) => ({
+    specs: tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
       inputSchema: toJsonValue(tool.parameters),

@@ -512,7 +512,7 @@ export async function dispatchReplyFromConfig(
         ? await hookRunner.runInboundClaimForPluginOutcome(
             pluginOwnedBinding.pluginId,
             inboundClaimEvent,
-            inboundClaimContext,
+            { ...inboundClaimContext, pluginBinding: pluginOwnedBinding },
           )
         : (() => {
             const pluginLoaded =
@@ -526,6 +526,9 @@ export async function dispatchReplyFromConfig(
 
       switch (targetedClaimOutcome.status) {
         case "handled": {
+          if (targetedClaimOutcome.result.reply) {
+            await sendBindingNotice(targetedClaimOutcome.result.reply, "terminal");
+          }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
@@ -640,8 +643,12 @@ export async function dispatchReplyFromConfig(
       return { queuedFinal, counts };
     }
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
-    const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const isSlackNonDirectSurface =
+      (ctx.Surface === "slack" || ctx.Provider === "slack") && ctx.ChatType !== "direct";
+    const shouldSendVerboseProgressMessages =
+      !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
+    const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
+    const shouldSendToolStartStatuses = shouldSendVerboseProgressMessages;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
@@ -803,7 +810,7 @@ export async function dispatchReplyFromConfig(
       explanation?: string;
       steps?: string[];
     }): Promise<void> => {
-      if (suppressDelivery || !shouldEmitVerboseProgress()) {
+      if (suppressDelivery || !shouldEmitVerboseProgress() || !shouldSendVerboseProgressMessages) {
         return;
       }
       const replyPayload: ReplyPayload = {

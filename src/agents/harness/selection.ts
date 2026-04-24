@@ -189,12 +189,12 @@ export async function runAgentHarnessAttemptWithFallback(
   });
   if (harness.id === "pi") {
     const result = await harness.runAttempt(params);
-    return { ...result, agentHarnessId: harness.id };
+    return applyHarnessResultClassification(harness, result, params);
   }
 
   try {
     const result = await harness.runAttempt(params);
-    return { ...result, agentHarnessId: harness.id };
+    return applyHarnessResultClassification(harness, result, params);
   } catch (error) {
     log.warn(`${harness.label} failed; not falling back to embedded PI backend`, {
       harnessId: harness.id,
@@ -261,6 +261,22 @@ function logAgentHarnessSelection(
     fallback: selection.policy.fallback,
     candidates: selection.candidates,
   });
+}
+
+function applyHarnessResultClassification(
+  harness: AgentHarness,
+  result: EmbeddedRunAttemptResult,
+  params: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptResult {
+  const classification = harness.classify?.(result, params);
+  if (!classification || classification === "ok") {
+    return { ...result, agentHarnessId: harness.id };
+  }
+  return {
+    ...result,
+    agentHarnessId: harness.id,
+    agentHarnessResultClassification: classification,
+  };
 }
 
 function resolvePinnedAgentHarnessPolicy(

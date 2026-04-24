@@ -6,10 +6,11 @@ const telemetryState = vi.hoisted(() => {
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
   const histograms = new Map<string, { record: ReturnType<typeof vi.fn> }>();
   const tracer = {
-    startSpan: vi.fn((_name: string, _opts?: unknown) => ({
+    startSpan: vi.fn((_name: string, _opts?: unknown, _ctx?: unknown) => ({
       end: vi.fn(),
       setStatus: vi.fn(),
     })),
+    setSpanContext: vi.fn((_ctx: unknown, spanContext: unknown) => ({ spanContext })),
   };
   const meter = {
     createCounter: vi.fn((name: string) => {
@@ -33,11 +34,19 @@ const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
 
 vi.mock("@opentelemetry/api", () => ({
+  context: {
+    active: () => ({}),
+  },
   metrics: {
     getMeter: () => telemetryState.meter,
   },
   trace: {
     getTracer: () => telemetryState.tracer,
+    setSpanContext: telemetryState.tracer.setSpanContext,
+  },
+  TraceFlags: {
+    NONE: 0,
+    SAMPLED: 1,
   },
   SpanStatusCode: {
     ERROR: 2,
@@ -110,6 +119,8 @@ import { createDiagnosticsOtelService } from "./service.js";
 const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
 const OTEL_TEST_ENDPOINT = "http://otel-collector:4318";
 const OTEL_TEST_PROTOCOL = "http/protobuf";
+const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
+const SPAN_ID = "00f067aa0ba902b7";
 
 function createLogger() {
   return {
@@ -155,12 +166,14 @@ function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext 
 type RegisteredLogTransport = (logObj: Record<string, unknown>) => void;
 function setupRegisteredTransports() {
   const registeredTransports: RegisteredLogTransport[] = [];
-  const stopTransport = vi.fn();
+  const stopTransports: ReturnType<typeof vi.fn>[] = [];
   registerLogTransportMock.mockImplementation((transport) => {
     registeredTransports.push(transport);
+    const stopTransport = vi.fn();
+    stopTransports.push(stopTransport);
     return stopTransport;
   });
-  return { registeredTransports, stopTransport };
+  return { registeredTransports, stopTransports };
 }
 
 async function emitAndCaptureLog(logObj: Record<string, unknown>) {
@@ -181,6 +194,7 @@ describe("diagnostics-otel service", () => {
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
     telemetryState.tracer.startSpan.mockClear();
+    telemetryState.tracer.setSpanContext.mockClear();
     telemetryState.meter.createCounter.mockClear();
     telemetryState.meter.createHistogram.mockClear();
     sdkStart.mockClear();
@@ -271,6 +285,73 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("restarts without retaining prior listeners or log transports", async () => {
+    const { registeredTransports, stopTransports } = setupRegisteredTransports();
+
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
+    await service.start(ctx);
+    await service.start(ctx);
+
+    expect(registerLogTransportMock).toHaveBeenCalledTimes(2);
+    expect(registeredTransports).toHaveLength(2);
+    expect(stopTransports[0]).toHaveBeenCalledTimes(1);
+    expect(logShutdown).toHaveBeenCalledTimes(1);
+    expect(sdkShutdown).toHaveBeenCalledTimes(1);
+
+    telemetryState.tracer.startSpan.mockClear();
+    emitDiagnosticEvent({
+      type: "message.processed",
+      channel: "telegram",
+      outcome: "completed",
+      durationMs: 10,
+    });
+    expect(telemetryState.tracer.startSpan).toHaveBeenCalledTimes(1);
+
+    await service.stop?.(ctx);
+    expect(stopTransports[1]).toHaveBeenCalledTimes(1);
+    expect(logShutdown).toHaveBeenCalledTimes(2);
+    expect(sdkShutdown).toHaveBeenCalledTimes(2);
+
+    telemetryState.tracer.startSpan.mockClear();
+    emitDiagnosticEvent({
+      type: "message.processed",
+      channel: "telegram",
+      outcome: "completed",
+      durationMs: 10,
+    });
+    expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
+  });
+
+  test("tears down active handles when restarted with diagnostics disabled", async () => {
+    const { stopTransports } = setupRegisteredTransports();
+
+    const service = createDiagnosticsOtelService();
+    const enabledCtx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(enabledCtx);
+    await service.start({
+      ...enabledCtx,
+      config: { diagnostics: { enabled: false } },
+    });
+
+    expect(stopTransports[0]).toHaveBeenCalledTimes(1);
+    expect(logShutdown).toHaveBeenCalledTimes(1);
+    expect(sdkShutdown).toHaveBeenCalledTimes(1);
+
+    telemetryState.tracer.startSpan.mockClear();
+    emitDiagnosticEvent({
+      type: "message.processed",
+      channel: "telegram",
+      outcome: "completed",
+      durationMs: 10,
+    });
+    expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
+  });
+
   test("appends signal path when endpoint contains non-signal /v1 segment", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createTraceOnlyContext("https://www.comet.com/opik/api/v1/private/otel");
@@ -334,6 +415,100 @@ describe("diagnostics-otel service", () => {
     if (typeof tokenAttr === "string") {
       expect(tokenAttr).toContain("…");
     }
+  });
+
+  test("attaches diagnostic trace context to exported logs", async () => {
+    const emitCall = await emitAndCaptureLog({
+      0: '{"subsystem":"diagnostic"}',
+      1: {
+        trace: {
+          traceId: TRACE_ID,
+          spanId: SPAN_ID,
+          traceFlags: "01",
+        },
+      },
+      2: "traceable log",
+      _meta: { logLevelName: "INFO", date: new Date() },
+    });
+
+    expect(emitCall?.attributes).toMatchObject({
+      "openclaw.traceId": TRACE_ID,
+      "openclaw.spanId": SPAN_ID,
+      "openclaw.traceFlags": "01",
+    });
+    expect(telemetryState.tracer.setSpanContext).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+        traceFlags: 1,
+        isRemote: true,
+      }),
+    );
+    expect(emitCall?.context).toEqual({
+      spanContext: expect.objectContaining({
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+      }),
+    });
+  });
+
+  test("parents diagnostic event spans from trace context", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      trace: {
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+        traceFlags: "01",
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { total: 4 },
+      durationMs: 12,
+    });
+
+    const modelUsageCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.usage",
+    );
+    expect(modelUsageCall?.[2]).toEqual({
+      spanContext: expect.objectContaining({
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+        traceFlags: 1,
+        isRemote: true,
+      }),
+    });
+    await service.stop?.(ctx);
+  });
+
+  test("ignores invalid diagnostic event trace parents", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      trace: {
+        traceId: "0".repeat(32),
+        spanId: "not-a-span",
+        traceFlags: "zz",
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { total: 4 },
+      durationMs: 12,
+    });
+
+    const modelUsageCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.usage",
+    );
+    expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    expect(modelUsageCall?.[2]).toBeUndefined();
+    await service.stop?.(ctx);
   });
 
   test("redacts sensitive reason in session.state metric attributes", async () => {

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveWebCredsPath } from "./creds-files.js";
-import { BufferJSON } from "./session.runtime.js";
 
 const CREDS_FILE_MODE = 0o600;
 const CREDS_SAVE_FLUSH_TIMEOUT_MS = 15_000;
@@ -10,6 +9,11 @@ const CREDS_SAVE_FLUSH_TIMEOUT_MS = 15_000;
 const credsSaveQueues = new Map<string, Promise<void>>();
 
 export type CredsQueueWaitResult = "drained" | "timed_out";
+
+async function stringifyCreds(creds: unknown): Promise<string> {
+  const { BufferJSON } = await import("./session.runtime.js");
+  return JSON.stringify(creds, BufferJSON.replacer);
+}
 
 async function syncDirectory(dirPath: string): Promise<void> {
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
@@ -28,7 +32,7 @@ async function syncDirectory(dirPath: string): Promise<void> {
 export async function writeCredsJsonAtomically(authDir: string, creds: unknown): Promise<void> {
   const credsPath = resolveWebCredsPath(authDir);
   const tempPath = path.join(authDir, `.creds.${process.pid}.${randomUUID()}.tmp`);
-  const json = JSON.stringify(creds, BufferJSON.replacer);
+  const json = await stringifyCreds(creds);
 
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {

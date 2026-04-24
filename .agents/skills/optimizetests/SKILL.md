@@ -1,6 +1,6 @@
 ---
 name: optimizetests
-description: Optimize OpenClaw test runtime end to end. Use when the user asks for /optimizetests, slow-test review, import optimization, deduping tests, moving misplaced core coverage to extensions, or reducing CI/test wall time without adding shards or dropping coverage.
+description: Optimize OpenClaw slow tests, imports, misplaced coverage, and CI wall time without dropping coverage.
 ---
 
 # Optimize Tests

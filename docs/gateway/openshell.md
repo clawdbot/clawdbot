@@ -303,7 +303,7 @@ the intended remote workspace.
 5. In `remote` mode: seed once on create, then operate directly on the remote
    workspace.
 
-## See also
+## Related
 
 - [Sandboxing](/gateway/sandboxing) -- modes, scopes, and backend comparison
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging blocked tools

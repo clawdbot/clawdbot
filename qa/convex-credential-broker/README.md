@@ -60,6 +60,10 @@ pnpm openclaw qa credentials add \
   --kind telegram \
   --payload-file qa/telegram-credential.json
 
+pnpm openclaw qa credentials add \
+  --kind discord \
+  --payload-file qa/discord-credential.json
+
 pnpm openclaw qa credentials list --kind telegram
 
 pnpm openclaw qa credentials remove --credential-id <credential-id>
@@ -139,6 +143,14 @@ For `kind: "telegram"`, broker `admin/add` validates that payload includes:
 - `groupId` as a numeric chat id string
 - non-empty `driverToken`
 - non-empty `sutToken`
+
+For `kind: "discord"`, broker `admin/add` validates that payload includes:
+
+- `guildId` as a Discord snowflake string
+- `channelId` as a Discord snowflake string
+- non-empty `driverBotToken`
+- non-empty `sutBotToken`
+- `sutApplicationId` as a Discord snowflake string
 
 Admin list (default redacted):
 

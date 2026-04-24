@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   resolveAuthProfileDisplayLabel: vi.fn(),
   resolveUsableCustomProviderApiKey: vi.fn(() => null),
   resolveEnvApiKey: vi.fn(() => null),
+  readCodexCliCredentialsCached: vi.fn<() => unknown>(() => null),
 }));
 
 vi.mock("./auth-profiles.js", () => ({
@@ -19,6 +20,10 @@ vi.mock("./auth-profiles.js", () => ({
 vi.mock("./model-auth.js", () => ({
   resolveUsableCustomProviderApiKey: mocks.resolveUsableCustomProviderApiKey,
   resolveEnvApiKey: mocks.resolveEnvApiKey,
+}));
+
+vi.mock("./cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
 }));
 
 let resolveModelAuthLabel: typeof import("./model-auth-label.js").resolveModelAuthLabel;
@@ -36,6 +41,8 @@ describe("resolveModelAuthLabel", () => {
     mocks.resolveUsableCustomProviderApiKey.mockReturnValue(null);
     mocks.resolveEnvApiKey.mockReset();
     mocks.resolveEnvApiKey.mockReturnValue(null);
+    mocks.readCodexCliCredentialsCached.mockReset();
+    mocks.readCodexCliCredentialsCached.mockReturnValue(null);
   });
 
   it("does not include token value in label for token profiles", () => {
@@ -110,6 +117,28 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toBe("oauth (anthropic:oauth)");
+  });
+
+  it("shows codex cli auth for codex provider without auth profiles", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.readCodexCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "token",
+      refresh: "refresh",
+      expires: Date.now() + 60_000,
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "codex",
+      cfg: {},
+    });
+
+    expect(label).toBe("oauth (codex-cli)");
   });
 
   it("can skip external auth profile overlays for status labels", () => {

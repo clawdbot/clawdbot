@@ -129,3 +129,9 @@ Use one of:
 - bake the env into your custom sandbox image or remote sandbox environment
 
 Global `env` and `skills.entries.<skill>.env/apiKey` apply to **host** runs only.
+
+## Related
+
+- [Skills](/tools/skills)
+- [Creating skills](/tools/creating-skills)
+- [Slash commands](/tools/slash-commands)

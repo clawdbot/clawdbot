@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
-import * as browserServerModule from "../server.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { getFreePort } from "./test-port.js";
@@ -466,12 +465,19 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
+let browserServerModulePromise: Promise<typeof import("../server.js")> | undefined;
+
+async function loadBrowserServerModule() {
+  browserServerModulePromise ??= import("../server.js");
+  return await browserServerModulePromise;
+}
+
 export async function startBrowserControlServerFromConfig() {
-  return await browserServerModule.startBrowserControlServerFromConfig();
+  return await (await loadBrowserServerModule()).startBrowserControlServerFromConfig();
 }
 
 export async function stopBrowserControlServer(): Promise<void> {
-  await browserServerModule.stopBrowserControlServer();
+  await (await loadBrowserServerModule()).stopBrowserControlServer();
 }
 
 export function makeResponse(

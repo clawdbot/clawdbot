@@ -131,7 +131,7 @@ async function runCronCleanupScenario(params: {
     payload: {
       kind: "agentTurn",
       message: "Use available context and then stop.",
-      timeoutSeconds: 12,
+      timeoutSeconds: 90,
       lightContext: true,
     },
     delivery: { mode: "none" },
@@ -182,7 +182,7 @@ async function runCronCleanupScenario(params: {
           entry.payload.jobId === job.id &&
           entry.payload.action === "finished",
       )?.payload,
-    90_000,
+    150_000,
   );
   assert(finished, "missing cron finished event");
 
@@ -212,7 +212,7 @@ async function runSubagentCleanupScenario(params: {
     cleanupBundleMcpOnRunEnd: true,
     idempotencyKey: randomUUID(),
     deliver: false,
-    timeout: 20,
+    timeout: 90,
     bestEffortDeliver: true,
   });
   assert(

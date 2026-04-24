@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import { createPluginSourceLoader } from "./source-loader.js";
@@ -13,6 +13,13 @@ type ProviderDiscoveryModule =
       providers?: ProviderPlugin[];
       provider?: ProviderPlugin;
     };
+
+type ProviderDiscoveryEntryResult = {
+  providers: ProviderPlugin[];
+  complete: boolean;
+  pluginRecords: PluginManifestRecord[];
+  entryPluginIds: Set<string>;
+};
 
 function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugin[] {
   const resolved =
@@ -37,6 +44,28 @@ function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugi
   return [];
 }
 
+function hasLiveProviderDiscoveryHook(provider: ProviderPlugin): boolean {
+  return (
+    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
+  );
+}
+
+function hasProviderAuthEnvCredential(
+  plugin: PluginManifestRecord,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return Object.values(plugin.providerAuthEnvVars ?? {}).some((envVars) =>
+    envVars.some((name) => {
+      const value = env[name]?.trim();
+      return value !== undefined && value !== "";
+    }),
+  );
+}
+
+function dedupeSorted(values: Iterable<string>): string[] {
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+}
+
 function resolveProviderDiscoveryEntryPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -44,21 +73,25 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
-}): ProviderPlugin[] {
+  discoveryEntriesOnly?: boolean;
+}): ProviderDiscoveryEntryResult {
   const pluginIds = resolveDiscoveredProviderPluginIds(params);
   const pluginIdSet = new Set(pluginIds);
-  const records = loadPluginManifestRegistry(params).plugins.filter(
-    (plugin) => plugin.providerDiscoverySource && pluginIdSet.has(plugin.id),
+  const pluginRecords = loadPluginManifestRegistry(params).plugins.filter((plugin) =>
+    pluginIdSet.has(plugin.id),
   );
-  if (records.length === 0) {
-    return [];
+  const entryRecords = pluginRecords.filter((plugin) => plugin.providerDiscoverySource);
+  const entryPluginIds = new Set(entryRecords.map((plugin) => plugin.id));
+  if (entryRecords.length === 0) {
+    return { providers: [], complete: false, pluginRecords, entryPluginIds };
   }
-  if (params.requireCompleteDiscoveryEntryCoverage && records.length < pluginIdSet.size) {
-    return [];
+  const complete = entryRecords.length === pluginIdSet.size;
+  if (params.requireCompleteDiscoveryEntryCoverage && !complete) {
+    return { providers: [], complete: false, pluginRecords, entryPluginIds };
   }
   const loadSource = createPluginSourceLoader();
   const providers: ProviderPlugin[] = [];
-  for (const manifest of records) {
+  for (const manifest of entryRecords) {
     try {
       const moduleExport = loadSource(manifest.providerDiscoverySource!) as ProviderDiscoveryModule;
       providers.push(
@@ -69,10 +102,26 @@ function resolveProviderDiscoveryEntryPlugins(params: {
     } catch {
       // Discovery fast path is optional. Fall back to the full plugin loader
       // below so existing plugin diagnostics/load behavior remains canonical.
-      return [];
+      return { providers: [], complete: false, pluginRecords, entryPluginIds };
     }
   }
-  return providers;
+  return { providers, complete, pluginRecords, entryPluginIds };
+}
+
+function resolveSelectiveFullPluginIds(params: {
+  entryResult: ProviderDiscoveryEntryResult;
+  entryProviders: ProviderPlugin[];
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  const staticOnlyEntryPluginIds = params.entryProviders
+    .filter((provider) => !hasLiveProviderDiscoveryHook(provider))
+    .map((provider) => provider.pluginId)
+    .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== "");
+  const missingEntryCredentialPluginIds = params.entryResult.pluginRecords
+    .filter((plugin) => !params.entryResult.entryPluginIds.has(plugin.id))
+    .filter((plugin) => hasProviderAuthEnvCredential(plugin, params.env))
+    .map((plugin) => plugin.id);
+  return dedupeSorted([...staticOnlyEntryPluginIds, ...missingEntryCredentialPluginIds]);
 }
 
 export function resolvePluginDiscoveryProvidersRuntime(params: {
@@ -82,13 +131,37 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
+  discoveryEntriesOnly?: boolean;
 }): ProviderPlugin[] {
-  const entryProviders = resolveProviderDiscoveryEntryPlugins(params);
-  if (entryProviders.length > 0) {
-    return entryProviders;
+  const env = params.env ?? process.env;
+  const entryResult = resolveProviderDiscoveryEntryPlugins(params);
+  if (params.discoveryEntriesOnly === true) {
+    return entryResult.providers;
+  }
+  const liveEntryProviders = entryResult.providers.filter(hasLiveProviderDiscoveryHook);
+  if (entryResult.complete && liveEntryProviders.length === entryResult.providers.length) {
+    return liveEntryProviders;
+  }
+  if (params.onlyPluginIds === undefined && entryResult.providers.length > 0) {
+    const fullPluginIds = resolveSelectiveFullPluginIds({
+      entryResult,
+      entryProviders: entryResult.providers,
+      env,
+    });
+    const fullProviders =
+      fullPluginIds.length > 0
+        ? resolvePluginProviders({
+            ...params,
+            env,
+            onlyPluginIds: fullPluginIds,
+            bundledProviderAllowlistCompat: true,
+          })
+        : [];
+    return [...liveEntryProviders, ...fullProviders];
   }
   return resolvePluginProviders({
     ...params,
+    env,
     bundledProviderAllowlistCompat: true,
   });
 }

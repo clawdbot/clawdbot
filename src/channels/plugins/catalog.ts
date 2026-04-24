@@ -4,6 +4,10 @@ import officialExternalChannelCatalog from "../../../scripts/lib/official-extern
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
+import {
+  describePluginInstallSource,
+  type PluginInstallSourceInfo,
+} from "../../plugins/install-source-info.js";
 import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "../../plugins/manifest.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
@@ -36,6 +40,7 @@ export type ChannelPluginCatalogEntry = {
   install: PluginPackageInstall & {
     npmSpec: string;
   };
+  installSource?: PluginInstallSourceInfo;
 };
 
 type CatalogOptions = {
@@ -264,6 +269,7 @@ function buildCatalogEntryFromManifest(params: {
     ...(params.origin ? { origin: params.origin } : {}),
     meta,
     install,
+    installSource: describePluginInstallSource(install),
   };
 }
 

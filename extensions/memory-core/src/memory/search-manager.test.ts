@@ -214,6 +214,25 @@ beforeEach(async () => {
 });
 
 describe("getMemorySearchManager caching", () => {
+  it("repairs an invalid shared singleton cache shape before using qmd cache maps", async () => {
+    await closeAllMemorySearchManagers();
+    vi.resetModules();
+    const cacheKey = Symbol.for("openclaw.memorySearchManagerCache");
+    (globalThis as Record<PropertyKey, unknown>)[cacheKey] = {};
+
+    const freshModule = await import("./search-manager.js");
+    try {
+      const result = await freshModule.getMemorySearchManager({
+        cfg: createQmdCfg("corrupt-cache-agent"),
+        agentId: "corrupt-cache-agent",
+      });
+      requireManager(result);
+    } finally {
+      await freshModule.closeAllMemorySearchManagers();
+      delete (globalThis as Record<PropertyKey, unknown>)[cacheKey];
+    }
+  });
+
   it("reuses the same QMD manager instance for repeated calls", async () => {
     const cfg = createQmdCfg("main");
 

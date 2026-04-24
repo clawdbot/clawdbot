@@ -26,13 +26,17 @@ function resolveOpenAIRequestCapabilities(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
-  compat?: { supportsStore?: boolean };
+  compat?: unknown;
 }) {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { supportsStore?: boolean })
+      : undefined;
   return resolveProviderRequestPolicyConfig({
     provider: readStringValue(model.provider),
     api: readStringValue(model.api),
     baseUrl: readStringValue(model.baseUrl),
-    compat: model.compat,
+    compat,
     capability: "llm",
     transport: "stream",
   }).capabilities;

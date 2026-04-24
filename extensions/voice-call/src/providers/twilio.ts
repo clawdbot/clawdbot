@@ -15,6 +15,7 @@ import type {
   NormalizedEvent,
   PlayTtsInput,
   ProviderWebhookParseResult,
+  SendDtmfInput,
   StartListeningInput,
   StopListeningInput,
   WebhookContext,
@@ -587,6 +588,23 @@ export class TwilioProvider implements VoiceCallProvider {
   <Gather input="speech" speechTimeout="auto" action="${escapeXml(webhookUrl)}" method="POST">
     <Say>.</Say>
   </Gather>
+</Response>`;
+
+    await this.apiRequest(`/Calls/${input.providerCallId}.json`, {
+      Twiml: twiml,
+    });
+  }
+
+  async sendDtmf(input: SendDtmfInput): Promise<void> {
+    const webhookUrl = this.callWebhookUrls.get(input.providerCallId);
+    if (!webhookUrl) {
+      throw new Error("Missing webhook URL for this call (provider state not initialized)");
+    }
+
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Play digits="${escapeXml(input.digits)}" />
+  <Redirect method="POST">${escapeXml(webhookUrl)}</Redirect>
 </Response>`;
 
     await this.apiRequest(`/Calls/${input.providerCallId}.json`, {

@@ -145,3 +145,8 @@ config.
 - [ACP Agents](/tools/acp-agents) -- external harness spawning
 - [Multi-agent](/concepts/multi-agent) -- multi-agent architecture
 - [Gateway Configuration](/gateway/configuration) -- session tool config knobs
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session pruning](/concepts/session-pruning)

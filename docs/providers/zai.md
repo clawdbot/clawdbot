@@ -80,7 +80,7 @@ with a Z.AI API key.
   </Tab>
 </Tabs>
 
-## Bundled GLM catalog
+## Built-in catalog
 
 OpenClaw currently seeds the bundled `zai` provider with:
 

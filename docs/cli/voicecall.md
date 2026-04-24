@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw voicecall` (voice-call plugin command surface)"
 read_when:
   - You use the voice-call plugin and want the CLI entry points
-  - You want quick examples for `voicecall call|continue|status|tail|expose`
+  - You want quick examples for `voicecall call|continue|dtmf|status|tail|expose`
 title: "Voicecall"
 ---
 
@@ -20,6 +20,7 @@ Primary doc:
 openclaw voicecall status --call-id <id>
 openclaw voicecall call --to "+15555550123" --message "Hello" --mode notify
 openclaw voicecall continue --call-id <id> --message "Any questions?"
+openclaw voicecall dtmf --call-id <id> --digits "ww123456#"
 openclaw voicecall end --call-id <id>
 ```
 
@@ -32,3 +33,8 @@ openclaw voicecall expose --mode off
 ```
 
 Security note: only expose the webhook endpoint to networks you trust. Prefer Tailscale Serve over Funnel when possible.
+
+## Related
+
+- [CLI reference](/cli)
+- [Voice call plugin](/plugins/voice-call)

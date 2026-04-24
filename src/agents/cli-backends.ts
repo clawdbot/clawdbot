@@ -5,6 +5,7 @@ import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
 import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
 import type {
   CliBackendAuthEpochMode,
+  CliBackendNormalizeConfigContext,
   CliBundleMcpMode,
   CliBackendPlugin,
   PluginTextTransforms,
@@ -50,7 +51,10 @@ type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
   baseConfig?: CliBackendConfig;
-  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+  normalizeConfig?: (
+    config: CliBackendConfig,
+    context?: CliBackendNormalizeConfigContext,
+  ) => CliBackendConfig;
   transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
   textTransforms?: PluginTextTransforms;
   defaultAuthProfileId?: string;
@@ -188,15 +192,23 @@ export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendL
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,
+  options: { agentId?: string } = {},
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
+  const normalizeContext: CliBackendNormalizeConfigContext = {
+    backendId: normalized,
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+    ...(cfg ? { config: cfg } : {}),
+  };
   const runtimeTextTransforms = resolveRuntimeTextTransforms();
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
   const registered = resolveRegisteredBackend(normalized);
   if (registered) {
     const merged = mergeBackendConfig(registered.config, override);
-    const config = registered.normalizeConfig ? registered.normalizeConfig(merged) : merged;
+    const config = registered.normalizeConfig
+      ? registered.normalizeConfig(merged, normalizeContext)
+      : merged;
     const command = config.command?.trim();
     if (!command) {
       return null;
@@ -224,7 +236,7 @@ export function resolveCliBackendConfig(
       return null;
     }
     const baseConfig = fallbackPolicy.normalizeConfig
-      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig)
+      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig, normalizeContext)
       : fallbackPolicy.baseConfig;
     const command = baseConfig.command?.trim();
     if (!command) {
@@ -249,7 +261,7 @@ export function resolveCliBackendConfig(
     ? mergeBackendConfig(fallbackPolicy.baseConfig, override)
     : override;
   const config = fallbackPolicy?.normalizeConfig
-    ? fallbackPolicy.normalizeConfig(mergedFallback)
+    ? fallbackPolicy.normalizeConfig(mergedFallback, normalizeContext)
     : mergedFallback;
   const command = config.command?.trim();
   if (!command) {

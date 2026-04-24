@@ -6,6 +6,7 @@ import type {
   InitiateCallResult,
   PlayTtsInput,
   ProviderName,
+  SendDtmfInput,
   WebhookParseOptions,
   ProviderWebhookParseResult,
   StartListeningInput,
@@ -57,6 +58,11 @@ export interface VoiceCallProvider {
    * The provider should handle streaming if supported.
    */
   playTts(input: PlayTtsInput): Promise<void>;
+
+  /**
+   * Send DTMF digits to an active call.
+   */
+  sendDtmf?: (input: SendDtmfInput) => Promise<void>;
 
   /**
    * Start listening for user speech (activate STT).

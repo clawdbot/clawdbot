@@ -210,4 +210,46 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(sessionEntry.authProfileOverrideSource).toBe("user");
     });
   });
+
+  it("keeps session override when CLI provider aliases the stored profile provider", async () => {
+    await withAuthStateDir(async ({ stateDir }) => {
+      const agentDir = path.join(stateDir, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      authStoreMocks.state.hasSource = true;
+      authStoreMocks.state.store = createAuthStoreWithProfiles({
+        profiles: {
+          [TEST_PRIMARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai-codex",
+            key: "sk-codex",
+          },
+        },
+        order: {
+          "codex-cli": [TEST_PRIMARY_PROFILE_ID],
+        },
+      });
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        authProfileOverrideSource: "auto",
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "codex-cli",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: false,
+      });
+
+      expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverride).toBe(TEST_PRIMARY_PROFILE_ID);
+    });
+  });
 });

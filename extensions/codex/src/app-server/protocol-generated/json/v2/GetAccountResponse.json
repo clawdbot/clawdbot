@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Account": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": ["apiKey"],
+              "title": "ApiKeyAccountType",
+              "type": "string"
+            }
+          },
+          "required": ["type"],
+          "title": "ApiKeyAccount",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "planType": {
+              "$ref": "#/definitions/PlanType"
+            },
+            "type": {
+              "enum": ["chatgpt"],
+              "title": "ChatgptAccountType",
+              "type": "string"
+            }
+          },
+          "required": ["email", "planType", "type"],
+          "title": "ChatgptAccount",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": ["amazonBedrock"],
+              "title": "AmazonBedrockAccountType",
+              "type": "string"
+            }
+          },
+          "required": ["type"],
+          "title": "AmazonBedrockAccount",
+          "type": "object"
+        }
+      ]
+    },
+    "PlanType": {
+      "enum": [
+        "free",
+        "go",
+        "plus",
+        "pro",
+        "prolite",
+        "team",
+        "self_serve_business_usage_based",
+        "business",
+        "enterprise_cbp_usage_based",
+        "enterprise",
+        "edu",
+        "unknown"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "account": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Account"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "requiresOpenaiAuth": {
+      "type": "boolean"
+    }
+  },
+  "required": ["requiresOpenaiAuth"],
+  "title": "GetAccountResponse",
+  "type": "object"
+}

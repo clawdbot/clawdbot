@@ -157,6 +157,10 @@ function resolvedModelSupportsCaching(modelArn: string): boolean {
  */
 const appProfileCacheEligibleCache = new Map<string, boolean>();
 
+export function resetBedrockAppProfileCacheEligibilityForTest(): void {
+  appProfileCacheEligibleCache.clear();
+}
+
 async function resolveAppProfileCacheEligible(
   modelId: string,
   fallbackRegion: string | undefined,

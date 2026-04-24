@@ -9,6 +9,7 @@ import {
 } from "../test/vitest/vitest.commands-light-paths.mjs";
 import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
 import { isBlueBubblesExtensionRoot } from "../test/vitest/vitest.extension-bluebubbles-paths.mjs";
+import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
@@ -70,6 +71,7 @@ const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
 const EXTENSION_BLUEBUBBLES_VITEST_CONFIG = "test/vitest/vitest.extension-bluebubbles.config.ts";
+const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
 const EXTENSION_DISCORD_VITEST_CONFIG = "test/vitest/vitest.extension-discord.config.ts";
@@ -152,6 +154,7 @@ const VITEST_CONFIG_BY_KIND = {
   extensionFull: FULL_EXTENSIONS_VITEST_CONFIG,
   extensionAcpx: EXTENSION_ACPX_VITEST_CONFIG,
   extensionBlueBubbles: EXTENSION_BLUEBUBBLES_VITEST_CONFIG,
+  extensionBrowser: EXTENSION_BROWSER_VITEST_CONFIG,
   extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
   extensionDiffs: EXTENSION_DIFFS_VITEST_CONFIG,
   extensionDiscord: EXTENSION_DISCORD_VITEST_CONFIG,
@@ -609,6 +612,9 @@ function classifyTarget(arg, cwd) {
     if (isBlueBubblesExtensionRoot(extensionRoot)) {
       return "extensionBlueBubbles";
     }
+    if (isBrowserExtensionRoot(extensionRoot)) {
+      return "extensionBrowser";
+    }
     if (isFeishuExtensionRoot(extensionRoot)) {
       return "extensionFeishu";
     }
@@ -897,6 +903,7 @@ export function buildVitestRunPlans(
     "extensionAcpx",
     "extensionDiffs",
     "extensionBlueBubbles",
+    "extensionBrowser",
     "extensionDiscord",
     "extensionFeishu",
     "extensionImessage",

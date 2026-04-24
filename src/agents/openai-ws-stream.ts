@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -73,6 +73,7 @@ import { mergeTransportMetadata } from "./transport-stream-shared.js";
 interface WsSession {
   manager: OpenAIWebSocketManager;
   managerConfigSignature: string;
+  authSignature: string;
   /** Number of messages that were in context.messages at the END of the last streamFn call. */
   lastContextLength: number;
   /** True if the connection has been established at least once. */
@@ -81,6 +82,9 @@ interface WsSession {
   warmUpAttempted: boolean;
   /** True if the session is permanently broken (no more reconnect). */
   broken: boolean;
+  /** Pending idle release timer when disabled-by-default pooling retains a session. */
+  idleTimer?: ReturnType<typeof setTimeout>;
+  pooledUntil?: number;
   /** Session-scoped cool-down after repeated websocket failures. */
   degradedUntil: number | null;
   degradeCooldownMs: number;
@@ -201,20 +205,72 @@ function createEventStream(): AssistantMessageEventStream {
 // Public registry helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+type ReleaseWsSessionOptions = {
+  allowPool?: boolean;
+  env?: NodeJS.ProcessEnv;
+};
+
+function resolveWsSessionPoolConfig(env: NodeJS.ProcessEnv = process.env): {
+  enabled: boolean;
+  idleMs: number;
+} {
+  const enabled =
+    env.OPENCLAW_OPENAI_WS_POOL === "1" || env.OPENCLAW_OPENAI_WS_SESSION_POOL === "1";
+  const rawIdleMs = Number(env.OPENCLAW_OPENAI_WS_SESSION_POOL_IDLE_MS);
+  const idleMs = Number.isFinite(rawIdleMs)
+    ? Math.min(300_000, Math.max(1_000, Math.trunc(rawIdleMs)))
+    : 30_000;
+  return { enabled, idleMs };
+}
+
+function clearWsSessionIdleTimer(session: WsSession): void {
+  if (!session.idleTimer) {
+    return;
+  }
+  clearTimeout(session.idleTimer);
+  session.idleTimer = undefined;
+  session.pooledUntil = undefined;
+}
+
+function closeWsSession(sessionId: string, session: WsSession): void {
+  clearWsSessionIdleTimer(session);
+  try {
+    session.manager.close();
+  } catch {
+    // Ignore close errors — connection may already be gone.
+  }
+  wsRegistry.delete(sessionId);
+}
+
 /**
  * Release and close the WebSocket session for the given sessionId.
  * Call this after the agent run completes to free the connection.
  */
-export function releaseWsSession(sessionId: string): void {
+export function releaseWsSession(sessionId: string, options: ReleaseWsSessionOptions = {}): void {
   const session = wsRegistry.get(sessionId);
-  if (session) {
-    try {
-      session.manager.close();
-    } catch {
-      // Ignore close errors — connection may already be gone.
-    }
-    wsRegistry.delete(sessionId);
+  if (!session) {
+    return;
   }
+  const pool = resolveWsSessionPoolConfig(options.env);
+  if (
+    options.allowPool === true &&
+    pool.enabled &&
+    !session.broken &&
+    session.manager.isConnected()
+  ) {
+    clearWsSessionIdleTimer(session);
+    session.pooledUntil = Date.now() + pool.idleMs;
+    session.idleTimer = setTimeout(() => {
+      const current = wsRegistry.get(sessionId);
+      if (current === session) {
+        closeWsSession(sessionId, session);
+      }
+    }, pool.idleMs);
+    session.idleTimer.unref?.();
+    log.debug(`[ws-stream] pooled websocket session=${sessionId} idleMs=${pool.idleMs}`);
+    return;
+  }
+  closeWsSession(sessionId, session);
 }
 
 /**
@@ -292,6 +348,7 @@ function resetWsSession(params: {
   createManager: () => OpenAIWebSocketManager;
   preserveDegradeUntil?: boolean;
 }): void {
+  clearWsSessionIdleTimer(params.session);
   try {
     params.session.manager.close();
   } catch {
@@ -360,6 +417,10 @@ function resolveWsManagerConfigSignature(
     request: managerOptions?.request,
     url: managerOptions?.url,
   });
+}
+
+function resolveWsAuthSignature(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex");
 }
 
 const AZURE_OPENAI_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
@@ -655,6 +716,7 @@ export function createOpenAIWebSocketStreamFn(
 
       while (true) {
         let session = wsRegistry.get(sessionId);
+        const authSignature = resolveWsAuthSignature(apiKey);
         const managerConfigSignature = resolveWsManagerConfigSignature(
           opts.managerOptions,
           sessionHeaders,
@@ -664,6 +726,7 @@ export function createOpenAIWebSocketStreamFn(
           session = {
             manager,
             managerConfigSignature,
+            authSignature,
             lastContextLength: 0,
             everConnected: false,
             warmUpAttempted: false,
@@ -672,13 +735,20 @@ export function createOpenAIWebSocketStreamFn(
             degradeCooldownMs: wsSessionPolicy.degradeCooldownMs,
           };
           wsRegistry.set(sessionId, session);
-        } else if (session.managerConfigSignature !== managerConfigSignature) {
+        } else if (
+          session.managerConfigSignature !== managerConfigSignature ||
+          session.authSignature !== authSignature
+        ) {
+          clearWsSessionIdleTimer(session);
           resetWsSession({
             session,
             createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
           });
           session.managerConfigSignature = managerConfigSignature;
+          session.authSignature = authSignature;
           session.degradeCooldownMs = wsSessionPolicy.degradeCooldownMs;
+        } else {
+          clearWsSessionIdleTimer(session);
         }
 
         if (transport !== "websocket" && isWsSessionDegraded(session)) {

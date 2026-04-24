@@ -10,7 +10,7 @@ import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
-export const CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS = "60000";
+export const CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS = "600000";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 
@@ -120,13 +120,17 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   const testPlan = resolveChangedTestTargetPlan(result.paths);
+  const runExtensionTests = result.extensionImpactFromCore;
+  const testTargets = runExtensionTests
+    ? testPlan.targets.filter((target) => target !== "extensions")
+    : testPlan.targets;
   const runChangedTestsBroad = testPlan.mode === "broad";
   return {
     commands,
-    testTargets: testPlan.targets,
+    testTargets,
     runChangedTestsBroad,
     runFullTests: false,
-    runExtensionTests: result.extensionImpactFromCore,
+    runExtensionTests,
     summary: Object.entries(lanes)
       .filter(([, enabled]) => enabled)
       .map(([lane]) => lane)

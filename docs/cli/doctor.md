@@ -63,3 +63,8 @@ launchctl getenv OPENCLAW_GATEWAY_PASSWORD
 launchctl unsetenv OPENCLAW_GATEWAY_TOKEN
 launchctl unsetenv OPENCLAW_GATEWAY_PASSWORD
 ```
+
+## Related
+
+- [CLI reference](/cli)
+- [Gateway doctor](/gateway/doctor)

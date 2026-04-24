@@ -49,6 +49,7 @@
     "memoryEmbeddingProviders": ["gemini"],
     "imageGenerationProviders": ["google"],
     "musicGenerationProviders": ["google"],
+    "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
     "webSearchProviders": ["gemini"]

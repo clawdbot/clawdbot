@@ -138,6 +138,7 @@ function createTestRegistryForSetup(
     nodeHostCommands: [],
     securityAuditCollectors: [],
     services: [],
+    gatewayDiscoveryServices: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],

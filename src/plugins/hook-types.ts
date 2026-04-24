@@ -7,6 +7,7 @@ import type {
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
+import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import {
   PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -138,8 +139,22 @@ const promptInjectionHookNameSet = new Set<PluginHookName>(PROMPT_INJECTION_HOOK
 export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   promptInjectionHookNameSet.has(hookName);
 
+export const CONVERSATION_HOOK_NAMES = [
+  "llm_input",
+  "llm_output",
+  "agent_end",
+] as const satisfies readonly PluginHookName[];
+
+export type ConversationHookName = (typeof CONVERSATION_HOOK_NAMES)[number];
+
+const conversationHookNameSet = new Set<PluginHookName>(CONVERSATION_HOOK_NAMES);
+
+export const isConversationHookName = (hookName: PluginHookName): boolean =>
+  conversationHookNameSet.has(hookName);
+
 export type PluginHookAgentContext = {
   runId?: string;
+  trace?: DiagnosticTraceContext;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -177,6 +192,14 @@ export type PluginHookLlmOutputEvent = {
   sessionId: string;
   provider: string;
   model: string;
+  /**
+   * Fully resolved provider/model ref used for the call.
+   *
+   * This intentionally keeps the provider prefix so operator tooling can
+   * distinguish e.g. openai-codex/gpt-5.4 from codex/gpt-5.4 even when display
+   * names collapse to just the model id.
+   */
+  resolvedRef?: string;
   assistantTexts: string[];
   lastAssistant?: unknown;
   usage?: {
@@ -218,6 +241,7 @@ export type PluginHookAfterCompactionEvent = {
 
 export type PluginHookInboundClaimResult = {
   handled: boolean;
+  reply?: ReplyPayload;
 };
 
 export type PluginHookBeforeDispatchEvent = {
@@ -286,6 +310,7 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
 };

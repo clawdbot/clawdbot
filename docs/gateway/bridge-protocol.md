@@ -87,3 +87,8 @@ Payload fields (all optional unless noted):
 The bridge was **implicit v1** (no min/max negotiation). This section is
 historical reference only; current node/operator clients use the WebSocket
 [Gateway Protocol](/gateway/protocol).
+
+## Related
+
+- [Gateway protocol](/gateway/protocol)
+- [Nodes](/nodes)

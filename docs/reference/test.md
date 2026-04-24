@@ -12,7 +12,7 @@ title: "Tests"
 - `pnpm test:coverage:changed`: Runs unit coverage only for files changed since `origin/main`.
 - `pnpm test:changed`: expands changed git paths into scoped Vitest lanes when the diff only touches routable source/test files. Config/setup changes still fall back to the native root projects run so wiring edits rerun broadly when needed.
 - `pnpm changed:lanes`: shows the architectural lanes triggered by the diff against `origin/main`.
-- `pnpm check:changed`: runs the smart changed gate for the diff against `origin/main`. It runs core work with core test lanes, extension work with extension test lanes, test-only work with test typecheck/tests only, expands public Plugin SDK or plugin-contract changes to extension validation, and keeps release metadata-only version bumps on targeted version/config/root-dependency checks.
+- `pnpm check:changed`: runs the smart changed gate for the diff against `origin/main`. It runs core work with core test lanes, extension work with extension test lanes, test-only work with test typecheck/tests only, expands public Plugin SDK or plugin-contract changes to one extension validation pass, and keeps release metadata-only version bumps on targeted version/config/root-dependency checks.
 - `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs use fixed shard groups and expand to leaf configs for local parallel execution; the extension group always expands to the per-extension shard configs instead of one giant root-project process.
 - Full and extension shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later runs use those timings to balance slow and fast shards. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
 - Selected `plugin-sdk` and `commands` test files now route through dedicated light lanes that keep only `test/setup.ts`, leaving runtime-heavy cases on their existing lanes.
@@ -20,7 +20,7 @@ title: "Tests"
 - `auto-reply` now also splits into three dedicated configs (`core`, `top-level`, `reply`) so the reply harness does not dominate the lighter top-level status/token/helper tests.
 - Base Vitest config now defaults to `pool: "threads"` and `isolate: false`, with the shared non-isolated runner enabled across the repo configs.
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
-- `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel extensions and OpenAI run as dedicated shards; other extension groups stay batched. Use `pnpm test extensions/<id>` for one bundled plugin lane.
+- `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel plugins, the browser plugin, and OpenAI run as dedicated shards; other plugin groups stay batched. Use `pnpm test extensions/<id>` for one bundled plugin lane.
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets.
 - `pnpm test:perf:imports:changed`: same import profiling, but only for files changed since `origin/main`.
 - `pnpm test:perf:changed:bench -- --ref <git-ref>` benchmarks the routed changed-mode path against the native root-project run for the same committed git diff.
@@ -32,7 +32,7 @@ title: "Tests"
 - Gateway integration: opt-in via `OPENCLAW_TEST_INCLUDE_GATEWAY=1 pnpm test` or `pnpm test:gateway`.
 - `pnpm test:e2e`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>` and set `OPENCLAW_E2E_VERBOSE=1` for verbose logs.
 - `pnpm test:live`: Runs provider live tests (minimax/zai). Requires API keys and `LIVE=1` (or provider-specific `*_LIVE_TEST=1`) to unskip.
-- `pnpm test:docker:all`: Builds the shared live-test image and Docker E2E image once, then runs the Docker smoke lanes with `OPENCLAW_SKIP_DOCKER_BUILD=1` at concurrency 4 by default. Tune with `OPENCLAW_DOCKER_ALL_PARALLELISM=<n>`. The runner stops scheduling new pooled lanes after the first failure unless `OPENCLAW_DOCKER_ALL_FAIL_FAST=0` is set, and each lane has a 120-minute timeout overrideable with `OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS`. Startup- or provider-sensitive lanes run exclusively after the parallel pool. Per-lane logs are written under `.artifacts/docker-tests/<run-id>/`.
+- `pnpm test:docker:all`: Builds the shared live-test image and Docker E2E image once, then runs the Docker smoke lanes with `OPENCLAW_SKIP_DOCKER_BUILD=1` at concurrency 8 by default. Tune the main pool with `OPENCLAW_DOCKER_ALL_PARALLELISM=<n>` and the provider-sensitive tail pool with `OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM=<n>`; both default to 8. Lane starts are staggered by 2 seconds by default to avoid local Docker daemon create storms; override with `OPENCLAW_DOCKER_ALL_START_STAGGER_MS=<ms>`. The runner stops scheduling new pooled lanes after the first failure unless `OPENCLAW_DOCKER_ALL_FAIL_FAST=0` is set, and each lane has a 120-minute timeout overrideable with `OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS`. Per-lane logs are written under `.artifacts/docker-tests/<run-id>/`.
 - `pnpm test:docker:openwebui`: Starts Dockerized OpenClaw + Open WebUI, signs in through Open WebUI, checks `/api/models`, then runs a real proxied chat through `/api/chat/completions`. Requires a usable live model key (for example OpenAI in `~/.profile`), pulls an external Open WebUI image, and is not expected to be CI-stable like the normal unit/e2e suites.
 - `pnpm test:docker:mcp-channels`: Starts a seeded Gateway container and a second client container that spawns `openclaw mcp serve`, then verifies routed conversation discovery, transcript reads, attachment metadata, live event queue behavior, outbound send routing, and Claude-style channel + permission notifications over the real stdio bridge. The Claude notification assertion reads the raw stdio MCP frames directly so the smoke reflects what the bridge actually emits.
 
@@ -127,3 +127,8 @@ Ensures the maintained QR runtime helper loads under the supported Docker Node r
 ```bash
 pnpm test:docker:qr
 ```
+
+## Related
+
+- [Testing](/help/testing)
+- [Testing live](/help/testing-live)

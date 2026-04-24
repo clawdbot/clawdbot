@@ -47,6 +47,7 @@ const { MockManager } = vi.hoisted(() => {
 
     sentEvents: unknown[] = [];
     connectCallCount = 0;
+    connectApiKeys: string[] = [];
     closeCallCount = 0;
     options: unknown;
 
@@ -69,6 +70,7 @@ const { MockManager } = vi.hoisted(() => {
 
     async connect(_apiKey: string): Promise<void> {
       this.connectCallCount++;
+      this.connectApiKeys.push(_apiKey);
       if (this.connectShouldFail || _globalConnectShouldFail) {
         throw new Error("Mock connect failure");
       }
@@ -575,6 +577,57 @@ describe("convertMessagesToInputItems", () => {
     expect(items[0]).toMatchObject({ type: "message", role: "user", content: "Hello!" });
   });
 
+  it("uses image_url parts for OpenAI-compatible user images", () => {
+    const msg: FakeMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "describe this" },
+        { type: "image", mimeType: "image/png", data: "AAAA" },
+      ],
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems(
+      [msg] as Parameters<typeof convertMessagesToInputItems>[0],
+      { api: "openai-completions", input: ["text", "image"] },
+    );
+
+    expect(items).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "describe this" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps input_image parts for Responses user images", () => {
+    const msg: FakeMessage = {
+      role: "user",
+      content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems(
+      [msg] as Parameters<typeof convertMessagesToInputItems>[0],
+      { api: "openai-responses", input: ["text", "image"] },
+    );
+
+    expect(items).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_image",
+            source: { type: "base64", media_type: "image/png", data: "AAAA" },
+          },
+        ],
+      },
+    ]);
+  });
+
   it("converts an assistant text-only message", () => {
     const items = convertMessagesToInputItems([assistantMsg(["Hi there."])] as Parameters<
       typeof convertMessagesToInputItems
@@ -853,6 +906,37 @@ describe("convertMessagesToInputItems", () => {
       call_id: "call_1",
       output: "file.txt",
     });
+  });
+
+  it("preserves OpenAI-compatible tool-result images as follow-up image_url parts", () => {
+    const msg: FakeMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+      isError: false,
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems(
+      [msg] as Parameters<typeof convertMessagesToInputItems>[0],
+      { api: "openai-completions", input: ["text", "image"] },
+    );
+
+    expect(items).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "(see attached image)",
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "Attached image(s) from tool result:" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+        ],
+      },
+    ]);
   });
 
   it("drops tool result messages with empty tool call id", () => {
@@ -3546,6 +3630,61 @@ describe("releaseWsSession / hasWsSession", () => {
     expect(manager.closeCallCount).toBe(1);
   });
 
+  it("pools cleanly released sessions behind the explicit pool flag", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "registry-test");
+    const stream = streamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        contextWindow: 128000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        name: "GPT-5.4",
+      } as Parameters<typeof streamFn>[0],
+      {
+        systemPrompt: "test",
+        messages: [userMsg("Hi") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        tools: [],
+      } as Parameters<typeof streamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-pooled", "done"),
+    });
+    for await (const _ of await resolveStream(stream)) {
+      // consume
+    }
+
+    vi.useFakeTimers();
+    try {
+      releaseWsSession("registry-test", {
+        allowPool: true,
+        env: {
+          OPENCLAW_OPENAI_WS_POOL: "1",
+          OPENCLAW_OPENAI_WS_SESSION_POOL_IDLE_MS: "1000",
+        } as NodeJS.ProcessEnv,
+      });
+
+      expect(hasWsSession("registry-test")).toBe(true);
+      expect(manager.closeCallCount).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(hasWsSession("registry-test")).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(hasWsSession("registry-test")).toBe(false);
+      expect(manager.closeCallCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("releaseWsSession is a no-op for unknown sessions", () => {
     expect(() => releaseWsSession("nonexistent-session")).not.toThrow();
   });
@@ -3625,6 +3764,75 @@ describe("releaseWsSession / hasWsSession", () => {
     secondManager.simulateEvent({
       type: "response.completed",
       response: makeResponseObject("resp-second", "done"),
+    });
+    for await (const _ of await resolveStream(secondStream)) {
+      // consume
+    }
+  });
+
+  it("recreates the cached manager when the API key changes for the same session", async () => {
+    const sessionId = "registry-test";
+    const firstStreamFn = createOpenAIWebSocketStreamFn("sk-first", sessionId);
+    const firstStream = firstStreamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        contextWindow: 128000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        name: "GPT-5.4",
+      } as Parameters<typeof firstStreamFn>[0],
+      {
+        systemPrompt: "test",
+        messages: [userMsg("Hi") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        tools: [],
+      } as Parameters<typeof firstStreamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const firstManager = MockManager.lastInstance!;
+    expect(firstManager.connectApiKeys).toEqual(["sk-first"]);
+    firstManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-first-key", "done"),
+    });
+    for await (const _ of await resolveStream(firstStream)) {
+      // consume
+    }
+
+    const secondStreamFn = createOpenAIWebSocketStreamFn("sk-second", sessionId);
+    const secondStream = secondStreamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        contextWindow: 128000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        name: "GPT-5.4",
+      } as Parameters<typeof secondStreamFn>[0],
+      {
+        systemPrompt: "test",
+        messages: [userMsg("Again") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        tools: [],
+      } as Parameters<typeof secondStreamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    expect(MockManager.instances).toHaveLength(2);
+    expect(firstManager.closeCallCount).toBe(1);
+    const secondManager = MockManager.lastInstance!;
+    expect(secondManager).not.toBe(firstManager);
+    expect(secondManager.connectApiKeys).toEqual(["sk-second"]);
+
+    secondManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-second-key", "done"),
     });
     for await (const _ of await resolveStream(secondStream)) {
       // consume

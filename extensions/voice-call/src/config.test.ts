@@ -25,6 +25,7 @@ describe("validateProviderConfig", () => {
   const clearProviderEnv = () => {
     delete process.env.TWILIO_ACCOUNT_SID;
     delete process.env.TWILIO_AUTH_TOKEN;
+    delete process.env.TWILIO_FROM_NUMBER;
     delete process.env.TELNYX_API_KEY;
     delete process.env.TELNYX_CONNECTION_ID;
     delete process.env.TELNYX_PUBLIC_KEY;
@@ -63,6 +64,7 @@ describe("validateProviderConfig", () => {
         if (provider === "twilio") {
           process.env.TWILIO_ACCOUNT_SID = "AC123";
           process.env.TWILIO_AUTH_TOKEN = "secret";
+          process.env.TWILIO_FROM_NUMBER = "+15550001234";
         } else if (provider === "telnyx") {
           process.env.TELNYX_API_KEY = "KEY123";
           process.env.TELNYX_CONNECTION_ID = "CONN456";
@@ -88,6 +90,20 @@ describe("validateProviderConfig", () => {
 
       expect(result.valid).toBe(true);
       expect(result.errors).toEqual([]);
+    });
+
+    it("resolves the Twilio from number from environment", () => {
+      process.env.TWILIO_ACCOUNT_SID = "AC123";
+      process.env.TWILIO_AUTH_TOKEN = "secret";
+      process.env.TWILIO_FROM_NUMBER = "+15550001234";
+
+      const config = resolveVoiceCallConfig({
+        ...createBaseConfig("twilio"),
+        fromNumber: undefined,
+      });
+
+      expect(config.fromNumber).toBe("+15550001234");
+      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
     });
 
     it("fails validation when required twilio credentials are missing", () => {

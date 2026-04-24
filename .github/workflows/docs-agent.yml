@@ -1,16 +1,15 @@
 name: Docs Agent
 
 on:
-  workflow_run: # zizmor: ignore[dangerous-triggers] main-only docs repair after trusted CI; job gates repository, event, branch, actor, conclusion, and exact current main SHA before using write token
+  workflow_run: # zizmor: ignore[dangerous-triggers] main-only docs repair after trusted CI; job gates repository, event, branch, actor, conclusion, exact current main SHA, and hourly cadence before using write token
     workflows:
       - CI
     types:
       - completed
-  schedule:
-    - cron: "17 5 * * *"
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
@@ -41,17 +40,24 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Skip superseded workflow runs
-        id: superseded
+      - name: Gate trusted main activity and hourly cadence
+        id: gate
         env:
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
           WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
 
           if [ "$EVENT_NAME" != "workflow_run" ]; then
-            echo "run_agent=true" >> "$GITHUB_OUTPUT"
-            echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            head_sha="$(git rev-parse HEAD)"
+            review_base="$(git rev-parse "${head_sha}^" 2>/dev/null || printf '%s' "$head_sha")"
+            {
+              echo "run_agent=true"
+              echo "base_sha=${head_sha}"
+              echo "review_base_sha=${review_base}"
+              echo "review_head_sha=${head_sha}"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -73,17 +79,65 @@ jobs:
             exit 0
           fi
 
-          echo "run_agent=true" >> "$GITHUB_OUTPUT"
-          echo "base_sha=${remote_main}" >> "$GITHUB_OUTPUT"
+          runs_json="$RUNNER_TEMP/docs-agent-runs.json"
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/docs-agent.yml/runs" \
+            -f branch=main \
+            -f event=workflow_run \
+            -f per_page=100 > "$runs_json"
+
+          one_hour_ago="$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
+          recent_runs="$(
+            jq -r \
+              --argjson current_run_id "$GITHUB_RUN_ID" \
+              --arg one_hour_ago "$one_hour_ago" \
+              '.workflow_runs[]
+                | select(.database_id != $current_run_id)
+                | select(.created_at >= $one_hour_ago)
+                | select(.status != "cancelled")
+                | select((.conclusion // "") != "skipped")
+                | [.database_id, .status, (.conclusion // ""), .created_at, .head_sha]
+                | @tsv' "$runs_json"
+          )"
+
+          if [ -n "$recent_runs" ]; then
+            echo "Docs agent already ran or is running within the last hour; skipping."
+            printf '%s\n' "$recent_runs"
+            echo "run_agent=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          review_base="$(
+            jq -r \
+              --argjson current_run_id "$GITHUB_RUN_ID" \
+              --arg remote_main "$remote_main" \
+              '.workflow_runs[]
+                | select(.database_id != $current_run_id)
+                | select(.status != "cancelled")
+                | select((.conclusion // "") != "skipped")
+                | .head_sha
+                | select(. != null and . != "")
+                | select(. != $remote_main)
+              ' "$runs_json" | head -n 1
+          )"
+          if [ -z "$review_base" ] || ! git cat-file -e "${review_base}^{commit}" 2>/dev/null; then
+            review_base="$(git rev-parse "${remote_main}^" 2>/dev/null || printf '%s' "$remote_main")"
+          fi
+
+          {
+            echo "run_agent=true"
+            echo "base_sha=${remote_main}"
+            echo "review_base_sha=${review_base}"
+            echo "review_head_sha=${remote_main}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Setup Node environment
-        if: steps.superseded.outputs.run_agent == 'true'
+        if: steps.gate.outputs.run_agent == 'true'
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
 
       - name: Ensure docs agent key exists
-        if: steps.superseded.outputs.run_agent == 'true'
+        if: steps.gate.outputs.run_agent == 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
         run: |
@@ -94,8 +148,11 @@ jobs:
           fi
 
       - name: Run Codex docs agent
-        if: steps.superseded.outputs.run_agent == 'true'
+        if: steps.gate.outputs.run_agent == 'true'
         uses: openai/codex-action@v1
+        env:
+          DOCS_AGENT_BASE_SHA: ${{ steps.gate.outputs.review_base_sha }}
+          DOCS_AGENT_HEAD_SHA: ${{ steps.gate.outputs.review_head_sha }}
         with:
           openai-api-key: ${{ secrets.OPENCLAW_DOCS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/docs-agent.md
@@ -106,7 +163,7 @@ jobs:
           codex-args: '["--full-auto"]'
 
       - name: Enforce existing-docs-only patch
-        if: steps.superseded.outputs.run_agent == 'true'
+        if: steps.gate.outputs.run_agent == 'true'
         run: |
           set -euo pipefail
 
@@ -139,8 +196,8 @@ jobs:
           fi
 
       - name: Restore Node 24 path
-        if: steps.superseded.outputs.run_agent == 'true'
-        run: |
+        if: steps.gate.outputs.run_agent == 'true'
+        run: | # zizmor: ignore[github-env] NODE_BIN is set by the trusted local setup-node-env action in this same job
           set -euo pipefail
           export PATH="${NODE_BIN}:${PATH}"
           echo "${NODE_BIN}" >> "$GITHUB_PATH"
@@ -149,13 +206,13 @@ jobs:
           pnpm -v
 
       - name: Check docs
-        if: steps.superseded.outputs.run_agent == 'true'
+        if: steps.gate.outputs.run_agent == 'true'
         run: pnpm check:docs
 
       - name: Commit docs updates
-        if: steps.superseded.outputs.run_agent == 'true'
+        if: steps.gate.outputs.run_agent == 'true'
         env:
-          BASE_SHA: ${{ steps.superseded.outputs.base_sha }}
+          BASE_SHA: ${{ steps.gate.outputs.base_sha }}
           GITHUB_TOKEN: ${{ github.token }}
           TARGET_BRANCH: main
         run: |

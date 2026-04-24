@@ -283,6 +283,24 @@ export function renderCatNoncePngBase64(nonce: string): string {
   return png.toString("base64");
 }
 
+export function renderSolidColorPngBase64(color: { r: number; g: number; b: number }): string {
+  const width = 192;
+  const height = 192;
+  const buf = Buffer.alloc(width * height * 4, 255);
+  fillRect({
+    buf,
+    width,
+    height,
+    x: 0,
+    y: 0,
+    w: width,
+    h: height,
+    color,
+  });
+  const png = encodePngRgba(buf, width, height);
+  return png.toString("base64");
+}
+
 export function renderCatFacePngBase64(): string {
   const width = 256;
   const height = 288;

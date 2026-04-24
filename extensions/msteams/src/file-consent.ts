@@ -9,8 +9,11 @@
  */
 
 import { lookup } from "node:dns/promises";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { buildUserAgent } from "./user-agent.js";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 /**
  * Allowlist of domains that are valid targets for file consent uploads.

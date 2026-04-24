@@ -1,11 +1,6 @@
 ---
 name: blacksmith-testbox
-description: >
-  Validate code changes against real CI when local execution is not
-  enough. Use for CI-parity checks, secrets/services, migrations, or
-  builds/tests that cannot run reliably on the local machine. Do not
-  replace repo-documented local test/build loops just because this
-  skill exists.
+description: Run Blacksmith Testbox for CI-parity checks, secrets, hosted services, migrations, or builds local cannot reproduce.
 ---
 
 # Blacksmith Testbox

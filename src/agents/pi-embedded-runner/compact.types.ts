@@ -1,5 +1,6 @@
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { SkillSnapshot } from "../skills.js";
@@ -41,6 +42,12 @@ export type CompactEmbeddedPiSessionParams = {
   skillsSnapshot?: SkillSnapshot;
   provider?: string;
   model?: string;
+  /** Optional caller-resolved context engine for harness-owned compaction. */
+  contextEngine?: ContextEngine;
+  /** Optional caller-resolved token budget for harness-owned compaction. */
+  contextTokenBudget?: number;
+  /** Optional caller-resolved runtime context for harness-owned context-engine compaction. */
+  contextEngineRuntimeContext?: ContextEngineRuntimeContext;
   /** Session-pinned embedded harness id. Prevents compaction hot-switching. */
   agentHarnessId?: string;
   thinkLevel?: ThinkLevel;

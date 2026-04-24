@@ -1,6 +1,6 @@
 ---
 name: oracle
-description: Best practices for using the oracle CLI (prompt + file bundling, engines, sessions, and file attachment patterns).
+description: Use oracle CLI to bundle prompts and files for second-model debugging, refactor, design, or review checks.
 homepage: https://askoracle.dev
 metadata:
   {

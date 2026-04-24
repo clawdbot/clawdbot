@@ -7,8 +7,6 @@ read_when:
 title: "Gateway on macOS"
 ---
 
-# Gateway on macOS (external launchd)
-
 OpenClaw.app no longer bundles Node/Bun or the Gateway runtime. The macOS app
 expects an **external** `openclaw` CLI install, does not spawn the Gateway as a
 child process, and manages a per‑user launchd service to keep the Gateway
@@ -73,3 +71,8 @@ Then:
 ```bash
 openclaw gateway call health --url ws://127.0.0.1:18999 --timeout 3000
 ```
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Gateway runbook](/gateway)

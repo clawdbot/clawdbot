@@ -33,6 +33,7 @@ import {
   resolveLmstudioInferenceBase,
   resolveLmstudioRequestContext,
 } from "../../plugin-sdk/lmstudio-runtime.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isLoopbackIpAddress } from "../../shared/net/ip.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -41,6 +42,7 @@ import {
 
 export type ModelAddAdapter = {
   providerId: string;
+  bootstrapMode?: "always" | "discovered";
   bootstrapProviderConfig?: (cfg: OpenClawConfig) => ModelProviderConfig | null;
   detect?: (params: {
     cfg: OpenClawConfig;
@@ -61,6 +63,10 @@ type AddModelOutcome = {
   warnings: string[];
 };
 
+export type ValidateAddProviderResult =
+  | { ok: true; provider: string }
+  | { ok: false; providers: string[]; knownProvider?: string };
+
 type OllamaModelShowInfo = {
   contextWindow?: number;
   capabilities?: string[];
@@ -75,6 +81,17 @@ type OllamaApiFacade = {
   queryOllamaModelShowInfo: (apiBase: string, modelName: string) => Promise<OllamaModelShowInfo>;
 };
 
+type OpenAIApiFacade = {
+  buildOpenAICodexProvider: () => ModelProviderConfig;
+  buildOpenAICodexProviderPlugin: () => {
+    resolveDynamicModel?: (ctx: {
+      provider: string;
+      modelId: string;
+      modelRegistry: { find: () => null };
+    }) => ProviderRuntimeModel | null | undefined;
+  };
+};
+
 const log = createSubsystemLogger("models-add");
 const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 
@@ -85,12 +102,25 @@ function loadOllamaApiFacade(): OllamaApiFacade {
   });
 }
 
+function loadOpenAIApiFacade(): OpenAIApiFacade {
+  return loadBundledPluginPublicSurfaceModuleSync<OpenAIApiFacade>({
+    dirName: "openai",
+    artifactBasename: "api.js",
+  });
+}
+
 const buildOllamaModelDefinition: OllamaApiFacade["buildOllamaModelDefinition"] =
   createLazyFacadeValue(loadOllamaApiFacade, "buildOllamaModelDefinition");
 const queryOllamaModelShowInfo: OllamaApiFacade["queryOllamaModelShowInfo"] = createLazyFacadeValue(
   loadOllamaApiFacade,
   "queryOllamaModelShowInfo",
 );
+const buildOpenAICodexProvider: OpenAIApiFacade["buildOpenAICodexProvider"] = createLazyFacadeValue(
+  loadOpenAIApiFacade,
+  "buildOpenAICodexProvider",
+);
+const buildOpenAICodexProviderPlugin: OpenAIApiFacade["buildOpenAICodexProviderPlugin"] =
+  createLazyFacadeValue(loadOpenAIApiFacade, "buildOpenAICodexProviderPlugin");
 
 function sanitizeUrlForLogs(raw: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(raw);
@@ -118,6 +148,42 @@ function buildDefaultModelDefinition(modelId: string): ModelDefinitionConfig {
     cost: SELF_HOSTED_DEFAULT_COST,
     contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
     maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+  };
+}
+
+function buildOpenAICodexModelDefinition(modelId: string): ModelDefinitionConfig {
+  const dynamicModel = buildOpenAICodexProviderPlugin().resolveDynamicModel?.({
+    provider: "openai-codex",
+    modelId,
+    modelRegistry: { find: () => null },
+  });
+  if (dynamicModel) {
+    return {
+      id: dynamicModel.id,
+      name: dynamicModel.name,
+      api: "openai-codex-responses",
+      baseUrl: dynamicModel.baseUrl,
+      reasoning: dynamicModel.reasoning,
+      input: [...dynamicModel.input],
+      cost: dynamicModel.cost,
+      contextWindow: dynamicModel.contextWindow,
+      ...(dynamicModel.contextTokens ? { contextTokens: dynamicModel.contextTokens } : {}),
+      maxTokens: dynamicModel.maxTokens,
+      ...(dynamicModel.headers ? { headers: dynamicModel.headers } : {}),
+      ...(dynamicModel.compat ? { compat: dynamicModel.compat } : {}),
+      metadataSource: "models-add",
+    };
+  }
+  return {
+    id: modelId,
+    name: modelId,
+    api: "openai-codex-responses",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+    metadataSource: "models-add",
   };
 }
 
@@ -176,6 +242,21 @@ function isLocalLmstudioBaseUrl(baseUrl: string | undefined): boolean {
 }
 
 const MODEL_ADD_ADAPTERS: Record<string, ModelAddAdapter> = {
+  "openai-codex": {
+    providerId: "openai-codex",
+    bootstrapMode: "discovered",
+    bootstrapProviderConfig: () => ({
+      ...buildOpenAICodexProvider(),
+      models: [],
+    }),
+    detect: async ({ modelId }) => ({
+      found: true,
+      model: buildOpenAICodexModelDefinition(modelId),
+      warnings: [
+        "OpenAI Codex model metadata was saved from provider defaults; provider availability still depends on your Codex account.",
+      ],
+    }),
+  },
   ollama: {
     providerId: "ollama",
     bootstrapProviderConfig: () => ({
@@ -260,7 +341,11 @@ const MODEL_ADD_ADAPTERS: Record<string, ModelAddAdapter> = {
   },
 };
 
-function canAddProvider(params: { cfg: OpenClawConfig; provider: string }): boolean {
+function canAddProvider(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  allowDiscoveredBootstrap?: boolean;
+}): boolean {
   const provider = normalizeProviderId(params.provider);
   if (!provider) {
     return false;
@@ -268,7 +353,14 @@ function canAddProvider(params: { cfg: OpenClawConfig; provider: string }): bool
   if (resolveConfiguredProvider(params.cfg, provider)) {
     return true;
   }
-  return !!MODEL_ADD_ADAPTERS[provider]?.bootstrapProviderConfig?.(params.cfg);
+  const adapter = MODEL_ADD_ADAPTERS[provider];
+  if (!adapter?.bootstrapProviderConfig) {
+    return false;
+  }
+  if (adapter.bootstrapMode === "discovered" && !params.allowDiscoveredBootstrap) {
+    return false;
+  }
+  return !!adapter.bootstrapProviderConfig(params.cfg);
 }
 
 export function listAddableProviders(params: {
@@ -278,7 +370,14 @@ export function listAddableProviders(params: {
   const providers = new Set<string>();
   for (const provider of params.discoveredProviders ?? []) {
     const normalized = normalizeProviderId(provider);
-    if (normalized && canAddProvider({ cfg: params.cfg, provider: normalized })) {
+    if (
+      normalized &&
+      canAddProvider({
+        cfg: params.cfg,
+        provider: normalized,
+        allowDiscoveredBootstrap: true,
+      })
+    ) {
       providers.add(normalized);
     }
   }
@@ -288,8 +387,10 @@ export function listAddableProviders(params: {
       providers.add(normalized);
     }
   }
-  for (const provider of Object.keys(MODEL_ADD_ADAPTERS)) {
-    providers.add(provider);
+  for (const [provider, adapter] of Object.entries(MODEL_ADD_ADAPTERS)) {
+    if (adapter.bootstrapMode !== "discovered") {
+      providers.add(provider);
+    }
   }
   return [...providers].toSorted();
 }
@@ -298,14 +399,17 @@ export function validateAddProvider(params: {
   cfg: OpenClawConfig;
   provider: string;
   discoveredProviders?: readonly string[];
-}): { ok: true; provider: string } | { ok: false; providers: string[] } {
+}): ValidateAddProviderResult {
   const provider = normalizeProviderId(params.provider);
   const providers = listAddableProviders({
     cfg: params.cfg,
     discoveredProviders: params.discoveredProviders,
   });
   if (!provider || !providers.includes(provider)) {
-    return { ok: false, providers };
+    const knownProvider = (params.discoveredProviders ?? [])
+      .map((discoveredProvider) => normalizeProviderId(discoveredProvider))
+      .find((discoveredProvider) => discoveredProvider === provider);
+    return { ok: false, providers, ...(knownProvider ? { knownProvider } : {}) };
   }
   return { ok: true, provider };
 }

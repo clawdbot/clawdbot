@@ -35,6 +35,12 @@ export type CliBackendPreparedExecution = {
 
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
+export type CliBackendNormalizeConfigContext = {
+  config?: OpenClawConfig;
+  backendId: string;
+  agentId?: string;
+};
+
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = {
   /** Provider id used in model refs, for example `claude-cli/opus`. */
@@ -78,7 +84,10 @@ export type CliBackendPlugin = {
    * Use this for backend-specific compatibility rewrites when old config
    * shapes need to stay working.
    */
-  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+  normalizeConfig?: (
+    config: CliBackendConfig,
+    context?: CliBackendNormalizeConfigContext,
+  ) => CliBackendConfig;
   /**
    * Backend-owned final system-prompt transform.
    *

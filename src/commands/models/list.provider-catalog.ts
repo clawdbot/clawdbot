@@ -14,10 +14,22 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProvider,
 } from "../../plugins/providers.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
 
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const SELF_HOSTED_DISCOVERY_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
 const log = createSubsystemLogger("models/list-provider-catalog");
+
+function providerMatchesFilter(params: {
+  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
+  providerFilter: string;
+}): boolean {
+  return [
+    params.provider.id,
+    ...(params.provider.aliases ?? []),
+    ...(params.provider.hookAliases ?? []),
+  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
+}
 
 export async function resolveProviderCatalogPluginIdsForFilter(params: {
   cfg: OpenClawConfig;
@@ -45,6 +57,47 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   return undefined;
 }
 
+export async function hasProviderStaticCatalogForFilter(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  providerFilter: string;
+}): Promise<boolean> {
+  const env = params.env ?? process.env;
+  const providerFilter = normalizeProviderId(params.providerFilter);
+  if (!providerFilter) {
+    return false;
+  }
+  const pluginIds = await resolveProviderCatalogPluginIdsForFilter({
+    ...params,
+    env,
+  });
+  if (!pluginIds || pluginIds.length === 0) {
+    return false;
+  }
+  const bundledPluginIds = resolveBundledProviderCompatPluginIds({
+    config: params.cfg,
+    env,
+  });
+  const bundledPluginIdSet = new Set(bundledPluginIds);
+  const scopedPluginIds = pluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId));
+  if (scopedPluginIds.length === 0) {
+    return false;
+  }
+  const providers = await resolvePluginDiscoveryProviders({
+    config: params.cfg,
+    env,
+    onlyPluginIds: scopedPluginIds,
+    includeUntrustedWorkspacePlugins: false,
+    requireCompleteDiscoveryEntryCoverage: true,
+    discoveryEntriesOnly: true,
+  });
+  return providers.some(
+    (provider) =>
+      typeof provider.staticCatalog?.run === "function" &&
+      providerMatchesFilter({ provider, providerFilter }),
+  );
+}
+
 function modelFromProviderCatalog(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
@@ -55,7 +108,7 @@ function modelFromProviderCatalog(params: {
     name: params.model.name || params.model.id,
     provider: params.provider,
     api: params.model.api ?? params.providerConfig.api ?? "openai-responses",
-    baseUrl: params.providerConfig.baseUrl,
+    baseUrl: params.model.baseUrl ?? params.providerConfig.baseUrl,
     reasoning: params.model.reasoning,
     input: params.model.input ?? ["text"],
     cost: params.model.cost,
@@ -72,6 +125,7 @@ export async function loadProviderCatalogModelsForList(params: {
   agentDir: string;
   env?: NodeJS.ProcessEnv;
   providerFilter?: string;
+  staticOnly?: boolean;
 }): Promise<Model<Api>[]> {
   const env = params.env ?? process.env;
   const providerFilter = params.providerFilter ? normalizeProviderId(params.providerFilter) : "";
@@ -104,7 +158,8 @@ export async function loadProviderCatalogModelsForList(params: {
       env,
       onlyPluginIds: scopedPluginIds,
       includeUntrustedWorkspacePlugins: false,
-      requireCompleteDiscoveryEntryCoverage: true,
+      requireCompleteDiscoveryEntryCoverage: params.staticOnly === true,
+      discoveryEntriesOnly: params.staticOnly === true,
     })
   ).filter(
     (provider) =>

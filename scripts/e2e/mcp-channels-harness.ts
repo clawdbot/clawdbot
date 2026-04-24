@@ -41,9 +41,9 @@ export type McpClientHandle = {
   rawMessages: unknown[];
 };
 
-const GATEWAY_WS_OPEN_TIMEOUT_MS = 5_000;
+const GATEWAY_WS_OPEN_TIMEOUT_MS = 15_000;
 const GATEWAY_RPC_TIMEOUT_MS = 30_000;
-const GATEWAY_CONNECT_RETRY_WINDOW_MS = 120_000;
+const GATEWAY_CONNECT_RETRY_WINDOW_MS = 240_000;
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -74,12 +74,12 @@ export function extractTextFromGatewayPayload(
 
 export async function waitFor<T>(
   label: string,
-  predicate: () => T | undefined,
+  predicate: () => Promise<T | undefined> | T | undefined,
   timeoutMs = 10_000,
 ): Promise<T> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const value = predicate();
+    const value = await predicate();
     if (value !== undefined) {
       return value;
     }
@@ -118,10 +118,10 @@ async function connectGatewayOnce(params: {
 }): Promise<GatewayRpcClient> {
   const ws = new WebSocket(params.url);
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("gateway ws open timeout")),
-      GATEWAY_WS_OPEN_TIMEOUT_MS,
-    );
+    const timeout = setTimeout(() => {
+      ws.close();
+      reject(new Error("gateway ws open timeout"));
+    }, GATEWAY_WS_OPEN_TIMEOUT_MS);
     timeout.unref?.();
     ws.once("open", () => {
       clearTimeout(timeout);

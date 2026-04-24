@@ -5,6 +5,21 @@
   "providerAuthEnvVars": {
     "nvidia": ["NVIDIA_API_KEY"]
   },
+  "providerAuthChoices": [
+    {
+      "provider": "nvidia",
+      "method": "api-key",
+      "choiceId": "nvidia-api-key",
+      "choiceLabel": "NVIDIA API key",
+      "groupId": "nvidia",
+      "groupLabel": "NVIDIA",
+      "groupHint": "API key",
+      "optionKey": "nvidiaApiKey",
+      "cliFlag": "--nvidia-api-key",
+      "cliOption": "--nvidia-api-key <key>",
+      "cliDescription": "NVIDIA API key"
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

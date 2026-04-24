@@ -58,3 +58,9 @@ Audience: macOS app contributors. Goal: keep the voice overlay predictable when 
 3. Refactor `VoicePushToTalk` to adopt existing sessions and call `endCapture` on release; apply runtime cooldown.
 4. Wire `VoiceWakeOverlayController` to the publisher; remove direct calls from runtime/PTT.
 5. Add integration tests for session adoption, cooldown, and empty-text dismissal.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Voice wake (macOS)](/platforms/mac/voicewake)
+- [Talk mode](/nodes/talk)

@@ -129,3 +129,8 @@ Beta and dev builds may **not** include a macOS app release. That is OK:
 
 - The git tag and npm dist-tag can still be published.
 - Call out "no macOS build for this beta" in release notes or changelog.
+
+## Related
+
+- [Updating](/install/updating)
+- [Installer internals](/install/installer)

@@ -81,15 +81,17 @@ function instantiatePiModelRegistry(
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
+  readOnly?: boolean;
 }): Promise<ModelCatalogEntry[]> {
-  if (params?.useCache === false) {
+  const readOnly = params?.readOnly === true;
+  if (!readOnly && params?.useCache === false) {
     modelCatalogPromise = null;
   }
-  if (modelCatalogPromise) {
+  if (!readOnly && modelCatalogPromise) {
     return modelCatalogPromise;
   }
 
-  modelCatalogPromise = (async () => {
+  const loadCatalog = async () => {
     const models: ModelCatalogEntry[] = [];
     const timingEnabled = shouldLogModelCatalogTiming();
     const startMs = timingEnabled ? Date.now() : 0;
@@ -110,8 +112,10 @@ export async function loadModelCatalog(params?: {
       });
     try {
       const cfg = params?.config ?? loadConfig();
-      await ensureOpenClawModelsJson(cfg);
-      logStage("models-json-ready");
+      if (!readOnly) {
+        await ensureOpenClawModelsJson(cfg);
+        logStage("models-json-ready");
+      }
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
@@ -121,7 +125,10 @@ export async function loadModelCatalog(params?: {
       const agentDir = resolveOpenClawAgentDir();
       const { shouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
-      const authStorage = piSdk.discoverAuthStorage(agentDir);
+      const authStorage = piSdk.discoverAuthStorage(
+        agentDir,
+        readOnly ? { readOnly: true } : undefined,
+      );
       logStage("auth-storage-ready");
       const registry = instantiatePiModelRegistry(
         piSdk,
@@ -182,7 +189,9 @@ export async function loadModelCatalog(params?: {
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
-        modelCatalogPromise = null;
+        if (!readOnly) {
+          modelCatalogPromise = null;
+        }
       }
 
       const sorted = sortModels(models);
@@ -194,14 +203,21 @@ export async function loadModelCatalog(params?: {
         log.warn(`Failed to load model catalog: ${String(error)}`);
       }
       // Don't poison the cache on transient dependency/filesystem issues.
-      modelCatalogPromise = null;
+      if (!readOnly) {
+        modelCatalogPromise = null;
+      }
       if (models.length > 0) {
         return sortModels(models);
       }
       return [];
     }
-  })();
+  };
 
+  if (readOnly) {
+    return loadCatalog();
+  }
+
+  modelCatalogPromise = loadCatalog();
   return modelCatalogPromise;
 }
 

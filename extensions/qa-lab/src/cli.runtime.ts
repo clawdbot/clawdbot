@@ -450,6 +450,7 @@ export async function runQaSuiteCommand(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinking?: string;
   cliAuthMode?: string;
   parityPack?: string;
   scenarioIds?: string[];
@@ -490,6 +491,7 @@ export async function runQaSuiteCommand(opts: {
     throw new Error("--cli-auth-mode requires --runner host.");
   }
   if (runner === "multipass") {
+    const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
     const result = await runQaMultipass({
       repoRoot,
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
@@ -498,6 +500,7 @@ export async function runQaSuiteCommand(opts: {
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
+      ...(thinkingDefault ? { thinkingDefault } : {}),
       allowFailures: true,
       scenarioIds,
       ...(opts.concurrency !== undefined
@@ -532,6 +535,7 @@ export async function runQaSuiteCommand(opts: {
     });
     return;
   }
+  const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
   const result = await runQaSuiteFromRuntimeWithInfraRetry({
     repoRoot,
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
@@ -540,6 +544,7 @@ export async function runQaSuiteCommand(opts: {
     primaryModel: opts.primaryModel,
     alternateModel: opts.alternateModel,
     fastMode: opts.fastMode,
+    ...(thinkingDefault ? { thinkingDefault } : {}),
     ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
     scenarioIds,
     ...(opts.concurrency !== undefined

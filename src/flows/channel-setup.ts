@@ -174,10 +174,11 @@ export async function setupChannels(
       channel,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
+      installRuntimeDeps: false,
     });
     const plugin =
-      snapshot.channels.find((entry) => entry.plugin.id === channel)?.plugin ??
-      snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin;
+      snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin ??
+      snapshot.channels.find((entry) => entry.plugin.id === channel)?.plugin;
     if (plugin) {
       rememberScopedPlugin(plugin);
       return plugin;

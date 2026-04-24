@@ -670,7 +670,7 @@ If multiple Matrix accounts are configured and one account id is `default`, Open
 If you configure multiple named accounts, set `defaultAccount` or pass `--account <id>` for CLI commands that rely on implicit account selection.
 Pass `--account <id>` to `openclaw matrix verify ...` and `openclaw matrix devices ...` when you want to override that implicit selection for one command.
 
-See [Configuration reference](/gateway/configuration-reference#multi-account-all-channels) for the shared multi-account pattern.
+See [Configuration reference](/gateway/config-channels#multi-account-all-channels) for the shared multi-account pattern.
 
 ## Private/LAN homeservers
 

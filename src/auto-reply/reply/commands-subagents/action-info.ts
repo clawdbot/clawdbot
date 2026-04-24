@@ -3,19 +3,94 @@ import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-reg
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import { loadSessionStore } from "../../../config/sessions/store-load.js";
+import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import { formatRunLabel } from "../subagents-utils.js";
 import {
-  type SubagentsCommandContext,
-  formatTimestampWithAge,
-  loadSubagentSessionEntry,
-  resolveDisplayStatus,
-  resolveSubagentEntryForToken,
-  stopWithText,
-} from "./shared.js";
+  formatRunLabel,
+  formatRunStatus,
+  resolveSubagentTargetFromRuns,
+} from "../subagents-utils.js";
+import { type SubagentsCommandContext } from "./shared.js";
+
+const RECENT_WINDOW_MINUTES = 30;
+
+function stopWithText(text: string): CommandHandlerResult {
+  return { shouldContinue: false, reply: { text } };
+}
+
+function formatTimestamp(valueMs?: number) {
+  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
+    return "n/a";
+  }
+  return new Date(valueMs).toISOString();
+}
+
+function formatTimestampWithAge(valueMs?: number) {
+  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
+    return "n/a";
+  }
+  return `${formatTimestamp(valueMs)} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
+}
+
+function resolveDisplayStatus(
+  entry: SubagentsCommandContext["runs"][number],
+  options?: { pendingDescendants?: number },
+) {
+  const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
+  if (pendingDescendants > 0) {
+    const childLabel = pendingDescendants === 1 ? "child" : "children";
+    return `active (waiting on ${pendingDescendants} ${childLabel})`;
+  }
+  const status = formatRunStatus(entry);
+  return status === "error" ? "failed" : status;
+}
+
+function resolveSubagentEntryForToken(
+  runs: SubagentsCommandContext["runs"],
+  token: string | undefined,
+): { entry: SubagentsCommandContext["runs"][number] } | { reply: CommandHandlerResult } {
+  const resolved = resolveSubagentTargetFromRuns({
+    runs,
+    token,
+    recentWindowMinutes: RECENT_WINDOW_MINUTES,
+    label: (entry) => formatRunLabel(entry),
+    isActive: (entry) =>
+      !entry.endedAt ||
+      Math.max(
+        0,
+        countPendingDescendantRunsFromRuns(
+          getSubagentRunsSnapshotForRead(subagentRuns),
+          entry.childSessionKey,
+        ),
+      ) > 0,
+    errors: {
+      missingTarget: "Missing subagent id.",
+      invalidIndex: (value) => `Invalid subagent index: ${value}`,
+      unknownSession: (value) => `Unknown subagent session: ${value}`,
+      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
+      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
+      ambiguousRunIdPrefix: (value) => `Ambiguous run id prefix: ${value}`,
+      unknownTarget: (value) => `Unknown subagent id: ${value}`,
+    },
+  });
+  if (!resolved.entry) {
+    return { reply: stopWithText(`⚠️ ${resolved.error ?? "Unknown subagent."}`) };
+  }
+  return { entry: resolved.entry };
+}
+
+function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], childKey: string) {
+  const parsed = parseAgentSessionKey(childKey);
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: parsed?.agentId,
+  });
+  const store = loadSessionStore(storePath);
+  return { entry: store[childKey] };
+}
 
 export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): CommandHandlerResult {
   const { params, requesterKey, runs, restTokens } = ctx;
@@ -30,10 +105,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   }
 
   const run = targetResolution.entry;
-  const { entry: sessionEntry } = loadSubagentSessionEntry(params, run.childSessionKey, {
-    loadSessionStore,
-    resolveStorePath,
-  });
+  const { entry: sessionEntry } = loadSubagentSessionEntry(params, run.childSessionKey);
   const runtime =
     run.startedAt && Number.isFinite(run.startedAt)
       ? (formatDurationCompact((run.endedAt ?? Date.now()) - run.startedAt) ?? "n/a")

@@ -6,6 +6,7 @@ import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "./diagnostic-events.js";
+import { createDiagnosticTraceContext } from "./diagnostic-trace-context.js";
 
 describe("diagnostic-events", () => {
   beforeEach(() => {
@@ -86,6 +87,31 @@ describe("diagnostic-events", () => {
       error: "failed",
     });
     expect(seen).toEqual(["webhook.received"]);
+  });
+
+  it("carries explicit trace context without creating retained trace state", () => {
+    const trace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+    });
+    const events: Array<{ trace: typeof trace | undefined; type: string }> = [];
+    const stop = onDiagnosticEvent((event) => {
+      events.push({ trace: event.trace, type: event.type });
+    });
+
+    emitDiagnosticEvent({
+      type: "message.queued",
+      source: "telegram",
+      trace,
+    });
+    stop();
+    emitDiagnosticEvent({
+      type: "message.queued",
+      source: "telegram",
+      trace,
+    });
+
+    expect(events).toEqual([{ trace, type: "message.queued" }]);
   });
 
   it("skips event enrichment and subscribers when diagnostics are disabled", () => {

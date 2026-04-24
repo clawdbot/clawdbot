@@ -120,6 +120,7 @@ describe("createReplyMediaPathNormalizer", () => {
       5 * 1024 * 1024,
       expect.any(Object),
     );
+    expect(result.text).toBe("⚠️ Media failed.");
   });
 
   it("drops host file URLs when no sandbox mapping applies", async () => {
@@ -314,6 +315,45 @@ describe("createReplyMediaPathNormalizer", () => {
     });
 
     expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+  });
+
+  it("keeps reply text and appends a warning when all reply media is dropped", async () => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      text: "WA_MEDIA_DM_07",
+      mediaUrls: ["./out/missing.png"],
+    });
+
+    expect(result).toMatchObject({
+      text: "WA_MEDIA_DM_07\n⚠️ Media failed.",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+  });
+
+  it("returns a warning-only text reply when media-only output is dropped upstream", async () => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["./out/missing.png"],
+    });
+
+    expect(result).toMatchObject({
+      text: "⚠️ Media failed.",
       mediaUrl: undefined,
       mediaUrls: undefined,
     });

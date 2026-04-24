@@ -3,6 +3,10 @@ import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import {
+  describePluginInstallSource,
+  type PluginInstallSourceInfo,
+} from "./install-source-info.js";
+import {
   loadPluginManifest,
   type PluginPackageInstall,
   type PluginManifestLoadResult,
@@ -17,6 +21,7 @@ export type ProviderInstallCatalogEntry = ProviderAuthChoiceMetadata & {
   label: string;
   origin: PluginOrigin;
   install: PluginPackageInstall;
+  installSource?: PluginInstallSourceInfo;
 };
 
 type ProviderInstallCatalogParams = {
@@ -179,6 +184,7 @@ export function resolveProviderInstallCatalogEntries(
           label: choice.groupLabel ?? choice.choiceLabel,
           origin: install.origin,
           install: install.install,
+          installSource: describePluginInstallSource(install.install),
         } satisfies ProviderInstallCatalogEntry,
       ];
     })

@@ -132,21 +132,41 @@ async function resolveImageRuntime(params: {
 function buildImageContext(
   prompt: string,
   images: Array<{ buffer: Buffer; mime?: string }>,
+  opts?: { promptInUserContent?: boolean },
 ): Context {
+  const imageContent = images.map((image) => ({
+    type: "image" as const,
+    data: image.buffer.toString("base64"),
+    mimeType: image.mime ?? "image/jpeg",
+  }));
+  const content = opts?.promptInUserContent
+    ? [{ type: "text" as const, text: prompt }, ...imageContent]
+    : imageContent;
+
   return {
-    systemPrompt: prompt,
+    ...(opts?.promptInUserContent ? {} : { systemPrompt: prompt }),
     messages: [
       {
         role: "user",
-        content: images.map((image) => ({
-          type: "image" as const,
-          data: image.buffer.toString("base64"),
-          mimeType: image.mime ?? "image/jpeg",
-        })),
+        content,
         timestamp: Date.now(),
       },
     ],
   };
+}
+
+function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
+  const capabilities = resolveProviderRequestCapabilities({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    capability: "image",
+    transport: "media-understanding",
+  });
+  return (
+    capabilities.endpointClass === "openrouter" ||
+    (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
+  );
 }
 
 async function describeImagesWithMinimax(params: {
@@ -252,7 +272,9 @@ export async function describeImagesWithModel(
     agentDir: params.agentDir,
   });
 
-  const context = buildImageContext(prompt, params.images);
+  const context = buildImageContext(prompt, params.images, {
+    promptInUserContent: shouldPlaceImagePromptInUserContent(model),
+  });
   const controller = new AbortController();
   const timeout =
     typeof params.timeoutMs === "number" &&

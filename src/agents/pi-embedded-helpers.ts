@@ -13,6 +13,7 @@ export {
   BILLING_ERROR_USER_MESSAGE,
   classifyProviderRuntimeFailureKind,
   formatBillingErrorMessage,
+  formatRateLimitOrOverloadedErrorCopy,
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
   formatRawAssistantErrorForUi,

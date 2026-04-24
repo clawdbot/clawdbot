@@ -14,7 +14,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.23"
+    "openclaw": ">=2026.4.24"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -53,10 +53,10 @@
     "install": {
       "npmSpec": "@openclaw/whatsapp",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.23"
+      "minHostVersion": ">=2026.4.24"
     },
     "compat": {
-      "pluginApi": ">=2026.4.23"
+      "pluginApi": ">=2026.4.24"
     },
     "bundle": {
       "stageRuntimeDependencies": true

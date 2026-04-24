@@ -22,7 +22,11 @@ const modelsAddMocks = vi.hoisted(() => ({
   listAddableProviders: vi.fn<(params: unknown) => string[]>(),
   validateAddProvider:
     vi.fn<
-      (params: unknown) => { ok: true; provider: string } | { ok: false; providers: string[] }
+      (
+        params: unknown,
+      ) =>
+        | { ok: true; provider: string }
+        | { ok: false; providers: string[]; knownProvider?: string }
     >(),
 }));
 
@@ -337,6 +341,24 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Add a model to ollama:");
     expect(result?.reply?.text).toContain("```text\n/models add ollama <modelId>\n```");
     expect(result?.reply?.text).toContain("```text\n/models ollama\n```");
+  });
+
+  it("explains when a selectable provider does not support /models add", async () => {
+    modelsAddMocks.validateAddProvider.mockReturnValueOnce({
+      ok: false,
+      providers: ["lmstudio", "ollama"],
+      knownProvider: "openai",
+    });
+
+    const result = await handleModelsCommand(buildParams("/models add openai gpt-5.5"), true);
+
+    expect(result?.reply?.text).toContain(
+      "openai is available for model selection, but /models add cannot create models for this provider from chat.",
+    );
+    expect(result?.reply?.text).toContain("/models openai");
+    expect(result?.reply?.text).toContain("/model openai/<modelId>");
+    expect(result?.reply?.text).toContain("openclaw configure");
+    expect(result?.reply?.text).not.toContain("Unknown provider");
   });
 
   it("adds a model and points users back to browse or switch", async () => {

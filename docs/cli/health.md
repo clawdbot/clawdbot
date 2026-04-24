@@ -34,3 +34,8 @@ Notes:
 - `--verbose` forces a live probe, prints gateway connection details, and expands the
   human-readable output across all configured accounts and agents.
 - Output includes per-agent session stores when multiple agents are configured.
+
+## Related
+
+- [CLI reference](/cli)
+- [Gateway health](/gateway/health)

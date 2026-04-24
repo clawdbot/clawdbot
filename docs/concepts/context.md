@@ -147,7 +147,7 @@ What persists across messages depends on the mechanism:
 
 - **Normal history** persists in the session transcript until compacted/pruned by policy.
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
-- **Pruning** removes old tool results from the _in-memory_ prompt for a run, but does not rewrite the transcript.
+- **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript — the full history is still inspectable on disk.
 
 Docs: [Session](/concepts/session), [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning).
 

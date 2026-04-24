@@ -2,8 +2,11 @@ import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
+import {
+  SLACK_REPLY_BUTTON_ACTION_ID,
+  SLACK_REPLY_SELECT_ACTION_ID,
+} from "../../reply-action-ids.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import {

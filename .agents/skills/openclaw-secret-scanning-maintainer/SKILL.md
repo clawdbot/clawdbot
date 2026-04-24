@@ -1,6 +1,6 @@
 ---
 name: openclaw-secret-scanning-maintainer
-description: Maintainer-only workflow for handling GitHub Secret Scanning alerts on OpenClaw. Use when Codex needs to triage, redact, clean up, and resolve secret leakage found in issue comments, issue bodies, PR comments, or other GitHub content.
+description: Triage, redact, clean up, and resolve OpenClaw GitHub Secret Scanning alerts in issues or PRs.
 ---
 
 # OpenClaw Secret Scanning Maintainer

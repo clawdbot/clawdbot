@@ -2,16 +2,14 @@ import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { normalizeProviderId } from "../provider-id.js";
+import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
-
-export function dedupeProfileIds(profileIds: string[]): string[] {
-  return [...new Set(profileIds)];
-}
+export { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 
 export async function setAuthProfileOrder(params: {
   agentDir?: string;
@@ -122,13 +120,6 @@ export async function removeProviderAuthProfilesWithLock(params: {
       return changed;
     },
   });
-}
-
-export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
-  const providerKey = resolveProviderIdForAuth(provider);
-  return Object.entries(store.profiles)
-    .filter(([, cred]) => resolveProviderIdForAuth(cred.provider) === providerKey)
-    .map(([id]) => id);
 }
 
 export async function markAuthProfileGood(params: {

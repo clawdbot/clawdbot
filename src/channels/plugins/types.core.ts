@@ -60,6 +60,12 @@ export type ChannelMessageActionDiscoveryContext = {
  */
 export type ChannelMessageToolSchemaContribution = {
   properties: Record<string, TSchema>;
+  /**
+   * Actions whose validation depends on this schema fragment. Cross-channel
+   * discovery can hide only these actions when the fragment is current-channel
+   * scoped. Omit to keep the legacy conservative behavior.
+   */
+  actions?: readonly ChannelMessageActionName[] | null;
   visibility?: "current-channel" | "all-configured";
 };
 
@@ -86,6 +92,8 @@ export type ChannelSetupInput = {
   token?: string;
   privateKey?: string;
   tokenFile?: string;
+  secret?: string;
+  secretFile?: string;
   botToken?: string;
   appToken?: string;
   signalNumber?: string;
@@ -115,6 +123,7 @@ export type ChannelSetupInput = {
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
+  baseUrl?: string;
   relayUrls?: string;
   code?: string;
   groupChannels?: string[];

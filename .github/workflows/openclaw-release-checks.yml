@@ -123,8 +123,17 @@ jobs:
             echo "- Validated SHA: \`${RELEASE_SHA}\`"
             echo "- Cross-OS provider: \`${RELEASE_PROVIDER}\`"
             echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
-            echo "- This run will execute cross-OS release validation, QA Lab parity, Matrix, and Telegram lanes, and the non-Parallels Docker/live/openwebui coverage from the CI migration plan."
+            echo "- This run will execute cross-OS release validation, install smoke, QA Lab parity, Matrix, and Telegram lanes, and the non-Parallels Docker/live/openwebui coverage from the CI migration plan."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  install_smoke_release_checks:
+    needs: [resolve_target]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/install-smoke.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.ref }}
+      run_bun_global_install_smoke: true
 
   cross_os_release_checks:
     needs: [resolve_target]

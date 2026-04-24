@@ -6,8 +6,6 @@ read_when:
 title: "General troubleshooting"
 ---
 
-# Troubleshooting
-
 If you only have 2 minutes, use this page as a triage front door.
 
 ## First 60 seconds

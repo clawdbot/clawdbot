@@ -2228,6 +2228,10 @@ export function renderApp(state: AppViewState) {
               streamStartedAt: state.chatStreamStartedAt,
               draft: state.chatMessage,
               queue: state.chatQueue,
+              realtimeTalkActive: state.realtimeTalkActive,
+              realtimeTalkStatus: state.realtimeTalkStatus,
+              realtimeTalkDetail: state.realtimeTalkDetail,
+              realtimeTalkTranscript: state.realtimeTalkTranscript,
               connected: state.connected,
               canSend: state.connected,
               disabledReason: chatDisabledReason,
@@ -2256,9 +2260,11 @@ export function renderApp(state: AppViewState) {
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
               onSend: () => state.handleSendChat(),
+              onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
+              onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
               onDismissSideResult: () => {
                 state.chatSideResult = null;
               },

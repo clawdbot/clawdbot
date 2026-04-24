@@ -815,10 +815,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes browser extension targets to the extensions config", () => {
+  it("routes browser extension targets to the browser config", () => {
     expect(buildVitestRunPlans(["extensions/browser/index.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.extensions.config.ts",
+        config: "test/vitest/vitest.extension-browser.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/browser/index.test.ts"],
         watchMode: false,

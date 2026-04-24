@@ -13,6 +13,7 @@ const isRoutableChannelMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
 const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
+const resolveProviderFollowupFallbackRouteMock = vi.fn();
 let resolveQueuedReplyExecutionConfigActual:
   | (typeof import("./agent-runner-utils.js"))["resolveQueuedReplyExecutionConfig"]
   | undefined;
@@ -281,6 +282,16 @@ async function loadFreshFollowupRunnerModuleForTest() {
     isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
     routeReply: (...args: unknown[]) => routeReplyMock(...args),
   }));
+  vi.doMock("../../plugins/provider-runtime.js", async () => {
+    const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
+      "../../plugins/provider-runtime.js",
+    );
+    return {
+      ...actual,
+      resolveProviderFollowupFallbackRoute: (...args: unknown[]) =>
+        resolveProviderFollowupFallbackRouteMock(...args),
+    };
+  });
   vi.doMock("./agent-runner-utils.js", async () => {
     const actual =
       await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
@@ -358,6 +369,8 @@ beforeEach(() => {
   runPreflightCompactionIfNeededMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
   resolveQueuedReplyExecutionConfigMock.mockReset();
+  resolveProviderFollowupFallbackRouteMock.mockReset();
+  resolveProviderFollowupFallbackRouteMock.mockReturnValue(undefined);
   const resolveQueuedReplyExecutionConfig = resolveQueuedReplyExecutionConfigActual;
   if (!resolveQueuedReplyExecutionConfig) {
     throw new Error("resolveQueuedReplyExecutionConfig mock not initialized");
@@ -1279,10 +1292,79 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     persistSpy.mockRestore();
   });
 
-  it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {
-    routeReplyMock.mockResolvedValueOnce({
+  it("does not send cross-channel payload content to dispatcher when origin routing fails", async () => {
+    routeReplyMock.mockResolvedValue({
       ok: false,
       error: "forced route failure",
+    });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }, { text: "second payload" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("could not deliver it to the originating channel"),
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello world!" }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "second payload" }),
+    );
+  });
+
+  it("does not emit cross-channel route-failure notice when a later payload routes", async () => {
+    routeReplyMock
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "transient route failure",
+      })
+      .mockResolvedValueOnce({ ok: true });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }, { text: "second payload" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("could not deliver it to the originating channel"),
+      }),
+    );
+  });
+
+  it("uses dispatcher when origin routing metadata is incomplete", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+  });
+
+  it("lets provider followup route hooks force dispatcher delivery", async () => {
+    resolveProviderFollowupFallbackRouteMock.mockReturnValue({
+      route: "dispatcher",
+      reason: "operator-visible review copy",
     });
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "hello world!" }] },
@@ -1293,7 +1375,38 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+    expect(resolveProviderFollowupFallbackRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        context: expect.objectContaining({
+          provider: "anthropic",
+          modelId: "claude",
+          originRoutable: true,
+          dispatcherAvailable: true,
+          payload: expect.objectContaining({ text: "hello world!" }),
+        }),
+      }),
+    );
+  });
+
+  it("lets provider followup route hooks drop payloads explicitly", async () => {
+    resolveProviderFollowupFallbackRouteMock.mockReturnValue({
+      route: "drop",
+      reason: "already delivered out of band",
+    });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 

@@ -66,6 +66,13 @@ openclaw channels login --channel whatsapp
 openclaw channels login --channel whatsapp --account work
 ```
 
+    To attach an existing/custom WhatsApp Web auth directory before login:
+
+```bash
+openclaw channels add --channel whatsapp --account work --auth-dir /path/to/wa-auth
+openclaw channels login --channel whatsapp --account work
+```
+
   </Step>
 
   <Step title="Start the gateway">
@@ -164,7 +171,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`
     - if no allowlist is configured, the linked self number is allowed by default
-    - outbound `fromMe` DMs are never auto-paired
+    - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send to yourself from the linked device)
 
   </Tab>
 
@@ -558,7 +565,7 @@ Example:
 
 Primary reference:
 
-- [Configuration reference - WhatsApp](/gateway/configuration-reference#whatsapp)
+- [Configuration reference - WhatsApp](/gateway/config-channels#whatsapp)
 
 High-signal WhatsApp fields:
 

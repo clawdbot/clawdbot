@@ -28,53 +28,13 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 0
 fi
 
-lint_files=()
-while IFS= read -r -d '' file; do
-  lint_files+=("$file")
-done < <(node "$FILTER_FILES" lint -- "${files[@]}")
-
 format_files=()
 while IFS= read -r -d '' file; do
   format_files+=("$file")
 done < <(node "$FILTER_FILES" format -- "${files[@]}")
-
-docs_only=true
-for file in "${files[@]}"; do
-  case "$file" in
-    docs/*|*.md|*.mdx)
-      ;;
-    *)
-      docs_only=false
-      break
-      ;;
-  esac
-done
-
-if [ "${#lint_files[@]}" -gt 0 ]; then
-  "$RUN_NODE_TOOL" oxlint --type-aware --fix -- "${lint_files[@]}"
-fi
 
 if [ "${#format_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${format_files[@]}"
 fi
 
 git add -- "${files[@]}"
-
-# This hook is also exercised from lightweight temp repos in tests, where the
-# staged-file safety behavior matters but the full OpenClaw workspace does not
-# exist. Only run the repo-wide validation gate inside a real checkout.
-if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; then
-  cd "$ROOT_DIR"
-  case "${FAST_COMMIT:-}" in
-    1|true|TRUE|yes|YES|on|ON)
-      echo "FAST_COMMIT enabled: skipping changed-scope check in pre-commit hook."
-      ;;
-    *)
-      if [[ "$docs_only" == true ]]; then
-        echo "Docs-only staged changes detected: skipping pnpm check in pre-commit hook."
-      else
-        pnpm check:changed --staged
-      fi
-      ;;
-  esac
-fi

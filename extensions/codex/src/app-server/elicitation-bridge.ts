@@ -3,6 +3,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
   requestPluginApproval,
   type AppServerApprovalOutcome,
@@ -198,8 +199,8 @@ async function requestPluginApprovalOutcome(params: {
       return "unavailable";
     }
 
-    const decision = Object.prototype.hasOwnProperty.call(requestResult, "decision")
-      ? requestResult.decision
+    const decision = approvalRequestExplicitlyUnavailable(requestResult)
+      ? null
       : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
     return mapExecDecisionToOutcome(decision);
   } catch {

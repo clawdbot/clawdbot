@@ -133,3 +133,9 @@ its normal score, usually `0`.
 This does not replace normal memory tuning. If a VPS or container repeatedly
 kills children, increase the memory limit, reduce concurrency, or add stronger
 resource controls such as systemd `MemoryMax=` or container-level memory limits.
+
+## Related
+
+- [Install overview](/install)
+- [Linux server](/vps)
+- [Raspberry Pi](/platforms/raspberry-pi)

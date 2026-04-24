@@ -166,3 +166,9 @@ Security notes:
 - The transport is **stateless**; it does not store membership.
 - If the Gateway is offline or pairing is disabled, nodes cannot pair.
 - If the Gateway is in remote mode, pairing still happens against the remote Gateway’s store.
+
+## Related
+
+- [Channel pairing](/channels/pairing)
+- [Nodes](/nodes)
+- [Devices CLI](/cli/devices)

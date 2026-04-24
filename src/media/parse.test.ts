@@ -103,4 +103,74 @@ describe("splitMediaFromOutput", () => {
       { type: "text", text: "```text\nMEDIA:https://example.com/ignored.png\n```\nAfter" },
     ]);
   });
+
+  it("extracts markdown image urls while keeping surrounding caption text", () => {
+    expectParsedMediaOutputCase("Caption\n\n![chart](https://example.com/chart.png)", {
+      text: "Caption",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
+  it("keeps inline caption text around markdown images", () => {
+    expectParsedMediaOutputCase("Look ![chart](https://example.com/chart.png) now", {
+      text: "Look now",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
+  it("extracts multiple markdown image urls in order", () => {
+    expectParsedMediaOutputCase(
+      "Before\n![one](https://example.com/one.png)\nMiddle\n![two](https://example.com/two.png)\nAfter",
+      {
+        text: "Before\nMiddle\nAfter",
+        mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
+      },
+    );
+  });
+
+  it("strips markdown image title suffixes from extracted urls", () => {
+    expectParsedMediaOutputCase(
+      'Caption ![chart](https://example.com/chart.png "Quarterly chart")',
+      {
+        text: "Caption",
+        mediaUrls: ["https://example.com/chart.png"],
+      },
+    );
+  });
+
+  it("keeps balanced parentheses inside markdown image urls", () => {
+    expectParsedMediaOutputCase("Chart ![img](https://example.com/a_(1).png) now", {
+      text: "Chart now",
+      mediaUrls: ["https://example.com/a_(1).png"],
+    });
+  });
+
+  it.each([
+    "![x](file:///etc/passwd)",
+    "![x](/var/run/secrets/kubernetes.io/serviceaccount/token)",
+    "![x](C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts)",
+  ] as const)("does not lift local markdown image target: %s", (input) => {
+    expectParsedMediaOutputCase(input, {
+      text: input,
+      mediaUrls: undefined,
+    });
+  });
+
+  it("does not lift markdown image urls that fail media validation", () => {
+    const longUrl = `![x](https://example.com/${"a".repeat(4097)}.png)`;
+
+    expectParsedMediaOutputCase(longUrl, {
+      text: longUrl,
+      mediaUrls: undefined,
+    });
+  });
+
+  it("leaves very long markdown-image candidate lines as text", () => {
+    const input = `${"prefix ".repeat(3000)}![x](https://example.com/image.png)`;
+
+    expectParsedMediaOutputCase(input, {
+      text: input,
+      mediaUrls: undefined,
+    });
+  });
 });

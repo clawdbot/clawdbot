@@ -169,7 +169,7 @@ This is the highest-leverage compatibility set for self-hosted frontends and too
     Use `x-openclaw-model`.
 
     Examples:
-    `x-openclaw-model: openai/gpt-5.5`
+    `x-openclaw-model: openai/gpt-5.4`
     `x-openclaw-model: gpt-5.5`
 
     If you omit it, the selected agent runs with its normal configured model choice.
@@ -237,7 +237,7 @@ Streaming:
 curl -N http://127.0.0.1:18789/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-openclaw-model: openai/gpt-5.5' \
+  -H 'x-openclaw-model: openai/gpt-5.4' \
   -d '{
     "model": "openclaw/research",
     "stream": true,
@@ -278,3 +278,8 @@ Notes:
 - `openclaw/default` is always present so one stable id works across environments.
 - Backend provider/model overrides belong in `x-openclaw-model`, not the OpenAI `model` field.
 - `/v1/embeddings` supports `input` as a string or array of strings.
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [OpenAI](/providers/openai)

@@ -28,6 +28,7 @@ import {
   buildTaskRunDetails,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
+  readGenerationTimeoutMs,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
@@ -95,6 +96,12 @@ const MusicGenerateToolSchema = Type.Object({
   durationSeconds: Type.Optional(
     Type.Number({
       description: "Optional target duration in seconds when the provider supports duration hints.",
+      minimum: 1,
+    }),
+  ),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      description: "Optional provider request timeout in milliseconds.",
       minimum: 1,
     }),
   ),
@@ -336,6 +343,7 @@ async function executeMusicGenerationJob(params: {
   filename?: string;
   loadedReferenceImages: LoadedReferenceImage[];
   taskHandle?: MusicGenerationTaskHandle | null;
+  timeoutMs?: number;
 }): Promise<ExecutedMusicGeneration> {
   if (params.taskHandle) {
     recordMusicGenerationTaskProgress({
@@ -353,6 +361,7 @@ async function executeMusicGenerationJob(params: {
     durationSeconds: params.durationSeconds,
     format: params.format,
     inputImages: params.loadedReferenceImages.map((entry) => entry.sourceImage),
+    timeoutMs: params.timeoutMs,
   });
   if (params.taskHandle) {
     recordMusicGenerationTaskProgress({
@@ -437,6 +446,7 @@ async function executeMusicGenerationJob(params: {
         : {}),
       ...(!ignoredOverrideKeys.has("format") && params.format ? { format: params.format } : {}),
       ...(params.filename ? { filename: params.filename } : {}),
+      ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       ...buildMediaReferenceDetails({
         entries: params.loadedReferenceImages,
         singleKey: "image",
@@ -520,6 +530,7 @@ export function createMusicGenerateTool(options?: {
       });
       const format = normalizeOutputFormat(readStringParam(args, "format"));
       const filename = readStringParam(args, "filename");
+      const timeoutMs = readGenerationTimeoutMs(args);
       const imageInputs = normalizeReferenceImageInputs(args);
       const selectedProvider = resolveSelectedMusicGenerationProvider({
         config: effectiveCfg,
@@ -564,6 +575,7 @@ export function createMusicGenerateTool(options?: {
               filename,
               loadedReferenceImages,
               taskHandle,
+              timeoutMs,
             });
             completeMusicGenerationTaskRun({
               handle: taskHandle,
@@ -627,6 +639,7 @@ export function createMusicGenerateTool(options?: {
             ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
             ...(format ? { format } : {}),
             ...(filename ? { filename } : {}),
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
           },
         };
       }
@@ -644,6 +657,7 @@ export function createMusicGenerateTool(options?: {
           filename,
           loadedReferenceImages,
           taskHandle,
+          timeoutMs,
         });
         completeMusicGenerationTaskRun({
           handle: taskHandle,

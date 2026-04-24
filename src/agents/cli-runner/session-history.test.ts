@@ -123,6 +123,41 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
+  it("rejects symlinked transcripts instead of following them outside the sessions directory", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-outside-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const canonicalSessionFile = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "sessions",
+      "session-symlink.jsonl",
+    );
+    const outsideFile = createSessionTranscript({
+      rootDir: outsideDir,
+      sessionId: "session-symlink",
+      filePath: path.join(outsideDir, "outside.jsonl"),
+      messages: ["stolen history"],
+    });
+    fs.mkdirSync(path.dirname(canonicalSessionFile), { recursive: true });
+    fs.symlinkSync(outsideFile, canonicalSessionFile);
+
+    try {
+      expect(
+        loadCliSessionHistoryMessages({
+          sessionId: "session-symlink",
+          sessionFile: canonicalSessionFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        }),
+      ).toEqual([]);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("drops oversized transcript files instead of loading them into hook payloads", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -147,6 +182,39 @@ describe("loadCliSessionHistoryMessages", () => {
       ).toEqual([]);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("honors custom session store roots when resolving hook history transcripts", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    const customStoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-store-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const storePath = path.join(customStoreDir, "sessions.json");
+    fs.writeFileSync(storePath, "{}", "utf-8");
+    const sessionFile = createSessionTranscript({
+      rootDir: customStoreDir,
+      sessionId: "session-custom-store",
+      filePath: path.join(customStoreDir, "session-custom-store.jsonl"),
+      messages: ["custom store history"],
+    });
+
+    try {
+      expect(
+        loadCliSessionHistoryMessages({
+          sessionId: "session-custom-store",
+          sessionFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          config: {
+            session: {
+              store: storePath,
+            },
+          },
+        }),
+      ).toMatchObject([{ role: "user", content: "custom store history" }]);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(customStoreDir, { recursive: true, force: true });
     }
   });
 });

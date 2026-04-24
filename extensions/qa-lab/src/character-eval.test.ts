@@ -125,7 +125,7 @@ describe("runQaCharacterEval", () => {
       expect.objectContaining({
         judgeModel: "openai/gpt-5.4",
         judgeThinkingDefault: "xhigh",
-        judgeFastMode: false,
+        judgeFastMode: true,
         timeoutMs: 300_000,
       }),
     );
@@ -223,7 +223,7 @@ describe("runQaCharacterEval", () => {
 
     expect(runSuite).toHaveBeenCalledTimes(8);
     expect(runSuite.mock.calls.map(([params]) => params.primaryModel)).toEqual([
-      "openai/gpt-5.5",
+      "openai/gpt-5.4",
       "openai/gpt-5.2",
       "openai/gpt-5",
       "anthropic/claude-opus-4-6",
@@ -233,7 +233,7 @@ describe("runQaCharacterEval", () => {
       "google/gemini-3.1-pro-preview",
     ]);
     expect(runSuite.mock.calls.map(([params]) => params.thinkingDefault)).toEqual([
-      "xhigh",
+      "medium",
       "xhigh",
       "xhigh",
       "high",
@@ -254,14 +254,14 @@ describe("runQaCharacterEval", () => {
     ]);
     expect(runJudge).toHaveBeenCalledTimes(2);
     expect(runJudge.mock.calls.map(([params]) => params.judgeModel)).toEqual([
-      "openai/gpt-5.5",
+      "openai/gpt-5.4",
       "anthropic/claude-opus-4-6",
     ]);
     expect(runJudge.mock.calls.map(([params]) => params.judgeThinkingDefault)).toEqual([
       "xhigh",
       "high",
     ]);
-    expect(runJudge.mock.calls.map(([params]) => params.judgeFastMode)).toEqual([false, false]);
+    expect(runJudge.mock.calls.map(([params]) => params.judgeFastMode)).toEqual([true, false]);
   });
 
   it("runs candidate models with bounded concurrency while preserving result order", async () => {

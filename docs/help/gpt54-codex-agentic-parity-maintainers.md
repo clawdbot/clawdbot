@@ -168,3 +168,7 @@ The parity harness is not the only evidence source. Keep this split explicit in 
 | `/elevated full` hints were sometimes misleading            | PR B ties guidance to actual runtime capability and blocked reasons                     |
 | Long tasks could disappear into replay/compaction ambiguity | PR C emits explicit paused, blocked, abandoned, and replay-invalid state                |
 | Parity claims were anecdotal                                | PR D produces a report plus JSON verdict with the same scenario coverage on both models |
+
+## Related
+
+- [GPT-5.4 / Codex agentic parity](/help/gpt54-codex-agentic-parity)

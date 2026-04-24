@@ -595,6 +595,52 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
   });
 
+  it("hydrates mention metadata from REST when bot mention syntax is present but mentions are missing", async () => {
+    const channelId = "channel-bot-mentions-hydrated";
+    const guildId = "guild-bot-mentions-hydrated";
+    const botId = "123456789012345678";
+    const message = createDiscordMessage({
+      id: "m-bot-mentions-hydrated",
+      channelId,
+      content: `hi <@${botId}>`,
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+      mentionedUsers: [],
+    });
+    const client = createGuildTextClient(channelId);
+    client.rest = {
+      get: vi.fn(async () => ({
+        id: message.id,
+        content: message.content,
+        mentions: [{ id: botId, username: "OpenClaw", bot: true }],
+        mention_roles: [],
+        mention_everyone: false,
+      })),
+    } as unknown as DiscordClient["rest"];
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: "mentions",
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      botUserId: botId,
+    });
+
+    expect(result).not.toBeNull();
+  });
+
   it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
     const channelId = "channel-bot-command-no-mention";
     const guildId = "guild-bot-command-no-mention";

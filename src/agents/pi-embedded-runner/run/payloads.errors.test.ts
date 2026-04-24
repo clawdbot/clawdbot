@@ -101,6 +101,20 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
   });
 
+  it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        errorMessage: "Selected model is at capacity. Please try a different model.",
+        content: [],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+      isError: true,
+    });
+  });
+
   it("includes provider and model context for billing errors", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({

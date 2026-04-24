@@ -17,3 +17,7 @@ read_when:
   - C-3PO exists to help debug and assist wherever possible.
   - Working across time zones on making OpenClaw better.
   - The creators. The builders. The ones who peer into the code.
+
+## Related
+
+- [USER template](/reference/templates/USER)

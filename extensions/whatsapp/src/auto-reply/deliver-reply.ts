@@ -3,15 +3,20 @@ import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/r
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
   isReasoningReplyPayload,
-  resolveOutboundMediaUrls,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMedia } from "../media.js";
+import {
+  normalizeWhatsAppLoadedMedia,
+  normalizeWhatsAppOutboundPayload,
+  normalizeWhatsAppPayloadTextPreservingIndentation,
+  sendWhatsAppOutboundWithRetry,
+} from "../outbound-media-contract.js";
 import { buildQuotedMessageOptions, lookupInboundMessageMeta } from "../quoted-message.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
-import { convertMarkdownTables, sleep } from "../text-runtime.js";
+import { convertMarkdownTables } from "../text-runtime.js";
 import { markdownToWhatsApp } from "../text-runtime.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import type { WebInboundMsg } from "./types.js";
@@ -40,11 +45,12 @@ export async function deliverWebReply(params: {
   }
   const tableMode = params.tableMode ?? "code";
   const chunkMode = params.chunkMode ?? "length";
-  const convertedText = markdownToWhatsApp(
-    convertMarkdownTables(replyResult.text || "", tableMode),
-  );
+  const normalizedReply = normalizeWhatsAppOutboundPayload(replyResult, {
+    normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
+  });
+  const convertedText = markdownToWhatsApp(convertMarkdownTables(normalizedReply.text, tableMode));
   const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
-  const mediaList = resolveOutboundMediaUrls(replyResult);
+  const mediaList = normalizedReply.mediaUrls ?? [];
 
   const getQuote = () => {
     if (!replyResult.replyToId) {
@@ -64,26 +70,15 @@ export async function deliverWebReply(params: {
   };
 
   const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
-    let lastErr: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        return await fn();
-      } catch (err) {
-        lastErr = err;
-        const errText = formatError(err);
-        const isLast = attempt === maxAttempts;
-        const shouldRetry = /closed|reset|timed\s*out|disconnect/i.test(errText);
-        if (!shouldRetry || isLast) {
-          throw err;
-        }
-        const backoffMs = 500 * attempt;
+    return await sendWhatsAppOutboundWithRetry({
+      send: fn,
+      maxAttempts,
+      onRetry: ({ attempt, maxAttempts: retryMaxAttempts, backoffMs, errorText }) => {
         logVerbose(
-          `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts - 1}) in ${backoffMs}ms: ${errText}`,
+          `Retrying ${label} to ${msg.from} after failure (${attempt}/${retryMaxAttempts - 1}) in ${backoffMs}ms: ${errorText}`,
         );
-        await sleep(backoffMs);
-      }
-    }
-    throw lastErr;
+      },
+    });
   };
 
   // Text-only replies
@@ -125,10 +120,13 @@ export async function deliverWebReply(params: {
     mediaUrls: mediaList,
     caption: leadingCaption,
     send: async ({ mediaUrl, caption }) => {
-      const media = await loadWebMedia(mediaUrl, {
-        maxBytes: maxMediaBytes,
-        localRoots: params.mediaLocalRoots,
-      });
+      const media = normalizeWhatsAppLoadedMedia(
+        await loadWebMedia(mediaUrl, {
+          maxBytes: maxMediaBytes,
+          localRoots: params.mediaLocalRoots,
+        }),
+        mediaUrl,
+      );
       if (shouldLogVerbose()) {
         logVerbose(
           `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,
@@ -143,7 +141,7 @@ export async function deliverWebReply(params: {
               {
                 image: media.buffer,
                 caption,
-                mimetype: media.contentType,
+                mimetype: media.mimetype,
               },
               quote,
             ),
@@ -157,7 +155,7 @@ export async function deliverWebReply(params: {
               {
                 audio: media.buffer,
                 ptt: true,
-                mimetype: media.contentType,
+                mimetype: media.mimetype,
                 caption,
               },
               quote,
@@ -172,24 +170,22 @@ export async function deliverWebReply(params: {
               {
                 video: media.buffer,
                 caption,
-                mimetype: media.contentType,
+                mimetype: media.mimetype,
               },
               quote,
             ),
           "media:video",
         );
       } else {
-        const fileName = media.fileName ?? mediaUrl.split("/").pop() ?? "file";
-        const mimetype = media.contentType ?? "application/octet-stream";
         const quote = getQuote();
         await sendWithRetry(
           () =>
             msg.sendMedia(
               {
                 document: media.buffer,
-                fileName,
+                fileName: media.fileName,
                 caption,
-                mimetype,
+                mimetype: media.mimetype,
               },
               quote,
             ),
@@ -220,8 +216,7 @@ export async function deliverWebReply(params: {
       if (!isFirst) {
         return;
       }
-      const warning =
-        error instanceof Error ? `⚠️ Media failed: ${error.message}` : "⚠️ Media failed.";
+      const warning = "⚠️ Media failed.";
       const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
       const fallbackText = fallbackTextParts.join("\n");
       if (!fallbackText) {

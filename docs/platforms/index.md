@@ -7,7 +7,8 @@ title: "Platforms"
 ---
 
 OpenClaw core is written in TypeScript. **Node is the recommended runtime**.
-Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
+Bun is not recommended for the Gateway — known issues with WhatsApp and
+Telegram channels; see [Bun (experimental)](/install/bun) for details.
 
 Companion apps exist for macOS (menu bar app) and mobile nodes (iOS/Android). Windows and
 Linux companion apps are planned, but the Gateway is fully supported today.
@@ -51,3 +52,9 @@ The service target depends on OS:
 - macOS: LaunchAgent (`ai.openclaw.gateway` or `ai.openclaw.<profile>`; legacy `com.openclaw.*`)
 - Linux/WSL2: systemd user service (`openclaw-gateway[-<profile>].service`)
 - Native Windows: Scheduled Task (`OpenClaw Gateway` or `OpenClaw Gateway (<profile>)`), with a per-user Startup-folder login item fallback if task creation is denied
+
+## Related
+
+- [Install overview](/install)
+- [macOS app](/platforms/macos)
+- [iOS app](/platforms/ios)

@@ -1,4 +1,5 @@
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeModelCompat,
@@ -26,10 +27,13 @@ import type {
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 2500;
 const LIVE_DISCOVERY_ENV = "OPENCLAW_CODEX_DISCOVERY_LIVE";
+const MODEL_DISCOVERY_PAGE_LIMIT = 100;
+const codexCatalogLog = createSubsystemLogger("codex/catalog");
 
 type CodexModelLister = (options: {
   timeoutMs: number;
   limit?: number;
+  cursor?: string;
   startOptions?: CodexAppServerStartOptions;
   sharedClient?: boolean;
 }) => Promise<CodexAppServerModelListResult>;
@@ -43,6 +47,7 @@ type BuildCatalogOptions = {
   env?: NodeJS.ProcessEnv;
   pluginConfig?: unknown;
   listModels?: CodexModelLister;
+  onDiscoveryFailure?: (error: unknown) => void;
 };
 
 export function buildCodexProvider(options: BuildCodexProviderOptions = {}): ProviderPlugin {
@@ -103,6 +108,7 @@ export async function buildCodexProviderCatalog(
       listModels: options.listModels ?? listCodexAppServerModelsLazy,
       timeoutMs,
       startOptions: appServer.start,
+      onDiscoveryFailure: options.onDiscoveryFailure,
     });
   }
   return {
@@ -115,12 +121,15 @@ function resolveCodexDynamicModel(modelId: string) {
   if (!id) {
     return undefined;
   }
+  const fallbackModel = FALLBACK_CODEX_MODELS.find((model) => model.id === id);
   return normalizeModelCompat({
     ...buildCodexModelDefinition({
       id,
       model: id,
-      inputModalities: ["text", "image"],
-      supportedReasoningEfforts: shouldDefaultToReasoningModel(id) ? ["medium"] : [],
+      inputModalities: fallbackModel?.inputModalities ?? ["text"],
+      supportedReasoningEfforts:
+        fallbackModel?.supportedReasoningEfforts ??
+        (shouldDefaultToReasoningModel(id) ? ["medium"] : []),
     }),
     provider: CODEX_PROVIDER_ID,
     baseUrl: CODEX_BASE_URL,
@@ -131,16 +140,28 @@ async function listModelsBestEffort(params: {
   listModels: CodexModelLister;
   timeoutMs: number;
   startOptions: CodexAppServerStartOptions;
+  onDiscoveryFailure?: (error: unknown) => void;
 }): Promise<CodexAppServerModel[]> {
   try {
-    const result = await params.listModels({
-      timeoutMs: params.timeoutMs,
-      limit: 100,
-      startOptions: params.startOptions,
-      sharedClient: false,
+    const models: CodexAppServerModel[] = [];
+    let cursor: string | undefined;
+    do {
+      const result = await params.listModels({
+        timeoutMs: params.timeoutMs,
+        limit: MODEL_DISCOVERY_PAGE_LIMIT,
+        cursor,
+        startOptions: params.startOptions,
+        sharedClient: false,
+      });
+      models.push(...result.models.filter((model) => !model.hidden));
+      cursor = result.nextCursor;
+    } while (cursor);
+    return models;
+  } catch (error) {
+    params.onDiscoveryFailure?.(error);
+    codexCatalogLog.debug("codex model discovery failed; using fallback catalog", {
+      error: error instanceof Error ? error.message : String(error),
     });
-    return result.models.filter((model) => !model.hidden);
-  } catch {
     return [];
   }
 }
@@ -148,6 +169,7 @@ async function listModelsBestEffort(params: {
 async function listCodexAppServerModelsLazy(options: {
   timeoutMs: number;
   limit?: number;
+  cursor?: string;
   startOptions?: CodexAppServerStartOptions;
   sharedClient?: boolean;
 }): Promise<CodexAppServerModelListResult> {

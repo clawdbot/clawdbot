@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
 type DiagnosticBaseEvent = {
   ts: number;
   seq: number;
+  trace?: DiagnosticTraceContext;
 };
 
 export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
@@ -152,6 +154,37 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticToolParamsSummary =
+  | { kind: "object" }
+  | { kind: "array"; length: number }
+  | { kind: "string"; length: number }
+  | { kind: "number" | "boolean" | "null" | "undefined" | "other" };
+
+type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  toolName: string;
+  toolCallId?: string;
+  paramsSummary?: DiagnosticToolParamsSummary;
+};
+
+export type DiagnosticToolExecutionStartedEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.started";
+};
+
+export type DiagnosticToolExecutionCompletedEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.completed";
+  durationMs: number;
+};
+
+export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.error";
+  durationMs: number;
+  errorCategory: string;
+  errorCode?: string;
+};
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   heapTotalBytes: number;
@@ -202,6 +235,9 @@ export type DiagnosticEventPayload =
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticToolLoopEvent
+  | DiagnosticToolExecutionStartedEvent
+  | DiagnosticToolExecutionCompletedEvent
+  | DiagnosticToolExecutionErrorEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent;

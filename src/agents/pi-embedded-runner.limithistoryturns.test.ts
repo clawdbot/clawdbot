@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { limitHistoryTurns } from "./pi-embedded-runner.js";
+import { limitHistoryTurns } from "./pi-embedded-runner/history.js";
 
 describe("limitHistoryTurns", () => {
   const mockUsage = {

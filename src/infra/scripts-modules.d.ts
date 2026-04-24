@@ -27,4 +27,8 @@ declare module "../../scripts/ci-changed-scope.mjs" {
     runChangedSmoke: boolean;
     runControlUiI18n: boolean;
   };
+  export function detectInstallSmokeScope(paths: string[]): {
+    runFastInstallSmoke: boolean;
+    runFullInstallSmoke: boolean;
+  };
 }

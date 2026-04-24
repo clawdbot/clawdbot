@@ -88,7 +88,7 @@ as one OpenCode setup.
 }
 ```
 
-## Catalogs
+## Built-in catalogs
 
 ### Zen
 

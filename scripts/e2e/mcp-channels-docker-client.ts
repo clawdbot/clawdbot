@@ -34,16 +34,21 @@ async function main() {
       mcp = mcpHandle.client;
     }
 
-    const listed = (await mcp.callTool({
-      name: "conversations_list",
-      arguments: {},
-    })) as {
-      structuredContent?: { conversations?: Array<Record<string, unknown>> };
-    };
-    const conversation = listed.structuredContent?.conversations?.find(
-      (entry) => entry.sessionKey === "agent:main:main",
+    const conversation = await waitFor(
+      "seeded conversation in conversations_list",
+      async () => {
+        const listed = (await mcp.callTool({
+          name: "conversations_list",
+          arguments: {},
+        })) as {
+          structuredContent?: { conversations?: Array<Record<string, unknown>> };
+        };
+        return listed.structuredContent?.conversations?.find(
+          (entry) => entry.sessionKey === "agent:main:main",
+        );
+      },
+      240_000,
     );
-    assert(conversation, "expected seeded conversation in conversations_list");
     assert(conversation.channel === "imessage", "expected seeded channel");
     assert(conversation.to === "+15551234567", "expected seeded target");
 
@@ -60,19 +65,31 @@ async function main() {
       "conversation_get returned wrong session",
     );
 
-    const history = (await mcp.callTool({
-      name: "messages_read",
-      arguments: { session_key: "agent:main:main", limit: 10 },
-    })) as {
-      structuredContent?: { messages?: Array<Record<string, unknown>> };
-    };
-    const messages = history.structuredContent?.messages ?? [];
-    assert(messages.length >= 2, "expected seeded transcript messages");
-    const attachmentMessage = messages.find((entry) => {
-      const raw = entry.__openclaw;
-      return raw && typeof raw === "object" && (raw as { id?: unknown }).id === "msg-attachment";
-    });
-    assert(attachmentMessage, "expected seeded attachment message");
+    const messages = await waitFor(
+      "seeded transcript messages",
+      async () => {
+        const history = (await mcp.callTool({
+          name: "messages_read",
+          arguments: { session_key: "agent:main:main", limit: 10 },
+        })) as {
+          structuredContent?: { messages?: Array<Record<string, unknown>> };
+        };
+        const currentMessages = history.structuredContent?.messages ?? [];
+        return currentMessages.length >= 2 ? currentMessages : undefined;
+      },
+      240_000,
+    );
+    await waitFor(
+      "seeded attachment message",
+      () =>
+        messages.find((entry) => {
+          const raw = entry.__openclaw;
+          return (
+            raw && typeof raw === "object" && (raw as { id?: unknown }).id === "msg-attachment"
+          );
+        }),
+      240_000,
+    );
 
     const attachments = (await mcp.callTool({
       name: "attachments_fetch",

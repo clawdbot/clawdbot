@@ -827,6 +827,8 @@
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
+  position: relative;
+  z-index: 1;
   scrollbar-width: none;
   -ms-overflow-style: none;
   padding-bottom: 2px;

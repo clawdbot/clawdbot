@@ -96,6 +96,8 @@ export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: 
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
 export const resolveSandboxContextMock = vi.fn(async () => null);
+export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
+  vi.fn(async () => undefined);
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
@@ -134,6 +136,8 @@ export function resetCompactSessionStateMocks(): void {
   resolveAgentTransportOverrideMock.mockReturnValue(undefined);
   resolveSandboxContextMock.mockReset();
   resolveSandboxContextMock.mockResolvedValue(null);
+  maybeCompactAgentHarnessSessionMock.mockReset();
+  maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
 }
 
 export function resetCompactHooksHarnessMocks(): void {
@@ -200,7 +204,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../harness/selection.js", () => ({
-    maybeCompactAgentHarnessSession: vi.fn(async () => undefined),
+    maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
   }));
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({

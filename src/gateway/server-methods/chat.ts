@@ -24,6 +24,7 @@ import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
+import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -601,6 +602,22 @@ function explicitOriginTargetsAcpSession(origin: ChatSendExplicitOrigin | undefi
     conversationId: origin.originatingTo,
   });
   return isAcpSessionKey(binding?.targetSessionKey);
+}
+
+function explicitOriginTargetsPluginBinding(origin: ChatSendExplicitOrigin | undefined): boolean {
+  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
+    return false;
+  }
+  const channel = normalizeMessageChannel(origin.originatingChannel);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
+  const binding = getSessionBindingService().resolveByConversation({
+    channel,
+    accountId: origin.accountId,
+    conversationId: origin.originatingTo,
+  });
+  return isPluginOwnedSessionBindingRecord(binding);
 }
 
 function stripDisallowedChatControlChars(message: string): string {
@@ -2181,6 +2198,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
+      explicitOriginResult.value,
+    );
     if (normalizedAttachments.length > 0) {
       const modelRef = resolveSessionModelRef(cfg, entry, agentId);
       const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
@@ -2188,8 +2208,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         provider: modelRef.provider,
         model: modelRef.model,
       });
+      // Bound plugin sessions own the real recipient model, so keep image
+      // attachments even when the parent OpenClaw session model is text-only.
       const supportsImages =
-        supportsSessionModelImages || explicitOriginTargetsAcpSession(explicitOriginResult.value);
+        supportsSessionModelImages ||
+        explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
+        explicitOriginTargetsPlugin;
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: 5_000_000,
@@ -2236,6 +2260,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         client,
         logGateway: context.logGateway,
       });
+      const pluginBoundMediaFields =
+        explicitOriginTargetsPlugin && parsedImages.length > 0
+          ? resolveChatSendTranscriptMediaFields(await persistedImagesPromise)
+          : {};
 
       const trimmedMessage = parsedMessage.trim();
       const injectThinking = Boolean(
@@ -2288,6 +2316,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes ?? [],
+        ...pluginBoundMediaFields,
       };
 
       const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
