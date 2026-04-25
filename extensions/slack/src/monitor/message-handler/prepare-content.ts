@@ -1,14 +1,10 @@
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/infra-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
-import {
-  MAX_SLACK_MEDIA_FILES,
-  resolveSlackAttachmentContent,
-  resolveSlackMedia,
-  type SlackMediaResult,
-  type SlackThreadStarter,
-} from "../media.js";
+import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "../media-types.js";
+import type { SlackThreadStarter } from "../thread.js";
 
 export type SlackResolvedMessageContent = {
   rawBody: string;
@@ -17,6 +13,14 @@ export type SlackResolvedMessageContent = {
 
 const SLACK_MENTION_RESOLUTION_CONCURRENCY = 4;
 const SLACK_MENTION_RESOLUTION_MAX_LOOKUPS_PER_MESSAGE = 20;
+
+type SlackMediaModule = typeof import("../media.js");
+let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
+
+function loadSlackMediaModule(): Promise<SlackMediaModule> {
+  slackMediaModulePromise ??= import("../media.js");
+  return slackMediaModulePromise;
+}
 
 function collectUniqueSlackMentionIds(texts: Array<string | undefined>): string[] {
   const seen = new Set<string>();
@@ -87,17 +91,29 @@ export async function resolveSlackMessageContent(params: {
     threadStarter: params.threadStarter,
   });
 
-  const media = await resolveSlackMedia({
-    files: ownFiles,
-    token: params.botToken,
-    maxBytes: params.mediaMaxBytes,
-  });
+  const media =
+    ownFiles && ownFiles.length > 0
+      ? await (async () => {
+          const { resolveSlackMedia } = await loadSlackMediaModule();
+          return resolveSlackMedia({
+            files: ownFiles,
+            token: params.botToken,
+            maxBytes: params.mediaMaxBytes,
+          });
+        })()
+      : null;
 
-  const attachmentContent = await resolveSlackAttachmentContent({
-    attachments: params.message.attachments,
-    token: params.botToken,
-    maxBytes: params.mediaMaxBytes,
-  });
+  const attachmentContent =
+    params.message.attachments && params.message.attachments.length > 0
+      ? await (async () => {
+          const { resolveSlackAttachmentContent } = await loadSlackMediaModule();
+          return resolveSlackAttachmentContent({
+            attachments: params.message.attachments,
+            token: params.botToken,
+            maxBytes: params.mediaMaxBytes,
+          });
+        })()
+      : null;
 
   const mergedMedia = [...(media ?? []), ...(attachmentContent?.media ?? [])];
   const effectiveDirectMedia = mergedMedia.length > 0 ? mergedMedia : null;
@@ -110,7 +126,7 @@ export async function resolveSlackMessageContent(params: {
     !mediaPlaceholder && fallbackFiles.length > 0
       ? fallbackFiles
           .slice(0, MAX_SLACK_MEDIA_FILES)
-          .map((file) => normalizeOptionalString(file.name) ?? "file")
+          .map((file) => formatSlackFileReference(file))
           .join(", ")
       : undefined;
   const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;

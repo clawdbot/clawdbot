@@ -207,13 +207,18 @@ async function loadDaemonConfigContext(
     resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
   );
 
-  const cliIO = createConfigIO({ env: process.env, configPath: cliConfigPath });
+  const cliIO = createConfigIO({
+    env: process.env,
+    configPath: cliConfigPath,
+    pluginValidation: "skip",
+  });
   const sharesDaemonConfigContext = !serviceEnv && cliConfigPath === daemonConfigPath;
   const daemonIO = sharesDaemonConfigContext
     ? cliIO
     : createConfigIO({
         env: mergedDaemonEnv,
         configPath: daemonConfigPath,
+        pluginValidation: "skip",
       });
 
   const cliSnapshotPromise = cliIO.readConfigFileSnapshot().catch(() => null);
@@ -444,7 +449,7 @@ export async function gatherDaemonStatus(
     rpcAuthWarning = undefined;
   }
   const health =
-    opts.probe && loaded
+    opts.probe && loaded && rpc?.ok !== true
       ? await loadRestartHealthModule()
           .then(({ inspectGatewayRestart }) =>
             inspectGatewayRestart({

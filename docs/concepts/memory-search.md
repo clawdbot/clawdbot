@@ -29,8 +29,8 @@ explicitly:
 }
 ```
 
-For local embeddings with no API key, use `provider: "local"` (requires
-node-llama-cpp).
+For local embeddings with no API key, install the optional `node-llama-cpp`
+runtime package next to OpenClaw and use `provider: "local"`.
 
 ## Supported providers
 

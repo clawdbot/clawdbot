@@ -9,6 +9,7 @@ import {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
@@ -89,6 +90,56 @@ describe("qa suite planning helpers", () => {
 
     expect(maxActive).toBe(2);
     expect(result).toEqual([10, 20, 30, 40]);
+  });
+
+  it("staggers scenario starts without reducing mapped concurrency", async () => {
+    const sleeps: number[] = [];
+    const releaseSleeps: Array<() => void> = [];
+    const started: number[] = [];
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const resultPromise = mapQaSuiteWithConcurrency(
+      [1, 2, 3, 4],
+      3,
+      async (item) => {
+        started.push(item);
+        return item;
+      },
+      {
+        startStaggerMs: 25,
+        sleepImpl: async (ms) => {
+          sleeps.push(ms);
+          await new Promise<void>((resolve) => {
+            releaseSleeps.push(resolve);
+          });
+        },
+      },
+    );
+
+    await tick();
+    expect(started).toEqual([1]);
+    releaseSleeps.shift()?.();
+    await tick();
+    expect(started).toEqual([1, 2]);
+    releaseSleeps.shift()?.();
+    await tick();
+    expect(started).toEqual([1, 2, 3]);
+    releaseSleeps.shift()?.();
+    await tick();
+    expect(started).toEqual([1, 2, 3, 4]);
+
+    const result = await resultPromise;
+    expect(result).toEqual([1, 2, 3, 4]);
+    expect(sleeps).toEqual([25, 25, 25]);
+  });
+
+  it("resolves a default worker startup stagger for concurrent suite workers", () => {
+    expect(resolveQaSuiteWorkerStartStaggerMs(1, {})).toBe(0);
+    expect(resolveQaSuiteWorkerStartStaggerMs(4, {})).toBe(1500);
+    expect(
+      resolveQaSuiteWorkerStartStaggerMs(4, {
+        OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "0",
+      }),
+    ).toBe(0);
   });
 
   it("keeps explicitly requested provider-specific scenarios", () => {

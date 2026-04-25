@@ -14,7 +14,11 @@ import {
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
 } from "./manager/outbound.js";
-import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./manager/store.js";
+import {
+  getCallHistoryFromStore,
+  loadActiveCallsFromStore,
+  persistCallRecord,
+} from "./manager/store.js";
 import { startMaxDurationTimer } from "./manager/timers.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import {
@@ -25,6 +29,12 @@ import {
   type OutboundCallOptions,
 } from "./types.js";
 import { resolveUserPath } from "./utils.js";
+
+function markRestoredCallSkipped(call: CallRecord, endReason: "completed" | "timeout"): void {
+  call.endedAt = Date.now();
+  call.endReason = endReason;
+  call.state = endReason;
+}
 
 function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
   const rawOverride = storePath?.trim() || config.store?.trim();
@@ -117,6 +127,7 @@ export class CallManager {
         startMaxDurationTimer({
           ctx: this.getContext(),
           callId,
+          timeoutMs: maxDurationMs - elapsed,
           onTimeout: async (id) => {
             await endCallWithContext(this.getContext(), id, { reason: "timeout" });
           },
@@ -160,6 +171,20 @@ export class CallManager {
         console.log(
           `[voice-call] Skipping restored call ${callId} (older than maxDurationSeconds)`,
         );
+        markRestoredCallSkipped(call, "timeout");
+        persistCallRecord(this.storePath, call);
+        await provider
+          .hangupCall({
+            callId,
+            providerCallId: call.providerCallId,
+            reason: "timeout",
+          })
+          .catch((err) => {
+            console.warn(
+              `[voice-call] Failed to hang up expired restored call ${callId}:`,
+              err instanceof Error ? err.message : String(err),
+            );
+          });
         continue;
       }
 
@@ -173,6 +198,8 @@ export class CallManager {
               console.log(
                 `[voice-call] Skipping restored call ${callId} (provider status: ${result.status})`,
               );
+              markRestoredCallSkipped(call, "completed");
+              persistCallRecord(this.storePath, call);
             } else if (result.isUnknown) {
               console.log(
                 `[voice-call] Keeping restored call ${callId} (provider status unknown, relying on timer)`,
@@ -307,6 +334,9 @@ export class CallManager {
     // is actually available; otherwise speak immediately on answered.
     const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
     if (mode === "conversation") {
+      if (this.config.realtime.enabled) {
+        return;
+      }
       const shouldWaitForStreamConnect =
         this.shouldDeferConversationInitialMessageUntilStreamConnect();
       if (shouldWaitForStreamConnect) {

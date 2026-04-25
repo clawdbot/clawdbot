@@ -103,7 +103,7 @@ describe("MediaStreamHandler TTS queue", () => {
       started.push("active");
       await waitForAbort(signal);
     });
-    void handler.queueTts("stream-1", async () => {
+    const queued = handler.queueTts("stream-1", async () => {
       queuedRan = true;
     });
 
@@ -112,8 +112,35 @@ describe("MediaStreamHandler TTS queue", () => {
 
     handler.clearTtsQueue("stream-1");
     await active;
+    await withTimeout(queued);
     await flush();
 
+    expect(queuedRan).toBe(false);
+  });
+
+  it("resolves pending queued playback during stream teardown", async () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+    });
+
+    let queuedRan = false;
+    const active = handler.queueTts("stream-1", async (signal) => {
+      await waitForAbort(signal);
+    });
+    const queued = handler.queueTts("stream-1", async () => {
+      queuedRan = true;
+    });
+
+    await flush();
+    (
+      handler as unknown as {
+        clearTtsState(streamSid: string): void;
+      }
+    ).clearTtsState("stream-1");
+
+    await withTimeout(active);
+    await withTimeout(queued);
     expect(queuedRan).toBe(false);
   });
 });

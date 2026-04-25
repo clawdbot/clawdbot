@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveStateDir } from "../../config/paths.js";
+import type { ReplyToMode } from "../../config/types.js";
 import { generateSecureUuid } from "../secure-random.js";
+import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
@@ -22,6 +24,8 @@ export type QueuedDeliveryPayload = {
   payloads: ReplyPayload[];
   threadId?: string | number | null;
   replyToId?: string | null;
+  replyToMode?: ReplyToMode;
+  formatting?: OutboundDeliveryFormattingOptions;
   bestEffort?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
@@ -142,6 +146,8 @@ export async function enqueueDelivery(
     payloads: params.payloads,
     threadId: params.threadId,
     replyToId: params.replyToId,
+    replyToMode: params.replyToMode,
+    formatting: params.formatting,
     bestEffort: params.bestEffort,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,

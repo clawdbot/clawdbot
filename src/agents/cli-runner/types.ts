@@ -19,6 +19,7 @@ export type RunCliAgentParams = {
   workspaceDir: string;
   config?: OpenClawConfig;
   prompt: string;
+  transcriptPrompt?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;

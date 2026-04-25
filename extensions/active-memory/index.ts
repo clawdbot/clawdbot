@@ -787,6 +787,7 @@ function buildRecallPrompt(params: {
     "Your job is to search memory and return only the most relevant memory context for that model.",
     "You receive conversation context, including the user's latest message.",
     "Use only memory_search and memory_get.",
+    "When searching for preference or habit recall, use a permissive memory_search threshold before deciding that no useful memory exists.",
     "Do not answer the user directly.",
     `Prompt style: ${params.config.promptStyle}.`,
     ...buildPromptStyleLines(params.config.promptStyle),
@@ -1684,6 +1685,7 @@ async function runRecallSubagent(params: {
       thinkLevel: params.config.thinking,
       reasoningLevel: "off",
       silentExpected: true,
+      cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
     });
     if (params.abortSignal?.aborted) {

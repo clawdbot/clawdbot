@@ -453,6 +453,26 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
   });
 
+  it("drops replayable reasoning when requested even with following content", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any, { dropReplayableReasoning: true })).toEqual(
+      [{ role: "assistant", content: [{ type: "text", text: "answer" }] }],
+    );
+  });
+
   it("drops orphaned reasoning blocks without following content", () => {
     const input = [
       {

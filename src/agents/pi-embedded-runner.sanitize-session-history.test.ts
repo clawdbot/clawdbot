@@ -688,20 +688,181 @@ describe("sanitizeSessionHistory", () => {
     expect(result[1]?.role).toBe("assistant");
   });
 
-  it("synthesizes missing tool results for openai-responses after repair", async () => {
+  it("synthesizes Codex-style aborted tool results for openai-responses after repair", async () => {
     const messages: AgentMessage[] = [
+      makeUserMessage("start"),
       makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }], {
         stopReason: "toolUse",
+      }),
+      makeUserMessage("continue"),
+    ];
+
+    const result = await sanitizeOpenAIHistory(messages);
+
+    expect(result.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
+    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("call1");
+    expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+      { type: "text", text: "aborted" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("missing tool result");
+  });
+
+  it("synthesizes Codex-style aborted tool results for openai-codex-responses", async () => {
+    const messages: AgentMessage[] = [
+      makeAssistantMessage(
+        [
+          { type: "toolCall", id: "call_a", name: "exec", arguments: {} },
+          { type: "toolCall", id: "call_b", name: "exec", arguments: {} },
+          { type: "toolCall", id: "call_c", name: "exec", arguments: {} },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      makeUserMessage("status?"),
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-codex-responses",
+      provider: "openai-codex",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "toolResult",
+      "user",
+    ]);
+    expect(
+      result.slice(1, 4).map((message) => (message as { toolCallId?: string }).toolCallId),
+    ).toEqual(["calla", "callb", "callc"]);
+    for (const message of result.slice(1, 4)) {
+      expect((message as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+        { type: "text", text: "aborted" },
+      ]);
+    }
+    expect(JSON.stringify(result)).not.toContain("missing tool result");
+  });
+
+  it("keeps real parallel tool results for openai-responses and aborts missing siblings", async () => {
+    const messages: AgentMessage[] = [
+      makeAssistantMessage(
+        [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
+          { type: "toolCall", id: "call_3", name: "write", arguments: {} },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      makeUserMessage("continue"),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
       }),
     ];
 
     const result = await sanitizeOpenAIHistory(messages);
 
-    // repairToolUseResultPairing now runs for all providers (including OpenAI)
-    // to fix orphaned function_call_output items that OpenAI would reject.
-    expect(result).toHaveLength(2);
-    expect(result[0]?.role).toBe("assistant");
-    expect(result[1]?.role).toBe("toolResult");
+    expect(result.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "toolResult",
+      "user",
+    ]);
+    expect(
+      extractToolCallsFromAssistant(result[0] as Extract<AgentMessage, { role: "assistant" }>),
+    ).toMatchObject([
+      { id: "call1", name: "read" },
+      { id: "call2", name: "exec" },
+      { id: "call3", name: "write" },
+    ]);
+    expect(
+      result.slice(1, 4).map((message) => (message as { toolCallId?: string }).toolCallId),
+    ).toEqual(["call1", "call2", "call3"]);
+    expect((result[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+      { type: "text", text: "aborted" },
+    ]);
+    expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+      { type: "text", text: "ok" },
+    ]);
+    expect((result[3] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+      { type: "text", text: "aborted" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("missing tool result");
+  });
+
+  it("applies aborted missing-result repair to azure-openai-responses", async () => {
+    const messages: AgentMessage[] = [
+      makeAssistantMessage([{ type: "toolCall", id: "call_azure", name: "read", arguments: {} }], {
+        stopReason: "toolUse",
+      }),
+      makeUserMessage("continue"),
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "azure-openai-responses",
+      provider: "azure-openai-responses",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("callazure");
+    expect((result[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+      { type: "text", text: "aborted" },
+    ]);
+  });
+
+  it("drops duplicate and orphan OpenAI outputs while preserving the first real result", async () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call_orphan",
+        toolName: "read",
+        content: [{ type: "text", text: "orphan" }],
+        isError: false,
+      }),
+      makeAssistantMessage([{ type: "toolCall", id: "call_keep", name: "read", arguments: {} }], {
+        stopReason: "toolUse",
+      }),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call_keep",
+        toolName: "read",
+        content: [{ type: "text", text: "first" }],
+        isError: false,
+      }),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call_keep",
+        toolName: "read",
+        content: [{ type: "text", text: "duplicate" }],
+        isError: false,
+      }),
+      makeUserMessage("continue"),
+    ];
+
+    const result = await sanitizeOpenAIHistory(messages);
+
+    expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("callkeep");
+    expect((result[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+      { type: "text", text: "first" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("orphan");
+    expect(JSON.stringify(result)).not.toContain("duplicate");
   });
 
   it.each([
@@ -789,7 +950,42 @@ describe("sanitizeSessionHistory", () => {
       sanitizeSessionHistory,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        usage: makeZeroUsageSnapshot(),
+      },
+    ]);
+  });
+
+  it("keeps paired openai reasoning when the model snapshot stays the same", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({
+      thinkingSignature: "json",
+      includeText: true,
+    });
+
+    const result = await sanitizeWithOpenAIResponses({
+      sanitizeSessionHistory,
+      messages,
+      modelId: "gpt-5.4",
+      sessionManager,
+    });
+
+    expect(result).toEqual([
+      {
+        ...(messages[0] as Record<string, unknown>),
+        usage: makeZeroUsageSnapshot(),
+      },
+    ]);
   });
 
   it("drops orphaned toolResult entries when switching from openai history to anthropic", async () => {

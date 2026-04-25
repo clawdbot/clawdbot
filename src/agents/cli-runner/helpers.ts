@@ -71,6 +71,7 @@ export function buildSystemPrompt(params: {
   ownerNumbers?: string[];
   heartbeatPrompt?: string;
   docsPath?: string;
+  sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   skillsPrompt?: string;
@@ -109,6 +110,7 @@ export function buildSystemPrompt(params: {
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
+    sourcePath: params.sourcePath,
     acpEnabled: params.config?.acp?.enabled !== false,
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),

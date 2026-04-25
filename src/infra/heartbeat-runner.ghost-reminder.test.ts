@@ -347,7 +347,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       reason: "exec-event",
       target: "none",
       enqueue: (sessionKey) => {
-        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
       },
     });
 
@@ -356,6 +356,23 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("includes untrusted exec completion details in user-relay prompts", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-untrusted-relay-",
+      replyText: "Deploy succeeded",
+      reason: "exec-event",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
+    expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
+    expect(sendTelegram).toHaveBeenCalled();
   });
 
   it("classifies hook:wake exec completions as exec-event prompts", async () => {

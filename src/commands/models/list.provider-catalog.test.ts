@@ -6,10 +6,17 @@ import {
 } from "./list.provider-catalog.js";
 
 const providerDiscoveryMocks = vi.hoisted(() => ({
+  loadInstalledPluginIndex: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
+  resolveInstalledPluginContributions: vi.fn(),
   resolveOwningPluginIdsForProvider: vi.fn(),
   resolvePluginDiscoveryProviders: vi.fn(),
   resolveProviderContractPluginIdsForProviderAlias: vi.fn(),
+}));
+
+vi.mock("../../plugins/installed-plugin-index.js", () => ({
+  loadInstalledPluginIndex: providerDiscoveryMocks.loadInstalledPluginIndex,
+  resolveInstalledPluginContributions: providerDiscoveryMocks.resolveInstalledPluginContributions,
 }));
 
 vi.mock("../../plugins/providers.js", () => ({
@@ -102,9 +109,34 @@ const catalogOnlyProvider = {
 
 const defaultProviders = [chutesProvider, moonshotProvider, openaiProvider];
 
+function createContributionMaps(params: {
+  providers?: ReadonlyMap<string, readonly string[]>;
+  cliBackends?: ReadonlyMap<string, readonly string[]>;
+}) {
+  return {
+    providers: params.providers ?? new Map(),
+    channels: new Map(),
+    channelConfigs: new Map(),
+    setupProviders: new Map(),
+    cliBackends: params.cliBackends ?? new Map(),
+    modelCatalogProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  };
+}
+
 describe("loadProviderCatalogModelsForList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    providerDiscoveryMocks.loadInstalledPluginIndex.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    providerDiscoveryMocks.resolveInstalledPluginContributions.mockReturnValue(
+      createContributionMaps({
+        providers: new Map(defaultProviders.map((provider) => [provider.id, [provider.pluginId]])),
+      }),
+    );
     providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValue([
       "chutes",
       "moonshot",
@@ -167,6 +199,22 @@ describe("loadProviderCatalogModelsForList", () => {
     );
   });
 
+  it("resolves provider owners from the installed plugin index before manifest fallback", async () => {
+    await expect(
+      resolveProviderCatalogPluginIdsForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "moonshot",
+      }),
+    ).resolves.toEqual(["moonshot"]);
+
+    expect(providerDiscoveryMocks.loadInstalledPluginIndex).toHaveBeenCalledWith({
+      config: baseParams.cfg,
+      env: baseParams.env,
+    });
+    expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+  });
+
   it("returns an empty catalog when a static provider catalog throws", async () => {
     providerDiscoveryMocks.resolvePluginDiscoveryProviders.mockResolvedValueOnce([
       {
@@ -224,6 +272,9 @@ describe("loadProviderCatalogModelsForList", () => {
   });
 
   it("does not skip registry for non-bundled static catalog owners", async () => {
+    providerDiscoveryMocks.resolveInstalledPluginContributions.mockReturnValueOnce(
+      createContributionMaps({}),
+    );
     providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce([
       "workspace-static-provider",
     ]);
@@ -241,6 +292,10 @@ describe("loadProviderCatalogModelsForList", () => {
   });
 
   it("recognizes bundled provider hook aliases before the unknown-provider short-circuit", async () => {
+    providerDiscoveryMocks.resolveInstalledPluginContributions.mockReturnValueOnce(
+      createContributionMaps({}),
+    );
+
     await expect(
       resolveProviderCatalogPluginIdsForFilter({
         cfg: baseParams.cfg,
@@ -291,6 +346,10 @@ describe("loadProviderCatalogModelsForList", () => {
   });
 
   it("keeps unknown provider filters eligible for early empty results", async () => {
+    providerDiscoveryMocks.resolveInstalledPluginContributions.mockReturnValueOnce(
+      createContributionMaps({}),
+    );
+
     await expect(
       resolveProviderCatalogPluginIdsForFilter({
         cfg: baseParams.cfg,

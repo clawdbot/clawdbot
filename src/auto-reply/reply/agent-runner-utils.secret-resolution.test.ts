@@ -17,7 +17,8 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
     hoisted.getScopedChannelsCommandSecretTargetsMock(...args),
 }));
 
-const { resolveQueuedReplyExecutionConfig } = await import("./agent-runner-utils.js");
+const { resolveQueuedReplyExecutionConfig, resolveQueuedReplyRuntimeConfig } =
+  await import("./agent-runner-utils.js");
 const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
   await import("../../config/config.js");
 
@@ -144,5 +145,47 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
       channel: "discord",
       accountId: undefined,
     });
+  });
+
+  it("does not replace an already resolved run config with a stale runtime snapshot", () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const staleRuntimeConfig = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: "stale-runtime-key",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const scopedResolvedConfig = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: "fresh-scoped-key",
+            models: [],
+          },
+        },
+      },
+      tools: {
+        experimental: {
+          planTool: true,
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(staleRuntimeConfig, sourceConfig);
+
+    expect(resolveQueuedReplyRuntimeConfig(structuredClone(sourceConfig))).toBe(staleRuntimeConfig);
+    expect(resolveQueuedReplyRuntimeConfig(scopedResolvedConfig)).toBe(scopedResolvedConfig);
   });
 });

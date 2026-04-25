@@ -424,11 +424,25 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 - ✅ Interactive cards (including streaming updates)
 - ⚠️ Rich text (post-style formatting; doesn't support full Feishu/Lark authoring capabilities)
 
+Native Feishu/Lark audio bubbles use the Feishu `audio` message type and require
+Ogg/Opus upload media (`file_type: "opus"`). Existing `.opus` and `.ogg` media
+is sent directly as native audio. MP3/WAV/M4A and other likely audio formats are
+transcoded to 48kHz Ogg/Opus with `ffmpeg` only when the reply requests voice
+delivery (`audioAsVoice` / message tool `asVoice`, including TTS voice-note
+replies). Ordinary MP3 attachments stay regular files. If `ffmpeg` is missing or
+conversion fails, OpenClaw falls back to a file attachment and logs the reason.
+
 ### Threads and replies
 
 - ✅ Inline replies
 - ✅ Thread replies
 - ✅ Media replies stay thread-aware when replying to a thread message
+
+For `groupSessionScope: "group_topic"` and `"group_topic_sender"`, native
+Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the canonical
+topic session key. Normal group replies that OpenClaw turns into threads keep
+using the reply root message ID (`om_*`) so the first turn and follow-up turn
+stay in the same session.
 
 ---
 

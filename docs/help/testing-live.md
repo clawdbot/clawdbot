@@ -13,6 +13,35 @@ For quick start, QA runners, unit/integration suites, and Docker flows, see
 suites: model matrix, CLI backends, ACP, and media-provider live tests, plus
 credential handling.
 
+## Live: local profile smoke commands
+
+Source `~/.profile` before ad hoc live checks so provider keys and local tool
+paths match your shell:
+
+```bash
+source ~/.profile
+```
+
+Safe media smoke:
+
+```bash
+pnpm openclaw infer tts convert --local --json \
+  --text "OpenClaw live smoke." \
+  --output /tmp/openclaw-live-smoke.mp3
+```
+
+Safe voice-call readiness smoke:
+
+```bash
+pnpm openclaw voicecall setup --json
+pnpm openclaw voicecall smoke --to "+15555550123"
+```
+
+`voicecall smoke` is a dry run unless `--yes` is also present. Use `--yes` only
+when you intentionally want to place a real notify call. For Twilio, Telnyx, and
+Plivo, a successful readiness check requires a public webhook URL; local-only
+loopback/private fallbacks are rejected by design.
+
 ## Live: Android node capability sweep
 
 - Test: `src/gateway/android-node.capabilities.live.test.ts`
@@ -48,7 +77,7 @@ Live tests are split into two layers so we can isolate failures:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - Set `OPENCLAW_LIVE_MODELS=modern` (or `all`, alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
 - How to select models:
-  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
+  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
   - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-6,..."` (comma allowlist)
   - Modern/all sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
@@ -82,7 +111,7 @@ Live tests are split into two layers so we can isolate failures:
 - How to enable:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - How to select models:
-  - Default: modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
+  - Default: modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
   - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
   - Modern/all gateway sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
@@ -120,11 +149,12 @@ openclaw models list --json
   - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.2"`
   - `OPENCLAW_LIVE_CLI_BACKEND_COMMAND="/full/path/to/codex"`
   - `OPENCLAW_LIVE_CLI_BACKEND_ARGS='["exec","--json","--color","never","--sandbox","read-only","--skip-git-repo-check"]'`
-  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=1` to send a real image attachment (paths are injected into the prompt).
+  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=1` to send a real image attachment (paths are injected into the prompt). Docker recipes default this off unless explicitly requested.
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
   - `OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
-  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE=0` to disable the default Claude Sonnet -> Opus same-session continuity probe (set to `1` to force it on when the selected model supports a switch target).
+  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE=1` to opt into the Claude Sonnet -> Opus same-session continuity probe when the selected model supports a switch target. Docker recipes default this off for aggregate reliability.
+  - `OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE=1` to opt into the MCP/tool loopback probe. Docker recipes default this off unless explicitly requested.
 
 Example:
 
@@ -287,11 +317,16 @@ Narrow, explicit allowlists are fastest and least flaky:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Tool calling across several providers:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,deepseek/deepseek-v4-flash,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
   - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
   - Antigravity (OAuth): `OPENCLAW_LIVE_GATEWAY_MODELS="google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-pro-high" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+
+- Google adaptive thinking smoke:
+  - If local keys live in shell profile: `source ~/.profile`
+  - Gemini 3 dynamic default: `pnpm openclaw qa manual --provider-mode live-frontier --model google/gemini-3.1-pro-preview --alt-model google/gemini-3.1-pro-preview --message '/think adaptive Reply exactly: GEMINI_ADAPTIVE_OK' --timeout-ms 180000`
+  - Gemini 2.5 dynamic budget: `pnpm openclaw qa manual --provider-mode live-frontier --model google/gemini-2.5-flash --alt-model google/gemini-2.5-flash --message '/think adaptive Reply exactly: GEMINI25_ADAPTIVE_OK' --timeout-ms 180000`
 
 Notes:
 
@@ -315,11 +350,12 @@ This is the “common models” run we expect to keep working:
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
+- DeepSeek: `deepseek/deepseek-v4-flash` and `deepseek/deepseek-v4-pro`
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/MiniMax-M2.7`
 
 Run gateway smoke with tools + image:
-`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,deepseek/deepseek-v4-flash,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Exec)
 
@@ -328,6 +364,7 @@ Pick at least one per provider family:
 - OpenAI: `openai/gpt-5.2`
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google: `google/gemini-3-flash-preview` (or `google/gemini-3.1-pro-preview`)
+- DeepSeek: `deepseek/deepseek-v4-flash`
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/MiniMax-M2.7`
 
@@ -387,7 +424,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Enable: `OPENCLAW_LIVE_TEST=1 COMFY_LIVE_TEST=1 pnpm test:live -- extensions/comfy/comfy.live.test.ts`
 - Scope:
   - Exercises the bundled comfy image, video, and `music_generate` paths
-  - Skips each capability unless `models.providers.comfy.<capability>` is configured
+  - Skips each capability unless `plugins.entries.comfy.config.<capability>` is configured
   - Useful after changing comfy workflow submission, polling, downloads, or plugin registration
 
 ## Image generation live
@@ -400,11 +437,9 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - Loads missing provider env vars from your login shell (`~/.profile`) before probing
   - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
-  - Runs the stock image-generation variants through the shared runtime capability:
-    - `google:flash-generate`
-    - `google:pro-generate`
-    - `google:pro-edit`
-    - `openai:default-generate`
+  - Runs each configured provider through the shared image-generation runtime:
+    - `<provider>:generate`
+    - `<provider>:edit` when the provider declares edit support
 - Current bundled providers covered:
   - `fal`
   - `google`
@@ -419,6 +454,23 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit,openrouter:generate,xai:default-generate,xai:default-edit"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
+
+For the shipped CLI path, add an `infer` smoke after the provider/runtime live
+test passes:
+
+```bash
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_INFER_CLI_TEST=1 pnpm test:live -- test/image-generation.infer-cli.live.test.ts
+openclaw infer image providers --json
+openclaw infer image generate \
+  --model google/gemini-3.1-flash-image-preview \
+  --prompt "Minimal flat test image: one blue square on a white background, no text." \
+  --output ./openclaw-infer-image-smoke.png \
+  --json
+```
+
+This covers CLI argument parsing, config/default-agent resolution, bundled
+plugin activation, on-demand bundled runtime-dependency repair, the shared
+image-generation runtime, and the live provider request.
 
 ## Music generation live
 

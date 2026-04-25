@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   parity-gate:
-    name: Run the GPT-5.4 / Opus 4.6 parity gate against the qa-lab mock
+    name: Run the OpenAI / Opus 4.6 parity gate against the qa-lab mock
     if: ${{ github.event.pull_request.draft != true }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 30
@@ -42,6 +42,7 @@ jobs:
       # followthrough gate that expects a fast post-approval read within a 30s
       # agent.wait timeout.
       QA_PARITY_CONCURRENCY: "1"
+      OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL }}
       OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
@@ -75,13 +76,13 @@ jobs:
       # The approval-turn sentinel still runs inside the full parity pack below.
       # Keep the exact mock read-plan contract in deterministic unit tests instead
       # of paying for a separate full-runtime preflight that has been flaky in CI.
-      - name: Run GPT-5.4 lane
+      - name: Run OpenAI candidate lane
         run: |
           pnpm openclaw qa suite \
             --provider-mode mock-openai \
             --parity-pack agentic \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
-            --model openai/gpt-5.4 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model openai/gpt-5.4-alt \
             --output-dir .artifacts/qa-e2e/gpt54
 
@@ -101,7 +102,7 @@ jobs:
             --repo-root . \
             --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
             --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
-            --candidate-label openai/gpt-5.4 \
+            --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
             --baseline-label anthropic/claude-opus-4-6 \
             --output-dir .artifacts/qa-e2e/parity
 

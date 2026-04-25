@@ -21,6 +21,13 @@ describe("minimax onboard", () => {
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
   });
 
+  it("keeps MiniMax chat models text-only so image tools use MiniMax-VL-01", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.7-highspeed");
+    expect(cfg.models?.providers?.minimax?.models).toEqual([
+      expect.objectContaining({ id: "MiniMax-M2.7-highspeed", input: ["text"] }),
+    ]);
+  });
+
   it("preserves existing model params when adding alias", () => {
     const cfg = applyMinimaxApiConfig(
       {

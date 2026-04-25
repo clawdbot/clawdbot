@@ -87,7 +87,7 @@ describe("before_tool_call loop detection behavior", () => {
   }
 
   async function withToolExecutionEvents(
-    run: (emitted: DiagnosticEventPayload[]) => Promise<void>,
+    run: (emitted: DiagnosticEventPayload[], flush: () => Promise<void>) => Promise<void>,
   ) {
     const emitted: DiagnosticEventPayload[] = [];
     const stop = onDiagnosticEvent((evt) => {
@@ -95,8 +95,9 @@ describe("before_tool_call loop detection behavior", () => {
         emitted.push(evt);
       }
     });
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
     try {
-      await run(emitted);
+      await run(emitted, flush);
     } finally {
       stop();
     }
@@ -367,13 +368,14 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withToolExecutionEvents(async (emitted) => {
+    await withToolExecutionEvents(async (emitted, flush) => {
       await tool.execute(
         "tool-call-1",
         { command: "pwd", token: "sk-1234567890abcdef1234567890abcdef" },
         undefined,
         undefined,
       );
+      await flush();
 
       expect(emitted.map((evt) => evt.type)).toEqual([
         "tool.execution.started",
@@ -412,10 +414,11 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withToolExecutionEvents(async (emitted) => {
+    await withToolExecutionEvents(async (emitted, flush) => {
       await expect(
         tool.execute("tool-call-error", { path: "/tmp/file" }, undefined, undefined),
       ).rejects.toThrow("failed with key");
+      await flush();
 
       expect(emitted.map((evt) => evt.type)).toEqual([
         "tool.execution.started",
@@ -429,6 +432,71 @@ describe("before_tool_call loop detection behavior", () => {
         errorCategory: "Error",
       });
       expect(JSON.stringify(emitted[1])).not.toContain("sk-1234567890abcdef1234567890abcdef");
+    });
+  });
+
+  it("does not let hostile thrown values break diagnostic error emission", async () => {
+    const hostileError = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("diagnostic getter should not run");
+        },
+        getOwnPropertyDescriptor() {
+          throw new Error("diagnostic descriptor failed");
+        },
+      },
+    );
+    const execute = vi.fn().mockRejectedValue(hostileError);
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("tool-call-hostile-error", { path: "/tmp/file" }, undefined, undefined),
+      ).rejects.toBe(hostileError);
+      await flush();
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.error",
+      ]);
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.error",
+        toolName: "read",
+        toolCallId: "tool-call-hostile-error",
+        errorCategory: "object",
+      });
+      expect(emitted[1]).not.toHaveProperty("errorCode");
+    });
+  });
+
+  it("emits only numeric HTTP status codes as diagnostic tool error codes", async () => {
+    const error = Object.assign(new Error("rate limited"), {
+      code: "SECRET_TOKEN",
+      status: 429,
+    });
+    const execute = vi.fn().mockRejectedValue(error);
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("tool-call-status-code", { path: "/tmp/file" }, undefined, undefined),
+      ).rejects.toThrow("rate limited");
+      await flush();
+
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.error",
+        errorCode: "429",
+      });
+      expect(JSON.stringify(emitted[1])).not.toContain("SECRET_TOKEN");
     });
   });
 
@@ -448,8 +516,9 @@ describe("before_tool_call loop detection behavior", () => {
       },
     );
 
-    await withToolExecutionEvents(async (emitted) => {
+    await withToolExecutionEvents(async (emitted, flush) => {
       await tool.execute("tool-call-proxy", params, undefined, undefined);
+      await flush();
 
       expect(emitted[0]).toMatchObject({
         type: "tool.execution.started",

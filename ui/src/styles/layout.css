@@ -1024,6 +1024,7 @@
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 0;
+  overflow: visible;
 }
 
 .content--chat .content-header > div:first-child {
@@ -1032,6 +1033,7 @@
 
 .content--chat .page-meta {
   justify-content: flex-start;
+  overflow: visible;
 }
 
 .content--chat .chat-controls {

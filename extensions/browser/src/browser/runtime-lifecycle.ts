@@ -3,6 +3,7 @@ import { getPwAiModule } from "./pw-ai-module.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import type { BrowserServerState } from "./server-context.js";
 import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
+import { startTrackedBrowserTabCleanupTimer } from "./session-tab-cleanup.js";
 
 export async function createBrowserRuntimeState(params: {
   resolved: BrowserServerState["resolved"];
@@ -16,6 +17,9 @@ export async function createBrowserRuntimeState(params: {
     resolved: params.resolved,
     profiles: new Map(),
   };
+  state.stopTrackedTabCleanup = startTrackedBrowserTabCleanupTimer({
+    onWarn: params.onWarn,
+  });
 
   await ensureExtensionRelayForProfiles({
     resolved: params.resolved,
@@ -35,6 +39,7 @@ export async function stopBrowserRuntime(params: {
   if (!params.current) {
     return;
   }
+  params.current.stopTrackedTabCleanup?.();
 
   await stopKnownBrowserProfiles({
     getState: params.getState,

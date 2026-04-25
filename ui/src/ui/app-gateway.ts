@@ -43,7 +43,12 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
-import { loadSessions, subscribeSessions, type SessionsState } from "./controllers/sessions.ts";
+import {
+  applySessionsChangedEvent,
+  loadSessions,
+  subscribeSessions,
+  type SessionsState,
+} from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,
@@ -482,6 +487,7 @@ function handleSessionMessageGatewayEvent(
   host: GatewayHost,
   payload: { sessionKey?: string } | undefined,
 ) {
+  applySessionsChangedEvent(host as unknown as SessionsState, payload);
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const sessionKey = payload?.sessionKey?.trim();
   if (!sessionKey || sessionKey !== host.sessionKey) {
@@ -568,6 +574,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
+    applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
     void loadSessions(host as unknown as SessionsState);
     return;
   }

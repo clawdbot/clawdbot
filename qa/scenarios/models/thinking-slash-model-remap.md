@@ -10,7 +10,15 @@ coverage:
   secondary:
     - models.switching
     - runtime.session-continuity
-objective: Verify /think lists provider-owned levels and remaps stored thinking levels when /model changes provider capabilities.
+objective: Verify /think lists provider-owned levels and remaps stored thinking levels when the session model changes provider capabilities.
+plugins:
+  - anthropic
+gatewayConfigPatch:
+  agents:
+    defaults:
+      models:
+        anthropic/claude-sonnet-4-6:
+          params: {}
 successCriteria:
   - Anthropic Claude Sonnet 4.6 advertises adaptive but not OpenAI-only xhigh or Opus max.
   - A stored adaptive level remaps to medium when switching to OpenAI GPT-5.4.
@@ -35,7 +43,8 @@ execution:
     anthropicModelRef: anthropic/claude-sonnet-4-6
     openAiXhighModelRef: openai/gpt-5.4
     noXhighModelRef: anthropic/claude-sonnet-4-6
-    conversationId: qa-thinking-slash-remap
+    conversationId: thinking-slash-remap
+    sessionKey: agent:qa:main
 ```
 
 ```yaml qa-flow
@@ -55,25 +64,9 @@ steps:
           expr: "env.providerMode === config.requiredProviderMode"
           message:
             expr: "`thinking remap scenario requires ${config.requiredProviderMode}; got ${env.providerMode}`"
-      - set: cursor
+      - set: anthropicModelAck
         value:
-          expr: state.getSnapshot().messages.length
-      - call: state.addInboundMessage
-        args:
-          - conversation:
-              id:
-                expr: config.conversationId
-              kind: direct
-            senderId: qa-operator
-            senderName: QA Operator
-            text:
-              expr: "`/model ${config.anthropicModelRef}`"
-      - call: waitForCondition
-        saveAs: anthropicModelAck
-        args:
-          - lambda:
-              expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate.text.includes(`Model set to ${config.anthropicModelRef}`)).at(-1)"
-          - expr: liveTurnTimeoutMs(env, 20000)
+          expr: "await env.gateway.call('sessions.patch', { key: config.sessionKey, model: config.anthropicModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
       - set: cursor
         value:
           expr: state.getSnapshot().messages.length
@@ -100,7 +93,7 @@ steps:
           expr: "!/Options: .*\\bxhigh\\b/i.test(anthropicThinkStatus.text) && !/Options: .*\\bmax\\b/i.test(anthropicThinkStatus.text)"
           message:
             expr: "`expected Sonnet /think options to omit xhigh/max, got ${anthropicThinkStatus.text}`"
-    detailsExpr: "`model=${anthropicModelAck.text}; think=${anthropicThinkStatus.text}`"
+    detailsExpr: "`model=${JSON.stringify(anthropicModelAck.resolved)}; think=${anthropicThinkStatus.text}`"
   - name: maps adaptive to medium when switching to OpenAI
     actions:
       - set: cursor
@@ -121,29 +114,13 @@ steps:
           - lambda:
               expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Thinking level set to adaptive/i.test(candidate.text)).at(-1)"
           - expr: liveTurnTimeoutMs(env, 20000)
-      - set: cursor
+      - set: openAiModelAck
         value:
-          expr: state.getSnapshot().messages.length
-      - call: state.addInboundMessage
-        args:
-          - conversation:
-              id:
-                expr: config.conversationId
-              kind: direct
-            senderId: qa-operator
-            senderName: QA Operator
-            text:
-              expr: "`/model ${config.openAiXhighModelRef}`"
-      - call: waitForCondition
-        saveAs: openAiModelAck
-        args:
-          - lambda:
-              expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate.text.includes(config.openAiXhighModelRef) && /Model (set to|reset to default)/i.test(candidate.text)).at(-1)"
-          - expr: liveTurnTimeoutMs(env, 20000)
+          expr: "await env.gateway.call('sessions.patch', { key: config.sessionKey, model: config.openAiXhighModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
       - assert:
-          expr: "/Thinking level set to medium \\(adaptive not supported for openai\\/gpt-5\\.4\\)/i.test(openAiModelAck.text)"
+          expr: "openAiModelAck.entry?.thinkingLevel === 'medium'"
           message:
-            expr: "`expected adaptive->medium remap, got ${openAiModelAck.text}`"
+            expr: "`expected adaptive->medium remap, got ${JSON.stringify(openAiModelAck.entry)}`"
       - set: cursor
         value:
           expr: state.getSnapshot().messages.length
@@ -166,7 +143,7 @@ steps:
           expr: "/Options: .*\\bxhigh\\b/i.test(openAiThinkStatus.text) && !/Options: .*\\badaptive\\b/i.test(openAiThinkStatus.text) && !/Options: .*\\bmax\\b/i.test(openAiThinkStatus.text)"
           message:
             expr: "`expected OpenAI GPT-5.4 /think options to include xhigh only, got ${openAiThinkStatus.text}`"
-    detailsExpr: "`adaptive=${adaptiveAck.text}; switch=${openAiModelAck.text}; think=${openAiThinkStatus.text}`"
+    detailsExpr: "`adaptive=${adaptiveAck.text}; switch=${JSON.stringify(openAiModelAck.resolved)}; think=${openAiThinkStatus.text}`"
   - name: maps xhigh to high on a model without xhigh
     actions:
       - set: cursor
@@ -187,29 +164,13 @@ steps:
           - lambda:
               expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Thinking level set to xhigh/i.test(candidate.text)).at(-1)"
           - expr: liveTurnTimeoutMs(env, 20000)
-      - set: cursor
+      - set: noXhighModelAck
         value:
-          expr: state.getSnapshot().messages.length
-      - call: state.addInboundMessage
-        args:
-          - conversation:
-              id:
-                expr: config.conversationId
-              kind: direct
-            senderId: qa-operator
-            senderName: QA Operator
-            text:
-              expr: "`/model ${config.noXhighModelRef}`"
-      - call: waitForCondition
-        saveAs: noXhighModelAck
-        args:
-          - lambda:
-              expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate.text.includes(config.noXhighModelRef) && /Model (set to|reset to default)/i.test(candidate.text)).at(-1)"
-          - expr: liveTurnTimeoutMs(env, 20000)
+          expr: "await env.gateway.call('sessions.patch', { key: config.sessionKey, model: config.noXhighModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
       - assert:
-          expr: "/Thinking level set to high \\(xhigh not supported for anthropic\\/claude-sonnet-4-6\\)/i.test(noXhighModelAck.text)"
+          expr: "noXhighModelAck.entry?.thinkingLevel === 'high'"
           message:
-            expr: "`expected xhigh->high remap, got ${noXhighModelAck.text}`"
+            expr: "`expected xhigh->high remap, got ${JSON.stringify(noXhighModelAck.entry)}`"
       - set: cursor
         value:
           expr: state.getSnapshot().messages.length
@@ -232,5 +193,5 @@ steps:
           expr: "/Options: .*\\badaptive\\b/i.test(noXhighThinkStatus.text) && !/Options: .*\\bxhigh\\b/i.test(noXhighThinkStatus.text) && !/Options: .*\\bmax\\b/i.test(noXhighThinkStatus.text)"
           message:
             expr: "`expected non-xhigh model /think options to include adaptive and omit xhigh/max, got ${noXhighThinkStatus.text}`"
-    detailsExpr: "`xhigh=${xhighAck.text}; switch=${noXhighModelAck.text}; think=${noXhighThinkStatus.text}`"
+    detailsExpr: "`xhigh=${xhighAck.text}; switch=${JSON.stringify(noXhighModelAck.resolved)}; think=${noXhighThinkStatus.text}`"
 ```

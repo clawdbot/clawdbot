@@ -7,6 +7,7 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import {
@@ -18,15 +19,44 @@ import {
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { hasKind } from "./slots.js";
 
+function listDisabledChannelIds(config: OpenClawConfig): Set<string> {
+  const channels = config.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return new Set();
+  }
+  return new Set(
+    Object.entries(channels)
+      .filter(([, value]) => {
+        return (
+          value &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          (value as { enabled?: unknown }).enabled === false
+        );
+      })
+      .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
+      .filter((channelId): channelId is string => Boolean(channelId)),
+  );
+}
+
+function listPotentialEnabledChannelIds(config: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  const disabled = listDisabledChannelIds(config);
+  return listPotentialConfiguredChannelIds(config, env)
+    .map((id) => normalizeOptionalLowercaseString(id) ?? "")
+    .filter((id) => id && !disabled.has(id));
+}
+
 function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
   return Boolean(
     plugin.providers.length > 0 ||
     plugin.cliBackends.length > 0 ||
     plugin.contracts?.speechProviders?.length ||
     plugin.contracts?.mediaUnderstandingProviders?.length ||
+    plugin.contracts?.documentExtractors?.length ||
     plugin.contracts?.imageGenerationProviders?.length ||
     plugin.contracts?.videoGenerationProviders?.length ||
     plugin.contracts?.musicGenerationProviders?.length ||
+    plugin.contracts?.webContentExtractors?.length ||
     plugin.contracts?.webFetchProviders?.length ||
     plugin.contracts?.webSearchProviders?.length ||
     plugin.contracts?.memoryEmbeddingProviders?.length ||
@@ -148,9 +178,7 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
-  );
+  const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
   if (configuredChannelIds.size === 0) {
     return [];
   }
@@ -183,9 +211,7 @@ export function resolveGatewayStartupPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
-  );
+  const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
   const pluginsConfig = normalizePluginsConfig(params.config.plugins);
   // Startup must classify allowlist exceptions against the raw config snapshot,
   // not the auto-enabled effective snapshot, or configured-only channels can be

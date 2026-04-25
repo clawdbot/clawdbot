@@ -444,6 +444,44 @@ describe("google transport stream", () => {
     });
   });
 
+  it("keeps adaptive Gemini 3 thinking on provider dynamic defaults", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3-flash-preview" }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        reasoning: "adaptive",
+      } as never,
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      thinkingConfig: { includeThoughts: true },
+    });
+    expect(params.generationConfig).not.toMatchObject({
+      thinkingConfig: { thinkingLevel: expect.any(String) },
+    });
+    expect(params.generationConfig).not.toMatchObject({
+      thinkingConfig: { thinkingBudget: expect.any(Number) },
+    });
+  });
+
+  it("maps adaptive Gemini 2.5 thinking to dynamic thinkingBudget", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-2.5-flash" }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        reasoning: "adaptive",
+      } as never,
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      thinkingConfig: { includeThoughts: true, thinkingBudget: -1 },
+    });
+  });
+
   it("normalizes explicit Gemini 3 Pro thinking levels", () => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel({ id: "gemini-3.1-pro-preview" }),

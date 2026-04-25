@@ -24,10 +24,18 @@ export function resolveBrowserControlAuth(
   });
   const token = normalizeOptionalString(auth.token) ?? "";
   const password = normalizeOptionalString(auth.password) ?? "";
-  return {
-    token: token || undefined,
-    password: password || undefined,
-  };
+  const mode = auth.mode;
+
+  switch (mode) {
+    case "password":
+    case "trusted-proxy":
+      return { password: password || undefined };
+    case "token":
+    case "none":
+      return { token: token || undefined };
+    default:
+      return {};
+  }
 }
 
 export function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {

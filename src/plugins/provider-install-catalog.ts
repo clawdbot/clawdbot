@@ -34,6 +34,7 @@ type ProviderInstallCatalogParams = {
 type PreferredInstallSource = {
   origin: PluginOrigin;
   install: PluginPackageInstall;
+  packageName?: string;
 };
 
 const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
@@ -162,6 +163,7 @@ function resolvePreferredInstallsByPluginId(
       preferredByPluginId.set(manifest.manifest.id, {
         origin: candidate.origin,
         install,
+        ...(candidate.packageName ? { packageName: candidate.packageName } : {}),
       });
     }
   }
@@ -184,7 +186,9 @@ export function resolveProviderInstallCatalogEntries(
           label: choice.groupLabel ?? choice.choiceLabel,
           origin: install.origin,
           install: install.install,
-          installSource: describePluginInstallSource(install.install),
+          installSource: describePluginInstallSource(install.install, {
+            expectedPackageName: install.packageName,
+          }),
         } satisfies ProviderInstallCatalogEntry,
       ];
     })

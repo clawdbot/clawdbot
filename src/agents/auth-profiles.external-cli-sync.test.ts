@@ -236,6 +236,59 @@ describe("external cli oauth resolution", () => {
     expect(credential).toBeNull();
   });
 
+  it("bootstraps the default codex profile from Codex CLI credentials when missing locally", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai-codex",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-codex",
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(makeStore());
+
+    expect(profiles).toEqual([
+      {
+        profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        credential: expect.objectContaining({
+          provider: "openai-codex",
+          access: "codex-cli-access",
+          refresh: "codex-cli-refresh",
+          accountId: "acct-codex",
+        }),
+      },
+    ]);
+  });
+
+  it("keeps any existing default codex oauth over Codex CLI bootstrap credentials", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai-codex",
+        access: "codex-cli-fresh-access",
+        refresh: "codex-cli-fresh-refresh",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-codex",
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(
+      makeStore(
+        OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        makeOAuthCredential({
+          provider: "openai-codex",
+          access: "local-expired-access",
+          refresh: "local-canonical-refresh",
+          expires: Date.now() - 5_000,
+          accountId: "acct-codex",
+        }),
+      ),
+    );
+
+    expect(profiles).toEqual([]);
+  });
+
   it("returns null when the profile id/provider do not map to the same external source", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({ provider: "openai-codex" }),

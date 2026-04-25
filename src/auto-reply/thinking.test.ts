@@ -8,6 +8,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
 }));
 
 let listThinkingLevelLabels: typeof import("./thinking.js").listThinkingLevelLabels;
+let listThinkingLevelOptions: typeof import("./thinking.js").listThinkingLevelOptions;
 let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
 let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
 let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
@@ -37,6 +38,7 @@ beforeEach(async () => {
 
   ({
     listThinkingLevelLabels,
+    listThinkingLevelOptions,
     listThinkingLevels,
     normalizeReasoningLevel,
     normalizeThinkLevel,
@@ -142,6 +144,19 @@ describe("listThinkingLevels", () => {
 
     expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("adaptive");
     expect(listThinkingLevels("anthropic", "claude-opus-4-7")).toContain("max");
+  });
+
+  it("preserves provider profile ids and labels", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "adaptive", label: "auto" }, { id: "max", label: "maximum" }],
+      defaultLevel: "adaptive",
+    });
+
+    expect(listThinkingLevelOptions("demo", "demo-model")).toEqual([
+      { id: "off", label: "off" },
+      { id: "adaptive", label: "auto" },
+      { id: "max", label: "maximum" },
+    ]);
   });
 
   it("uses provider thinking profiles ahead of legacy hooks", () => {

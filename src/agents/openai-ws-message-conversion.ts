@@ -627,3 +627,13 @@ export function buildAssistantMessageFromResponse(
     ? ({ ...message, phase: finalAssistantPhase } as AssistantMessageWithPhase)
     : message;
 }
+
+export function convertResponseToInputItems(
+  response: ResponseObject,
+  modelInfo: { api: string; provider: string; id: string; input?: ReadonlyArray<string> },
+): InputItem[] {
+  return convertMessagesToInputItems(
+    [buildAssistantMessageFromResponse(response, modelInfo)] as Message[],
+    modelInfo,
+  );
+}

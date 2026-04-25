@@ -29,13 +29,14 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "console messages",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           const messages = await pw.getConsoleMessagesViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             level: normalizeOptionalString(level),
           });
-          res.json({ ok: true, messages, targetId: tab.targetId });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, messages, targetId: tab.targetId, ...(url ? { url } : {}) });
         },
       });
     }),
@@ -53,13 +54,14 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "page errors",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           const result = await pw.getPageErrorsViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             clear,
           });
-          res.json({ ok: true, targetId: tab.targetId, ...result });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), ...result });
         },
       });
     }),
@@ -78,14 +80,15 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "network requests",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           const result = await pw.getNetworkRequestsViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             filter: normalizeOptionalString(filter),
             clear,
           });
-          res.json({ ok: true, targetId: tab.targetId, ...result });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), ...result });
         },
       });
     }),
@@ -106,7 +109,7 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "trace start",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           await pw.traceStartViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
@@ -114,7 +117,8 @@ export function registerBrowserAgentDebugRoutes(
             snapshots,
             sources,
           });
-          res.json({ ok: true, targetId: tab.targetId });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}) });
         },
       });
     }),
@@ -133,7 +137,7 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "trace stop",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           const id = crypto.randomUUID();
           const tracePath = await resolveWritableOutputPathOrRespond({
             res,
@@ -151,9 +155,11 @@ export function registerBrowserAgentDebugRoutes(
             targetId: tab.targetId,
             path: tracePath,
           });
+          const url = await resolveTabUrl(tab.url);
           res.json({
             ok: true,
             targetId: tab.targetId,
+            ...(url ? { url } : {}),
             path: path.resolve(tracePath),
           });
         },

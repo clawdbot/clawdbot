@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import {
+  createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
@@ -58,7 +59,13 @@ export function createCodexDynamicToolBridge(params: {
     toolMediaUrls: [],
     toolAudioAsVoice: false,
   };
-  const extensionRunner = createCodexAppServerToolResultExtensionRunner(params.hookContext ?? {});
+  const middlewareRunner = createAgentToolResultMiddlewareRunner({
+    runtime: "codex",
+    ...params.hookContext,
+  });
+  const legacyExtensionRunner = createCodexAppServerToolResultExtensionRunner(
+    params.hookContext ?? {},
+  );
 
   return {
     specs: tools.map((tool) => ({
@@ -80,20 +87,31 @@ export function createCodexDynamicToolBridge(params: {
       try {
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
         const rawResult = await tool.execute(call.callId, preparedArgs, params.signal);
-        const result = await extensionRunner.applyToolResultExtensions({
+        const rawIsError = isToolResultError(rawResult);
+        const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
           turnId: call.turnId,
           toolCallId: call.callId,
           toolName: tool.name,
           args,
+          isError: rawIsError,
           result: rawResult,
+        });
+        const result = await legacyExtensionRunner.applyToolResultExtensions({
+          threadId: call.threadId,
+          turnId: call.turnId,
+          toolCallId: call.callId,
+          toolName: tool.name,
+          args,
+          result: middlewareResult,
         });
         collectToolTelemetry({
           toolName: tool.name,
           args,
           result,
+          mediaTrustResult: rawResult,
           telemetry,
-          isError: false,
+          isError: rawIsError || isToolResultError(result),
         });
         void runAgentHarnessAfterToolCallHook({
           toolName: tool.name,
@@ -147,6 +165,7 @@ function collectToolTelemetry(params: {
   toolName: string;
   args: Record<string, unknown>;
   result: AgentToolResult<unknown> | undefined;
+  mediaTrustResult?: AgentToolResult<unknown>;
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
 }): void {
@@ -159,7 +178,11 @@ function collectToolTelemetry(params: {
   if (!params.isError && params.result) {
     const media = extractToolResultMediaArtifact(params.result);
     if (media) {
-      const mediaUrls = filterToolResultMediaUrls(params.toolName, media.mediaUrls, params.result);
+      const mediaUrls = filterToolResultMediaUrls(
+        params.toolName,
+        media.mediaUrls,
+        params.mediaTrustResult ?? params.result,
+      );
       const seen = new Set(params.telemetry.toolMediaUrls);
       for (const mediaUrl of mediaUrls) {
         if (!seen.has(mediaUrl)) {
@@ -191,6 +214,35 @@ function collectToolTelemetry(params: {
     to: readFirstString(params.args, ["to", "target", "recipient"]),
     threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isToolResultError(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  if (!isRecord(details)) {
+    return false;
+  }
+  if (details.timedOut === true) {
+    return true;
+  }
+  if (typeof details.exitCode === "number" && details.exitCode !== 0) {
+    return true;
+  }
+  if (typeof details.status !== "string") {
+    return false;
+  }
+  const status = details.status.trim().toLowerCase();
+  return (
+    status !== "" &&
+    status !== "0" &&
+    status !== "ok" &&
+    status !== "success" &&
+    status !== "completed" &&
+    status !== "running"
+  );
 }
 
 function convertToolContent(

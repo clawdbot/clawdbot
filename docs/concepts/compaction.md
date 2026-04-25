@@ -113,6 +113,11 @@ the summary:
 /compact Focus on the API design decisions
 ```
 
+When `agents.defaults.compaction.keepRecentTokens` is set, manual compaction
+honors that Pi cut-point and keeps the recent tail in rebuilt context. Without
+an explicit keep budget, manual compaction behaves as a hard checkpoint and
+continues from the new summary alone.
+
 ## Using a different model
 
 By default, compaction uses your agent's primary model. You can use a more

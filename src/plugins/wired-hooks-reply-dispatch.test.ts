@@ -81,7 +81,7 @@ describe("reply_dispatch hook runner", () => {
       counts: { tool: 1, block: 0, final: 0 },
     });
     expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("reply_dispatch handler from test-plugin failed: Error: boom"),
+      expect.stringContaining("reply_dispatch handler from test-plugin failed: boom"),
     );
     expect(succeeding).toHaveBeenCalledTimes(1);
   });

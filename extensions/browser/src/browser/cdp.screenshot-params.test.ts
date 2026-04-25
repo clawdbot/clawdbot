@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withCdpSocket } from "./cdp.helpers.js";
 import { captureScreenshot } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { shouldUsePlaywrightForScreenshot } from "./profile-capabilities.js";
@@ -18,44 +19,50 @@ const mockState = vi.hoisted(() => ({
 }));
 
 vi.mock("./cdp.helpers.js", () => ({
-  withCdpSocket: vi.fn(async (_wsUrl: string, fn: (send: unknown) => Promise<unknown>) => {
-    const send = (method: string, params?: Record<string, unknown>) => {
-      sentMessages.push({ method, params });
-      if (method === "Page.captureScreenshot") {
-        return Promise.resolve({ data: "AAAA" });
-      }
-      if (method === "Page.getLayoutMetrics") {
-        return Promise.resolve({
-          cssContentSize: { width: 1200, height: 3000 },
-          contentSize: { width: 1200, height: 3000 },
-        });
-      }
-      if (method === "Emulation.clearDeviceMetricsOverride") {
-        mockState.emulationCleared = true;
-        return Promise.resolve({});
-      }
-      if (method === "Emulation.setDeviceMetricsOverride") {
-        mockState.emulationCleared = false;
-        return Promise.resolve({});
-      }
-      if (method === "Runtime.evaluate") {
-        if (mockState.emulationCleared && mockState.emulatedTab) {
+  withCdpSocket: vi.fn(
+    async (
+      _wsUrl: string,
+      fn: (send: unknown) => Promise<unknown>,
+      _opts?: { commandTimeoutMs?: number },
+    ) => {
+      const send = (method: string, params?: Record<string, unknown>) => {
+        sentMessages.push({ method, params });
+        if (method === "Page.captureScreenshot") {
+          return Promise.resolve({ data: "AAAA" });
+        }
+        if (method === "Page.getLayoutMetrics") {
+          return Promise.resolve({
+            cssContentSize: { width: 1200, height: 3000 },
+            contentSize: { width: 1200, height: 3000 },
+          });
+        }
+        if (method === "Emulation.clearDeviceMetricsOverride") {
+          mockState.emulationCleared = true;
+          return Promise.resolve({});
+        }
+        if (method === "Emulation.setDeviceMetricsOverride") {
+          mockState.emulationCleared = false;
+          return Promise.resolve({});
+        }
+        if (method === "Runtime.evaluate") {
+          if (mockState.emulationCleared && mockState.emulatedTab) {
+            return Promise.resolve({
+              result: {
+                value: mockState.naturalViewport,
+              },
+            });
+          }
           return Promise.resolve({
             result: {
-              value: mockState.naturalViewport,
+              value: mockState.viewport,
             },
           });
         }
-        return Promise.resolve({
-          result: {
-            value: mockState.viewport,
-          },
-        });
-      }
-      return Promise.resolve({});
-    };
-    return fn(send);
-  }),
+        return Promise.resolve({});
+      };
+      return fn(send);
+    },
+  ),
   appendCdpPath: vi.fn(),
   fetchJson: vi.fn(),
   isLoopbackHost: vi.fn(),
@@ -75,6 +82,7 @@ const localProfile: ResolvedBrowserProfile = {
   cdpIsLoopback: true,
   color: "#FF4500",
   driver: "openclaw",
+  headless: false,
   attachOnly: false,
 };
 
@@ -87,22 +95,36 @@ beforeEach(() => {
 });
 
 describe("CDP screenshot params", () => {
-  it("viewport screenshot omits fromSurface without clip or emulation override", async () => {
+  it("viewport screenshot omits fromSurface and captureBeyondViewport", async () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
 
     const call = sentMessages.find((m) => m.method === "Page.captureScreenshot");
     expect(call).toBeDefined();
     expect(call!.params).toMatchObject({
       format: "png",
-      captureBeyondViewport: true,
     });
     expect(call!.params).not.toHaveProperty("fromSurface");
+    expect(call!.params).not.toHaveProperty("captureBeyondViewport");
     expect(call!.params).not.toHaveProperty("clip");
 
     const emulationCalls = sentMessages.filter(
       (m) => m.method === "Emulation.setDeviceMetricsOverride",
     );
     expect(emulationCalls).toHaveLength(0);
+  });
+
+  it("uses the requested timeout as the raw CDP command timeout", async () => {
+    await captureScreenshot({
+      wsUrl: "ws://localhost:9222/devtools/page/X",
+      format: "png",
+      timeoutMs: 12_345,
+    });
+
+    expect(withCdpSocket).toHaveBeenCalledWith(
+      "ws://localhost:9222/devtools/page/X",
+      expect.any(Function),
+      { commandTimeoutMs: 12_345 },
+    );
   });
 
   it("fullPage on emulated tab: clears, detects drift, re-applies saved emulation", async () => {
@@ -132,6 +154,8 @@ describe("CDP screenshot params", () => {
     // Clear is called first in the finally block
     const clearCall = sentMessages.find((m) => m.method === "Emulation.clearDeviceMetricsOverride");
     expect(clearCall).toBeDefined();
+    const captureCall = sentMessages.find((m) => m.method === "Page.captureScreenshot");
+    expect(captureCall?.params).toMatchObject({ captureBeyondViewport: true });
 
     // Viewport drifted after clear → re-apply saved dimensions
     expect(secondSetCall.params).toMatchObject({

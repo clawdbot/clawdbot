@@ -1,7 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { registerProviders, requireProvider } from "./contracts-testkit.js";
+import {
+  registerProviderPlugins as registerProviders,
+  requireRegisteredProvider as requireProvider,
+} from "../../../src/test-utils/plugin-registration.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
 const buildVllmProviderMock = vi.hoisted(() => vi.fn());

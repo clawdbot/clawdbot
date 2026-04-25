@@ -46,8 +46,10 @@ const MATRIX_QA_E2EE_SYNC_FILTER = {
 export type MatrixQaE2eeScenarioClient = {
   acceptVerification(id: string): Promise<MatrixVerificationSummary>;
   bootstrapOwnDeviceVerification(params?: {
+    allowAutomaticCrossSigningReset?: boolean;
     forceResetCrossSigning?: boolean;
     recoveryKey?: string;
+    verifyOwnIdentity?: boolean;
   }): Promise<MatrixVerificationBootstrapResult>;
   confirmVerificationReciprocateQr(id: string): Promise<MatrixVerificationSummary>;
   confirmVerificationSas(id: string): Promise<MatrixVerificationSummary>;

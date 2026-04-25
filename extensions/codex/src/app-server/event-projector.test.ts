@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -78,7 +79,12 @@ async function createProjectorWithAssistantHooks() {
   return { onAssistantMessageStart, onPartialReply, projector };
 }
 
+beforeEach(() => {
+  resetAgentEventsForTest();
+});
+
 afterEach(async () => {
+  resetAgentEventsForTest();
   resetGlobalHookRunner();
   vi.restoreAllMocks();
   for (const tempDir of tempDirs) {

@@ -26,7 +26,7 @@ jobs:
       matrix:
         include:
           - language: javascript-typescript
-            runs_on: blacksmith-16vcpu-ubuntu-2404
+            runs_on: blacksmith-32vcpu-ubuntu-2404
             needs_node: true
             needs_python: false
             needs_java: false

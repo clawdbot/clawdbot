@@ -137,7 +137,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCLAW_CONTROL_UI_I18N_MODEL: gpt-5.4
+          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
           LOCALE: ${{ matrix.locale }}
         run: node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write

@@ -200,6 +200,23 @@ table view to per-plugin detail lines with source/origin/version/activation
 metadata. Use `--json` for machine-readable inventory plus registry
 diagnostics.
 
+`plugins list` runs discovery from the current CLI environment and config. It is
+useful for checking whether a plugin is enabled/loadable, but it is not a live
+runtime probe of an already-running Gateway process. After changing plugin code,
+enablement, hook policy, or `plugins.load.paths`, restart the Gateway that
+serves the channel before expecting new `register(api)` code or hooks to run.
+For remote/container deployments, verify you are restarting the actual
+`openclaw gateway run` child, not only a wrapper process.
+
+For runtime hook debugging:
+
+- `openclaw plugins inspect <id> --json` shows registered hooks and diagnostics
+  from a module-loaded inspection pass.
+- `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway,
+  service/process hints, config path, and RPC health.
+- Non-bundled conversation hooks (`llm_input`, `llm_output`, `agent_end`) require
+  `plugins.entries.<id>.hooks.allowConversationAccess=true`.
+
 Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 
 ```bash

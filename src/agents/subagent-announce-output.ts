@@ -63,10 +63,6 @@ export type SubagentRunOutcome = {
   elapsedMs?: number;
 };
 
-function isFailedOutcome(outcome?: SubagentRunOutcome): boolean {
-  return outcome?.status === "error";
-}
-
 function readFiniteNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -156,6 +152,9 @@ function extractSubagentOutputText(message: unknown): string {
   const role = (message as { role?: unknown }).role;
   const content = (message as { content?: unknown }).content;
   if (role === "assistant") {
+    if (typeof content === "string") {
+      return sanitizeTextContent(content);
+    }
     return extractAssistantText(message) ?? "";
   }
   if (role === "toolResult" || role === "tool") {
@@ -257,9 +256,6 @@ function selectSubagentOutputText(
   snapshot: SubagentOutputSnapshot,
   outcome?: SubagentRunOutcome,
 ): string | undefined {
-  if (isFailedOutcome(outcome)) {
-    return undefined;
-  }
   if (snapshot.latestSilentText) {
     return snapshot.latestSilentText;
   }
@@ -277,9 +273,6 @@ export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
 ): Promise<string | undefined> {
-  if (isFailedOutcome(outcome)) {
-    return undefined;
-  }
   const history = await subagentAnnounceOutputDeps.callGateway({
     method: "chat.history",
     params: { sessionKey, limit: 100 },
@@ -359,9 +352,6 @@ export async function captureSubagentCompletionReply(
   sessionKey: string,
   options?: { waitForReply?: boolean; outcome?: SubagentRunOutcome },
 ): Promise<string | undefined> {
-  if (isFailedOutcome(options?.outcome)) {
-    return undefined;
-  }
   return await captureSubagentCompletionReplyUsing({
     sessionKey,
     waitForReply: options?.waitForReply,

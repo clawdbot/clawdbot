@@ -15,8 +15,8 @@ type DiscordRecipient =
 
 export async function parseAndResolveRecipient(
   raw: string,
+  cfg: OpenClawConfig,
   accountId?: string,
-  cfg?: OpenClawConfig,
   parseOptions: DiscordTargetParseOptions = {},
 ): Promise<DiscordRecipient> {
   if (!cfg) {

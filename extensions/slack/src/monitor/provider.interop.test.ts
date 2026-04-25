@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createSlackBoltApp, resolveSlackBoltInterop } from "./provider-support.js";
+import {
+  createSlackBoltApp,
+  resolveSlackBoltInterop,
+  shouldSkipOpenClawSlackSelfEvent,
+} from "./provider-support.js";
 
 describe("resolveSlackBoltInterop", () => {
   function FakeApp() {}
@@ -107,9 +111,15 @@ describe("resolveSlackBoltInterop", () => {
 describe("createSlackBoltApp", () => {
   class FakeApp {
     args: Record<string, unknown>;
+    middleware: unknown[] = [];
 
     constructor(args: Record<string, unknown>) {
       this.args = args;
+    }
+
+    use(middleware: unknown) {
+      this.middleware.push(middleware);
+      return this;
     }
   }
 
@@ -157,7 +167,9 @@ describe("createSlackBoltApp", () => {
       token: "xoxb-test",
       receiver,
       clientOptions,
+      ignoreSelf: false,
     });
+    expect((app as unknown as FakeApp).middleware).toHaveLength(1);
   });
 
   it("uses HTTPReceiver for webhook mode", () => {
@@ -185,6 +197,39 @@ describe("createSlackBoltApp", () => {
       token: "xoxb-test",
       receiver,
       clientOptions,
+      ignoreSelf: false,
     });
+    expect((app as unknown as FakeApp).middleware).toHaveLength(1);
+  });
+
+  it("keeps Bolt self filtering except assistant message_changed events", () => {
+    expect(
+      shouldSkipOpenClawSlackSelfEvent({
+        context: { botUserId: "U_BOT", botId: "B_BOT" },
+        event: { type: "reaction_added", user: "U_BOT" },
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldSkipOpenClawSlackSelfEvent({
+        context: { botUserId: "U_BOT", botId: "B_BOT" },
+        event: { type: "message", subtype: "message_changed", user: "U_BOT" },
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSkipOpenClawSlackSelfEvent({
+        context: { botUserId: "U_BOT", botId: "B_BOT" },
+        event: { type: "message", user: "U_BOT" },
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldSkipOpenClawSlackSelfEvent({
+        context: { botUserId: "U_BOT", botId: "B_BOT" },
+        event: { type: "message", user: "U_OTHER" },
+        message: { subtype: "bot_message", bot_id: "B_BOT" },
+      }),
+    ).toBe(true);
   });
 });

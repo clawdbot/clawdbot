@@ -4,6 +4,7 @@
   "channelEnvVars": {
     "qqbot": ["QQBOT_APP_ID", "QQBOT_CLIENT_SECRET"]
   },
+  "enabledByDefault": true,
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",

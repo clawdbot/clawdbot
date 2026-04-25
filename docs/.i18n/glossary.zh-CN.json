@@ -4,12 +4,48 @@
     "target": "OpenClaw"
   },
   {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "OpenAI provider",
+    "target": "OpenAI provider"
+  },
+  {
+    "source": "Status",
+    "target": "Status"
+  },
+  {
     "source": "Gateway",
     "target": "Gateway 网关"
   },
   {
     "source": "Pi",
     "target": "Pi"
+  },
+  {
+    "source": "Agent runtimes",
+    "target": "Agent Runtimes"
+  },
+  {
+    "source": "Agent Runtimes",
+    "target": "Agent Runtimes"
+  },
+  {
+    "source": "Codex harness",
+    "target": "Codex harness"
+  },
+  {
+    "source": "Agent harness plugins",
+    "target": "Agent harness plugins"
+  },
+  {
+    "source": "Agent loop",
+    "target": "Agent loop"
+  },
+  {
+    "source": "Models",
+    "target": "Models"
   },
   {
     "source": "Skills",
@@ -332,7 +368,15 @@
     "target": "插件 SDK"
   },
   {
+    "source": "Building plugins",
+    "target": "构建插件"
+  },
+  {
     "source": "Plugin SDK Overview",
+    "target": "插件 SDK 概览"
+  },
+  {
+    "source": "Plugin SDK overview",
     "target": "插件 SDK 概览"
   },
   {
@@ -342,6 +386,22 @@
   {
     "source": "Plugin Entry Points",
     "target": "插件入口点"
+  },
+  {
+    "source": "Plugin entry points",
+    "target": "插件入口点"
+  },
+  {
+    "source": "Plugin hooks",
+    "target": "插件钩子"
+  },
+  {
+    "source": "Internal hooks",
+    "target": "内部钩子"
+  },
+  {
+    "source": "Plugin architecture internals",
+    "target": "插件架构内部机制"
   },
   {
     "source": "Entry Points",

@@ -16,7 +16,7 @@ export type OpenAICompletionsCompatDefaults = {
   supportsReasoningEffort: boolean;
   supportsUsageInStreaming: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
-  thinkingFormat: "openai" | "openrouter" | "zai";
+  thinkingFormat: "openai" | "openrouter" | "deepseek" | "zai";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
 };
@@ -72,6 +72,9 @@ export function resolveOpenAICompletionsCompatDefaults(
   const isZai =
     endpointClass === "zai-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
+  const isDeepSeek =
+    endpointClass === "deepseek-native" ||
+    (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek"));
   const isNonStandard =
     endpointClass === "cerebras-native" ||
     endpointClass === "chutes-native" ||
@@ -105,7 +108,13 @@ export function resolveOpenAICompletionsCompatDefaults(
       supportsKnownLocalStreamingUsage ||
       (!isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
-    thinkingFormat: isZai ? "zai" : isOpenRouterLike ? "openrouter" : "openai",
+    thinkingFormat: isDeepSeek
+      ? "deepseek"
+      : isZai
+        ? "zai"
+        : isOpenRouterLike
+          ? "openrouter"
+          : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
   };
@@ -126,7 +135,9 @@ export function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
 }
 
 export function detectOpenAICompletionsCompat(
-  model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id" | "compat">,
+  model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
+    compat?: { supportsStore?: boolean } | null;
+  },
 ): DetectedOpenAICompletionsCompat {
   const capabilities = resolveProviderRequestCapabilities({
     provider: model.provider,

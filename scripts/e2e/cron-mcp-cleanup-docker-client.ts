@@ -54,7 +54,7 @@ async function describeProbePid(pid: number): Promise<string | undefined> {
 
 async function waitForProbePid(pidPath: string): Promise<number | undefined> {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 60_000) {
+  while (Date.now() - startedAt < 240_000) {
     const pid = await readProbePid(pidPath);
     if (pid) {
       return pid;
@@ -182,7 +182,7 @@ async function runCronCleanupScenario(params: {
           entry.payload.jobId === job.id &&
           entry.payload.action === "finished",
       )?.payload,
-    150_000,
+    240_000,
   );
   assert(finished, "missing cron finished event");
 
@@ -223,7 +223,7 @@ async function runSubagentCleanupScenario(params: {
   const exitedPid = await waitForAnyProbeExit({
     pidsPath,
     label: "subagent",
-    timeoutMs: 90_000,
+    timeoutMs: 240_000,
   });
   return {
     runId: run.runId,

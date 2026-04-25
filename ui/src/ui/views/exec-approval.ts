@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { formatApprovalDisplayPath } from "../../../../src/infra/approval-display-paths.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import type {
   ExecApprovalRequest,
@@ -19,11 +20,14 @@ function formatRemaining(ms: number): string {
   return `${hours}h`;
 }
 
-function renderMetaRow(label: string, value?: string | null) {
+function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
   if (!value) {
     return nothing;
   }
-  return html`<div class="exec-approval-meta-row"><span>${label}</span><span>${value}</span></div>`;
+  const displayValue = opts?.path ? formatApprovalDisplayPath(value) : value;
+  return html`<div class="exec-approval-meta-row">
+    <span>${label}</span><span>${displayValue}</span>
+  </div>`;
 }
 
 function renderExecBody(request: ExecApprovalRequestPayload) {
@@ -31,8 +35,11 @@ function renderExecBody(request: ExecApprovalRequestPayload) {
     <div class="exec-approval-command mono">${request.command}</div>
     <div class="exec-approval-meta">
       ${renderMetaRow("Host", request.host)} ${renderMetaRow("Agent", request.agentId)}
-      ${renderMetaRow("Session", request.sessionKey)} ${renderMetaRow("CWD", request.cwd)}
-      ${renderMetaRow("Resolved", request.resolvedPath)}
+      ${renderMetaRow("Session", request.sessionKey)}
+      ${renderMetaRow("CWD", request.cwd, {
+        path: true,
+      })}
+      ${renderMetaRow("Resolved", request.resolvedPath, { path: true })}
       ${renderMetaRow("Security", request.security)} ${renderMetaRow("Ask", request.ask)}
     </div>
   `;

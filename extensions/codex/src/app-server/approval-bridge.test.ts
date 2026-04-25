@@ -512,7 +512,7 @@ describe("Codex app-server approval bridge", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
     expect(params.onAgentEvent).not.toHaveBeenCalled();
   });
-  it("labels permission approvals explicitly with sanitized permission detail", async () => {
+  it("labels permission approvals explicitly with permission detail", async () => {
     const params = createParams();
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-3", status: "accepted" })
@@ -556,7 +556,7 @@ describe("Codex app-server approval bridge", () => {
     expect(description).toContain("Network allowHosts: example.com, *.internal");
     expect(description).toContain("File system roots: /; writePaths: ~");
     expect(description).toContain(
-      "High-risk targets: wildcard hosts, private-network wildcards, filesystem root, home directory",
+      "High-risk targets: wildcard hosts, private-network wildcards, filesystem root",
     );
     expect(requestPayload).toEqual(
       expect.objectContaining({
@@ -565,7 +565,7 @@ describe("Codex app-server approval bridge", () => {
     );
   });
 
-  it("keeps permission detail bounded with truncated and redacted target samples", async () => {
+  it("keeps permission detail bounded with truncated and compacted target samples", async () => {
     const params = createParams();
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-4", status: "accepted" })
@@ -611,9 +611,38 @@ describe("Codex app-server approval bridge", () => {
     expect(description).not.toContain("simone");
     expect(description).toContain("*.internal");
     expect(description).toContain("/workspace/project");
-    expect(description).toContain("readPaths: ~/.ssh/id_rsa, /etc/hosts (+1 more)");
-    expect(description).toContain("writePaths: /tmp/output, /var/log/app (+1 more)");
     expect(description).toContain("High-risk targets:");
+    expect(description).toContain("readPaths: ~/.ssh/id_rsa, /etc/hosts");
+  });
+
+  it("compacts Windows home paths in permission descriptions", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-windows-home", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-windows-home", decision: "allow-once" });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "perm-windows-home",
+        permissions: {
+          fileSystem: {
+            roots: ["C:/Users/alice"],
+            readPaths: ["C:\\Users\\alice\\.ssh\\id_rsa", "c:/users/bob/project"],
+          },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain("File system roots: ~; readPaths: ~/.ssh/id_rsa, ~/project");
+    expect(description).not.toContain("High-risk targets");
   });
 
   it("strips terminal and invisible controls from permission descriptions", async () => {
@@ -727,6 +756,61 @@ describe("Codex app-server approval bridge", () => {
           },
         },
       },
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["decline"] },
+        "approved-once",
+      ),
+    ).toEqual({
+      decision: "decline",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["decline"] },
+        "approved-session",
+      ),
+    ).toEqual({
+      decision: "decline",
+    });
+    expect(
+      buildApprovalResponse("item/commandExecution/requestApproval", undefined, "approved-once"),
+    ).toEqual({
+      decision: "accept",
+    });
+    expect(
+      buildApprovalResponse("item/commandExecution/requestApproval", undefined, "approved-session"),
+    ).toEqual({
+      decision: "acceptForSession",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["cancel"] },
+        "approved-once",
+      ),
+    ).toEqual({
+      decision: "cancel",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["accept", "cancel"] },
+        "denied",
+      ),
+    ).toEqual({
+      decision: "cancel",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["decline"] },
+        "cancelled",
+      ),
+    ).toEqual({
+      decision: "decline",
     });
     expect(buildApprovalResponse("item/fileChange/requestApproval", undefined, "denied")).toEqual({
       decision: "decline",

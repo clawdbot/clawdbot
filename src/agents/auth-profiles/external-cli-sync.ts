@@ -1,5 +1,12 @@
-import { readMiniMaxCliCredentialsCached } from "../cli-credentials.js";
-import { EXTERNAL_CLI_SYNC_TTL_MS, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
+import {
+  readCodexCliCredentialsCached,
+  readMiniMaxCliCredentialsCached,
+} from "../cli-credentials.js";
+import {
+  EXTERNAL_CLI_SYNC_TTL_MS,
+  MINIMAX_CLI_PROFILE_ID,
+  OPENAI_CODEX_DEFAULT_PROFILE_ID,
+} from "./constants.js";
 import { log } from "./constants.js";
 import {
   areOAuthCredentialsEquivalent,
@@ -29,6 +36,12 @@ type ExternalCliSyncProvider = {
   profileId: string;
   provider: string;
   readCredentials: () => OAuthCredential | null;
+  // bootstrapOnly providers adopt the external CLI credential only to
+  // seed an empty slot; once a local OAuth credential exists for the
+  // profile, the local refresh token is treated as canonical and the
+  // CLI state must not replace or shadow it. Codex requires this to
+  // avoid clobbering a locally refreshed token with stale CLI state.
+  bootstrapOnly?: boolean;
 };
 
 function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
@@ -73,6 +86,12 @@ export function isSafeToUseExternalCliCredential(
 
 const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
+    profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+    provider: "openai-codex",
+    readCredentials: () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+    bootstrapOnly: true,
+  },
+  {
     profileId: MINIMAX_CLI_PROFILE_ID,
     provider: "minimax-portal",
     readCredentials: () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
@@ -103,6 +122,13 @@ export function readExternalCliBootstrapCredential(params: {
   if (!provider) {
     return null;
   }
+  // bootstrapOnly providers must not replace an existing local credential
+  // during runtime refresh. The oauth-manager only calls this hook when a
+  // local credential is already present, so returning null here keeps the
+  // locally stored refresh token canonical.
+  if (provider.bootstrapOnly) {
+    return null;
+  }
   return provider.readCredentials();
 }
 
@@ -129,6 +155,13 @@ export function resolveExternalCliAuthProfiles(
         provider: providerConfig.provider,
         localType: existing.type,
         localProvider: existing.provider,
+      });
+      continue;
+    }
+    if (providerConfig.bootstrapOnly && existingOAuth) {
+      log.debug("kept local oauth over external cli bootstrap-only provider", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
       });
       continue;
     }

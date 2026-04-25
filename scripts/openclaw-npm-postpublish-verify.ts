@@ -283,6 +283,8 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     ];
   }
   const missingImporters = new Map<string, Set<string>>();
+  const bundledExtensionRuntimeDependencyOwners =
+    collectBundledExtensionRuntimeDependencyOwners(packageRoot);
 
   for (const filePath of distFiles) {
     const fileStat = lstatSync(filePath);
@@ -305,7 +307,12 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
       if (
         !dependencyName ||
         NODE_BUILTIN_MODULES.has(dependencyName) ||
-        declaredRuntimeDeps.has(dependencyName)
+        declaredRuntimeDeps.has(dependencyName) ||
+        isBundledExtensionOwnedRuntimeImport({
+          dependencyName,
+          ownersByDependency: bundledExtensionRuntimeDependencyOwners,
+          source,
+        })
       ) {
         continue;
       }
@@ -321,6 +328,35 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
       return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
     })
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+function collectBundledExtensionRuntimeDependencyOwners(
+  packageRoot: string,
+): Map<string, Set<string>> {
+  const ownersByDependency = new Map<string, Set<string>>();
+  const { manifests } = readBundledExtensionPackageJsons(packageRoot);
+  for (const { id, manifest } of manifests) {
+    for (const dependencyName of collectRuntimeDependencySpecs(manifest).keys()) {
+      const owners = ownersByDependency.get(dependencyName) ?? new Set<string>();
+      owners.add(id);
+      ownersByDependency.set(dependencyName, owners);
+    }
+  }
+  return ownersByDependency;
+}
+
+function isBundledExtensionOwnedRuntimeImport(params: {
+  dependencyName: string;
+  ownersByDependency: Map<string, Set<string>>;
+  source: string;
+}): boolean {
+  const owners = params.ownersByDependency.get(params.dependencyName);
+  if (!owners) {
+    return false;
+  }
+  return [...owners].some((pluginId) =>
+    params.source.includes(`//#region extensions/${pluginId}/`),
+  );
 }
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {

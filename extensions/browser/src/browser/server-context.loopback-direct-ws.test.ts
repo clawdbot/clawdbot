@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import * as cdpModule from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
-import { createBrowserRouteContext } from "./server-context.js";
-import { makeState, originalFetch } from "./server-context.remote-tab-ops.harness.js";
+import {
+  createTestBrowserRouteContext,
+  makeState,
+  originalFetch,
+} from "./server-context.remote-tab-ops.harness.js";
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -40,7 +43,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       cdpUrl: "ws://127.0.0.1:18800/devtools/browser/SESSION?token=abc",
       color: "#FF4500",
     };
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const opened = await openclaw.openTab("about:blank");
@@ -85,7 +88,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       cdpUrl: "ws://127.0.0.1:18800/devtools/browser/SESSION?token=abc",
       color: "#FF4500",
     };
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     await openclaw.focusTab("T1");
@@ -133,7 +136,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       cdpUrl: "wss://127.0.0.1:18800/cdp?token=abc",
       color: "#FF4500",
     };
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const tabs = await openclaw.listTabs();
@@ -158,7 +161,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       cdpUrl: "ws://10.0.0.42:18800/devtools/browser/SESSION?token=abc",
       color: "#FF4500",
     };
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     await expect(openclaw.listTabs()).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);

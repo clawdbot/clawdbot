@@ -4,9 +4,12 @@ import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import "../../test-support/browser-security-runtime.mock.js";
-import { isDirectCdpWebSocketEndpoint, isWebSocketUrl } from "./cdp.helpers.js";
+import {
+  isDirectCdpWebSocketEndpoint,
+  isWebSocketUrl,
+  parseBrowserHttpUrl as parseHttpUrl,
+} from "./cdp.helpers.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
-import { parseHttpUrl } from "./config.js";
 import {
   BROWSER_ENDPOINT_BLOCKED_MESSAGE,
   BROWSER_NAVIGATION_BLOCKED_MESSAGE,

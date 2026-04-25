@@ -1,6 +1,7 @@
 export {
   createGoogleThinkingPayloadWrapper,
   createGoogleThinkingStreamWrapper,
+  isGoogleGemini25ThinkingBudgetModel,
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,

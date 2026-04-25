@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
+import * as webMedia from "../../media/web-media.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
@@ -753,6 +754,43 @@ describe("createVideoGenerateTool", () => {
     expect(call.inputImages).toHaveLength(2);
     expect(call.inputImages?.[0]?.role).toBe("first_frame");
     expect(call.inputImages?.[1]?.role).toBe("last_frame");
+  });
+
+  it("passes web_fetch SSRF policy when loading reference assets", async () => {
+    mockVideoPluginProvider({
+      imageToVideo: { enabled: true, maxInputImages: 1 },
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    mockSavedVideoResult();
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/vid-v1" },
+          },
+        },
+        tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await tool.execute("call-1", {
+      prompt: "lobster",
+      image: "/tmp/reference.png",
+    });
+
+    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+      "/tmp/reference.png",
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    );
   });
 
   it("rejects audio data: URLs via the templated rejection branch", async () => {

@@ -5,8 +5,6 @@ read_when:
 title: "Remote access"
 ---
 
-# Remote access (SSH, tunnels, and tailnets)
-
 This repo supports “remote over SSH” by keeping a single Gateway (the master) running on a dedicated host (desktop/server) and connecting clients to it.
 
 - For **operators (you / the macOS app)**: SSH tunneling is the universal fallback.

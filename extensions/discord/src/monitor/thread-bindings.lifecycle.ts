@@ -98,7 +98,7 @@ export function listThreadBindingsBySessionKey(params: {
 }
 
 export async function autoBindSpawnedDiscordSubagent(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   accountId?: string;
   channel?: string;
   to?: string;

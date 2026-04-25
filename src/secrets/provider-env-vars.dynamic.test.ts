@@ -15,6 +15,12 @@ type MockManifestRegistry = {
     kind?: "memory" | "context-engine" | Array<"memory" | "context-engine">;
     providerAuthEnvVars?: Record<string, string[]>;
     providerAuthAliases?: Record<string, string>;
+    setup?: {
+      providers?: Array<{
+        id: string;
+        envVars?: string[];
+      }>;
+    };
   }>;
   diagnostics: unknown[];
 };
@@ -57,6 +63,55 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
   });
 
+  it("includes setup provider env vars without loading setup runtime", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "external-model-studio",
+          origin: "global",
+          setup: {
+            providers: [
+              {
+                id: "model-studio",
+                envVars: ["MODEL_STUDIO_API_KEY", "MODEL_STUDIO_API_KEY"],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(getProviderEnvVars("model-studio")).toEqual(["MODEL_STUDIO_API_KEY"]);
+    expect(listKnownProviderAuthEnvVarNames()).toContain("MODEL_STUDIO_API_KEY");
+    expect(listKnownSecretEnvVarNames()).toContain("MODEL_STUDIO_API_KEY");
+  });
+
+  it("appends setup provider env vars after explicit provider auth env vars", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "external-fireworks",
+          origin: "global",
+          providerAuthEnvVars: {
+            fireworks: ["FIREWORKS_API_KEY"],
+          },
+          setup: {
+            providers: [
+              {
+                id: "fireworks",
+                envVars: ["FIREWORKS_SETUP_KEY", "FIREWORKS_API_KEY"],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_API_KEY", "FIREWORKS_SETUP_KEY"]);
+  });
+
   it("keeps lazy manifest-backed exports cold until accessed and resolves them once", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
@@ -79,6 +134,27 @@ describe("provider env vars dynamic manifest metadata", () => {
 
     void PROVIDER_ENV_VARS.fireworks;
     void PROVIDER_AUTH_ENV_VAR_CANDIDATES.fireworks;
+    expect(loadPluginManifestRegistry).toHaveBeenCalledTimes(initialLoads);
+  });
+
+  it("reuses the lazy default lookup cache for repeated provider env var reads", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "external-fireworks",
+          origin: "global",
+          providerAuthEnvVars: {
+            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    const initialLoads = loadPluginManifestRegistry.mock.calls.length;
+    expect(initialLoads).toBeGreaterThan(0);
+    expect(getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(loadPluginManifestRegistry).toHaveBeenCalledTimes(initialLoads);
   });
 
@@ -111,6 +187,14 @@ describe("provider env vars dynamic manifest metadata", () => {
           providerAuthEnvVars: {
             whisperx: ["AWS_SECRET_ACCESS_KEY"],
           },
+          setup: {
+            providers: [
+              {
+                id: "workspace-setup",
+                envVars: ["WORKSPACE_SETUP_SECRET"],
+              },
+            ],
+          },
         },
       ],
       diagnostics: [],
@@ -125,11 +209,23 @@ describe("provider env vars dynamic manifest metadata", () => {
       }),
     ).toEqual([]);
     expect(
+      mod.getProviderEnvVars("workspace-setup", {
+        config: { plugins: {} },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual([]);
+    expect(
       mod.listKnownProviderAuthEnvVarNames({
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
     ).not.toContain("AWS_SECRET_ACCESS_KEY");
+    expect(
+      mod.listKnownProviderAuthEnvVarNames({
+        config: { plugins: {} },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).not.toContain("WORKSPACE_SETUP_SECRET");
   });
 
   it("keeps explicitly trusted workspace plugin env vars when requested", async () => {

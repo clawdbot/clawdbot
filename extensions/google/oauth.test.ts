@@ -669,11 +669,9 @@ describe("loginGeminiCliOAuth", () => {
     return { result, authUrl };
   }
 
-  async function runRemoteLoginExpectingProjectId(
-    loginGeminiCliOAuth: LoginGeminiCliOAuthFn,
-    projectId: string,
-  ) {
-    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+  async function runProjectDiscoveryExpectingProjectId(projectId: string) {
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    const result = await resolveGoogleOAuthIdentity("access-token");
     expect(result.projectId).toBe(projectId);
   }
 
@@ -730,8 +728,7 @@ describe("loginGeminiCliOAuth", () => {
       return undefined;
     });
 
-    const { loginGeminiCliOAuth } = await import("./oauth.js");
-    await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "daily-project");
+    await runProjectDiscoveryExpectingProjectId("daily-project");
     const loadRequests = requests.filter((request) =>
       request.url.includes("v1internal:loadCodeAssist"),
     );
@@ -805,8 +802,7 @@ describe("loginGeminiCliOAuth", () => {
       return undefined;
     });
 
-    const { loginGeminiCliOAuth } = await import("./oauth.js");
-    await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "env-project");
+    await runProjectDiscoveryExpectingProjectId("env-project");
     expect(requests.filter(({ url }) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
     expect(requests.some(({ url }) => url.includes("v1internal:onboardUser"))).toBe(false);
   });
@@ -824,9 +820,8 @@ describe("loginGeminiCliOAuth", () => {
     );
 
     const { requests } = installGeminiOAuthFetchMock(() => undefined);
-
-    const { loginGeminiCliOAuth } = await import("./oauth.js");
-    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    const result = await exchangeCodeForTokens("oauth-code", "pkce-verifier");
 
     expect(result.projectId).toBeUndefined();
     expect(requests.map(({ url }) => url)).toEqual([TOKEN_URL, USERINFO_URL]);

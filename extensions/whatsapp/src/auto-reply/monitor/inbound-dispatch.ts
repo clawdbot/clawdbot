@@ -57,17 +57,20 @@ function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): bo
   return !cfg.channels.whatsapp.blockStreaming;
 }
 
-function shouldSuppressWhatsAppPayload(
+function resolveWhatsAppDeliverablePayload(
   payload: ReplyPayload,
   info: { kind: ReplyLifecycleKind },
-): boolean {
-  if (info.kind === "tool") {
-    return true;
-  }
+): ReplyPayload | null {
   if (payload.isReasoning === true || payload.isCompactionNotice === true) {
-    return true;
+    return null;
   }
-  return false;
+  if (info.kind === "tool") {
+    if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
+      return null;
+    }
+    return { ...payload, text: undefined };
+  }
+  return payload;
 }
 
 export function resolveWhatsAppResponsePrefix(params: {
@@ -86,15 +89,19 @@ export function resolveWhatsAppResponsePrefix(params: {
 }
 
 export function buildWhatsAppInboundContext(params: {
+  bodyForAgent?: string;
   combinedBody: string;
+  commandBody?: string;
   commandAuthorized?: boolean;
   conversationId: string;
   groupHistory?: GroupHistoryEntry[];
   groupMemberRoster?: Map<string, string>;
   groupSystemPrompt?: string;
   msg: WebInboundMsg;
+  rawBody?: string;
   route: ReturnType<typeof resolveAgentRoute>;
   sender: SenderContext;
+  transcript?: string;
   replyThreading?: ReplyThreadingContext;
   visibleReplyTo?: VisibleReplyTarget;
 }) {
@@ -109,10 +116,11 @@ export function buildWhatsAppInboundContext(params: {
 
   const result = finalizeInboundContext({
     Body: params.combinedBody,
-    BodyForAgent: params.msg.body,
+    BodyForAgent: params.bodyForAgent ?? params.msg.body,
     InboundHistory: inboundHistory,
-    RawBody: params.msg.body,
-    CommandBody: params.msg.body,
+    RawBody: params.rawBody ?? params.msg.body,
+    CommandBody: params.commandBody ?? params.msg.body,
+    Transcript: params.transcript,
     From: params.msg.from,
     To: params.msg.to,
     SessionKey: params.route.sessionKey,
@@ -286,11 +294,12 @@ export async function dispatchWhatsAppBufferedReply(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info: { kind: ReplyLifecycleKind }) => {
-        if (shouldSuppressWhatsAppPayload(payload, info)) {
+        const deliveryPayload = resolveWhatsAppDeliverablePayload(payload, info);
+        if (!deliveryPayload) {
           return;
         }
         await params.deliverReply({
-          replyResult: payload,
+          replyResult: deliveryPayload,
           msg: params.msg,
           mediaLocalRoots,
           maxMediaBytes: params.maxMediaBytes,
@@ -302,17 +311,17 @@ export async function dispatchWhatsAppBufferedReply(params: {
           tableMode,
         });
         didSendReply = true;
-        const shouldLog = payload.text ? true : undefined;
-        params.rememberSentText(payload.text, {
+        const shouldLog = deliveryPayload.text ? true : undefined;
+        params.rememberSentText(deliveryPayload.text, {
           combinedBody: params.context.Body as string | undefined,
           combinedBodySessionKey: params.route.sessionKey,
           logVerboseMessage: shouldLog,
         });
         const fromDisplay =
           params.msg.chatType === "group" ? params.conversationId : (params.msg.from ?? "unknown");
-        const reply = resolveSendableOutboundReplyParts(payload);
+        const reply = resolveSendableOutboundReplyParts(deliveryPayload);
         if (shouldLogVerbose()) {
-          const preview = payload.text != null ? reply.text : "<media>";
+          const preview = deliveryPayload.text != null ? reply.text : "<media>";
           logVerbose(`Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${fromDisplay}`);
         }
       },
@@ -324,7 +333,8 @@ export async function dispatchWhatsAppBufferedReply(params: {
     },
   });
 
-  const didQueueVisibleReply = queuedFinal || counts.block > 0 || counts.final > 0;
+  const didQueueVisibleReply =
+    queuedFinal || counts.tool > 0 || counts.block > 0 || counts.final > 0;
   if (!didQueueVisibleReply) {
     if (params.shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);

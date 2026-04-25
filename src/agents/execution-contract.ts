@@ -14,7 +14,7 @@ import { resolveAgentExecutionContract, resolveSessionAgentIds } from "./agent-s
  * bare names. The adversarial review in #64227 flagged this as a quality
  * gap on completion-gate criterion 1.
  */
-function stripProviderPrefix(modelId: string): string {
+export function stripProviderPrefix(modelId: string): string {
   const normalizedModelId = modelId.trim();
   const match = /^([^/:]+)[/:](.+)$/.exec(normalizedModelId);
   return (match?.[2] ?? normalizedModelId).toLowerCase();

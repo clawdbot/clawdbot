@@ -31,6 +31,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
+import { formatSlackFileReference } from "../../file-reference.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import {
@@ -54,9 +55,9 @@ import {
 } from "../context.js";
 import { recordInboundSession, resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
-import { resolveSlackThreadStarter } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
+import { resolveSlackThreadStarter } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
@@ -455,11 +456,9 @@ export async function prepareSlackMessage(params: {
   if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
-    const fallbackFile = message.files?.[0]?.name
-      ? `[Slack file: ${message.files[0].name}]`
-      : message.files?.length
-        ? "[Slack file]"
-        : "";
+    const fallbackFile = message.files?.length
+      ? `[Slack file: ${formatSlackFileReference(message.files[0])}]`
+      : "";
     const pendingBody = pendingText || fallbackFile;
     recordPendingHistoryEntryIfEnabled({
       historyMap: ctx.channelHistories,

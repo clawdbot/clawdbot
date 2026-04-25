@@ -303,10 +303,14 @@ export function renderToolPreview(
   `;
 }
 
-export function buildSidebarContent(value: string): SidebarContent {
+export function buildSidebarContent(
+  value: string,
+  options?: { rawText?: string | null },
+): SidebarContent {
   return {
     kind: "markdown",
     content: value,
+    ...(options?.rawText ? { rawText: options.rawText } : {}),
   };
 }
 

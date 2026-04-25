@@ -16,18 +16,32 @@ function runTailscaleCommand(
     });
 
     let stdout = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (result: { code: number; stdout: string }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
     proc.stdout.on("data", (data) => {
       stdout += data;
     });
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       proc.kill("SIGKILL");
-      resolve({ code: -1, stdout: "" });
+      finish({ code: -1, stdout: "" });
     }, timeoutMs);
 
+    proc.on("error", () => {
+      finish({ code: -1, stdout: "" });
+    });
+
     proc.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? -1, stdout });
+      finish({ code: code ?? -1, stdout });
     });
   });
 }

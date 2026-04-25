@@ -12,6 +12,13 @@ type ScanEmptyAllowlistPolicyWarningsParams = {
   ) => boolean;
 };
 
+function isDisabledRecord(value: unknown): boolean {
+  return (
+    Boolean(value && typeof value === "object" && !Array.isArray(value)) &&
+    (value as { enabled?: unknown }).enabled === false
+  );
+}
+
 export function scanEmptyAllowlistPolicyWarnings(
   cfg: OpenClawConfig,
   params: ScanEmptyAllowlistPolicyWarningsParams,
@@ -76,6 +83,9 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
+    if (isDisabledRecord(channelConfig)) {
+      continue;
+    }
     checkAccount(channelConfig, `channels.${channelName}`, channelName);
 
     const accounts = asObjectRecord(channelConfig.accounts);
@@ -84,6 +94,9 @@ export function scanEmptyAllowlistPolicyWarnings(
     }
     for (const [accountId, account] of Object.entries(accounts)) {
       if (!account || typeof account !== "object") {
+        continue;
+      }
+      if (isDisabledRecord(account)) {
         continue;
       }
       checkAccount(

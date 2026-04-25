@@ -14,6 +14,7 @@ import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
+  resolveAssistantTextAvatar,
 } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
@@ -100,6 +101,7 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
   onSend: () => void;
+  onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -137,6 +139,11 @@ function getPinnedMessages(sessionKey: string): PinnedMessages {
     sessionKey,
     () => new PinnedMessages(sessionKey),
   );
+}
+
+function toPlainTextCodeFence(value: string, language = ""): string {
+  const fenceHeader = language ? `\`\`\`${language}` : "```";
+  return `${fenceHeader}\n${value}\n\`\`\``;
 }
 
 function getDeletedMessages(sessionKey: string): DeletedMessages {
@@ -475,12 +482,8 @@ const WELCOME_SUGGESTIONS = [
 
 function renderWelcomeState(props: ChatProps): TemplateResult {
   const name = props.assistantName || "Assistant";
-  const avatar = resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
-    identity: {
-      avatar: props.assistantAvatar ?? undefined,
-      avatarUrl: props.assistantAvatarUrl ?? undefined,
-    },
-  });
+  const avatar = resolveAssistantAvatarUrl(props);
+  const avatarText = avatar ? null : resolveAssistantTextAvatar(props.assistantAvatar);
   const logoUrl = agentLogoUrl(props.basePath ?? "");
 
   return html`
@@ -492,9 +495,13 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
             alt=${name}
             style="width:56px; height:56px; border-radius:50%; object-fit:cover;"
           />`
-        : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
-            <img src=${logoUrl} alt="OpenClaw" />
-          </div>`}
+        : avatarText
+          ? html`<div class="agent-chat__avatar agent-chat__avatar--text" aria-label=${name}>
+              ${avatarText}
+            </div>`
+          : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
+              <img src=${logoUrl} alt="OpenClaw" />
+            </div>`}
       <h2>${name}</h2>
       <div class="agent-chat__badges">
         <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Ready to chat</span>
@@ -518,6 +525,23 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
       </div>
     </div>
   `;
+}
+
+function resolveAssistantAvatarUrl(
+  props: Pick<ChatProps, "assistantAvatar" | "assistantAvatarUrl">,
+): string | null {
+  return resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
+    identity: {
+      avatar: props.assistantAvatar ?? undefined,
+      avatarUrl: props.assistantAvatarUrl ?? undefined,
+    },
+  });
+}
+
+function resolveAssistantDisplayAvatar(
+  props: Pick<ChatProps, "assistantAvatar" | "assistantAvatarUrl">,
+): string | null {
+  return resolveAssistantAvatarUrl(props) ?? resolveAssistantTextAvatar(props.assistantAvatar);
 }
 
 function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof nothing {
@@ -750,18 +774,14 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
+  const compactBusy =
+    props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
-    avatar:
-      resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
-        identity: {
-          avatar: props.assistantAvatar ?? undefined,
-          avatarUrl: props.assistantAvatarUrl ?? undefined,
-        },
-      }) ?? null,
+    avatar: resolveAssistantDisplayAvatar(props),
   };
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);
@@ -1114,14 +1134,17 @@ export function renderChat(props: ChatProps) {
                       return;
                     }
                     if (props.sidebarContent.kind === "markdown") {
+                      const rawText = props.sidebarContent.rawText ?? props.sidebarContent.content;
                       props.onOpenSidebar(
-                        buildSidebarContent(`\`\`\`\n${props.sidebarContent.content}\n\`\`\``),
+                        buildSidebarContent(toPlainTextCodeFence(rawText), { rawText }),
                       );
                       return;
                     }
                     if (props.sidebarContent.rawText?.trim()) {
                       props.onOpenSidebar(
-                        buildSidebarContent(`\`\`\`json\n${props.sidebarContent.rawText}\n\`\`\``),
+                        buildSidebarContent(
+                          toPlainTextCodeFence(props.sidebarContent.rawText, "json"),
+                        ),
                       );
                     }
                   },
@@ -1189,7 +1212,11 @@ export function renderChat(props: ChatProps) {
       ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
-      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
+      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
+        compactBusy,
+        compactDisabled: !props.connected || isBusy || Boolean(props.canAbort),
+        onCompact: props.onCompact,
+      })}
       ${props.showNewMessages
         ? html`
             <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>

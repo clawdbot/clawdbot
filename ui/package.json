@@ -11,7 +11,7 @@
   "dependencies": {
     "@create-markdown/preview": "^2.0.3",
     "@noble/ed25519": "3.1.0",
-    "dompurify": "^3.4.0",
+    "dompurify": "^3.4.1",
     "lit": "^3.3.2",
     "markdown-it": "^14.1.1",
     "markdown-it-task-lists": "^2.1.1",
@@ -19,10 +19,10 @@
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
-    "@vitest/browser-playwright": "4.1.4",
+    "@vitest/browser-playwright": "4.1.5",
     "jsdom": "^29.0.2",
     "playwright": "^1.59.1",
     "vite": "8.0.9",
-    "vitest": "4.1.4"
+    "vitest": "4.1.5"
   }
 }

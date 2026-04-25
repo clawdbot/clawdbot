@@ -298,6 +298,17 @@ export function createFeishuTextMessageEvent(params: {
   };
 }
 
+async function expectFeishuLifecycleEventually(
+  assertion: () => void | Promise<void>,
+  timeoutMs: number,
+) {
+  try {
+    await assertion();
+  } catch {
+    await vi.waitFor(assertion, { timeout: timeoutMs });
+  }
+}
+
 export async function replayFeishuLifecycleEvent(params: {
   handler: (data: unknown) => Promise<void>;
   event: unknown;
@@ -305,11 +316,11 @@ export async function replayFeishuLifecycleEvent(params: {
   waitForSecond?: () => void | Promise<void>;
   waitTimeoutMs?: number;
 }) {
-  const waitOptions = { timeout: params.waitTimeoutMs ?? FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS };
+  const waitTimeoutMs = params.waitTimeoutMs ?? FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS;
   await params.handler(params.event);
-  await vi.waitFor(params.waitForFirst, waitOptions);
+  await expectFeishuLifecycleEventually(params.waitForFirst, waitTimeoutMs);
   await params.handler(params.event);
-  await vi.waitFor(params.waitForSecond ?? params.waitForFirst, waitOptions);
+  await expectFeishuLifecycleEventually(params.waitForSecond ?? params.waitForFirst, waitTimeoutMs);
 }
 
 export async function runFeishuLifecycleSequence(
@@ -318,9 +329,10 @@ export async function runFeishuLifecycleSequence(
 ) {
   for (const [index, deliver] of deliveries.entries()) {
     await deliver();
-    await vi.waitFor(waits[index] ?? waits.at(-1) ?? (() => {}), {
-      timeout: FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS,
-    });
+    await expectFeishuLifecycleEventually(
+      waits[index] ?? waits.at(-1) ?? (() => {}),
+      FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS,
+    );
   }
 }
 

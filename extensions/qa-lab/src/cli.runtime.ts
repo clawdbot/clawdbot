@@ -24,6 +24,7 @@ import {
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import {
   addQaCredentialSet,
+  diagnoseQaCredentialBroker,
   listQaCredentialSets,
   QaCredentialAdminError,
   removeQaCredentialSet,
@@ -423,6 +424,18 @@ function printQaCredentialListTable(credentials: QaCredentialRecord[]) {
   for (const row of rows) {
     process.stdout.write(
       `${row.credentialId.padEnd(idWidth)}  ${row.kind.padEnd(kindWidth)}  ${row.status.padEnd(statusWidth)}  ${row.leased.padEnd(leaseWidth)}  ${row.note}\n`,
+    );
+  }
+}
+
+function printQaCredentialDoctorTable(
+  result: Awaited<ReturnType<typeof diagnoseQaCredentialBroker>>,
+) {
+  process.stdout.write(`QA credentials doctor: ${result.status}\n`);
+  const nameWidth = Math.max("check".length, ...result.checks.map((check) => check.name.length));
+  for (const check of result.checks) {
+    process.stdout.write(
+      `${check.name.padEnd(nameWidth)}  ${check.status.padEnd(4)}  ${check.details ?? ""}\n`,
     );
   }
 }
@@ -837,6 +850,27 @@ export async function runQaCredentialsListCommand(opts: {
       return;
     }
     throw error;
+  }
+}
+
+export async function runQaCredentialsDoctorCommand(opts: {
+  actorId?: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  siteUrl?: string;
+}) {
+  const result = await diagnoseQaCredentialBroker({
+    actorId: opts.actorId,
+    endpointPrefix: opts.endpointPrefix,
+    siteUrl: opts.siteUrl,
+  });
+  if (opts.json) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  } else {
+    printQaCredentialDoctorTable(result);
+  }
+  if (result.status === "fail") {
+    process.exitCode = 1;
   }
 }
 

@@ -30,6 +30,13 @@ function resolveNonNegativeNumber(value: number | undefined): number | undefined
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function resolvePositiveInteger(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
   contextTokensOverride?: number;
@@ -62,16 +69,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
+  const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextTokens =
-    typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
-      ? params.contextTokensOverride
-      : ((await getContextModule()).resolveContextTokensForModel({
-          cfg,
-          provider: providerUsed,
-          model: modelUsed,
-          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-          allowAsyncLoad: false,
-        }) ?? DEFAULT_CONTEXT_TOKENS);
+    runtimeContextTokens !== undefined
+      ? runtimeContextTokens
+      : typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
+        ? params.contextTokensOverride
+        : ((await getContextModule()).resolveContextTokensForModel({
+            cfg,
+            provider: providerUsed,
+            model: modelUsed,
+            fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+            allowAsyncLoad: false,
+          }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const entry = sessionStore[sessionKey] ?? {
     sessionId,

@@ -24,10 +24,10 @@ export async function runAudioTranscription(params: {
   }
 
   const providerRegistry = buildProviderRegistry(params.providers, params.cfg);
-  const cache = createMediaAttachmentCache(
-    attachments,
-    params.localPathRoots ? { localPathRoots: params.localPathRoots } : undefined,
-  );
+  const cache = createMediaAttachmentCache(attachments, {
+    ...(params.localPathRoots ? { localPathRoots: params.localPathRoots } : {}),
+    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+  });
 
   try {
     const result = await runCapability({

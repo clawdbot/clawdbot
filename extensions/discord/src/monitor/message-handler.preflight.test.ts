@@ -1244,6 +1244,7 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
 
   it("returns true for recently unbound thread webhook echoes", async () => {
     const manager = createThreadBindingManager({
+      cfg: DEFAULT_PREFLIGHT_CFG,
       accountId: "default",
       persist: false,
       enableSweeper: false,

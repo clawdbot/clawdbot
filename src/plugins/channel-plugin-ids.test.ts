@@ -510,6 +510,45 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("does not treat explicitly disabled stale channel config as startup intent", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {
+          "demo-channel": {
+            enabled: false,
+            token: "stale",
+          },
+        },
+      } as OpenClawConfig,
+      env: {},
+      expected: ["browser"],
+    });
+  });
+
+  it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {
+    loadPluginManifestRegistry
+      .mockReset()
+      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+
+    expect(
+      resolveConfiguredDeferredChannelPluginIds({
+        config: {
+          channels: {
+            "demo-channel": {
+              enabled: false,
+              token: "stale",
+            },
+          },
+          plugins: {
+            allow: ["workspace-demo-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toEqual([]);
+  });
+
   it("includes the explicitly selected memory slot plugin in startup scope", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({

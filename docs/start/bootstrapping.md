@@ -22,6 +22,10 @@ On the first agent run, OpenClaw bootstraps the workspace (default
 - Writes identity + preferences to `IDENTITY.md`, `USER.md`, `SOUL.md`.
 - Removes `BOOTSTRAP.md` when finished so it only runs once.
 
+## Skipping bootstrapping
+
+To skip this for a pre-seeded workspace, run `openclaw onboard --skip-bootstrap`.
+
 ## Where it runs
 
 Bootstrapping always runs on the **gateway host**. If the macOS app connects to

@@ -70,6 +70,18 @@ describe("prompt composition invariants", () => {
     expect(steady.systemPrompt).toBe(eventTurn.systemPrompt);
   });
 
+  it("includes direct-chat guidance that routes NO_REPLY through the default rewrite path", () => {
+    const directScenario = fixture.scenarios.find(
+      (entry) => entry.scenario === "auto-reply-direct",
+    );
+    expect(directScenario).toBeDefined();
+    const first = getTurn(directScenario!, "t1");
+
+    expect(first.systemPrompt).toContain("You are in a Slack direct conversation.");
+    expect(first.systemPrompt).toContain('reply with exactly "NO_REPLY"');
+    expect(first.systemPrompt).toContain("so OpenClaw can send a short fallback reply");
+  });
+
   it("keeps maintenance prompts out of the normal stable-turn invariant set", () => {
     const maintenanceScenario = fixture.scenarios.find(
       (entry) => entry.scenario === "maintenance-prompts",

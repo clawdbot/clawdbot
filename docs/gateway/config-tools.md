@@ -415,7 +415,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
   - `request.allowPrivateNetwork`: when `true`, allow HTTPS to `baseUrl` when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (operator opt-in for trusted self-hosted OpenAI-compatible endpoints). WebSocket uses the same `request` for headers/TLS but not that fetch SSRF gate. Default `false`.
 - `models.providers.*.models`: explicit provider model catalog entries.
 - `models.providers.*.models.*.contextWindow`: native model context window metadata.
-- `models.providers.*.models.*.contextTokens`: optional runtime context cap. Use this when you want a smaller effective context budget than the model's native `contextWindow`.
+- `models.providers.*.models.*.contextTokens`: optional runtime context cap. Use this when you want a smaller effective context budget than the model's native `contextWindow`; `openclaw models list` shows both values when they differ.
 - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
 - `models.providers.*.models.*.compat.requiresStringContent`: optional compatibility hint for string-only OpenAI-compatible chat endpoints. When `true`, OpenClaw flattens pure text `messages[].content` arrays into plain strings before sending the request.
 - `plugins.entries.amazon-bedrock.config.discovery`: Bedrock auto-discovery settings root.
@@ -628,7 +628,7 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
             id: "MiniMax-M2.7",
             name: "MiniMax M2.7",
             reasoning: true,
-            input: ["text", "image"],
+            input: ["text"],
             cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
             contextWindow: 204800,
             maxTokens: 131072,

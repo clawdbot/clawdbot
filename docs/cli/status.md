@@ -21,7 +21,7 @@ Notes:
 
 - `--deep` runs live probes (WhatsApp Web + Telegram + Discord + Slack + Signal).
 - `--usage` prints normalized provider usage windows as `X% left`.
-- Session status output now separates `Runtime:` from `Runner:`. `Runtime` is the execution path and sandbox state (`direct`, `docker/*`), while `Runner` tells you whether the session is using embedded Pi, a CLI-backed provider, or an ACP harness backend such as `codex (acp/acpx)`.
+- Session status output separates `Execution:` from `Runtime:`. `Execution` is the sandbox path (`direct`, `docker/*`), while `Runtime` tells you whether the session is using `OpenClaw Pi Default`, `OpenAI Codex`, a CLI backend, or an ACP backend such as `codex (acp/acpx)`. See [Agent runtimes](/concepts/agent-runtimes) for the provider/model/runtime distinction.
 - MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota, so OpenClaw inverts them before display; count-based fields win when present. `model_remains` responses prefer the chat-model entry, derive the window label from timestamps when needed, and include the model name in the plan label.
 - When the current session snapshot is sparse, `/status` can backfill token and cache counters from the most recent transcript usage log. Existing nonzero live values still win over transcript fallback values.
 - Transcript fallback can also recover the active runtime model label when the live session entry is missing it. If that transcript model differs from the selected model, status resolves the context window against the recovered runtime model instead of the selected one.

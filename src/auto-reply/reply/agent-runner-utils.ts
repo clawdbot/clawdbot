@@ -11,7 +11,12 @@ import {
   getScopedChannelsCommandSecretTargets,
 } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
-import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+  type OpenClawConfig,
+} from "../../config/config.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -29,8 +34,16 @@ import type { FollowupRun } from "./queue.js";
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  const runtimeConfig =
+    typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null;
+  const runtimeSourceConfig =
+    typeof getRuntimeConfigSourceSnapshot === "function" ? getRuntimeConfigSourceSnapshot() : null;
   return (
-    (typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null) ?? config
+    selectApplicableRuntimeConfig({
+      inputConfig: config,
+      runtimeConfig,
+      runtimeSourceConfig,
+    }) ?? config
   );
 }
 

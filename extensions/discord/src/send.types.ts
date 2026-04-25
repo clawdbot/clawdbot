@@ -37,7 +37,7 @@ export type DiscordRuntimeAccountContext = {
 };
 
 export type DiscordReactOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   accountId?: string;
   token?: string;
   rest?: RequestClient;

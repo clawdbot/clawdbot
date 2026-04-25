@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   captureWsEvent,
   createDebugProxyWebSocketAgent,
@@ -634,10 +635,7 @@ async function createOpenAIRealtimeBrowserSession(
   const payload = await (async () => {
     try {
       if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(
-          `OpenAI Realtime browser session failed (${response.status}): ${detail || response.statusText}`,
-        );
+        throw await createProviderHttpError(response, "OpenAI Realtime browser session failed");
       }
       return (await response.json()) as unknown;
     } finally {

@@ -58,7 +58,17 @@ Natural-language triggers that should route to the native Codex plugin:
 - "Attach this chat to Codex thread `<id>`."
 - "Show Codex threads, then bind this one."
 
-Native Codex conversation binding is the default chat-control path, but it is intentionally conservative for interactive Codex approval/tool flows: OpenClaw dynamic tools and approval prompts are not exposed through this bound-chat path yet, so those requests are declined with a clear explanation. Use the Codex harness path or explicit ACP fallback when the workflow depends on OpenClaw dynamic tools or long-running interactive approvals.
+Native Codex conversation binding is the default chat-control path. OpenClaw
+dynamic tools still execute through OpenClaw, while Codex-native tools such as
+shell/apply-patch execute inside Codex. For Codex-native tool events, OpenClaw
+injects a per-turn native hook relay so plugin hooks can block
+`before_tool_call`, observe `after_tool_call`, and route Codex
+`PermissionRequest` events through OpenClaw approvals. The v1 relay is
+deliberately conservative: it does not mutate Codex-native tool arguments,
+rewrite Codex thread records, or gate final answers/Stop hooks. Use explicit
+ACP only when you want the ACP runtime/session model. The embedded Codex support
+boundary is documented in the
+[Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
 
 Natural-language triggers that should route to the ACP runtime:
 

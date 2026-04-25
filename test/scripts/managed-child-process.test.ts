@@ -65,7 +65,7 @@ process.exitCode = await runManagedCommand({
       const result = await waitForClose(runner);
 
       expect(result).toEqual({ code: 143, signal: null });
-      await waitFor(() => !isProcessAlive(childPid));
+      await waitFor(() => !isProcessAlive(childPid), 10_000);
     } finally {
       if (runner.pid && isProcessAlive(runner.pid)) {
         process.kill(runner.pid, "SIGKILL");

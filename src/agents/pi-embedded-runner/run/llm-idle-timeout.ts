@@ -25,6 +25,8 @@ export function resolveLlmIdleTimeoutMs(params?: {
   runTimeoutMs?: number;
 }): number {
   const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
+  const clampImplicitTimeoutMs = (valueMs: number) =>
+    clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
   const raw = params?.cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
   // 0 means explicitly disabled (no timeout).
   if (raw === 0) {
@@ -39,7 +41,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
     if (runTimeoutMs >= MAX_SAFE_TIMEOUT_MS) {
       return 0;
     }
-    return clampTimeoutMs(runTimeoutMs);
+    return clampImplicitTimeoutMs(runTimeoutMs);
   }
 
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
@@ -48,7 +50,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
     Number.isFinite(agentTimeoutSeconds) &&
     agentTimeoutSeconds > 0
   ) {
-    return clampTimeoutMs(agentTimeoutSeconds * 1000);
+    return clampImplicitTimeoutMs(agentTimeoutSeconds * 1000);
   }
 
   if (params?.trigger === "cron") {

@@ -3,11 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
-vi.mock("@mariozechner/pi-ai", async () =>
-  createPiAiStreamSimpleMock(() =>
-    vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai"),
-  ),
-);
+vi.mock("@mariozechner/pi-ai", () => createPiAiStreamSimpleMock());
 
 let runExtraParamsCase: typeof import("./extra-params.test-support.js").runExtraParamsCase;
 let extraParamsTesting: typeof import("./extra-params.js").__testing;
@@ -46,6 +42,7 @@ describe("extra-params: provider tool_stream support", () => {
         }
         return extraParams;
       },
+      resolveProviderExtraParamsForTransport: () => undefined,
       wrapProviderStreamFn: (params) => {
         const extraParams = params.context.extraParams ?? {};
         if (extraParams.tool_stream !== true) {

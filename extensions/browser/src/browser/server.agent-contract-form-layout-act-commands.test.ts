@@ -374,9 +374,17 @@ describe("browser control server", () => {
     const shot = await postJson<{ ok: boolean; path?: string }>(`${base}/screenshot`, {
       element: "body",
       type: "jpeg",
+      timeoutMs: 3333,
     });
     expect(shot.ok).toBe(true);
     expect(typeof shot.path).toBe("string");
+    expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        element: "body",
+        type: "jpeg",
+        timeoutMs: 3333,
+      }),
+    );
   });
 
   it("blocks file chooser traversal / absolute paths outside uploads dir", async () => {

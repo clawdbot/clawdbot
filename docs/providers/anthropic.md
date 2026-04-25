@@ -5,8 +5,6 @@ read_when:
 title: "Anthropic"
 ---
 
-# Anthropic (Claude)
-
 Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 - **API key** — direct Anthropic API access with usage-based billing (`anthropic/*` models)

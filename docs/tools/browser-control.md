@@ -141,11 +141,13 @@ openclaw browser close abcd1234
 openclaw browser screenshot
 openclaw browser screenshot --full-page
 openclaw browser screenshot --ref 12        # or --ref e12
+openclaw browser screenshot --labels
 openclaw browser snapshot
 openclaw browser snapshot --format aria --limit 200
 openclaw browser snapshot --interactive --compact --depth 6
 openclaw browser snapshot --efficient
 openclaw browser snapshot --labels
+openclaw browser snapshot --urls
 openclaw browser snapshot --selector "#main" --interactive
 openclaw browser snapshot --frame "iframe#main" --interactive
 openclaw browser console --level error
@@ -163,6 +165,7 @@ openclaw browser responsebody "**/api" --max-chars 5000
 openclaw browser navigate https://example.com
 openclaw browser resize 1280 720
 openclaw browser click 12 --double           # or e12 for role refs
+openclaw browser click-coords 120 340        # viewport coordinates
 openclaw browser type 23 "hello" --submit
 openclaw browser press Enter
 openclaw browser hover 44
@@ -210,7 +213,7 @@ openclaw browser set device "iPhone 14"
 Notes:
 
 - `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog.
-- `click`/`type`/etc require a `ref` from `snapshot` (numeric `12` or role ref `e12`). CSS selectors are intentionally not supported for actions.
+- `click`/`type`/etc require a `ref` from `snapshot` (numeric `12` or role ref `e12`). CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
 - Download, trace, and upload paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads,/uploads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 
@@ -221,6 +224,7 @@ Snapshot flags at a glance:
 - `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/configuration-reference#browser)).
 - `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
 - `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
+- `--urls` appends discovered link destinations to AI snapshots.
 
 ## Snapshots and refs
 
@@ -236,6 +240,8 @@ OpenClaw supports two “snapshot” styles:
   - Actions: `openclaw browser click e12`, `openclaw browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
   - Add `--labels` to include a viewport screenshot with overlayed `e12` labels.
+  - Add `--urls` when link text is ambiguous and the agent needs concrete
+    navigation targets.
 
 Ref behavior:
 

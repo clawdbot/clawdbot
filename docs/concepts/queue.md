@@ -5,8 +5,6 @@ read_when:
 title: "Command queue"
 ---
 
-# Command Queue (2026-01-16)
-
 We serialize inbound auto-reply runs (all channels) through a tiny in-process queue to prevent multiple agent runs from colliding, while still allowing safe parallelism across sessions.
 
 ## Why

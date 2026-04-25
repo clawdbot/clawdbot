@@ -1,3 +1,9 @@
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+
 export const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimax.io";
 
 export const MINIMAX_TTS_MODELS = ["speech-2.8-hd", "speech-01-240228"] as const;
@@ -16,6 +22,10 @@ export function normalizeMinimaxTtsBaseUrl(baseUrl?: string): string {
     return DEFAULT_MINIMAX_TTS_BASE_URL;
   }
   return trimmed.replace(/\/+$/, "");
+}
+
+function normalizeMinimaxTtsPitch(pitch: number): number {
+  return Math.trunc(pitch);
 }
 
 export async function minimaxTTS(params: {
@@ -49,41 +59,47 @@ export async function minimaxTTS(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${baseUrl}/v1/t2a_v2`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${baseUrl}/v1/t2a_v2`,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          text,
+          voice_setting: {
+            voice_id: voiceId,
+            speed,
+            vol,
+            pitch: normalizeMinimaxTtsPitch(pitch),
+          },
+          audio_setting: {
+            format,
+            sample_rate: sampleRate,
+          },
+        }),
+        signal: controller.signal,
       },
-      body: JSON.stringify({
-        model,
-        text,
-        voice_setting: {
-          voice_id: voiceId,
-          speed,
-          vol,
-          pitch,
-        },
-        audio_setting: {
-          format,
-          sample_rate: sampleRate,
-        },
-      }),
-      signal: controller.signal,
+      timeoutMs,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+      auditContext: "minimax.tts",
     });
+    try {
+      await assertOkOrThrowProviderError(response, "MiniMax TTS API error");
 
-    if (!response.ok) {
-      const errBody = await response.text().catch(() => "");
-      throw new Error(`MiniMax TTS API error (${response.status})${errBody ? `: ${errBody}` : ""}`);
+      const body = (await response.json()) as { data?: { audio?: string } };
+      const hexAudio = body?.data?.audio;
+      if (!hexAudio) {
+        throw new Error("MiniMax TTS API returned no audio data");
+      }
+
+      return Buffer.from(hexAudio, "hex");
+    } finally {
+      await release();
     }
-
-    const body = (await response.json()) as { data?: { audio?: string } };
-    const hexAudio = body?.data?.audio;
-    if (!hexAudio) {
-      throw new Error("MiniMax TTS API returned no audio data");
-    }
-
-    return Buffer.from(hexAudio, "hex");
   } finally {
     clearTimeout(timeout);
   }

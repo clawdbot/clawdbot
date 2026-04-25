@@ -83,6 +83,23 @@ describe("browser control server", () => {
   );
 
   it(
+    "returns ACT_INVALID_REQUEST for malformed coordinate clicks",
+    async () => {
+      const base = await startServerAndBase();
+      const response = await postActAndReadError(base, {
+        kind: "clickCoords",
+        x: -1,
+        y: 20,
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("ACT_INVALID_REQUEST");
+      expect(response.body.error).toContain("clickCoords requires non-negative x and y");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns ACT_EXISTING_SESSION_UNSUPPORTED for unsupported existing-session actions",
     async () => {
       setBrowserControlServerProfiles({
@@ -296,6 +313,31 @@ describe("browser control server", () => {
     );
     const [clickSelectorArgs] = pwMocks.clickViaPlaywright.mock.calls[1] ?? [];
     expect((clickSelectorArgs as { doubleClick?: boolean }).doubleClick).toBeUndefined();
+
+    const clickCoords = await postJson<{ ok: boolean; url?: string }>(`${base}/act`, {
+      kind: "clickCoords",
+      x: "42.5",
+      y: 64,
+      doubleClick: "true",
+      button: "left",
+      delayMs: "10",
+    });
+    expect(clickCoords.ok).toBe(true);
+    expect(clickCoords.url).toBe("https://example.com");
+    expect(pwMocks.clickCoordsViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        x: 42.5,
+        y: 64,
+        doubleClick: true,
+        button: "left",
+        delayMs: 10,
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      }),
+    );
 
     const type = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "type",

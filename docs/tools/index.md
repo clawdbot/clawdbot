@@ -125,6 +125,12 @@ config. Deny always wins over allow.
 }
 ```
 
+OpenClaw fails closed when an explicit allowlist resolves to no callable tools.
+For example, `tools.allow: ["query_db"]` only works if a loaded plugin actually
+registers `query_db`. If no built-in, plugin, or bundled MCP tool matches the
+allowlist, the run stops before the model call instead of continuing as a
+text-only run that could hallucinate tool results.
+
 ### Tool profiles
 
 `tools.profile` sets a base allowlist before `allow`/`deny` is applied.

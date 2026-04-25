@@ -25,6 +25,12 @@ describe("resolveDefaultMediaModel", () => {
     expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "image" })).toBe(
       "auto",
     );
+    expect(resolveDefaultMediaModel({ providerId: "opencode", capability: "image" })).toBe(
+      "gpt-5-nano",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "opencode-go", capability: "image" })).toBe(
+      "kimi-k2.6",
+    );
   });
 });
 

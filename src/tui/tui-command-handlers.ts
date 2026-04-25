@@ -22,6 +22,7 @@ import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
   GatewayStatusSummary,
+  TuiResult,
   TuiOptions,
   TuiStateAccess,
 } from "./tui-types.js";
@@ -50,7 +51,7 @@ type CommandHandlerContext = {
   runAuthFlow?: (params: {
     provider?: string;
   }) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
-  requestExit: () => void;
+  requestExit: (result?: Partial<TuiResult>) => void;
 };
 
 function isBtwCommand(text: string): boolean {
@@ -85,6 +86,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
+    chatLog.addSystem(`agent set to ${state.currentAgentId}; use /crestodian to return`);
   };
 
   const closeOverlayAndRender = () => {
@@ -328,6 +330,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "agents":
         await openAgentSelector();
+        break;
+      case "crestodian":
+        chatLog.addSystem(
+          args ? `returning to Crestodian with request: ${args}` : "returning to Crestodian",
+        );
+        requestExit({
+          exitReason: "return-to-crestodian",
+          ...(args ? { crestodianMessage: args } : {}),
+        });
         break;
       case "session":
         if (!args) {

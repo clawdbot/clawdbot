@@ -148,3 +148,63 @@ describe("webHandlers web.login.start", () => {
     expect(startChannel).not.toHaveBeenCalled();
   });
 });
+
+describe("webHandlers web.login.wait", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("passes refreshed QR payloads back to the client while login is still pending", async () => {
+    const loginWithQrWait = vi.fn().mockResolvedValue({
+      connected: false,
+      message: "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.",
+      qrDataUrl: "data:image/png;base64,next-qr",
+    });
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        gatewayMethods: ["web.login.wait"],
+        gateway: { loginWithQrWait },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await webHandlers["web.login.wait"](
+      createOptions(
+        {
+          accountId: "default",
+          timeoutMs: 5000,
+          currentQrDataUrl: "data:image/png;base64,current-qr",
+        },
+        {
+          req: {
+            type: "req",
+            id: "req-2",
+            method: "web.login.wait",
+            params: {
+              accountId: "default",
+              timeoutMs: 5000,
+              currentQrDataUrl: "data:image/png;base64,current-qr",
+            },
+          } as GatewayRequestHandlerOptions["req"],
+          respond,
+        },
+      ),
+    );
+
+    expect(loginWithQrWait).toHaveBeenCalledWith({
+      accountId: "default",
+      timeoutMs: 5000,
+      currentQrDataUrl: "data:image/png;base64,current-qr",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        connected: false,
+        message: "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.",
+        qrDataUrl: "data:image/png;base64,next-qr",
+      },
+      undefined,
+    );
+  });
+});

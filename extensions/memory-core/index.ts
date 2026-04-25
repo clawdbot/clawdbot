@@ -44,6 +44,7 @@ export default definePluginEntry({
         createMemorySearchTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
+          sandboxed: ctx.sandboxed,
         }),
       { names: ["memory_search"] },
     );

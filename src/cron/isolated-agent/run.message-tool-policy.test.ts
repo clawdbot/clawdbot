@@ -241,6 +241,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       thinkLevel: undefined,
       timeoutMs: 60_000,
       messageChannel: "messagechat",
+      suppressExecNotifyOnExit: true,
       toolPolicy: {
         requireExplicitMessageTarget: false,
         disableMessageTool: false,
@@ -267,6 +268,48 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     await expectMessageToolEnabledForPlan({
       requested: false,
       mode: "none",
+    });
+  });
+
+  it('suppresses automatic exec completion notifications when delivery.mode is "none"', async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+      channel: "topicchat",
+      to: "room#42",
+      threadId: 42,
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "topicchat",
+      to: "room#42",
+      threadId: 42,
+      accountId: undefined,
+      error: undefined,
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob({
+        mode: "none",
+        channel: "topicchat",
+        to: "room#42",
+        threadId: 42,
+      }),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      disableMessageTool: false,
+      forceMessageTool: true,
+      messageChannel: "topicchat",
+      messageTo: "room#42",
+      messageThreadId: 42,
+      execOverrides: {
+        notifyOnExit: false,
+        notifyOnExitEmptySuccess: false,
+      },
     });
   });
 
@@ -412,6 +455,39 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       channel: "messagechat",
       to: "123",
     });
+  });
+
+  it("keeps automatic exec completion notifications when announce delivery is active", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob(),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.execOverrides).toBeUndefined();
+  });
+
+  it("keeps automatic exec completion notifications when webhook delivery is active", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob({
+        mode: "webhook",
+        to: "https://example.invalid/cron",
+      }),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.execOverrides).toBeUndefined();
   });
 
   it("disables the message tool when webhook delivery is active", async () => {

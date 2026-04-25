@@ -104,6 +104,10 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
+}));
+
 vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
 }));
@@ -178,6 +182,13 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
       loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
+      getRequesterSessionActivity: (requesterSessionKey: string) => {
+        const entry = sessionStore[requesterSessionKey];
+        return {
+          sessionId: entry?.sessionId,
+          isActive: false,
+        };
+      },
     });
     subagentAnnounceOutputTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
@@ -457,6 +468,7 @@ describe("subagent registry lifecycle error grace", () => {
     emitLifecycleEvent("run-refresh-silent", { phase: "end", endedAt });
     await flushAsync();
     await waitForCleanupHandledFalse("run-refresh-silent");
+    await waitForFrozenResultText("run-refresh-silent", "All work complete, final summary");
 
     setAssistantOutput("agent:main:subagent:refresh-silent", "NO_REPLY");
     emitLifecycleEvent(

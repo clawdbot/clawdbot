@@ -1,28 +1,6 @@
 import fs from "node:fs/promises";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { TEST_STATE_DIR, SANDBOX_REGISTRY_PATH, SANDBOX_BROWSER_REGISTRY_PATH } = vi.hoisted(() => {
-  const path = require("node:path");
-  const { mkdtempSync } = require("node:fs");
-  const { tmpdir } = require("node:os");
-  const baseDir = mkdtempSync(path.join(tmpdir(), "openclaw-sandbox-registry-"));
-
-  return {
-    TEST_STATE_DIR: baseDir,
-    SANDBOX_REGISTRY_PATH: path.join(baseDir, "containers.json"),
-    SANDBOX_BROWSER_REGISTRY_PATH: path.join(baseDir, "browsers.json"),
-  };
-});
-
-vi.mock("./constants.js", () => ({
-  SANDBOX_STATE_DIR: TEST_STATE_DIR,
-  SANDBOX_REGISTRY_PATH,
-  SANDBOX_BROWSER_REGISTRY_PATH,
-}));
-
-type SandboxBrowserRegistryEntry = import("./registry.js").SandboxBrowserRegistryEntry;
-type SandboxRegistryEntry = import("./registry.js").SandboxRegistryEntry;
-
 type WriteDelayConfig = {
   targetFile: "containers.json" | "browsers.json";
   containerName: string;
@@ -31,58 +9,67 @@ type WriteDelayConfig = {
   waitForRelease: Promise<void>;
 };
 
-let activeWriteGate: WriteDelayConfig | null = null;
-let readBrowserRegistry: typeof import("./registry.js").readBrowserRegistry;
-let readRegistry: typeof import("./registry.js").readRegistry;
-let removeBrowserRegistryEntry: typeof import("./registry.js").removeBrowserRegistryEntry;
-let removeRegistryEntry: typeof import("./registry.js").removeRegistryEntry;
-let updateBrowserRegistry: typeof import("./registry.js").updateBrowserRegistry;
-let updateRegistry: typeof import("./registry.js").updateRegistry;
+const { TEST_STATE_DIR, SANDBOX_REGISTRY_PATH, SANDBOX_BROWSER_REGISTRY_PATH, writeGateState } =
+  vi.hoisted(() => {
+    const path = require("node:path");
+    const { mkdtempSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const baseDir = mkdtempSync(path.join(tmpdir(), "openclaw-sandbox-registry-"));
 
-async function loadFreshRegistryModuleForTest() {
-  vi.resetModules();
-  vi.doMock("./constants.js", () => ({
-    SANDBOX_STATE_DIR: TEST_STATE_DIR,
-    SANDBOX_REGISTRY_PATH,
-    SANDBOX_BROWSER_REGISTRY_PATH,
-  }));
-  vi.doMock("../../infra/json-files.js", async () => {
-    const actual = await vi.importActual<typeof import("../../infra/json-files.js")>(
-      "../../infra/json-files.js",
-    );
     return {
-      ...actual,
-      writeJsonAtomic: async (
-        filePath: string,
-        value: unknown,
-        options?: Parameters<typeof actual.writeJsonAtomic>[2],
-      ) => {
-        const payload = JSON.stringify(value);
-        const gate = activeWriteGate;
-        if (
-          gate &&
-          filePath.includes(gate.targetFile) &&
-          payloadMentionsContainer(payload, gate.containerName)
-        ) {
-          if (!gate.started) {
-            gate.started = true;
-            gate.markStarted();
-          }
-          await gate.waitForRelease;
-        }
-        await actual.writeJsonAtomic(filePath, value, options);
-      },
+      TEST_STATE_DIR: baseDir,
+      SANDBOX_REGISTRY_PATH: path.join(baseDir, "containers.json"),
+      SANDBOX_BROWSER_REGISTRY_PATH: path.join(baseDir, "browsers.json"),
+      writeGateState: { active: null as WriteDelayConfig | null },
     };
   });
-  ({
-    readBrowserRegistry,
-    readRegistry,
-    removeBrowserRegistryEntry,
-    removeRegistryEntry,
-    updateBrowserRegistry,
-    updateRegistry,
-  } = await import("./registry.js"));
-}
+
+vi.mock("./constants.js", () => ({
+  SANDBOX_STATE_DIR: TEST_STATE_DIR,
+  SANDBOX_REGISTRY_PATH,
+  SANDBOX_BROWSER_REGISTRY_PATH,
+}));
+
+vi.mock("../../infra/json-files.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/json-files.js")>(
+    "../../infra/json-files.js",
+  );
+  return {
+    ...actual,
+    writeJsonAtomic: async (
+      filePath: string,
+      value: unknown,
+      options?: Parameters<typeof actual.writeJsonAtomic>[2],
+    ) => {
+      const payload = JSON.stringify(value);
+      const gate = writeGateState.active;
+      if (
+        gate &&
+        filePath.includes(gate.targetFile) &&
+        payloadMentionsContainer(payload, gate.containerName)
+      ) {
+        if (!gate.started) {
+          gate.started = true;
+          gate.markStarted();
+        }
+        await gate.waitForRelease;
+      }
+      await actual.writeJsonAtomic(filePath, value, options);
+    },
+  };
+});
+
+import {
+  readBrowserRegistry,
+  readRegistry,
+  removeBrowserRegistryEntry,
+  removeRegistryEntry,
+  updateBrowserRegistry,
+  updateRegistry,
+} from "./registry.js";
+
+type SandboxBrowserRegistryEntry = import("./registry.js").SandboxBrowserRegistryEntry;
+type SandboxRegistryEntry = import("./registry.js").SandboxRegistryEntry;
 
 function payloadMentionsContainer(payload: string, containerName: string): boolean {
   return (
@@ -111,7 +98,7 @@ function installWriteGate(
   const waitForRelease = new Promise<void>((resolve) => {
     resolveRelease = resolve;
   });
-  activeWriteGate = {
+  writeGateState.active = {
     targetFile,
     containerName,
     started: false,
@@ -122,18 +109,16 @@ function installWriteGate(
     waitForStart,
     release: () => {
       resolveRelease();
-      activeWriteGate = null;
+      writeGateState.active = null;
     },
   };
 }
 
-beforeEach(async () => {
-  activeWriteGate = null;
-  await loadFreshRegistryModuleForTest();
+beforeEach(() => {
+  writeGateState.active = null;
 });
 
 afterEach(async () => {
-  vi.restoreAllMocks();
   await fs.rm(SANDBOX_REGISTRY_PATH, { force: true });
   await fs.rm(SANDBOX_BROWSER_REGISTRY_PATH, { force: true });
   await fs.rm(`${SANDBOX_REGISTRY_PATH}.lock`, { force: true });

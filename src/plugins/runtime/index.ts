@@ -216,7 +216,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       _options.subagent,
       _options.allowGatewaySubagentBinding === true,
     ),
-    nodes: createLateBindingNodes(_options.allowGatewaySubagentBinding === true),
+    nodes: _options.nodes ?? createLateBindingNodes(_options.allowGatewaySubagentBinding === true),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     webSearch: {

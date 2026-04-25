@@ -456,6 +456,127 @@ describe("slackPlugin outbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-media" });
   });
 
+  it("falls back to threadId when replyToId is not a Slack thread timestamp", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text" });
+    const sendText = requireSlackSendText();
+
+    const result = await sendText({
+      cfg,
+      to: "C123",
+      text: "hello",
+      accountId: "default",
+      replyToId: "msg-internal-1",
+      threadId: "1712345678.123456",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        threadTs: "1712345678.123456",
+      }),
+    );
+    expect(result).toEqual({ channel: "slack", messageId: "m-text" });
+  });
+
+  it("does not stringify numeric Slack thread ids", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text" });
+    const sendText = requireSlackSendText();
+
+    await sendText({
+      cfg,
+      to: "C123",
+      text: "hello",
+      accountId: "default",
+      threadId: 1712345678.123456,
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        threadTs: undefined,
+      }),
+    );
+  });
+
+  it("falls back to auto-thread lookup when replyToId is not a Slack thread timestamp", () => {
+    const resolveAutoThreadId = slackPlugin.threading?.resolveAutoThreadId;
+    if (!resolveAutoThreadId) {
+      throw new Error("slack threading.resolveAutoThreadId unavailable");
+    }
+
+    const threadId = resolveAutoThreadId({
+      cfg,
+      to: "channel:C123",
+      replyToId: "msg-internal-1",
+      toolContext: {
+        currentChannelId: "C123",
+        currentThreadTs: "1712345678.123456",
+        replyToMode: "all",
+      },
+    });
+
+    expect(threadId).toBe("1712345678.123456");
+  });
+
+  it("does not recover invalid Slack auto-thread anchors", () => {
+    const resolveAutoThreadId = slackPlugin.threading?.resolveAutoThreadId;
+    if (!resolveAutoThreadId) {
+      throw new Error("slack threading.resolveAutoThreadId unavailable");
+    }
+
+    const threadId = resolveAutoThreadId({
+      cfg,
+      to: "channel:C123",
+      replyToId: "msg-internal-1",
+      toolContext: {
+        currentChannelId: "C123",
+        currentThreadTs: "thread-root",
+        replyToMode: "all",
+      },
+    });
+
+    expect(threadId).toBeUndefined();
+  });
+
+  it("does not stringify numeric thread ids in tool context", () => {
+    const buildToolContext = slackPlugin.threading?.buildToolContext;
+    if (!buildToolContext) {
+      throw new Error("slack threading.buildToolContext unavailable");
+    }
+
+    const context = buildToolContext({
+      cfg,
+      context: {
+        To: "channel:C123",
+        MessageThreadId: 1712345678.123456,
+      },
+    });
+
+    expect(context?.currentThreadTs).toBeUndefined();
+  });
+
+  it("falls back to threadId in reply transport when replyToId is not a Slack thread timestamp", () => {
+    const resolveReplyTransport = slackPlugin.threading?.resolveReplyTransport;
+    if (!resolveReplyTransport) {
+      throw new Error("slack threading.resolveReplyTransport unavailable");
+    }
+
+    expect(
+      resolveReplyTransport({
+        cfg,
+        replyToId: "msg-internal-1",
+        threadId: "1712345678.123456",
+      }),
+    ).toEqual({
+      replyToId: "1712345678.123456",
+      threadId: null,
+    });
+  });
+
   it("forwards mediaLocalRoots for sendMedia", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media-local" });
     const sendMedia = requireSlackSendMedia();

@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
 import {
@@ -83,19 +84,19 @@ const {
 } = discordSendMocks;
 
 const enableAllActions = () => true;
-const DISCORD_TEST_CFG = {} as OpenClawConfig;
+const DISCORD_TEST_CFG = EMPTY_DISCORD_TEST_CONFIG;
 
 function handleMessagingAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
+  cfg: OpenClawConfig = DISCORD_TEST_CFG,
   options?: {
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
-  cfg: OpenClawConfig = DISCORD_TEST_CFG,
 ) {
-  return handleDiscordMessagingAction(action, params, isActionEnabled, options, cfg);
+  return handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
 }
 
 function handleGuildAction(
@@ -178,7 +179,6 @@ describe("handleDiscordMessagingAction", () => {
         emoji: "✅",
       },
       enableAllActions,
-      undefined,
       {
         channels: {
           discord: {
@@ -363,7 +363,7 @@ describe("handleDiscordMessagingAction", () => {
         },
       },
     } as OpenClawConfig;
-    await handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions, {}, cfg);
+    await handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions, cfg);
     expect(readMessagesDiscord).toHaveBeenCalledWith("C1", expect.any(Object), { cfg });
   });
 
@@ -397,7 +397,6 @@ describe("handleDiscordMessagingAction", () => {
       "fetchMessage",
       { guildId: "G1", channelId: "C1", messageId: "M1" },
       enableAllActions,
-      {},
       cfg,
     );
     expect(fetchMessageDiscord).toHaveBeenCalledWith("C1", "M1", { cfg });
@@ -471,6 +470,7 @@ describe("handleDiscordMessagingAction", () => {
         mediaUrl: "/tmp/image.png",
       },
       enableAllActions,
+      DISCORD_TEST_CFG,
       { mediaLocalRoots: ["/tmp/agent-root"] },
     );
     expect(sendMessageDiscord).toHaveBeenCalledWith(
@@ -496,6 +496,7 @@ describe("handleDiscordMessagingAction", () => {
         components: {},
       },
       enableAllActions,
+      DISCORD_TEST_CFG,
       { mediaLocalRoots: ["/tmp/agent-root"] },
     );
 

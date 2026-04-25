@@ -31,7 +31,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `update allowlist reports rejected basename pattern`() async throws {
+    func `update allowlist accepts basename pattern`() async throws {
         try await self.withTempStateDir { _ in
             let rejected = ExecApprovalsStore.updateAllowlist(
                 agentId: "main",
@@ -39,12 +39,10 @@ struct ExecApprovalsStoreRefactorTests {
                     ExecAllowlistEntry(pattern: "echo"),
                     ExecAllowlistEntry(pattern: "/bin/echo"),
                 ])
-            #expect(rejected.count == 1)
-            #expect(rejected.first?.reason == .missingPathComponent)
-            #expect(rejected.first?.pattern == "echo")
+            #expect(rejected.isEmpty)
 
             let resolved = ExecApprovalsStore.resolve(agentId: "main")
-            #expect(resolved.allowlist.map(\.pattern) == ["/bin/echo"])
+            #expect(resolved.allowlist.map(\.pattern) == ["echo", "/bin/echo"])
         }
     }
 

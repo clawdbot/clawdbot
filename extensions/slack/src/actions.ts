@@ -4,7 +4,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackWebClient, createSlackWriteClient } from "./client.js";
+import { createSlackWebClient, getSlackWriteClient } from "./client.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
@@ -81,7 +81,7 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
     return opts.client;
   }
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
-  return mode === "write" ? createSlackWriteClient(token) : createSlackWebClient(token);
+  return mode === "write" ? getSlackWriteClient(token) : createSlackWebClient(token);
 }
 
 async function resolveBotUserId(client: WebClient) {

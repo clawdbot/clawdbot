@@ -150,7 +150,12 @@ describe("web monitor inbox", () => {
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ from: "+123", to: "+123", body: "self ping" }),
+      expect.objectContaining({
+        from: "+123",
+        to: "+123",
+        body: "self ping",
+        accessControlPassed: true,
+      }),
     );
     expect(sock.readMessages).not.toHaveBeenCalled();
 

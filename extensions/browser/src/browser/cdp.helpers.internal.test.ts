@@ -246,6 +246,31 @@ describe("cdp.helpers internal", () => {
         }),
       ).rejects.toThrow(/CDP socket closed/);
     });
+
+    it("rejects and closes the socket when a CDP command exceeds its timeout", async () => {
+      const server = await startWsServer();
+      wss = server.wss;
+      let closed = false;
+      server.wss.on("connection", (socket) => {
+        socket.on("message", () => {
+          // Intentionally leave the command unanswered.
+        });
+        socket.on("close", () => {
+          closed = true;
+        });
+      });
+
+      await expect(
+        withCdpSocket(
+          server.url,
+          async (send) => {
+            await send("Page.captureScreenshot");
+          },
+          { commandTimeoutMs: 5 },
+        ),
+      ).rejects.toThrow(/CDP command Page\.captureScreenshot timed out after 5ms/);
+      await vi.waitFor(() => expect(closed).toBe(true));
+    });
   });
 
   describe("withCdpSocket", () => {

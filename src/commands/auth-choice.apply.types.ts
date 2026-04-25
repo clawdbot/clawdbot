@@ -11,6 +11,7 @@ export type ApplyAuthChoiceParams = {
   runtime: RuntimeEnv;
   agentDir?: string;
   setDefaultModel: boolean;
+  preserveExistingDefaultModel?: boolean;
   agentId?: string;
   opts?: Partial<OnboardOptions>;
 };

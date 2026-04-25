@@ -6,6 +6,10 @@ import type {
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
+import {
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+} from "./constants.js";
 
 export type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 
@@ -24,6 +28,29 @@ export type BrowserDownloadPayload = {
 };
 
 type BrowserDownloadResult = { ok: true; targetId: string; download: BrowserDownloadPayload };
+
+const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+
+function normalizePositiveTimeoutMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
+  const explicitTimeout = normalizePositiveTimeoutMs((req as { timeoutMs?: unknown }).timeoutMs);
+  const candidateTimeouts =
+    explicitTimeout === undefined
+      ? [DEFAULT_BROWSER_ACTION_TIMEOUT_MS]
+      : [explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS];
+  if (req.kind === "wait") {
+    const waitDuration = normalizePositiveTimeoutMs(req.timeMs);
+    if (waitDuration !== undefined) {
+      candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
+    }
+  }
+  return Math.max(...candidateTimeouts);
+}
 
 async function postDownloadRequest(
   baseUrl: string | undefined,
@@ -156,14 +183,17 @@ export async function browserDownload(
 export async function browserAct(
   baseUrl: string | undefined,
   req: BrowserActRequest,
-  opts?: { profile?: string },
+  opts?: { profile?: string; timeoutMs?: number },
 ): Promise<BrowserActResponse> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserActResponse>(withBaseUrl(baseUrl, `/act${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
-    timeoutMs: 20000,
+    timeoutMs:
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : resolveBrowserActRequestTimeoutMs(req),
   });
 }
 
@@ -175,10 +205,17 @@ export async function browserScreenshotAction(
     ref?: string;
     element?: string;
     type?: "png" | "jpeg";
+    labels?: boolean;
+    timeoutMs?: number;
     profile?: string;
   },
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? Math.max(1, Math.floor(opts.timeoutMs))
+      : undefined;
+  const effectiveTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
   return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/screenshot${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -188,7 +225,9 @@ export async function browserScreenshotAction(
       ref: opts.ref,
       element: opts.element,
       type: opts.type,
+      labels: opts.labels,
+      timeoutMs: effectiveTimeoutMs,
     }),
-    timeoutMs: 20000,
+    timeoutMs: effectiveTimeoutMs,
   });
 }

@@ -7,8 +7,6 @@ read_when:
 title: "Moonshot AI"
 ---
 
-# Moonshot AI (Kimi)
-
 Moonshot provides the Kimi API with OpenAI-compatible endpoints. Configure the
 provider and set the default model to `moonshot/kimi-k2.6`, or use
 Kimi Coding with `kimi/kimi-code`.

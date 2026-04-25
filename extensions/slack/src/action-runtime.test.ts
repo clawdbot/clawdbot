@@ -5,7 +5,7 @@ import { parseSlackBlocksInput } from "./blocks-input.js";
 
 const originalSlackActionRuntime = { ...slackActionRuntime };
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
-const downloadSlackFile = vi.fn(async (..._args: unknown[]) => null);
+const downloadSlackFile = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
 const editSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const getSlackMemberInfo = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackEmojis = vi.fn(async (..._args: unknown[]) => ({}));
@@ -262,6 +262,43 @@ describe("handleSlackAction", () => {
     expect(result).toEqual(
       expect.objectContaining({
         details: expect.objectContaining({ ok: false }),
+      }),
+    );
+  });
+
+  it("returns non-image downloadFile results as file metadata instead of image content", async () => {
+    downloadSlackFile.mockResolvedValueOnce({
+      path: "/tmp/openclaw-media/report.pdf",
+      contentType: "application/pdf",
+      placeholder: "[Slack file: report.pdf (fileId: F123)]",
+    });
+
+    const result = await handleSlackAction(
+      {
+        action: "downloadFile",
+        fileId: "F123",
+      },
+      slackConfig(),
+    );
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("/tmp/openclaw-media/report.pdf"),
+      }),
+    );
+    expect(result.content.some((entry) => entry.type === "image")).toBe(false);
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        ok: true,
+        fileId: "F123",
+        path: "/tmp/openclaw-media/report.pdf",
+        contentType: "application/pdf",
+        media: {
+          mediaUrl: "/tmp/openclaw-media/report.pdf",
+          contentType: "application/pdf",
+        },
       }),
     );
   });

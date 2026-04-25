@@ -35,19 +35,26 @@ export async function prepareGatewayPluginBootstrap(params: {
         }
       : params.cfgAtStart;
 
-  if (!params.minimalTestGateway) {
-    await Promise.all([
+  const shouldRunStartupMaintenance =
+    !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;
+  if (shouldRunStartupMaintenance) {
+    const startupTasks = [
       runChannelPluginStartupMaintenance({
         cfg: startupMaintenanceConfig,
         env: process.env,
         log: params.log,
       }),
-      runStartupSessionMigration({
-        cfg: params.cfgAtStart,
-        env: process.env,
-        log: params.log,
-      }),
-    ]);
+    ];
+    if (!params.minimalTestGateway) {
+      startupTasks.push(
+        runStartupSessionMigration({
+          cfg: params.cfgAtStart,
+          env: process.env,
+          log: params.log,
+        }),
+      );
+    }
+    await Promise.all(startupTasks);
   }
 
   initSubagentRegistry();

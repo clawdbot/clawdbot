@@ -42,7 +42,7 @@ export function normalizeThinkLevel(raw?: string | null): string | undefined {
   if (collapsed === "xhigh" || collapsed === "extrahigh") {
     return "xhigh";
   }
-  if (key === "off") {
+  if (key === "off" || key === "none") {
     return "off";
   }
   if (["on", "enable", "enabled"].includes(key)) {

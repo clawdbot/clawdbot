@@ -370,6 +370,8 @@ describe("scripts/changed-lanes", () => {
       PATH: "/usr/bin",
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
       OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
+      OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: "1",
     });
 
     expect(
@@ -381,5 +383,17 @@ describe("scripts/changed-lanes", () => {
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "45000",
       OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1",
     });
+  });
+
+  it("does not force serial changed-check tests in CI or when workers are explicit", () => {
+    expect(createChangedCheckVitestEnv({ CI: "true" })).not.toHaveProperty(
+      "OPENCLAW_VITEST_MAX_WORKERS",
+    );
+    expect(createChangedCheckVitestEnv({ OPENCLAW_VITEST_MAX_WORKERS: "4" })).toMatchObject({
+      OPENCLAW_VITEST_MAX_WORKERS: "4",
+    });
+    expect(
+      createChangedCheckVitestEnv({ OPENCLAW_TEST_PROJECTS_PARALLEL: "4" }),
+    ).not.toHaveProperty("OPENCLAW_TEST_PROJECTS_SERIAL");
   });
 });

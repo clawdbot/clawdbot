@@ -128,6 +128,11 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true, result: "nodes" }),
     },
     {
+      name: "browser",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "browser" }),
+    },
+    {
       name: "owner_only_test",
       ownerOnly: true,
       parameters: { type: "object", properties: {} },
@@ -181,7 +186,7 @@ vi.mock("../agents/openclaw-tools.js", () => {
   return {
     createOpenClawTools: (ctx: Record<string, unknown>) => {
       lastCreateOpenClawToolsContext = ctx;
-      return tools;
+      return ctx.disablePluginTools ? tools.filter((tool) => tool.name !== "browser") : tools;
     },
   };
 });
@@ -877,5 +882,18 @@ describe("POST /tools/invoke", () => {
     expect(patchRes.status).toBe(404);
     expect(nodesRes.status).toBe(404);
     expect(nodesAdminRes.status).toBe(404);
+  });
+
+  it("falls back to plugin-backed tools when a cataloged core tool has no core implementation", async () => {
+    setMainAllowedTools({ allow: ["browser"] });
+
+    const res = await invokeToolAuthed({
+      tool: "browser",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toEqual({ ok: true, result: "browser" });
+    expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
   });
 });

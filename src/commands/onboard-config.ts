@@ -1,3 +1,4 @@
+import { setConfigValueAtPath } from "../config/config-paths.js";
 import type { DmScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolProfileId } from "../config/types.tools.js";
@@ -31,4 +32,14 @@ export function applyLocalSetupWorkspaceConfig(
       profile: baseConfig.tools?.profile ?? ONBOARDING_DEFAULT_TOOLS_PROFILE,
     },
   };
+}
+
+export function applySkipBootstrapConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = structuredClone(cfg);
+  setConfigValueAtPath(
+    next as Record<string, unknown>,
+    ["agents", "defaults", "skipBootstrap"],
+    true,
+  );
+  return next;
 }

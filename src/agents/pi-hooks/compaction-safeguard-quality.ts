@@ -60,6 +60,7 @@ export function buildCompactionStructureInstructions(
     ...REQUIRED_SUMMARY_SECTIONS,
     identifierSectionInstruction,
     "Do not omit unresolved asks from the user.",
+    "When prior compaction summaries are present, re-distill them with new messages and remove stale duplicate detail.",
   ].join("\n");
   const custom = customInstructions?.trim();
   if (!custom) {

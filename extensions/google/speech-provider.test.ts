@@ -166,6 +166,39 @@ describe("Google speech provider", () => {
     });
   });
 
+  it("prepends configured Gemini TTS profile text", async () => {
+    const fetchMock = installGoogleTtsFetchMock();
+    const provider = buildGoogleSpeechProvider();
+
+    await provider.synthesize({
+      text: "Status update starts now.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+        audioProfile: "Speak professionally with a calm executive tone.",
+        speakerName: "Alex",
+      },
+      target: "audio-file",
+      timeoutMs: 10_000,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      contents: [
+        {
+          parts: [
+            {
+              text:
+                "Speak professionally with a calm executive tone.\n\n" +
+                "Speaker name: Alex\n\n" +
+                "Status update starts now.",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("resolves provider config and directive overrides", () => {
     const provider = buildGoogleSpeechProvider();
 
@@ -178,6 +211,8 @@ describe("Google speech provider", () => {
               apiKey: "configured-key",
               model: "google/gemini-3.1-flash-tts-preview",
               voice: "Leda",
+              audioProfile: "Speak warmly.",
+              speakerName: "Narrator",
             },
           },
         },
@@ -185,8 +220,10 @@ describe("Google speech provider", () => {
       }),
     ).toEqual({
       apiKey: "configured-key",
+      audioProfile: "Speak warmly.",
       baseUrl: undefined,
       model: "gemini-3.1-flash-tts-preview",
+      speakerName: "Narrator",
       voiceName: "Leda",
     });
 
@@ -243,6 +280,39 @@ describe("Google speech provider", () => {
         { id: "Kore", name: "Kore" },
         { id: "Puck", name: "Puck" },
       ]),
+    );
+  });
+
+  it("formats Google TTS HTTP errors with provider details", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "Quota exceeded",
+              status: "RESOURCE_EXHAUSTED",
+            },
+          }),
+          {
+            status: 429,
+            headers: { "x-request-id": "google_req_123" },
+          },
+        ),
+      ),
+    );
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Read this plainly.",
+        cfg: {},
+        providerConfig: { apiKey: "google-test-key" },
+        target: "audio-file",
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow(
+      "Google TTS failed (429): Quota exceeded [code=RESOURCE_EXHAUSTED] [request_id=google_req_123]",
     );
   });
 });

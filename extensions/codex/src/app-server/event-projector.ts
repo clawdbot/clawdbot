@@ -2,6 +2,8 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
+  embeddedAgentLog,
+  emitAgentEvent as emitGlobalAgentEvent,
   formatErrorMessage,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
@@ -34,6 +36,10 @@ export type CodexAppServerToolTelemetry = {
   successfulCronAdds?: number;
 };
 
+type AgentHarnessResultClassification = NonNullable<
+  EmbeddedRunAttemptResult["agentHarnessResultClassification"]
+>;
+
 const ZERO_USAGE: Usage = {
   input: 0,
   output: 0,
@@ -59,6 +65,25 @@ const CURRENT_TOKEN_USAGE_KEYS = [
 ] as const;
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
+
+function classifyTerminalResult(params: {
+  assistantTexts: string[];
+  reasoningText: string;
+  planText: string;
+  promptError: unknown;
+  turnCompleted: boolean;
+}): AgentHarnessResultClassification | undefined {
+  if (!params.turnCompleted || params.promptError || params.assistantTexts.length > 0) {
+    return undefined;
+  }
+  if (params.planText.trim()) {
+    return "planning-only";
+  }
+  if (params.reasoningText.trim()) {
+    return "reasoning-only";
+  }
+  return "empty";
+}
 
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
@@ -192,6 +217,13 @@ export class CodexAppServerEventProjector {
     const promptError =
       this.promptError ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
+    const agentHarnessResultClassification = classifyTerminalResult({
+      assistantTexts,
+      reasoningText,
+      planText,
+      promptError,
+      turnCompleted: Boolean(this.completedTurn),
+    });
     return {
       aborted: this.aborted || turnInterrupted,
       externalAbort: false,
@@ -201,6 +233,7 @@ export class CodexAppServerEventProjector {
       promptError,
       promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
       sessionIdUsed: this.params.sessionId,
+      ...(agentHarnessResultClassification ? { agentHarnessResultClassification } : {}),
       bootstrapPromptWarningSignaturesSeen: this.params.bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature: this.params.bootstrapPromptWarningSignature,
       messagesSnapshot,
@@ -693,9 +726,23 @@ export class CodexAppServerEventProjector {
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
   ): void {
     try {
-      this.params.onAgentEvent?.(event);
-    } catch {
+      emitGlobalAgentEvent({
+        runId: this.params.runId,
+        stream: event.stream,
+        data: event.data,
+        ...(this.params.sessionKey ? { sessionKey: this.params.sessionKey } : {}),
+      });
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+    }
+    try {
+      const maybePromise = this.params.onAgentEvent?.(event);
+      void Promise.resolve(maybePromise).catch((error: unknown) => {
+        embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
+      });
+    } catch (error) {
       // Downstream event consumers must not corrupt the canonical Codex turn projection.
+      embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
     }
   }
 

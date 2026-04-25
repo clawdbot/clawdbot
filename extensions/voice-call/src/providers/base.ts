@@ -1,4 +1,5 @@
 import type {
+  AnswerCallInput,
   GetCallStatusInput,
   GetCallStatusResult,
   HangupCallInput,
@@ -47,6 +48,12 @@ export interface VoiceCallProvider {
    * @returns Provider call ID and status
    */
   initiateCall(input: InitiateCallInput): Promise<InitiateCallResult>;
+
+  /**
+   * Answer an accepted inbound call when the provider requires an explicit
+   * answer command after the initial webhook.
+   */
+  answerCall?: (input: AnswerCallInput) => Promise<void>;
 
   /**
    * Hang up an active call.

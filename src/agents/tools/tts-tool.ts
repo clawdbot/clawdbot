@@ -92,7 +92,7 @@ export function createTtsTool(opts?: {
             media: {
               mediaUrl: result.audioPath,
               trustedLocalMedia: true,
-              ...(result.voiceCompatible ? { audioAsVoice: true } : {}),
+              ...(result.audioAsVoice || result.voiceCompatible ? { audioAsVoice: true } : {}),
             },
           },
         };

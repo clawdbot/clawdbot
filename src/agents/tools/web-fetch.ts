@@ -10,13 +10,13 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { isRecord } from "../../utils.js";
+import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   extractBasicHtmlContent,
-  extractReadableContent,
   htmlToMarkdown,
   markdownToText,
   truncateText,
@@ -34,7 +34,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-export { extractReadableContent } from "./web-fetch-utils.js";
+export { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
@@ -271,6 +271,7 @@ type WebFetchRuntimeParams = {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  config?: OpenClawConfig;
   ssrfPolicy?: {
     allowRfc2544BenchmarkRange?: boolean;
   };
@@ -498,11 +499,12 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           html: body,
           url: finalUrl,
           extractMode: params.extractMode,
+          config: params.config,
         });
         if (readable?.text) {
           text = readable.text;
           title = readable.title;
-          extractor = "readability";
+          extractor = readable.extractor;
         } else {
           let payload: Record<string, unknown> | null = null;
           try {
@@ -648,6 +650,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        config: options?.config,
         ssrfPolicy: fetch?.ssrfPolicy,
         lookupFn: options?.lookupFn,
         resolveProviderFallback,

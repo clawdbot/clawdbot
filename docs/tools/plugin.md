@@ -65,6 +65,9 @@ Packaged OpenClaw installs do not eagerly install every bundled plugin's
 runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
 plugin config, legacy channel config, or a default-enabled manifest, startup
 repairs only that plugin's declared runtime dependencies before importing it.
+Explicit disablement still wins: `plugins.entries.<id>.enabled: false`,
+`plugins.deny`, `plugins.enabled: false`, and `channels.<id>.enabled: false`
+prevent automatic bundled runtime-dependency repair for that plugin/channel.
 External plugins and custom load paths must still be installed through
 `openclaw plugins install`.
 
@@ -151,6 +154,17 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 Config changes **require a gateway restart**. If the Gateway is running with config
 watch + in-process restart enabled (the default `openclaw gateway` path), that
 restart is usually performed automatically a moment after the config write lands.
+There is no supported hot-reload path for native plugin runtime code or lifecycle
+hooks; restart the Gateway process that is serving the live channel before
+expecting updated `register(api)` code, `api.on(...)` hooks, tools, services, or
+provider/runtime hooks to run.
+
+`openclaw plugins list` is a local CLI/config snapshot. A `loaded` plugin there
+means the plugin is discoverable and loadable from the config/files seen by that
+CLI invocation. It does not prove that an already-running remote Gateway child
+has restarted into the same plugin code. On VPS/container setups with wrapper
+processes, send restarts to the actual `openclaw gateway run` process, or use
+`openclaw gateway restart` against the running Gateway.
 
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
@@ -196,6 +210,27 @@ OpenClaw scans for plugins in this order (first match wins):
   `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
   app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
   `codex/*` model refs
+
+## Troubleshooting runtime hooks
+
+If a plugin appears in `plugins list` but `register(api)` side effects or hooks
+do not run in live chat traffic, check these first:
+
+- Run `openclaw gateway status --deep --require-rpc` and confirm the active
+  Gateway URL, profile, config path, and process are the ones you are editing.
+- Restart the live Gateway after plugin install/config/code changes. In wrapper
+  containers, PID 1 may only be a supervisor; restart or signal the child
+  `openclaw gateway run` process.
+- Use `openclaw plugins inspect <id> --json` to confirm hook registrations and
+  diagnostics. Non-bundled conversation hooks such as `llm_input`,
+  `llm_output`, and `agent_end` need
+  `plugins.entries.<id>.hooks.allowConversationAccess=true`.
+- For model switching, prefer `before_model_resolve`. It runs before model
+  resolution for agent turns; `llm_output` only runs after a model attempt
+  produces assistant output.
+- For proof of the effective session model, use `openclaw sessions` or the
+  Gateway session/status surfaces and, when debugging provider payloads, start
+  the Gateway with `--raw-stream --raw-stream-path <path>`.
 
 ## Plugin slots (exclusive categories)
 
@@ -331,6 +366,25 @@ activation. The loader still falls back to `activate(api)` for older plugins,
 but bundled plugins and new external plugins should treat `register` as the
 public contract.
 
+`api.registrationMode` tells a plugin why its entry is being loaded:
+
+| Mode            | Meaning                                                                                                                          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `full`          | Runtime activation. Register tools, hooks, services, commands, routes, and other live side effects.                              |
+| `discovery`     | Read-only capability discovery. Register providers and metadata; trusted plugin entry code may load, but skip live side effects. |
+| `setup-only`    | Channel setup metadata loading through a lightweight setup entry.                                                                |
+| `setup-runtime` | Channel setup loading that also needs the runtime entry.                                                                         |
+| `cli-metadata`  | CLI command metadata collection only.                                                                                            |
+
+Plugin entries that open sockets, databases, background workers, or long-lived
+clients should guard those side effects with `api.registrationMode === "full"`.
+Discovery loads are cached separately from activating loads and do not replace
+the running Gateway registry. Discovery is non-activating, not import-free:
+OpenClaw may evaluate the trusted plugin entry or channel plugin module to build
+the snapshot. Keep module top levels lightweight and side-effect-free, and move
+network clients, subprocesses, listeners, credential reads, and service startup
+behind full-runtime paths.
+
 Common registration methods:
 
 | Method                                  | What it registers           |
@@ -362,13 +416,20 @@ Hook guard behavior for typed lifecycle hooks:
 - `message_sending`: `{ cancel: true }` is terminal; lower-priority handlers are skipped.
 - `message_sending`: `{ cancel: false }` is a no-op and does not clear an earlier cancel.
 
-For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
+Native Codex app-server runs bridge Codex-native tool events back into this
+hook surface. Plugins can block native Codex tools through `before_tool_call`,
+observe results through `after_tool_call`, and participate in Codex
+`PermissionRequest` approvals. The bridge does not rewrite Codex-native tool
+arguments yet. The exact Codex runtime support boundary lives in the
+[Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
+
+For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-decision-semantics).
 
 ## Related
 
-- [Building Plugins](/plugins/building-plugins) — create your own plugin
-- [Plugin Bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
-- [Plugin Manifest](/plugins/manifest) — manifest schema
-- [Registering Tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
-- [Plugin Internals](/plugins/architecture) — capability model and load pipeline
-- [Community Plugins](/plugins/community) — third-party listings
+- [Building plugins](/plugins/building-plugins) — create your own plugin
+- [Plugin bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
+- [Plugin manifest](/plugins/manifest) — manifest schema
+- [Registering tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
+- [Plugin internals](/plugins/architecture) — capability model and load pipeline
+- [Community plugins](/plugins/community) — third-party listings

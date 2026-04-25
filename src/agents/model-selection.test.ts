@@ -792,25 +792,25 @@ describe("model-selection", () => {
           defaults: {
             models: {
               "openai-codex/gpt-5.4": {},
-              "opencode-go/kimi-k2.5": {},
+              "opencode-go/kimi-k2.6": {},
               "opencode-go/glm-5": {},
             },
           },
         },
       } as OpenClawConfig;
 
-      // When session default is openai-codex, switching to a bare "kimi-k2.5"
-      // should resolve to opencode-go/kimi-k2.5, not openai-codex/kimi-k2.5
+      // When session default is openai-codex, switching to a bare "kimi-k2.6"
+      // should resolve to opencode-go/kimi-k2.6, not openai-codex/kimi-k2.6
       const result = resolveAllowedModelRef({
         cfg,
         catalog: [],
-        raw: "kimi-k2.5",
+        raw: "kimi-k2.6",
         defaultProvider: "openai-codex", // session's current provider
       });
 
       expect(result).toEqual({
-        key: "opencode-go/kimi-k2.5",
-        ref: { provider: "opencode-go", model: "kimi-k2.5" },
+        key: "opencode-go/kimi-k2.6",
+        ref: { provider: "opencode-go", model: "kimi-k2.6" },
       });
     });
   });
@@ -966,7 +966,7 @@ describe("model-selection", () => {
       }
     });
 
-    it("sanitizes control characters in providerless-model warnings", () => {
+    it("sanitizes control characters in providerless-model warnings", async () => {
       const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
         const cfg: Partial<OpenClawConfig> = {
@@ -987,7 +987,7 @@ describe("model-selection", () => {
           provider: "google",
           model: "\u001B[31mclaude-3-5-sonnet\nspoof",
         });
-        const warning = warnLogs.findText('Falling back to "google/claude-3-5-sonnet"');
+        const warning = await warnLogs.findText('Falling back to "google/claude-3-5-sonnet"');
         expect(warning).toContain('Falling back to "google/claude-3-5-sonnet"');
         expect(warning).not.toContain("\u001B");
         expect(warning).not.toContain("\n");

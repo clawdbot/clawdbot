@@ -106,8 +106,8 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
-let unregisterLogTransport: (() => void) | undefined;
-let registerLogTransportFn: typeof import("../logging/logger.js").registerLogTransport;
+let createDiagnosticLogRecordCaptureFn: typeof import("../logging/test-helpers/diagnostic-log-capture.js").createDiagnosticLogRecordCapture;
+let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
 let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
 const originalFetch = globalThis.fetch;
@@ -116,11 +116,10 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
-  ({
-    registerLogTransport: registerLogTransportFn,
-    resetLogger: resetLoggerFn,
-    setLoggerOverride: setLoggerOverrideFn,
-  } = await import("../logging/logger.js"));
+  ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =
+    await import("../logging/test-helpers/diagnostic-log-capture.js"));
+  ({ resetLogger: resetLoggerFn, setLoggerOverride: setLoggerOverrideFn } =
+    await import("../logging/logger.js"));
 });
 
 async function runEmbeddedPiAgentInline(
@@ -152,8 +151,8 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  unregisterLogTransport?.();
-  unregisterLogTransport = undefined;
+  cleanupLogCapture?.();
+  cleanupLogCapture = undefined;
   setLoggerOverrideFn(null);
   resetLoggerFn();
 });
@@ -182,6 +181,8 @@ const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage 
 const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => {
   const toolMetas = overrides.toolMetas ?? [];
   const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
+  const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
+  const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
@@ -202,11 +203,13 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
       buildAttemptReplayMetadata({
         toolMetas,
         didSendViaMessagingTool,
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
         successfulCronAdds,
       }),
     didSendViaMessagingTool,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
+    messagingToolSentTexts,
+    messagingToolSentMediaUrls,
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
@@ -860,14 +863,12 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   });
 
   it("logs structured failover decision metadata for overloaded assistant rotation", async () => {
-    const records: Array<Record<string, unknown>> = [];
+    const logCapture = createDiagnosticLogRecordCaptureFn();
+    cleanupLogCapture = logCapture.cleanup;
     setLoggerOverrideFn({
       level: "trace",
       consoleLevel: "silent",
       file: path.join(os.tmpdir(), `openclaw-auth-rotation-${Date.now()}.log`),
-    });
-    unregisterLogTransport = registerLogTransportFn((record) => {
-      records.push(record);
     });
 
     await runAutoPinnedRotationCase({
@@ -876,18 +877,17 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       sessionKey: "agent:test:overloaded-logging",
       runId: "run:overloaded-logging",
     });
+    await logCapture.flush();
 
-    const decisionRecord = records.find(
+    const decisionRecord = logCapture.records.find(
       (record) =>
-        record["2"] === "embedded run failover decision" &&
-        record["1"] &&
-        typeof record["1"] === "object" &&
-        (record["1"] as Record<string, unknown>).decision === "rotate_profile",
+        record.message === "embedded run failover decision" &&
+        record.attributes?.decision === "rotate_profile",
     );
 
     expect(decisionRecord).toBeDefined();
     const safeProfileId = redactIdentifier("openai:p1", { len: 12 });
-    expect((decisionRecord as Record<string, unknown>)["1"]).toMatchObject({
+    expect(decisionRecord?.attributes).toMatchObject({
       event: "embedded_run_failover_decision",
       runId: "run:overloaded-logging",
       decision: "rotate_profile",
@@ -899,16 +899,14 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
     });
 
-    const stateRecord = records.find(
+    const stateRecord = logCapture.records.find(
       (record) =>
-        record["2"] === "auth profile failure state updated" &&
-        record["1"] &&
-        typeof record["1"] === "object" &&
-        (record["1"] as Record<string, unknown>).profileId === safeProfileId,
+        record.message === "auth profile failure state updated" &&
+        record.attributes?.profileId === safeProfileId,
     );
 
     expect(stateRecord).toBeDefined();
-    expect((stateRecord as Record<string, unknown>)["1"]).toMatchObject({
+    expect(stateRecord?.attributes).toMatchObject({
       event: "auth_profile_failure_state_updated",
       runId: "run:overloaded-logging",
       profileId: safeProfileId,

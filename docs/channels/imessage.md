@@ -6,8 +6,6 @@ read_when:
 title: "iMessage"
 ---
 
-# iMessage (legacy: imsg)
-
 <Warning>
 For new iMessage deployments, use <a href="/channels/bluebubbles">BlueBubbles</a>.
 

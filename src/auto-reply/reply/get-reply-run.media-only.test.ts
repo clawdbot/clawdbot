@@ -74,6 +74,7 @@ vi.mock("./body.js", () => ({
 }));
 
 vi.mock("./groups.js", () => ({
+  buildDirectChatContext: vi.fn().mockReturnValue(""),
   buildGroupIntro: vi.fn().mockReturnValue(""),
   buildGroupChatContext: vi.fn().mockReturnValue(""),
 }));
@@ -834,8 +835,10 @@ describe("runPreparedReply media-only handling", () => {
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call?.commandBody).toContain("System: [t] Initial event.");
     expect(call?.commandBody).not.toContain("System: [t] Post-compaction context.");
+    expect(call?.transcriptCommandBody).not.toContain("System: [t] Initial event.");
     expect(call?.followupRun.prompt).toContain("System: [t] Initial event.");
     expect(call?.followupRun.prompt).not.toContain("System: [t] Post-compaction context.");
+    expect(call?.followupRun.transcriptPrompt).not.toContain("System: [t] Initial event.");
   });
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(

@@ -140,7 +140,7 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
     originalName: "model",
     description: "View or change the current model",
     autoComplete: true,
-    autoCompleteHint: "[model-name]",
+    autoCompleteHint: "[model-name] [--runtime runtime]",
   },
   {
     trigger: "oc_models",

@@ -6,11 +6,20 @@ import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accou
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import {
+  acceptMatrixVerification,
   bootstrapMatrixVerification,
+  cancelMatrixVerification,
+  confirmMatrixVerificationSas,
+  getMatrixVerificationSas,
   getMatrixRoomKeyBackupStatus,
   getMatrixVerificationStatus,
+  listMatrixVerifications,
+  mismatchMatrixVerificationSas,
+  requestMatrixVerification,
   resetMatrixRoomKeyBackup,
   restoreMatrixRoomKeyBackup,
+  runMatrixSelfVerification,
+  startMatrixVerification,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions/verification.js";
 import { resolveMatrixRoomKeyBackupIssue } from "./matrix/backup-health.js";
@@ -53,7 +62,11 @@ function scheduleMatrixCliExit(): void {
   matrixCliExitScheduled = true;
   // matrix-js-sdk rust crypto can leave background async work alive after command completion.
   setTimeout(() => {
-    process.exit(process.exitCode ?? 0);
+    process.stdout.write("", () => {
+      process.stderr.write("", () => {
+        process.exit(process.exitCode ?? 0);
+      });
+    });
   }, 0);
 }
 
@@ -66,7 +79,7 @@ function toErrorMessage(err: unknown): string {
 }
 
 function printJson(payload: unknown): void {
-  console.log(JSON.stringify(payload, null, 2));
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
 function formatLocalTimestamp(value: string | null | undefined): string | null {
@@ -83,23 +96,56 @@ function formatLocalTimestamp(value: string | null | undefined): string | null {
 function printTimestamp(label: string, value: string | null | undefined): void {
   const formatted = formatLocalTimestamp(value);
   if (formatted) {
-    console.log(`${label}: ${formatted}`);
+    console.log(`${label}: ${formatMatrixCliText(formatted)}`);
   }
 }
 
 function printAccountLabel(accountId?: string): void {
-  console.log(`Account: ${normalizeAccountId(accountId)}`);
+  console.log(`Account: ${formatMatrixCliText(normalizeAccountId(accountId))}`);
 }
 
 function resolveMatrixCliAccountId(accountId?: string): string {
+  return resolveMatrixCliAccountContext(accountId).accountId;
+}
+
+function resolveMatrixCliAccountContext(accountId?: string): {
+  accountId: string;
+  cfg: CoreConfig;
+} {
   const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
-  return resolveMatrixAuthContext({ cfg, accountId }).accountId;
+  return {
+    accountId: resolveMatrixAuthContext({ cfg, accountId }).accountId,
+    cfg,
+  };
 }
 
 function formatMatrixCliCommand(command: string, accountId?: string): string {
+  return formatMatrixCliCommandParts(command.split(" "), accountId);
+}
+
+function formatMatrixCliCommandParts(parts: string[], accountId?: string): string {
   const normalizedAccountId = normalizeAccountId(accountId);
-  const suffix = normalizedAccountId === "default" ? "" : ` --account ${normalizedAccountId}`;
-  return `openclaw matrix ${command}${suffix}`;
+  const command = ["openclaw", "matrix", ...parts];
+  if (normalizedAccountId !== "default") {
+    const optionTerminatorIndex = command.indexOf("--");
+    if (optionTerminatorIndex >= 0) {
+      command.splice(optionTerminatorIndex, 0, "--account", normalizedAccountId);
+    } else {
+      command.push("--account", normalizedAccountId);
+    }
+  }
+  return command.map(formatMatrixCliShellArg).join(" ");
+}
+
+function formatMatrixCliShellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:=@%+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function formatMatrixCliText(value: string | null | undefined, fallback = "unknown"): string {
+  return sanitizeMatrixCliText(value ?? fallback);
 }
 
 function printMatrixOwnDevices(
@@ -116,13 +162,17 @@ function printMatrixOwnDevices(
     return;
   }
   for (const device of devices) {
-    const labels = [device.current ? "current" : null, device.displayName].filter(Boolean);
-    console.log(`- ${device.deviceId}${labels.length ? ` (${labels.join(", ")})` : ""}`);
+    const labels = [device.current ? "current" : null, device.displayName]
+      .filter((label): label is string => Boolean(label))
+      .map((label) => formatMatrixCliText(label));
+    console.log(
+      `- ${formatMatrixCliText(device.deviceId)}${labels.length ? ` (${labels.join(", ")})` : ""}`,
+    );
     if (device.lastSeenTs) {
       printTimestamp("  Last seen", new Date(device.lastSeenTs).toISOString());
     }
     if (device.lastSeenIp) {
-      console.log(`  Last IP: ${device.lastSeenIp}`);
+      console.log(`  Last IP: ${formatMatrixCliText(device.lastSeenIp)}`);
     }
   }
 }
@@ -290,7 +340,7 @@ async function addMatrixAccount(params: {
     staleOpenClawDeviceIds: [],
   };
   try {
-    const addedDevices = await listMatrixOwnDevices({ accountId });
+    const addedDevices = await listMatrixOwnDevices({ accountId, cfg: updated });
     deviceHealth = {
       currentDeviceId: addedDevices.find((device) => device.current)?.deviceId ?? null,
       staleOpenClawDeviceIds: addedDevices
@@ -317,22 +367,34 @@ async function addMatrixAccount(params: {
 
 function printDirectRoomCandidate(room: MatrixCliDirectRoomCandidate): void {
   const members =
-    room.joinedMembers === null ? "unavailable" : room.joinedMembers.join(", ") || "none";
+    room.joinedMembers === null
+      ? "unavailable"
+      : room.joinedMembers.map((member) => formatMatrixCliText(member)).join(", ") || "none";
   console.log(
-    `- ${room.roomId} [${room.source}] strict=${room.strict ? "yes" : "no"} joined=${members}`,
+    `- ${formatMatrixCliText(room.roomId)} [${room.source}] strict=${
+      room.strict ? "yes" : "no"
+    } joined=${members}`,
   );
 }
 
 function printDirectRoomInspection(result: MatrixCliDirectRoomInspection): void {
   printAccountLabel(result.accountId);
-  console.log(`Peer: ${result.remoteUserId}`);
-  console.log(`Self: ${result.selfUserId ?? "unknown"}`);
-  console.log(`Active direct room: ${result.activeRoomId ?? "none"}`);
+  console.log(`Peer: ${formatMatrixCliText(result.remoteUserId)}`);
+  console.log(`Self: ${formatMatrixCliText(result.selfUserId)}`);
+  console.log(`Active direct room: ${formatMatrixCliText(result.activeRoomId, "none")}`);
   console.log(
-    `Mapped rooms: ${result.mappedRoomIds.length ? result.mappedRoomIds.join(", ") : "none"}`,
+    `Mapped rooms: ${
+      result.mappedRoomIds.length
+        ? result.mappedRoomIds.map((roomId) => formatMatrixCliText(roomId)).join(", ")
+        : "none"
+    }`,
   );
   console.log(
-    `Discovered strict rooms: ${result.discoveredStrictRoomIds.length ? result.discoveredStrictRoomIds.join(", ") : "none"}`,
+    `Discovered strict rooms: ${
+      result.discoveredStrictRoomIds.length
+        ? result.discoveredStrictRoomIds.map((roomId) => formatMatrixCliText(roomId)).join(", ")
+        : "none"
+    }`,
   );
   if (result.mappedRooms.length > 0) {
     console.log("Mapped room details:");
@@ -346,12 +408,13 @@ async function inspectMatrixDirectRoom(params: {
   accountId: string;
   userId: string;
 }): Promise<MatrixCliDirectRoomInspection> {
+  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
   const [{ withResolvedActionClient }, { inspectMatrixDirectRooms }] = await Promise.all([
     loadMatrixActionClientModule(),
     loadMatrixDirectManagementModule(),
   ]);
   return await withResolvedActionClient(
-    { accountId: params.accountId },
+    { accountId: params.accountId, cfg },
     async (client) => {
       const inspection = await inspectMatrixDirectRooms({
         client,
@@ -381,7 +444,7 @@ async function repairMatrixDirectRoom(params: {
     loadMatrixActionClientModule(),
     loadMatrixDirectManagementModule(),
   ]);
-  return await withStartedActionClient({ accountId: params.accountId }, async (client) => {
+  return await withStartedActionClient({ accountId: params.accountId, cfg }, async (client) => {
     const repaired = await repairMatrixDirectRooms({
       client,
       remoteUserId: params.userId,
@@ -448,7 +511,7 @@ async function runMatrixCliCommand<TResult>(
     if (config.json) {
       printJson(config.onJsonError ? config.onJsonError(message) : { error: message });
     } else {
-      console.error(`${config.errorPrefix}: ${message}`);
+      console.error(`${config.errorPrefix}: ${formatMatrixCliText(message)}`);
     }
     markCliFailure();
   } finally {
@@ -479,6 +542,46 @@ type MatrixCliVerificationStatus = {
   recoveryKeyStored: boolean;
   recoveryKeyCreatedAt: string | null;
   pendingVerifications: number;
+  recoveryKeyAccepted?: boolean;
+  backupUsable?: boolean;
+  deviceOwnerVerified?: boolean;
+};
+
+type MatrixCliVerificationCommandOptions = {
+  account?: string;
+  userId?: string;
+  roomId?: string;
+  verbose?: boolean;
+  json?: boolean;
+};
+
+type MatrixCliSelfVerificationCommandOptions = {
+  account?: string;
+  timeoutMs?: string;
+  verbose?: boolean;
+};
+
+type MatrixCliVerificationSummary = {
+  id: string;
+  transactionId?: string;
+  roomId?: string;
+  otherUserId: string;
+  otherDeviceId?: string;
+  isSelfVerification: boolean;
+  initiatedByMe: boolean;
+  phaseName: string;
+  pending: boolean;
+  methods: string[];
+  chosenMethod?: string | null;
+  hasSas: boolean;
+  sas?: MatrixCliVerificationSas;
+  completed: boolean;
+  error?: string;
+};
+
+type MatrixCliVerificationSas = {
+  decimal?: [number, number, number];
+  emoji?: Array<[string, string]>;
 };
 
 type MatrixCliDirectRoomCandidate = {
@@ -541,14 +644,14 @@ function yesNoUnknown(value: boolean | null): string {
 }
 
 function printBackupStatus(backup: MatrixCliBackupStatus): void {
-  console.log(`Backup server version: ${backup.serverVersion ?? "none"}`);
-  console.log(`Backup active on this device: ${backup.activeVersion ?? "no"}`);
+  console.log(`Backup server version: ${formatMatrixCliText(backup.serverVersion, "none")}`);
+  console.log(`Backup active on this device: ${formatMatrixCliText(backup.activeVersion, "no")}`);
   console.log(`Backup trusted by this device: ${yesNoUnknown(backup.trusted)}`);
   console.log(`Backup matches local decryption key: ${yesNoUnknown(backup.matchesDecryptionKey)}`);
   console.log(`Backup key cached locally: ${yesNoUnknown(backup.decryptionKeyCached)}`);
   console.log(`Backup key load attempted: ${yesNoUnknown(backup.keyLoadAttempted)}`);
   if (backup.keyLoadError) {
-    console.log(`Backup key load error: ${backup.keyLoadError}`);
+    console.log(`Backup key load error: ${formatMatrixCliText(backup.keyLoadError)}`);
   }
 }
 
@@ -556,8 +659,8 @@ function printVerificationIdentity(status: {
   userId: string | null;
   deviceId: string | null;
 }): void {
-  console.log(`User: ${status.userId ?? "unknown"}`);
-  console.log(`Device: ${status.deviceId ?? "unknown"}`);
+  console.log(`User: ${formatMatrixCliText(status.userId)}`);
+  console.log(`Device: ${formatMatrixCliText(status.deviceId)}`);
 }
 
 function printVerificationBackupSummary(status: {
@@ -584,6 +687,346 @@ function printVerificationTrustDiagnostics(status: {
   console.log(`Signed by owner: ${status.signedByOwner ? "yes" : "no"}`);
 }
 
+function sanitizeMatrixCliText(value: string): string {
+  let withoutAnsi = "";
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code === 0x9b) {
+      index++;
+      while (index < value.length && !isAnsiFinalByte(value.charCodeAt(index))) {
+        index++;
+      }
+      continue;
+    }
+    if (code === 0x9d) {
+      index++;
+      while (index < value.length) {
+        const current = value.charCodeAt(index);
+        if (current === 0x07 || current === 0x9c) {
+          break;
+        }
+        if (current === 0x1b && value[index + 1] === "\\") {
+          index++;
+          break;
+        }
+        index++;
+      }
+      continue;
+    }
+    if (code === 0x90 || code === 0x9e || code === 0x9f) {
+      index++;
+      while (index < value.length) {
+        const current = value.charCodeAt(index);
+        if (current === 0x07 || current === 0x9c) {
+          break;
+        }
+        if (current === 0x1b && value[index + 1] === "\\") {
+          index++;
+          break;
+        }
+        index++;
+      }
+      continue;
+    }
+    if (code !== 0x1b) {
+      withoutAnsi += value[index];
+      continue;
+    }
+
+    const marker = value[index + 1];
+    if (marker === "[") {
+      index += 2;
+      while (index < value.length && !isAnsiFinalByte(value.charCodeAt(index))) {
+        index++;
+      }
+      continue;
+    }
+    if (marker === "]") {
+      index += 2;
+      while (index < value.length) {
+        const current = value.charCodeAt(index);
+        if (current === 0x07) {
+          break;
+        }
+        if (current === 0x1b && value[index + 1] === "\\") {
+          index++;
+          break;
+        }
+        index++;
+      }
+      continue;
+    }
+    index++;
+  }
+
+  let sanitized = "";
+  for (const character of withoutAnsi) {
+    const code = character.charCodeAt(0);
+    if (!isUnsafeMatrixCliTerminalCode(code)) {
+      sanitized += character;
+    }
+  }
+  return sanitized;
+}
+
+function isUnsafeMatrixCliTerminalCode(code: number): boolean {
+  return (
+    code < 0x20 ||
+    code === 0x7f ||
+    (code >= 0x80 && code <= 0x9f) ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2066 && code <= 0x2069)
+  );
+}
+
+function isAnsiFinalByte(code: number): boolean {
+  return code >= 0x40 && code <= 0x7e;
+}
+
+function formatMatrixCliSasEmoji(emoji: NonNullable<MatrixCliVerificationSas["emoji"]>): string {
+  return emoji
+    .map(
+      ([emojiValue, label]) =>
+        `${sanitizeMatrixCliText(emojiValue)} ${sanitizeMatrixCliText(label)}`,
+    )
+    .join(" | ");
+}
+
+function printMatrixVerificationSummary(summary: MatrixCliVerificationSummary): void {
+  console.log(`Verification id: ${sanitizeMatrixCliText(summary.id)}`);
+  if (summary.transactionId) {
+    console.log(`Transaction id: ${sanitizeMatrixCliText(summary.transactionId)}`);
+  }
+  if (summary.roomId) {
+    console.log(`Room id: ${sanitizeMatrixCliText(summary.roomId)}`);
+  }
+  console.log(`Other user: ${sanitizeMatrixCliText(summary.otherUserId)}`);
+  console.log(`Other device: ${sanitizeMatrixCliText(summary.otherDeviceId ?? "unknown")}`);
+  console.log(`Self-verification: ${summary.isSelfVerification ? "yes" : "no"}`);
+  console.log(`Initiated by OpenClaw: ${summary.initiatedByMe ? "yes" : "no"}`);
+  console.log(`Phase: ${sanitizeMatrixCliText(summary.phaseName)}`);
+  console.log(`Pending: ${summary.pending ? "yes" : "no"}`);
+  console.log(`Completed: ${summary.completed ? "yes" : "no"}`);
+  console.log(
+    `Methods: ${
+      summary.methods.length ? summary.methods.map(sanitizeMatrixCliText).join(", ") : "none"
+    }`,
+  );
+  if (summary.chosenMethod) {
+    console.log(`Chosen method: ${sanitizeMatrixCliText(summary.chosenMethod)}`);
+  }
+  if (summary.hasSas && summary.sas?.emoji?.length) {
+    console.log(`SAS emoji: ${formatMatrixCliSasEmoji(summary.sas.emoji)}`);
+  } else if (summary.hasSas && summary.sas?.decimal) {
+    console.log(`SAS decimals: ${summary.sas.decimal.join(" ")}`);
+  }
+  if (summary.error) {
+    console.log(`Verification error: ${sanitizeMatrixCliText(summary.error)}`);
+  }
+}
+
+function printMatrixVerificationSummaries(summaries: MatrixCliVerificationSummary[]): void {
+  if (summaries.length === 0) {
+    console.log("Verifications: none");
+    return;
+  }
+  summaries.forEach((summary, index) => {
+    if (index > 0) {
+      console.log("");
+    }
+    printMatrixVerificationSummary(summary);
+  });
+}
+
+function printMatrixVerificationSas(sas: MatrixCliVerificationSas): void {
+  if (sas.emoji?.length) {
+    console.log(`SAS emoji: ${formatMatrixCliSasEmoji(sas.emoji)}`);
+  } else if (sas.decimal) {
+    console.log(`SAS decimals: ${sas.decimal.join(" ")}`);
+  } else {
+    console.log("SAS: unavailable");
+  }
+}
+
+function matrixCliVerificationDmLookupOptions(options: MatrixCliVerificationCommandOptions): {
+  verificationDmRoomId?: string;
+  verificationDmUserId?: string;
+} {
+  const lookup: {
+    verificationDmRoomId?: string;
+    verificationDmUserId?: string;
+  } = {};
+  if (options.roomId !== undefined) {
+    lookup.verificationDmRoomId = options.roomId;
+  }
+  if (options.userId !== undefined) {
+    lookup.verificationDmUserId = options.userId;
+  }
+  return lookup;
+}
+
+function formatMatrixVerificationDmFollowupParts(params: {
+  roomId?: string;
+  userId?: string;
+}): string[] {
+  if (!params.roomId || !params.userId) {
+    return [];
+  }
+  return [
+    "--user-id",
+    sanitizeMatrixCliText(params.userId),
+    "--room-id",
+    sanitizeMatrixCliText(params.roomId),
+  ];
+}
+
+function formatMatrixVerificationSummaryDmFollowupParts(
+  summary: MatrixCliVerificationSummary,
+): string[] {
+  return formatMatrixVerificationDmFollowupParts({
+    roomId: summary.roomId,
+    userId: summary.otherUserId,
+  });
+}
+
+function formatMatrixVerificationOptionsDmFollowupParts(
+  options: MatrixCliVerificationCommandOptions,
+): string[] {
+  return formatMatrixVerificationDmFollowupParts({
+    roomId: options.roomId,
+    userId: options.userId,
+  });
+}
+
+function formatMatrixVerificationPreferredDmFollowupParts(
+  summary: MatrixCliVerificationSummary,
+  options: MatrixCliVerificationCommandOptions,
+): string[] {
+  const summaryParts = formatMatrixVerificationSummaryDmFollowupParts(summary);
+  return summaryParts.length
+    ? summaryParts
+    : formatMatrixVerificationOptionsDmFollowupParts(options);
+}
+
+function formatMatrixVerificationFollowupCommand(params: {
+  action: string;
+  requestId: string;
+  accountId?: string;
+  dmParts?: string[];
+}): string {
+  return formatMatrixCliCommandParts(
+    ["verify", params.action, ...(params.dmParts ?? []), "--", params.requestId],
+    params.accountId,
+  );
+}
+
+function printMatrixVerificationSasGuidance(
+  requestId: string,
+  accountId?: string,
+  dmParts: string[] = [],
+): void {
+  printGuidance([
+    `Compare the emoji or decimals with the other Matrix client.`,
+    `If they match, run ${formatMatrixVerificationFollowupCommand({ action: "confirm-sas", requestId, accountId, dmParts })}.`,
+    `If they do not match, run ${formatMatrixVerificationFollowupCommand({ action: "mismatch-sas", requestId, accountId, dmParts })}.`,
+  ]);
+}
+
+function formatMatrixVerificationCommandId(summary: MatrixCliVerificationSummary): string {
+  return sanitizeMatrixCliText(summary.transactionId ?? summary.id);
+}
+
+async function promptMatrixVerificationSasMatch(): Promise<boolean> {
+  const { createInterface } = await import("node:readline/promises");
+  const prompt = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  try {
+    const answer = await prompt.question("Do the emoji or decimals match? Type yes to confirm: ");
+    return /^(?:y|yes)$/i.test(answer.trim());
+  } finally {
+    prompt.close();
+  }
+}
+
+function printMatrixVerificationRequestGuidance(
+  summary: MatrixCliVerificationSummary,
+  accountId?: string,
+): void {
+  const requestId = formatMatrixVerificationCommandId(summary);
+  const dmParts = formatMatrixVerificationSummaryDmFollowupParts(summary);
+  printGuidance([
+    `Accept the verification request in another Matrix client for this account.`,
+    `Then run ${formatMatrixVerificationFollowupCommand({ action: "start", requestId, accountId, dmParts })} to start SAS verification.`,
+    `Run ${formatMatrixVerificationFollowupCommand({ action: "sas", requestId, accountId, dmParts })} to display the SAS emoji or decimals.`,
+    `When the SAS matches, run ${formatMatrixVerificationFollowupCommand({ action: "confirm-sas", requestId, accountId, dmParts })}.`,
+  ]);
+}
+
+async function runMatrixCliVerificationSummaryCommand(params: {
+  options: MatrixCliVerificationCommandOptions;
+  run: (accountId: string, cfg: CoreConfig) => Promise<MatrixCliVerificationSummary>;
+  afterText?: (summary: MatrixCliVerificationSummary, accountId: string) => void;
+  errorPrefix: string;
+}): Promise<void> {
+  const { accountId, cfg } = resolveMatrixCliAccountContext(params.options.account);
+  await runMatrixCliCommand({
+    verbose: params.options.verbose === true,
+    json: params.options.json === true,
+    run: async () => await params.run(accountId, cfg),
+    onText: (summary) => {
+      printAccountLabel(accountId);
+      printMatrixVerificationSummary(summary);
+      params.afterText?.(summary, accountId);
+    },
+    errorPrefix: params.errorPrefix,
+  });
+}
+
+async function runMatrixCliSelfVerificationCommand(
+  options: MatrixCliSelfVerificationCommandOptions,
+): Promise<void> {
+  const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
+  await runMatrixCliCommand({
+    verbose: options.verbose === true,
+    json: false,
+    run: async () =>
+      await runMatrixSelfVerification({
+        accountId,
+        cfg,
+        timeoutMs: parseOptionalInt(options.timeoutMs, "--timeout-ms"),
+        onRequested: (summary) => {
+          printAccountLabel(accountId);
+          printMatrixVerificationSummary(summary);
+          console.log("Accept this verification request in another Matrix client.");
+        },
+        onReady: (summary) => {
+          console.log("Verification request accepted.");
+          if (!summary.hasSas) {
+            console.log("Starting SAS verification...");
+          }
+        },
+        onSas: (summary) => {
+          printMatrixVerificationSas(summary.sas ?? {});
+          console.log("Compare this SAS with the other Matrix client.");
+        },
+        confirmSas: async () => await promptMatrixVerificationSasMatch(),
+      }),
+    onText: (summary, verbose) => {
+      printMatrixVerificationSummary(summary);
+      console.log(`Device verified by owner: ${summary.deviceOwnerVerified ? "yes" : "no"}`);
+      printVerificationTrustDiagnostics(summary.ownerVerification);
+      printVerificationBackupSummary(summary.ownerVerification);
+      if (verbose) {
+        printVerificationBackupStatus(summary.ownerVerification);
+      }
+      console.log("Self-verification complete.");
+    },
+    errorPrefix: "Self-verification failed",
+  });
+}
+
 function printVerificationGuidance(status: MatrixCliVerificationStatus, accountId?: string): void {
   printGuidance(buildVerificationGuidance(status, accountId));
 }
@@ -592,7 +1035,7 @@ function printBackupSummary(backup: MatrixCliBackupStatus): void {
   const issue = resolveMatrixRoomKeyBackupIssue(backup);
   console.log(`Backup: ${issue.summary}`);
   if (backup.serverVersion) {
-    console.log(`Backup version: ${backup.serverVersion}`);
+    console.log(`Backup version: ${formatMatrixCliText(backup.serverVersion)}`);
   }
 }
 
@@ -604,13 +1047,22 @@ function buildVerificationGuidance(
   const backupIssue = resolveMatrixRoomKeyBackupIssue(backup);
   const nextSteps = new Set<string>();
   if (!status.verified) {
-    nextSteps.add(
-      `Run '${formatMatrixCliCommand("verify device <key>", accountId)}' to verify this device.`,
-    );
+    if (status.recoveryKeyAccepted === true && status.backupUsable === true) {
+      nextSteps.add(
+        `Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run ${formatMatrixCliCommand("verify self", accountId)} and follow the prompts from another Matrix client.`,
+      );
+      nextSteps.add(
+        `If you intend to replace the current cross-signing identity, run ${formatMatrixCliCommand("verify bootstrap --recovery-key <key> --force-reset-cross-signing", accountId)}.`,
+      );
+    } else {
+      nextSteps.add(
+        `Run ${formatMatrixCliCommand("verify device <key>", accountId)} to verify this device.`,
+      );
+    }
   }
   if (backupIssue.code === "missing-server-backup") {
     nextSteps.add(
-      `Run '${formatMatrixCliCommand("verify bootstrap", accountId)}' to create a room key backup.`,
+      `Run ${formatMatrixCliCommand("verify bootstrap", accountId)} to create a room key backup.`,
     );
   } else if (
     backupIssue.code === "key-load-failed" ||
@@ -619,30 +1071,30 @@ function buildVerificationGuidance(
   ) {
     if (status.recoveryKeyStored) {
       nextSteps.add(
-        `Backup key is not loaded on this device. Run '${formatMatrixCliCommand("verify backup restore", accountId)}' to load it and restore old room keys.`,
+        `Backup key is not loaded on this device. Run ${formatMatrixCliCommand("verify backup restore", accountId)} to load it and restore old room keys.`,
       );
     } else {
       nextSteps.add(
-        `Store a recovery key with '${formatMatrixCliCommand("verify device <key>", accountId)}', then run '${formatMatrixCliCommand("verify backup restore", accountId)}'.`,
+        `Store a recovery key with ${formatMatrixCliCommand("verify device <key>", accountId)}, then run ${formatMatrixCliCommand("verify backup restore", accountId)}.`,
       );
     }
   } else if (backupIssue.code === "key-mismatch") {
     nextSteps.add(
-      `Backup key mismatch on this device. Re-run '${formatMatrixCliCommand("verify device <key>", accountId)}' with the matching recovery key.`,
+      `Backup key mismatch on this device. Re-run ${formatMatrixCliCommand("verify device <key>", accountId)} with the matching recovery key.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'. This may also repair secret storage so the new backup key can be loaded after restart.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run ${formatMatrixCliCommand("verify backup reset --yes", accountId)}. This may also repair secret storage so the new backup key can be loaded after restart.`,
     );
   } else if (backupIssue.code === "untrusted-signature") {
     nextSteps.add(
-      `Backup trust chain is not verified on this device. Re-run '${formatMatrixCliCommand("verify device <key>", accountId)}' if you have the correct recovery key.`,
+      `Backup trust chain is not verified on this device. Re-run ${formatMatrixCliCommand("verify device <key>", accountId)} if you have the correct recovery key.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'. This may also repair secret storage so the new backup key can be loaded after restart.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run ${formatMatrixCliCommand("verify backup reset --yes", accountId)}. This may also repair secret storage so the new backup key can be loaded after restart.`,
     );
   } else if (backupIssue.code === "indeterminate") {
     nextSteps.add(
-      `Run '${formatMatrixCliCommand("verify status --verbose", accountId)}' to inspect backup trust diagnostics.`,
+      `Run ${formatMatrixCliCommand("verify status --verbose", accountId)} to inspect backup trust diagnostics.`,
     );
   }
   if (status.pendingVerifications > 0) {
@@ -754,8 +1206,8 @@ export function registerMatrixCli(params: { program: Command }): void {
               useEnv: options.useEnv === true,
             }),
           onText: (result) => {
-            console.log(`Saved matrix account: ${result.accountId}`);
-            console.log(`Config path: ${result.configPath}`);
+            console.log(`Saved matrix account: ${formatMatrixCliText(result.accountId)}`);
+            console.log(`Config path: ${formatMatrixCliText(result.configPath)}`);
             console.log(
               `Credentials source: ${result.useEnv ? "MATRIX_* / MATRIX_<ACCOUNT_ID>_* env vars" : "inline config"}`,
             );
@@ -767,30 +1219,39 @@ export function registerMatrixCli(params: { program: Command }): void {
                   result.verificationBootstrap.recoveryKeyCreatedAt,
                 );
                 if (result.verificationBootstrap.backupVersion) {
-                  console.log(`Backup version: ${result.verificationBootstrap.backupVersion}`);
+                  console.log(
+                    `Backup version: ${formatMatrixCliText(result.verificationBootstrap.backupVersion)}`,
+                  );
                 }
               } else {
                 console.error(
-                  `Matrix verification bootstrap warning: ${result.verificationBootstrap.error}`,
+                  `Matrix verification bootstrap warning: ${formatMatrixCliText(result.verificationBootstrap.error)}`,
                 );
               }
             }
             if (result.deviceHealth.error) {
-              console.error(`Matrix device health warning: ${result.deviceHealth.error}`);
+              console.error(
+                `Matrix device health warning: ${formatMatrixCliText(result.deviceHealth.error)}`,
+              );
             } else if (result.deviceHealth.staleOpenClawDeviceIds.length > 0) {
+              const staleDeviceIds = result.deviceHealth.staleOpenClawDeviceIds
+                .map((deviceId) => formatMatrixCliText(deviceId))
+                .join(", ");
               console.log(
-                `Matrix device hygiene warning: stale OpenClaw devices detected (${result.deviceHealth.staleOpenClawDeviceIds.join(", ")}). Run 'openclaw matrix devices prune-stale --account ${result.accountId}'.`,
+                `Matrix device hygiene warning: stale OpenClaw devices detected (${staleDeviceIds}). Run ${formatMatrixCliCommand("devices prune-stale", result.accountId)}.`,
               );
             }
             if (result.profile.attempted) {
               if (result.profile.error) {
-                console.error(`Profile sync warning: ${result.profile.error}`);
+                console.error(`Profile sync warning: ${formatMatrixCliText(result.profile.error)}`);
               } else {
                 console.log(
                   `Profile sync: name ${result.profile.displayNameUpdated ? "updated" : "unchanged"}, avatar ${result.profile.avatarUpdated ? "updated" : "unchanged"}`,
                 );
                 if (result.profile.convertedAvatarFromHttp && result.profile.resolvedAvatarUrl) {
-                  console.log(`Avatar converted and saved as: ${result.profile.resolvedAvatarUrl}`);
+                  console.log(
+                    `Avatar converted and saved as: ${formatMatrixCliText(result.profile.resolvedAvatarUrl)}`,
+                  );
                 }
               }
             }
@@ -836,7 +1297,9 @@ export function registerMatrixCli(params: { program: Command }): void {
               `Profile update: name ${result.profile.displayNameUpdated ? "updated" : "unchanged"}, avatar ${result.profile.avatarUpdated ? "updated" : "unchanged"}`,
             );
             if (result.profile.convertedAvatarFromHttp && result.avatarUrl) {
-              console.log(`Avatar converted and saved as: ${result.avatarUrl}`);
+              console.log(
+                `Avatar converted and saved as: ${formatMatrixCliText(result.avatarUrl)}`,
+              );
             }
           },
           errorPrefix: "Profile update failed",
@@ -893,14 +1356,14 @@ export function registerMatrixCli(params: { program: Command }): void {
           onText: (result, verbose) => {
             printDirectRoomInspection(result);
             console.log(`Encrypted room creation: ${result.encrypted ? "enabled" : "disabled"}`);
-            console.log(`Created room: ${result.createdRoomId ?? "none"}`);
+            console.log(`Created room: ${formatMatrixCliText(result.createdRoomId, "none")}`);
             console.log(`m.direct updated: ${result.changed ? "yes" : "no"}`);
             if (verbose) {
               console.log(
-                `m.direct before: ${JSON.stringify(result.directContentBefore[result.remoteUserId] ?? [])}`,
+                `m.direct before: ${formatMatrixCliText(JSON.stringify(result.directContentBefore[result.remoteUserId] ?? []))}`,
               );
               console.log(
-                `m.direct after: ${JSON.stringify(result.directContentAfter[result.remoteUserId] ?? [])}`,
+                `m.direct after: ${formatMatrixCliText(JSON.stringify(result.directContentAfter[result.remoteUserId] ?? []))}`,
               );
             }
           },
@@ -910,6 +1373,253 @@ export function registerMatrixCli(params: { program: Command }): void {
     );
 
   const verify = root.command("verify").description("Device verification for Matrix E2EE");
+
+  verify
+    .command("list")
+    .description("List pending Matrix verification requests")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON")
+    .action(async (options: { account?: string; verbose?: boolean; json?: boolean }) => {
+      const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
+      await runMatrixCliCommand({
+        verbose: options.verbose === true,
+        json: options.json === true,
+        run: async () => await listMatrixVerifications({ accountId, cfg }),
+        onText: (summaries) => {
+          printAccountLabel(accountId);
+          printMatrixVerificationSummaries(summaries);
+        },
+        errorPrefix: "Verification listing failed",
+      });
+    });
+
+  verify
+    .command("self")
+    .description("Interactively self-verify this Matrix device")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--timeout-ms <ms>", "How long to wait for the other Matrix client")
+    .option("--verbose", "Show detailed diagnostics")
+    .action(async (options: MatrixCliSelfVerificationCommandOptions) => {
+      await runMatrixCliSelfVerificationCommand(options);
+    });
+
+  verify
+    .command("request")
+    .description("Request Matrix device verification from another Matrix client")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--own-user", "Request self-verification for this Matrix account")
+    .option("--user-id <id>", "Matrix user ID to verify")
+    .option("--device-id <id>", "Matrix device ID to verify")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification")
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON")
+    .action(
+      async (options: {
+        account?: string;
+        ownUser?: boolean;
+        userId?: string;
+        deviceId?: string;
+        roomId?: string;
+        verbose?: boolean;
+        json?: boolean;
+      }) => {
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
+        await runMatrixCliCommand({
+          verbose: options.verbose === true,
+          json: options.json === true,
+          run: async () => {
+            if (
+              options.ownUser === true &&
+              (options.userId || options.deviceId || options.roomId)
+            ) {
+              throw new Error(
+                "--own-user cannot be combined with --user-id, --device-id, or --room-id",
+              );
+            }
+            return await requestMatrixVerification({
+              accountId,
+              cfg,
+              ownUser: options.ownUser === true ? true : undefined,
+              userId: options.userId,
+              deviceId: options.deviceId,
+              roomId: options.roomId,
+            });
+          },
+          onText: (summary) => {
+            printAccountLabel(accountId);
+            printMatrixVerificationSummary(summary);
+            printMatrixVerificationRequestGuidance(summary, accountId);
+          },
+          errorPrefix: "Verification request failed",
+        });
+      },
+    );
+
+  verify
+    .command("accept <id>")
+    .description("Accept an inbound Matrix verification request")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON")
+    .action(async (id: string, options: MatrixCliVerificationCommandOptions) => {
+      await runMatrixCliVerificationSummaryCommand({
+        options,
+        run: async (accountId, cfg) =>
+          await acceptMatrixVerification(id, {
+            accountId,
+            cfg,
+            ...matrixCliVerificationDmLookupOptions(options),
+          }),
+        afterText: (summary, accountId) => {
+          const requestId = formatMatrixVerificationCommandId(summary);
+          const dmParts = formatMatrixVerificationPreferredDmFollowupParts(summary, options);
+          printGuidance([
+            `Run ${formatMatrixVerificationFollowupCommand({ action: "start", requestId, accountId, dmParts })} to start SAS verification.`,
+          ]);
+        },
+        errorPrefix: "Verification accept failed",
+      });
+    });
+
+  verify
+    .command("start <id>")
+    .description("Start SAS verification for a Matrix verification request")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON")
+    .action(async (id: string, options: MatrixCliVerificationCommandOptions) => {
+      await runMatrixCliVerificationSummaryCommand({
+        options,
+        run: async (accountId, cfg) =>
+          await startMatrixVerification(id, {
+            accountId,
+            cfg,
+            method: "sas",
+            ...matrixCliVerificationDmLookupOptions(options),
+          }),
+        afterText: (summary, accountId) =>
+          printMatrixVerificationSasGuidance(
+            formatMatrixVerificationCommandId(summary),
+            accountId,
+            formatMatrixVerificationPreferredDmFollowupParts(summary, options),
+          ),
+        errorPrefix: "Verification start failed",
+      });
+    });
+
+  verify
+    .command("sas <id>")
+    .description("Show SAS emoji or decimals for a Matrix verification request")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON")
+    .action(async (id: string, options: MatrixCliVerificationCommandOptions) => {
+      const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
+      await runMatrixCliCommand({
+        verbose: options.verbose === true,
+        json: options.json === true,
+        run: async () =>
+          await getMatrixVerificationSas(id, {
+            accountId,
+            cfg,
+            ...matrixCliVerificationDmLookupOptions(options),
+          }),
+        onText: (sas) => {
+          const requestId = formatMatrixCliText(id);
+          printAccountLabel(accountId);
+          console.log(`Verification id: ${requestId}`);
+          printMatrixVerificationSas(sas);
+          printMatrixVerificationSasGuidance(
+            requestId,
+            accountId,
+            formatMatrixVerificationOptionsDmFollowupParts(options),
+          );
+        },
+        errorPrefix: "Verification SAS lookup failed",
+      });
+    });
+
+  verify
+    .command("confirm-sas <id>")
+    .description("Confirm matching SAS emoji or decimals for a Matrix verification request")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON")
+    .action(async (id: string, options: MatrixCliVerificationCommandOptions) => {
+      await runMatrixCliVerificationSummaryCommand({
+        options,
+        run: async (accountId, cfg) =>
+          await confirmMatrixVerificationSas(id, {
+            accountId,
+            cfg,
+            ...matrixCliVerificationDmLookupOptions(options),
+          }),
+        errorPrefix: "Verification SAS confirm failed",
+      });
+    });
+
+  verify
+    .command("mismatch-sas <id>")
+    .description("Reject a Matrix SAS verification when the emoji or decimals do not match")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON")
+    .action(async (id: string, options: MatrixCliVerificationCommandOptions) => {
+      await runMatrixCliVerificationSummaryCommand({
+        options,
+        run: async (accountId, cfg) =>
+          await mismatchMatrixVerificationSas(id, {
+            accountId,
+            cfg,
+            ...matrixCliVerificationDmLookupOptions(options),
+          }),
+        errorPrefix: "Verification SAS mismatch failed",
+      });
+    });
+
+  verify
+    .command("cancel <id>")
+    .description("Cancel a Matrix verification request")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
+    .option("--reason <text>", "Cancellation reason")
+    .option("--code <code>", "Matrix cancellation code")
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON")
+    .action(
+      async (
+        id: string,
+        options: MatrixCliVerificationCommandOptions & {
+          reason?: string;
+          code?: string;
+        },
+      ) => {
+        await runMatrixCliVerificationSummaryCommand({
+          options,
+          run: async (accountId, cfg) =>
+            await cancelMatrixVerification(id, {
+              accountId,
+              cfg,
+              reason: options.reason,
+              code: options.code,
+              ...matrixCliVerificationDmLookupOptions(options),
+            }),
+          errorPrefix: "Verification cancel failed",
+        });
+      },
+    );
 
   verify
     .command("status")
@@ -925,13 +1635,14 @@ export function registerMatrixCli(params: { program: Command }): void {
         includeRecoveryKey?: boolean;
         json?: boolean;
       }) => {
-        const accountId = resolveMatrixCliAccountId(options.account);
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
           run: async () =>
             await getMatrixVerificationStatus({
               accountId,
+              cfg,
               includeRecoveryKey: options.includeRecoveryKey === true,
             }),
           onText: (status, verbose) => {
@@ -952,11 +1663,11 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (options: { account?: string; verbose?: boolean; json?: boolean }) => {
-      const accountId = resolveMatrixCliAccountId(options.account);
+      const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
       await runMatrixCliCommand({
         verbose: options.verbose === true,
         json: options.json === true,
-        run: async () => await getMatrixRoomKeyBackupStatus({ accountId }),
+        run: async () => await getMatrixRoomKeyBackupStatus({ accountId, cfg }),
         onText: (status, verbose) => {
           printAccountLabel(accountId);
           printBackupSummary(status);
@@ -979,7 +1690,7 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--json", "Output as JSON")
     .action(
       async (options: { account?: string; yes?: boolean; verbose?: boolean; json?: boolean }) => {
-        const accountId = resolveMatrixCliAccountId(options.account);
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
@@ -987,17 +1698,23 @@ export function registerMatrixCli(params: { program: Command }): void {
             if (options.yes !== true) {
               throw new Error("Refusing to reset Matrix room-key backup without --yes");
             }
-            return await resetMatrixRoomKeyBackup({ accountId });
+            return await resetMatrixRoomKeyBackup({ accountId, cfg });
           },
           onText: (result, verbose) => {
             printAccountLabel(accountId);
             console.log(`Reset success: ${result.success ? "yes" : "no"}`);
             if (result.error) {
-              console.log(`Error: ${result.error}`);
+              console.log(`Error: ${formatMatrixCliText(result.error)}`);
             }
-            console.log(`Previous backup version: ${result.previousVersion ?? "none"}`);
-            console.log(`Deleted backup version: ${result.deletedVersion ?? "none"}`);
-            console.log(`Current backup version: ${result.createdVersion ?? "none"}`);
+            console.log(
+              `Previous backup version: ${formatMatrixCliText(result.previousVersion, "none")}`,
+            );
+            console.log(
+              `Deleted backup version: ${formatMatrixCliText(result.deletedVersion, "none")}`,
+            );
+            console.log(
+              `Current backup version: ${formatMatrixCliText(result.createdVersion, "none")}`,
+            );
             printBackupSummary(result.backup);
             if (verbose) {
               printTimestamp("Reset at", result.resetAt);
@@ -1025,22 +1742,23 @@ export function registerMatrixCli(params: { program: Command }): void {
         verbose?: boolean;
         json?: boolean;
       }) => {
-        const accountId = resolveMatrixCliAccountId(options.account);
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
           run: async () =>
             await restoreMatrixRoomKeyBackup({
               accountId,
+              cfg,
               recoveryKey: options.recoveryKey,
             }),
           onText: (result, verbose) => {
             printAccountLabel(accountId);
             console.log(`Restore success: ${result.success ? "yes" : "no"}`);
             if (result.error) {
-              console.log(`Error: ${result.error}`);
+              console.log(`Error: ${formatMatrixCliText(result.error)}`);
             }
-            console.log(`Backup version: ${result.backupVersion ?? "none"}`);
+            console.log(`Backup version: ${formatMatrixCliText(result.backupVersion, "none")}`);
             console.log(`Imported keys: ${result.imported}/${result.total}`);
             printBackupSummary(result.backup);
             if (verbose) {
@@ -1074,13 +1792,14 @@ export function registerMatrixCli(params: { program: Command }): void {
         verbose?: boolean;
         json?: boolean;
       }) => {
-        const accountId = resolveMatrixCliAccountId(options.account);
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
           run: async () =>
             await bootstrapMatrixVerification({
               accountId,
+              cfg,
               recoveryKey: options.recoveryKey,
               forceResetCrossSigning: options.forceResetCrossSigning === true,
             }),
@@ -1088,7 +1807,7 @@ export function registerMatrixCli(params: { program: Command }): void {
             printAccountLabel(accountId);
             console.log(`Bootstrap success: ${result.success ? "yes" : "no"}`);
             if (result.error) {
-              console.log(`Error: ${result.error}`);
+              console.log(`Error: ${formatMatrixCliText(result.error)}`);
             }
             console.log(`Verified by owner: ${result.verification.verified ? "yes" : "no"}`);
             printVerificationIdentity(result.verification);
@@ -1129,19 +1848,39 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--json", "Output as JSON")
     .action(
       async (key: string, options: { account?: string; verbose?: boolean; json?: boolean }) => {
-        const accountId = resolveMatrixCliAccountId(options.account);
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
-          run: async () => await verifyMatrixRecoveryKey(key, { accountId }),
+          run: async () => await verifyMatrixRecoveryKey(key, { accountId, cfg }),
           onText: (result, verbose) => {
             printAccountLabel(accountId);
             if (!result.success) {
-              console.error(`Verification failed: ${result.error ?? "unknown error"}`);
+              console.error(`Verification failed: ${formatMatrixCliText(result.error)}`);
+              printVerificationIdentity(result);
+              console.log(`Recovery key accepted: ${result.recoveryKeyAccepted ? "yes" : "no"}`);
+              console.log(`Backup usable: ${result.backupUsable ? "yes" : "no"}`);
+              console.log(`Device verified by owner: ${result.deviceOwnerVerified ? "yes" : "no"}`);
+              printVerificationBackupSummary(result);
+              if (verbose) {
+                printVerificationTrustDiagnostics(result);
+                printVerificationBackupStatus(result);
+                printTimestamp("Recovery key created at", result.recoveryKeyCreatedAt);
+              }
+              printVerificationGuidance(
+                {
+                  ...result,
+                  pendingVerifications: 0,
+                },
+                accountId,
+              );
               return;
             }
             console.log("Device verification completed successfully.");
             printVerificationIdentity(result);
+            console.log(`Recovery key accepted: ${result.recoveryKeyAccepted ? "yes" : "no"}`);
+            console.log(`Backup usable: ${result.backupUsable ? "yes" : "no"}`);
+            console.log(`Device verified by owner: ${result.deviceOwnerVerified ? "yes" : "no"}`);
             printVerificationBackupSummary(result);
             if (verbose) {
               printVerificationTrustDiagnostics(result);
@@ -1173,11 +1912,11 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (options: { account?: string; verbose?: boolean; json?: boolean }) => {
-      const accountId = resolveMatrixCliAccountId(options.account);
+      const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
       await runMatrixCliCommand({
         verbose: options.verbose === true,
         json: options.json === true,
-        run: async () => await listMatrixOwnDevices({ accountId }),
+        run: async () => await listMatrixOwnDevices({ accountId, cfg }),
         onText: (result) => {
           printAccountLabel(accountId);
           printMatrixOwnDevices(result);
@@ -1193,17 +1932,23 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (options: { account?: string; verbose?: boolean; json?: boolean }) => {
-      const accountId = resolveMatrixCliAccountId(options.account);
+      const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
       await runMatrixCliCommand({
         verbose: options.verbose === true,
         json: options.json === true,
-        run: async () => await pruneMatrixStaleGatewayDevices({ accountId }),
+        run: async () => await pruneMatrixStaleGatewayDevices({ accountId, cfg }),
         onText: (result, verbose) => {
           printAccountLabel(accountId);
           console.log(
-            `Deleted stale OpenClaw devices: ${result.deletedDeviceIds.length ? result.deletedDeviceIds.join(", ") : "none"}`,
+            `Deleted stale OpenClaw devices: ${
+              result.deletedDeviceIds.length
+                ? result.deletedDeviceIds
+                    .map((deviceId) => formatMatrixCliText(deviceId))
+                    .join(", ")
+                : "none"
+            }`,
           );
-          console.log(`Current device: ${result.currentDeviceId ?? "unknown"}`);
+          console.log(`Current device: ${formatMatrixCliText(result.currentDeviceId)}`);
           console.log(`Remaining devices: ${result.remainingDevices.length}`);
           if (verbose) {
             console.log("Devices before cleanup:");

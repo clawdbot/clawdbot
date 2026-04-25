@@ -10,6 +10,7 @@ import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from 
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
+import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
 import type {
   CanvasHostConfig,
@@ -74,6 +75,7 @@ export type OpenClawConfig = {
   diagnostics?: DiagnosticsConfig;
   logging?: LoggingConfig;
   cli?: CliConfig;
+  crestodian?: CrestodianConfig;
   update?: {
     /** Update channel for git + npm installs ("stable", "beta", or "dev"). */
     channel?: "stable" | "beta" | "dev";

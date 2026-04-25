@@ -2,6 +2,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const supervisorMock = vi.hoisted(() => ({
+  spawn: vi.fn(),
+}));
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: requestHeartbeatNowMock,
@@ -11,20 +14,36 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
 }));
 
+vi.mock("../process/supervisor/index.js", () => ({
+  getProcessSupervisor: () => ({
+    spawn: supervisorMock.spawn,
+  }),
+}));
+
+let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
+let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
 
 beforeAll(async () => {
+  ({ markBackgrounded } = await import("./bash-process-registry.js"));
   ({
     buildExecExitOutcome,
     detectCursorKeyMode,
     emitExecSystemEvent,
     formatExecFailureReason,
     resolveExecTarget,
+    runExecProcess,
   } = await import("./bash-tools.exec-runtime.js"));
+});
+
+beforeEach(() => {
+  requestHeartbeatNowMock.mockClear();
+  enqueueSystemEventMock.mockClear();
+  supervisorMock.spawn.mockReset();
 });
 
 describe("detectCursorKeyMode", () => {
@@ -292,6 +311,84 @@ describe("resolveExecTarget", () => {
     ).toThrow(
       "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
     );
+  });
+});
+
+describe("exec notifyOnExit suppression", () => {
+  async function runBackgroundedExit(params: {
+    reason: "manual-cancel" | "overall-timeout";
+    stdout?: string;
+  }) {
+    supervisorMock.spawn.mockImplementationOnce(
+      async (input: { onStdout?: (chunk: string) => void }) => {
+        if (params.stdout) {
+          input.onStdout?.(params.stdout);
+        }
+        return {
+          runId: "run-1",
+          startedAtMs: Date.now(),
+          pid: 123,
+          wait: async () => {
+            await new Promise((resolve) => setImmediate(resolve));
+            return {
+              reason: params.reason,
+              exitCode: null,
+              exitSignal: "SIGKILL",
+              durationMs: 10,
+              stdout: "",
+              stderr: "",
+              timedOut: params.reason === "overall-timeout",
+              noOutputTimedOut: false,
+            };
+          },
+          cancel: vi.fn(),
+        };
+      },
+    );
+
+    const run = await runExecProcess({
+      command: "sleep 999",
+      workdir: "/tmp",
+      env: {},
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: true,
+      notifyOnExitEmptySuccess: false,
+      sessionKey: "agent:main:main",
+      timeoutSec: null,
+    });
+    markBackgrounded(run.session);
+    return await run.promise;
+  }
+
+  it("keeps manual-cancelled no-output background execs silent", async () => {
+    const outcome = await runBackgroundedExit({ reason: "manual-cancel" });
+
+    expect(outcome.status).toBe("failed");
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("notifies for manual-cancelled background execs with output", async () => {
+    await runBackgroundedExit({ reason: "manual-cancel", stdout: "partial output\n" });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("partial output"),
+      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalled();
+  });
+
+  it("still notifies for no-output background exec timeouts", async () => {
+    await runBackgroundedExit({ reason: "overall-timeout" });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("Exec failed"),
+      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalled();
   });
 });
 

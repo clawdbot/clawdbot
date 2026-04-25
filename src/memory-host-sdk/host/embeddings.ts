@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
 import {
@@ -17,8 +18,7 @@ export type {
   GeminiTaskType,
 } from "./embeddings.types.js";
 
-export const DEFAULT_LOCAL_MODEL =
-  "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
+export { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 
 export async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,

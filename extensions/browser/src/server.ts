@@ -54,17 +54,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
   const browserAuthRequired =
     browserAuthBootstrapFailed || shouldAutoGenerateBrowserAuth(process.env);
-  const allowLegacyPasswordModeWithoutSecret =
-    !browserAuthBootstrapFailed &&
-    cfg.gateway?.auth?.mode === "password" &&
-    !browserAuth.token &&
-    !browserAuth.password;
-  if (
-    browserAuthRequired &&
-    !allowLegacyPasswordModeWithoutSecret &&
-    !browserAuth.token &&
-    !browserAuth.password
-  ) {
+  if (browserAuthRequired && !browserAuth.token && !browserAuth.password) {
     if (browserAuthBootstrapFailed) {
       logServer.error(
         "browser control startup aborted: authentication bootstrap failed " +

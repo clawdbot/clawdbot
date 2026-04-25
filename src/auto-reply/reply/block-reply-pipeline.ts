@@ -13,6 +13,7 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  getSentMediaUrls: () => readonly string[];
 };
 
 export type BlockReplyBuffer = {
@@ -86,6 +87,7 @@ export function createBlockReplyPipeline(params: {
   const { onBlockReply, timeoutMs, coalescing, buffer } = params;
   const sentKeys = new Set<string>();
   const sentContentKeys = new Set<string>();
+  const sentMediaUrls = new Set<string>();
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
   const bufferedKeys = new Set<string>();
@@ -149,6 +151,9 @@ export function createBlockReplyPipeline(params: {
         sentKeys.add(payloadKey);
         sentContentKeys.add(contentKey);
         const reply = resolveSendableOutboundReplyParts(payload);
+        for (const mediaUrl of reply.mediaUrls) {
+          sentMediaUrls.add(mediaUrl);
+        }
         if (!reply.hasMedia && reply.trimmedText) {
           streamedTextFragments.push(reply.trimmedText);
         }
@@ -284,5 +289,6 @@ export function createBlockReplyPipeline(params: {
       const normalize = (text: string) => text.replace(/\s+/g, "");
       return normalize(streamedTextFragments.join("")) === normalize(reply.trimmedText);
     },
+    getSentMediaUrls: () => Array.from(sentMediaUrls),
   };
 }

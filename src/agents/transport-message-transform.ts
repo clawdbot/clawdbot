@@ -1,4 +1,5 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "anthropic-messages",
@@ -6,31 +7,34 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "bedrock-converse-stream",
   "google-generative-ai",
   "openclaw-google-generative-ai-transport",
+  "openai-responses",
+  "openai-codex-responses",
+  "azure-openai-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-azure-openai-responses-transport",
 ]);
 
-type PendingToolCall = { id: string; name: string };
+// "aborted" is an OpenAI Responses-family convention from upstream Codex
+// history normalization. Gemini/Anthropic transports use their own text while
+// still needing synthetic results to satisfy provider turn-shape contracts;
+// tool-replay-repair.live.test.ts exercises both paths against real models.
+const CODEX_STYLE_ABORTED_OUTPUT_APIS = new Set<string>([
+  "openai-responses",
+  "openai-codex-responses",
+  "azure-openai-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
 
 function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
   return SYNTHETIC_TOOL_RESULT_APIS.has(modelApi);
 }
 
-function appendMissingToolResults(
-  result: Context["messages"],
-  pendingToolCalls: PendingToolCall[],
-  existingToolResultIds: ReadonlySet<string>,
-): void {
-  for (const toolCall of pendingToolCalls) {
-    if (!existingToolResultIds.has(toolCall.id)) {
-      result.push({
-        role: "toolResult",
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        content: [{ type: "text", text: "No result provided" }],
-        isError: true,
-        timestamp: Date.now(),
-      });
-    }
+function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
+  if (message.role !== "assistant") {
+    return false;
   }
+  return message.stopReason === "error" || message.stopReason === "aborted";
 }
 
 export function transformTransportMessages(
@@ -43,6 +47,9 @@ export function transformTransportMessages(
   ) => string,
 ): Context["messages"] {
   const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
+  const syntheticToolResultText = CODEX_STYLE_ABORTED_OUTPUT_APIS.has(model.api)
+    ? "aborted"
+    : "No result provided";
   const toolCallIdMap = new Map<string, string>();
   const transformed = messages.map((msg) => {
     if (msg.role === "user") {
@@ -102,42 +109,21 @@ export function transformTransportMessages(
     }
     return { ...msg, content };
   });
+  // Preserve the old transport replay filter: failed streamed turns can contain
+  // partial text, partial tool calls, or both, and strict providers can treat
+  // them as valid assistant context on retry unless we drop the whole turn.
+  const replayable = transformed.filter((msg) => !isFailedAssistantTurn(msg));
 
-  const result: Context["messages"] = [];
-  let pendingToolCalls: PendingToolCall[] = [];
-  let existingToolResultIds = new Set<string>();
-  for (const msg of transformed) {
-    if (msg.role === "assistant") {
-      if (allowSyntheticToolResults && pendingToolCalls.length > 0) {
-        appendMissingToolResults(result, pendingToolCalls, existingToolResultIds);
-      }
-      pendingToolCalls = [];
-      existingToolResultIds = new Set();
-      if (msg.stopReason === "error" || msg.stopReason === "aborted") {
-        continue;
-      }
-      const toolCalls = msg.content.filter(
-        (block): block is Extract<(typeof msg.content)[number], { type: "toolCall" }> =>
-          block.type === "toolCall",
-      );
-      if (toolCalls.length > 0) {
-        pendingToolCalls = toolCalls.map((block) => ({ id: block.id, name: block.name }));
-        existingToolResultIds = new Set();
-      }
-      result.push(msg);
-      continue;
-    }
-    if (msg.role === "toolResult") {
-      existingToolResultIds.add(msg.toolCallId);
-      result.push(msg);
-      continue;
-    }
-    if (allowSyntheticToolResults && pendingToolCalls.length > 0) {
-      appendMissingToolResults(result, pendingToolCalls, existingToolResultIds);
-    }
-    pendingToolCalls = [];
-    existingToolResultIds = new Set();
-    result.push(msg);
+  if (!allowSyntheticToolResults) {
+    return replayable;
   }
-  return result;
+
+  // PI's local transform can synthesize missing results, but it does not move
+  // displaced real results back before an intervening user turn. Shared repair
+  // handles both, while preserving the previous transport behavior of dropping
+  // aborted/error assistant tool-call turns before replaying strict providers.
+  return repairToolUseResultPairing(replayable, {
+    erroredAssistantResultPolicy: "drop",
+    missingToolResultText: syntheticToolResultText,
+  }).messages as Context["messages"];
 }

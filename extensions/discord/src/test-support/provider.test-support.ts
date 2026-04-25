@@ -470,6 +470,7 @@ vi.mock(buildDiscordSourceModuleId("monitor/exec-approvals.js"), () => ({
 
 vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
   createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
+  waitForDiscordGatewayPluginRegistration: () => undefined,
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({

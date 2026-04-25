@@ -279,8 +279,20 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   - `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <beta-version>`
   - install/update smoke against the published beta channel
   - Docker install/update coverage that exercises the published beta package
+  - published npm Telegram proof: dispatch Actions > `NPM Telegram Beta E2E`
+    from `main` with `package_spec=openclaw@<beta-version>` and
+    `provider_mode=mock-openai`, approve `npm-release`, and require success.
+    This is the default button path for installed-package onboarding,
+    Telegram setup, and real Telegram E2E against the published npm package.
+    Use the local `pnpm test:docker:npm-telegram-live` lane with the matching
+    `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC` and Convex CI env only as a fallback
+    or debugging path.
   - Parallels published beta install/update coverage with both OpenAI and
     Anthropic provider keys available
+  - Parallels install/update proof must keep plugin installs enabled unless the
+    operator explicitly scopes a harness-only isolation check; a lane that
+    disables bundled plugin installs is not valid plugin/dependency release
+    evidence.
   - targeted QA reruns only for areas touched by fixes after the full pre-npm
     roster, unless the operator requests the full QA roster again. If the fix
     touches live channel QA, credential plumbing, Matrix, Telegram, or the QA
@@ -329,10 +341,17 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
   workflow because `npm dist-tag` management needs `NPM_TOKEN`, while the
   public npm release workflow stays OIDC-only.
+- Prefer fixing the private workflow token path over any local 1Password
+  fallback. The desired setup is a granular npm token stored as the private
+  repo's `NPM_TOKEN` secret, scoped to the `openclaw` package with read/write
+  and 2FA bypass for automation.
 - If the private dist-tag workflow cannot promote because `NPM_TOKEN` is absent
   or stale, use the local tmux + 1Password fallback:
   - Start or reuse a tmux session so interactive `npm login` and OTP prompts
     are observable and recoverable.
+  - Hard rule: never run `op` directly in the main agent shell during release
+    work. Any 1Password CLI use must happen inside that tmux session so prompts
+    and alerts are contained and observable.
   - Use the 1Password item `op://Private/Npmjs` for npm credentials and OTP.
     Do not print passwords, tokens, or OTPs to the transcript; send them through
     tmux buffers, env vars scoped to the tmux command, or `expect` with
@@ -502,9 +521,11 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 23. Run the post-published beta verification roster. If any lane fails after
     the beta tag/package is pushed or published, fix, commit/push/pull,
     increment to the next beta tag, and restart at the full pre-npm beta test
-    roster for the new beta. If a pre-npm lane fails before any tag/package
-    leaves the machine, fix and rerun the same intended beta attempt. Repeat up
-    to the operator's authorized beta-attempt limit, normally 4.
+    roster for the new beta. The roster includes the manual Actions >
+    `NPM Telegram Beta E2E` workflow against the exact published beta package.
+    If a pre-npm lane fails before any tag/package leaves the machine, fix and
+    rerun the same intended beta attempt. Repeat up to the operator's
+    authorized beta-attempt limit, normally 4.
 24. Announce the beta/stable release on Discord best-effort using Peter's bot
     token from `.profile`.
 25. If the operator requested beta only, stop after beta verification and the

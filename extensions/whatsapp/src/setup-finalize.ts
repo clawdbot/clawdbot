@@ -15,7 +15,6 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppAuthDir,
 } from "./accounts.js";
-import { loginWeb } from "./login.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 
 type SetupPrompter = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
@@ -424,6 +423,7 @@ export async function finalizeWhatsAppSetup(params: {
   });
   if (wantsLink) {
     try {
+      const { loginWeb } = await import("./login.js");
       await loginWeb(false, undefined, params.runtime, accountId);
     } catch (error) {
       params.runtime.error(`WhatsApp login failed: ${String(error)}`);

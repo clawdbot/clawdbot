@@ -188,13 +188,13 @@
 }
 
 /* Scrollbar - visible on light backgrounds */
-:root[data-theme="light"]::-webkit-scrollbar-thumb,
-:root[data-theme="light"] ::-webkit-scrollbar-thumb {
+:root[data-theme-mode="light"]::-webkit-scrollbar-thumb,
+:root[data-theme-mode="light"] ::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.15);
 }
 
-:root[data-theme="light"]::-webkit-scrollbar-thumb:hover,
-:root[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+:root[data-theme-mode="light"]::-webkit-scrollbar-thumb:hover,
+:root[data-theme-mode="light"] ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.25);
 }
 

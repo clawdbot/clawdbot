@@ -6,8 +6,7 @@ read_when:
 title: "Model providers"
 ---
 
-This page covers **LLM/model providers** (not chat channels like WhatsApp/Telegram).
-For model selection rules, see [/concepts/models](/concepts/models).
+Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram). For model selection rules, see [Models](/concepts/models).
 
 ## Quick rules
 
@@ -20,15 +19,20 @@ For model selection rules, see [/concepts/models](/concepts/models).
   OpenAI API-key provider in PI, `openai-codex/<model>` uses Codex OAuth in PI,
   and `openai/<model>` plus `agents.defaults.embeddedHarness.runtime: "codex"`
   uses the native Codex app-server harness. See [OpenAI](/providers/openai)
-  and [Codex harness](/plugins/codex-harness).
+  and [Codex harness](/plugins/codex-harness). If the provider/runtime split is
+  confusing, read [Agent runtimes](/concepts/agent-runtimes) first.
 - Plugin auto-enable follows that same boundary: `openai-codex/<model>` belongs
   to the OpenAI plugin, while the Codex plugin is enabled by
   `embeddedHarness.runtime: "codex"` or legacy `codex/<model>` refs.
-- GPT-5.5 is currently available through subscription/OAuth routes:
-  `openai-codex/gpt-5.5` in PI or `openai/gpt-5.5` with the Codex app-server
-  harness. The direct API-key route for `openai/gpt-5.5` is supported once
-  OpenAI enables GPT-5.5 on the public API; until then use API-enabled models
-  such as `openai/gpt-5.4` for `OPENAI_API_KEY` setups.
+- CLI runtimes use the same split: choose canonical model refs such as
+  `anthropic/claude-*`, `google/gemini-*`, or `openai/gpt-*`, then set
+  `agents.defaults.embeddedHarness.runtime` to `claude-cli`,
+  `google-gemini-cli`, or `codex-cli` when you want a local CLI backend.
+  Legacy `claude-cli/*`, `google-gemini-cli/*`, and `codex-cli/*` refs migrate
+  back to canonical provider refs with the runtime recorded separately.
+- GPT-5.5 is available through `openai-codex/gpt-5.5` in PI, the native
+  Codex app-server harness, and the public OpenAI API when the bundled PI
+  catalog exposes `openai/gpt-5.5` for your install.
 
 ## Plugin-owned provider behavior
 
@@ -67,8 +71,10 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `openai`
 - Auth: `OPENAI_API_KEY`
 - Optional rotation: `OPENAI_API_KEYS`, `OPENAI_API_KEY_1`, `OPENAI_API_KEY_2`, plus `OPENCLAW_LIVE_OPENAI_KEY` (single override)
-- Example models: `openai/gpt-5.4`, `openai/gpt-5.4-mini`
-- GPT-5.5 direct API support is future-ready here once OpenAI exposes GPT-5.5 on the API
+- Example models: `openai/gpt-5.5`, `openai/gpt-5.4`, `openai/gpt-5.4-mini`
+- GPT-5.5 direct API support depends on the bundled PI catalog version for
+  your install; verify with `openclaw models list --provider openai` before
+  using `openai/gpt-5.5` without the Codex app-server runtime.
 - CLI: `openclaw onboard --auth-choice openai-api-key`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
@@ -112,6 +118,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: OAuth (ChatGPT)
 - PI model ref: `openai-codex/gpt-5.5`
 - Native Codex app-server harness ref: `openai/gpt-5.5` with `agents.defaults.embeddedHarness.runtime: "codex"`
+- Native Codex app-server harness docs: [Codex harness](/plugins/codex-harness)
 - Legacy model refs: `codex/gpt-*`
 - Plugin boundary: `openai-codex/*` loads the OpenAI plugin; the native Codex
   app-server plugin is selected only by the Codex harness runtime or legacy
@@ -124,9 +131,9 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   `User-Agent`) are only attached on native Codex traffic to
   `chatgpt.com/backend-api`, not generic OpenAI-compatible proxies
 - Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`; OpenClaw maps that to `service_tier=priority`
-- `openai-codex/gpt-5.5` keeps native `contextWindow = 1000000` and a default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai-codex.models[].contextTokens`
+- `openai-codex/gpt-5.5` uses the Codex catalog native `contextWindow = 400000` and default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai-codex.models[].contextTokens`
 - Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
-- Current GPT-5.5 access uses this OAuth/subscription route until OpenAI enables GPT-5.5 on the public API.
+- Use `openai-codex/gpt-5.5` when you want the Codex OAuth/subscription route; use `openai/gpt-5.5` when your API-key setup and local catalog expose the public API route.
 
 ```json5
 {
@@ -150,14 +157,14 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - [Qwen Cloud](/providers/qwen): Qwen Cloud provider surface plus Alibaba DashScope and Coding Plan endpoint mapping
 - [MiniMax](/providers/minimax): MiniMax Coding Plan OAuth or API key access
-- [GLM Models](/providers/glm): Z.AI Coding Plan or general API endpoints
+- [GLM models](/providers/glm): Z.AI Coding Plan or general API endpoints
 
 ### OpenCode
 
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
-- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.5`
+- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.6`
 - CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
 
 ```json5
@@ -174,6 +181,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3-flash-preview`
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
+- Thinking: `/think adaptive` uses Google dynamic thinking. Gemini 3/3.1 omit a fixed
+  `thinkingLevel`; Gemini 2.5 sends `thinkingBudget: -1`.
 - Direct Gemini runs also accept `agents.defaults.models["google/<model>"].params.cachedContent`
   (or legacy `cached_content`) to forward a provider-native
   `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
@@ -235,6 +244,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | BytePlus                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                           | `byteplus-plan/ark-code-latest`                 |
 | Cerebras                | `cerebras`                       | `CEREBRAS_API_KEY`                                           | `cerebras/zai-glm-4.7`                          |
 | Cloudflare AI Gateway   | `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                              | —                                               |
+| DeepSeek                | `deepseek`                       | `DEEPSEEK_API_KEY`                                           | `deepseek/deepseek-v4-flash`                    |
 | GitHub Copilot          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`         | —                                               |
 | Groq                    | `groq`                           | `GROQ_API_KEY`                                               | —                                               |
 | Hugging Face Inference  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`           |
@@ -257,9 +267,9 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 
 Quirks worth knowing:
 
-- **OpenRouter** applies its app-attribution headers and Anthropic `cache_control` markers only on verified `openrouter.ai` routes. As a proxy-style OpenAI-compatible path, it skips native-OpenAI-only shaping (`serviceTier`, Responses `store`, prompt-cache hints, OpenAI reasoning-compat). Gemini-backed refs keep proxy-Gemini thought-signature sanitation only.
+- **OpenRouter** applies its app-attribution headers and Anthropic `cache_control` markers only on verified `openrouter.ai` routes. DeepSeek, Moonshot, and ZAI refs are cache-TTL eligible for OpenRouter-managed prompt caching but do not receive Anthropic cache markers. As a proxy-style OpenAI-compatible path, it skips native-OpenAI-only shaping (`serviceTier`, Responses `store`, prompt-cache hints, OpenAI reasoning-compat). Gemini-backed refs keep proxy-Gemini thought-signature sanitation only.
 - **Kilo Gateway** Gemini-backed refs follow the same proxy-Gemini sanitation path; `kilocode/kilo/auto` and other proxy-reasoning-unsupported refs skip proxy reasoning injection.
-- **MiniMax** API-key onboarding writes explicit M2.7 model definitions with `input: ["text", "image"]`; the bundled catalog keeps chat refs text-only until that config is materialized.
+- **MiniMax** API-key onboarding writes explicit text-only M2.7 chat model definitions; image understanding stays on the plugin-owned `MiniMax-VL-01` media provider.
 - **xAI** uses the xAI Responses path. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
 - **Cerebras** GLM models use `zai-glm-4.7` / `zai-glm-4.6`; OpenAI-compatible base URL is `https://api.cerebras.ai/v1`.
 
@@ -616,9 +626,12 @@ Notes:
 - Recommended: set explicit values that match your proxy/model limits.
 - For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), OpenClaw forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles.
 - Proxy-style OpenAI-compatible routes also skip native OpenAI-only request
-  shaping: no `service_tier`, no Responses `store`, no prompt-cache hints, no
-  OpenAI reasoning-compat payload shaping, and no hidden OpenClaw attribution
-  headers.
+  shaping: no `service_tier`, no Responses `store`, no Completions `store`, no
+  prompt-cache hints, no OpenAI reasoning-compat payload shaping, and no hidden
+  OpenClaw attribution headers.
+- For OpenAI-compatible Completions proxies that need vendor-specific fields,
+  set `agents.defaults.models["provider/model"].params.extra_body` (or
+  `extraBody`) to merge extra JSON into the outbound request body.
 - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
 - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
 
@@ -630,11 +643,11 @@ openclaw models set opencode/claude-opus-4-6
 openclaw models list
 ```
 
-See also: [/gateway/configuration](/gateway/configuration) for full configuration examples.
+See also: [Configuration](/gateway/configuration) for full configuration examples.
 
 ## Related
 
 - [Models](/concepts/models) — model configuration and aliases
-- [Model Failover](/concepts/model-failover) — fallback chains and retry behavior
-- [Configuration Reference](/gateway/config-agents#agent-defaults) — model config keys
+- [Model failover](/concepts/model-failover) — fallback chains and retry behavior
+- [Configuration reference](/gateway/config-agents#agent-defaults) — model config keys
 - [Providers](/providers) — per-provider setup guides

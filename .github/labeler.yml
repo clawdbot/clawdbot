@@ -387,3 +387,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: gradium":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gradium/**"

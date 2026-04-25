@@ -519,6 +519,16 @@ describe("isHighSignalLiveModelRef", () => {
       true,
     );
   });
+
+  it("keeps DeepSeek V4 models in the default live matrix when the provider marks them modern", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
+      provider === "deepseek" && context.modelId.startsWith("deepseek-v4") ? true : undefined,
+    );
+
+    expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-flash" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-pro" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-chat" })).toBe(false);
+  });
 });
 
 describe("selectHighSignalLiveItems", () => {
@@ -528,6 +538,7 @@ describe("selectHighSignalLiveItems", () => {
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "openai", id: "gpt-5.2" },
       { provider: "opencode", id: "big-pickle" },
     ];
@@ -544,6 +555,28 @@ describe("selectHighSignalLiveItems", () => {
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
+    ]);
+  });
+
+  it("prioritizes DeepSeek V4 before later fallback providers", () => {
+    const items = [
+      { provider: "openai", id: "gpt-5.2" },
+      { provider: "deepseek", id: "deepseek-v4-flash" },
+      { provider: "deepseek", id: "deepseek-v4-pro" },
+      { provider: "minimax", id: "minimax-m2.7" },
+    ];
+
+    expect(
+      selectHighSignalLiveItems(
+        items,
+        3,
+        (item) => item,
+        (item) => item.provider,
+      ),
+    ).toEqual([
+      { provider: "deepseek", id: "deepseek-v4-flash" },
+      { provider: "deepseek", id: "deepseek-v4-pro" },
+      { provider: "minimax", id: "minimax-m2.7" },
     ]);
   });
 });

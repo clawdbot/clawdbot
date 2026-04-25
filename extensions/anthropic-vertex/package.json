@@ -4,10 +4,18 @@
   "private": true,
   "description": "OpenClaw Anthropic Vertex provider plugin",
   "type": "module",
+  "dependencies": {
+    "@anthropic-ai/vertex-sdk": "^0.16.0",
+    "@mariozechner/pi-agent-core": "0.70.2",
+    "@mariozechner/pi-ai": "0.70.2"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
     "extensions": [
       "./index.ts"
     ]

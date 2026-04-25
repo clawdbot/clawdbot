@@ -38,6 +38,7 @@ const {
   formatPreservedTurnsSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  prependPreviousSummaryForRedistill,
   appendSummarySection,
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
@@ -1198,6 +1199,20 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(buildStructuredFallbackSummary(structured)).toBe(structured);
   });
 
+  it("converts previous summaries into redistill input instead of update-prompt state", () => {
+    const messages: AgentMessage[] = [{ role: "user", content: "new context", timestamp: 1 }];
+    const redistillMessages = prependPreviousSummaryForRedistill({
+      messages,
+      previousSummary: "## Goal\nold duplicate summary",
+    });
+
+    expect(redistillMessages).toHaveLength(2);
+    expect(redistillMessages[0]?.role).toBe("user");
+    expect(JSON.stringify(redistillMessages[0])).toContain("<previous-compaction-summary>");
+    expect(JSON.stringify(redistillMessages[0])).toContain("Prune stale, duplicate");
+    expect(redistillMessages[1]).toBe(messages[0]);
+  });
+
   it("restructures summaries with near-match headings instead of reusing them", () => {
     const nearMatch = [
       "## Decisions",
@@ -1284,6 +1299,52 @@ describe("compaction-safeguard recent-turn preservation", () => {
     );
     expect(droppedCall?.customInstructions).toContain("## Decisions");
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
+  });
+
+  it("adds Copilot IDE headers to built-in compaction summarization", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      provider: "github-copilot",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.githubcopilot.com",
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
+      ok: true,
+      apiKey: "github-token",
+      headers: { "X-Test": "1" },
+    });
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock,
+    });
+    const compactionHandler = createCompactionHandler();
+    const event = createCompactionEvent({
+      messageText: "summarize me",
+      tokensBefore: 1000,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
+
+    expect(result.cancel).not.toBe(true);
+    const summaryCall = mockSummarizeInStages.mock.calls.at(-1)?.[0];
+    expect(summaryCall?.headers).toMatchObject({
+      "Copilot-Integration-Id": "vscode-chat",
+      "Editor-Plugin-Version": "copilot-chat/0.35.0",
+      "Openai-Organization": "github-copilot",
+      "User-Agent": "GitHubCopilotChat/0.26.7",
+      "X-Test": "1",
+      "x-initiator": "user",
+    });
   });
 
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
@@ -1639,7 +1700,72 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).toContain("legacy summary without headings");
   });
 
+  it("re-distills prior summaries on the LLM path instead of preserving them verbatim", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(
+      [
+        "## Decisions",
+        "Condensed prior context with latest status.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Preserve identifiers.",
+        "## Pending user asks",
+        "latest ask status",
+        "## Exact identifiers",
+        "None.",
+      ].join("\n"),
+    );
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [{ role: "user", content: "latest ask status", timestamp: 1 }],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: "## Goal\nOld duplicated section that should be re-distilled.",
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const call = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(call?.previousSummary).toBeUndefined();
+    expect(JSON.stringify(call?.messages[0])).toContain("<previous-compaction-summary>");
+    expect(JSON.stringify(call?.messages[0])).toContain("Old duplicated section");
+  });
+
   it("passes compaction instructions to providers and preserves suffix context", async () => {
+    mockSummarizeInStages.mockReset();
     const providerSummarize = vi.fn().mockResolvedValue("provider summary body");
     registerCompactionProvider({
       id: "test-provider",

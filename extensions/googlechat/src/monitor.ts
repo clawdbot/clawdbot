@@ -30,6 +30,7 @@ import type {
   GoogleChatRuntimeEnv,
   WebhookTarget,
 } from "./monitor-types.js";
+import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 export type { GoogleChatMonitorOptions, GoogleChatRuntimeEnv } from "./monitor-types.js";
@@ -476,6 +477,13 @@ export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): ()
   const audienceType = normalizeAudienceType(options.account.config.audienceType);
   const audience = options.account.config.audience?.trim();
   const mediaMaxMb = options.account.config.mediaMaxMb ?? 20;
+
+  warnAppPrincipalMisconfiguration({
+    accountId: options.account.accountId,
+    audienceType,
+    appPrincipal: options.account.config.appPrincipal,
+    log: options.runtime.log,
+  });
 
   const unregisterTarget = registerGoogleChatWebhookTarget({
     account: options.account,

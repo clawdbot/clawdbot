@@ -148,6 +148,7 @@ let executeNodeHostCommand: typeof import("./bash-tools.exec-host-node.js").exec
 
 type MockNodeInvokeParams = {
   command?: string;
+  params?: Record<string, unknown>;
 };
 
 describe("executeNodeHostCommand", () => {
@@ -271,6 +272,36 @@ describe("executeNodeHostCommand", () => {
           approved: true,
           approvalDecision: "allow-once",
           systemRunPlan: preparedPlan,
+        }),
+      }),
+    );
+  });
+
+  it("suppresses node completion events when notifyOnExit is disabled", async () => {
+    requiresExecApprovalMock.mockReturnValue(false);
+
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      notifyOnExit: false,
+    });
+
+    expect(callGatewayToolMock).toHaveBeenNthCalledWith(
+      2,
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({
+        command: "system.run",
+        params: expect.objectContaining({
+          suppressNotifyOnExit: true,
         }),
       }),
     );

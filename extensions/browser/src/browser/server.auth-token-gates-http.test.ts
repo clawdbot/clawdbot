@@ -66,4 +66,44 @@ describe("browser control HTTP auth", () => {
     expect(ok.status).toBe(200);
     expect((await ok.json()) as { ok: boolean }).toEqual({ ok: true });
   });
+
+  it("rejects bearer auth when password mode is active", async () => {
+    const base = `http://127.0.0.1:${port}`;
+
+    server?.removeAllListeners("request");
+    server?.on("request", (req: IncomingMessage, res: ServerResponse) => {
+      if (!isAuthorizedBrowserRequest(req, { password: "browser-password" })) {
+        res.statusCode = 401;
+        res.end("Unauthorized");
+        return;
+      }
+      res.statusCode = 200;
+      res.end("ok");
+    });
+
+    const bearer = await realFetch(`${base}/`, {
+      headers: {
+        Authorization: "Bearer browser-control-secret",
+      },
+    });
+    expect(bearer.status).toBe(401);
+
+    const password = await realFetch(`${base}/`, {
+      headers: {
+        "x-openclaw-password": "browser-password",
+      },
+    });
+    expect(password.status).toBe(200);
+  });
+
+  it("rejects password auth when token mode is active", async () => {
+    const base = `http://127.0.0.1:${port}`;
+
+    const password = await realFetch(`${base}/`, {
+      headers: {
+        "x-openclaw-password": "browser-control-secret",
+      },
+    });
+    expect(password.status).toBe(401);
+  });
 });

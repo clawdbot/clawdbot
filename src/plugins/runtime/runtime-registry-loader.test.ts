@@ -3,6 +3,7 @@ import { createEmptyPluginRegistry } from "../registry.js";
 
 const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../loader.js").loadOpenClawPlugins>(),
+  resolveRuntimePluginRegistry: vi.fn<typeof import("../loader.js").resolveRuntimePluginRegistry>(),
   getActivePluginRegistry: vi.fn<typeof import("../runtime.js").getActivePluginRegistry>(),
   resolveConfiguredChannelPluginIds:
     vi.fn<typeof import("../channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
@@ -24,6 +25,8 @@ let resetPluginRegistryLoadedForTests: typeof import("./runtime-registry-loader.
 vi.mock("../loader.js", () => ({
   loadOpenClawPlugins: (...args: Parameters<typeof mocks.loadOpenClawPlugins>) =>
     mocks.loadOpenClawPlugins(...args),
+  resolveRuntimePluginRegistry: (...args: Parameters<typeof mocks.resolveRuntimePluginRegistry>) =>
+    mocks.resolveRuntimePluginRegistry(...args),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -61,6 +64,7 @@ describe("ensurePluginRegistryLoaded", () => {
 
   beforeEach(() => {
     mocks.loadOpenClawPlugins.mockReset();
+    mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.getActivePluginRegistry.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();
     mocks.resolveChannelPluginIds.mockReset();
@@ -70,6 +74,10 @@ describe("ensurePluginRegistryLoaded", () => {
     resetPluginRegistryLoadedForTests();
 
     mocks.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+    mocks.loadOpenClawPlugins.mockReturnValue(createEmptyPluginRegistry());
+    mocks.resolveRuntimePluginRegistry.mockImplementation(
+      (...args: Parameters<typeof mocks.loadOpenClawPlugins>) => mocks.loadOpenClawPlugins(...args),
+    );
     mocks.applyPluginAutoEnable.mockImplementation((params) => ({
       config:
         params.config && typeof params.config === "object"
@@ -254,5 +262,27 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(
       (mocks.loadOpenClawPlugins.mock.calls[0]?.[0] as { onlyPluginIds?: string[] }).onlyPluginIds,
     ).toBeUndefined();
+  });
+
+  it("reuses a compatible active registry instead of forcing a broad reload", () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(activeRegistry);
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { allow: ["demo"] } } as never,
+    });
+
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        throwOnLoadError: true,
+      }),
+    );
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        onlyPluginIds: expect.any(Array),
+      }),
+    );
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 });

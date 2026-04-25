@@ -41,7 +41,13 @@ vi.mock("../agents/sandbox.js", () => sandboxMocks);
 vi.mock("../agents/sandbox-paths.js", () => ({
   assertSandboxPath: sandboxMocks.assertSandboxPath,
 }));
-vi.mock("node:child_process", () => childProcessMocks);
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawn: childProcessMocks.spawn,
+  };
+});
 vi.mock("../infra/fs-safe.js", () => fsSafeMocks);
 vi.mock("../media/channel-inbound-roots.js", () => mediaRootMocks);
 

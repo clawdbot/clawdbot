@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 
-const { detectChangedScope, detectInstallSmokeScope, listChangedPaths } =
+const { detectChangedScope, detectInstallSmokeScope, detectNodeFastScope, listChangedPaths } =
   (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
     detectChangedScope: (paths: string[]) => {
       runNode: boolean;
@@ -19,6 +19,11 @@ const { detectChangedScope, detectInstallSmokeScope, listChangedPaths } =
     detectInstallSmokeScope: (paths: string[]) => {
       runFastInstallSmoke: boolean;
       runFullInstallSmoke: boolean;
+    };
+    detectNodeFastScope: (paths: string[]) => {
+      runFastOnly: boolean;
+      runPluginContracts: boolean;
+      runCiRouting: boolean;
     };
     listChangedPaths: (base: string, head?: string) => string[];
   };
@@ -317,6 +322,15 @@ describe("detectChangedScope", () => {
       runChangedSmoke: true,
       runControlUiI18n: false,
     });
+    expect(detectChangedScope(["scripts/e2e/agents-delete-shared-workspace-docker.sh"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
     expect(detectChangedScope(["scripts/e2e/plugin-update-unchanged-docker.sh"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -477,6 +491,55 @@ describe("detectChangedScope", () => {
     });
   });
 
+  it("identifies plugin contract helper changes as fast Node-only CI scope", () => {
+    const bundledCapabilityMetadataPath = [
+      "src/plugins/contracts",
+      "inventory/bundled-capability-metadata.ts",
+    ].join("/");
+    expect(
+      detectNodeFastScope([
+        bundledCapabilityMetadataPath,
+        "src/plugins/contracts/registry.ts",
+        "test/helpers/plugins/tts-contract-suites.ts",
+        "scripts/test-projects.test-support.mjs",
+        "test/scripts/test-projects.test.ts",
+      ]),
+    ).toEqual({
+      runFastOnly: true,
+      runPluginContracts: true,
+      runCiRouting: false,
+    });
+  });
+
+  it("identifies CI routing changes as fast Node-only CI scope", () => {
+    expect(
+      detectNodeFastScope([
+        ".github/workflows/ci.yml",
+        "scripts/ci-changed-scope.mjs",
+        "src/commands/status.scan-result.test.ts",
+        "src/scripts/ci-changed-scope.test.ts",
+        "docs/ci.md",
+      ]),
+    ).toEqual({
+      runFastOnly: true,
+      runPluginContracts: false,
+      runCiRouting: true,
+    });
+  });
+
+  it("keeps broad source changes on the full Node CI scope", () => {
+    expect(
+      detectNodeFastScope([
+        "src/plugins/contracts/manifest-loader.ts",
+        "src/plugins/contracts/registry.ts",
+      ]),
+    ).toEqual({
+      runFastOnly: false,
+      runPluginContracts: false,
+      runCiRouting: false,
+    });
+  });
+
   it("treats base and head as literal git args", () => {
     const markerPath = path.join(
       os.tmpdir(),
@@ -518,6 +581,9 @@ describe("detectChangedScope", () => {
       run_windows: "false",
       run_skills_python: "false",
       run_changed_smoke: "false",
+      run_node_fast_only: "false",
+      run_node_fast_plugin_contracts: "false",
+      run_node_fast_ci_routing: "false",
       run_fast_install_smoke: "false",
       run_full_install_smoke: "false",
       run_control_ui_i18n: "false",

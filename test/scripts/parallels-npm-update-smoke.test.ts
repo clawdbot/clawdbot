@@ -21,10 +21,14 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("delete entries.whatsapp");
     expect(script).toContain("Remove-FuturePluginEntries\n  Stop-OpenClawGatewayProcesses");
     expect(script).toContain("scrub_future_plugin_entries\nstop_openclaw_gateway_processes");
-    expect(script).toContain("$env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'");
-    expect(script).toContain(
+    expect(script).not.toContain("$env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'\n  & $Path update");
+    expect(script).not.toContain(
       "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update",
     );
-    expect(script).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update");
+    expect(script).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update");
+    expect(script).toContain(
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw gateway stop",
+    );
+    expect(script).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw gateway stop");
   });
 });

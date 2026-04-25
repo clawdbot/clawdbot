@@ -61,6 +61,15 @@ function expectSessionStore(
   expect(loadSessionStore(storePath, { skipCache: true })).toEqual(sessions);
 }
 
+function readJsonLogs(): Array<Record<string, unknown>> {
+  return runtime.log.mock.calls
+    .filter((call): call is [string, ...unknown[]] => {
+      const arg = call[0];
+      return typeof arg === "string" && arg.startsWith("{");
+    })
+    .map((call) => JSON.parse(call[0]) as Record<string, unknown>);
+}
+
 describe("agents delete command", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockReset();
@@ -172,6 +181,204 @@ describe("agents delete command", () => {
       expectSessionStore(storePath, {
         main: { sessionId: "sess-main", updatedAt: now + 1 },
         "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: now + 2 },
+      });
+    });
+  });
+
+  it("skips workspace removal when another agent shares the same workspace (#70890)", async () => {
+    await withStateDirEnv("openclaw-agents-delete-shared-workspace-", async ({ stateDir }) => {
+      const sharedWorkspace = path.join(stateDir, "workspace-shared");
+      await fs.mkdir(sharedWorkspace, { recursive: true });
+
+      const now = Date.now();
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: sharedWorkspace },
+            { id: "ops", workspace: sharedWorkspace },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
+        },
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      // Workspace should still exist — it was shared
+      const stat = await fs.stat(sharedWorkspace).catch(() => null);
+      expect(stat).not.toBeNull();
+
+      // The JSON output should report why the workspace was retained.
+      const jsonOutput = readJsonLogs();
+      expect(jsonOutput).toHaveLength(1);
+      expect(jsonOutput[0]).toMatchObject({
+        workspaceRetained: true,
+        workspaceRetainedReason: "shared",
+        workspaceSharedWith: ["main"],
+      });
+      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
+        ["trash", sharedWorkspace],
+        { timeoutMs: 5000 },
+      );
+    });
+  });
+
+  it("skips workspace removal when another agent workspace overlaps a child path (#70890)", async () => {
+    await withStateDirEnv("openclaw-agents-delete-overlapping-workspace-", async ({ stateDir }) => {
+      const sharedWorkspace = path.join(stateDir, "workspace-shared");
+      const childWorkspace = path.join(sharedWorkspace, "ops-child");
+      await fs.mkdir(childWorkspace, { recursive: true });
+
+      const now = Date.now();
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: sharedWorkspace },
+            { id: "ops", workspace: childWorkspace },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
+        },
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(readJsonLogs()[0]).toMatchObject({
+        workspaceRetained: true,
+        workspaceSharedWith: ["main"],
+      });
+      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
+        ["trash", childWorkspace],
+        { timeoutMs: 5000 },
+      );
+    });
+  });
+
+  it("skips workspace removal when deleting a parent workspace that contains another agent workspace (#70890)", async () => {
+    await withStateDirEnv("openclaw-agents-delete-parent-workspace-", async ({ stateDir }) => {
+      const sharedWorkspace = path.join(stateDir, "workspace-shared");
+      const childWorkspace = path.join(sharedWorkspace, "main-child");
+      await fs.mkdir(childWorkspace, { recursive: true });
+
+      const now = Date.now();
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: childWorkspace },
+            { id: "ops", workspace: sharedWorkspace },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
+        },
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(readJsonLogs()[0]).toMatchObject({
+        workspaceRetained: true,
+        workspaceSharedWith: ["main"],
+      });
+      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
+        ["trash", sharedWorkspace],
+        { timeoutMs: 5000 },
+      );
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "skips workspace removal when another agent reaches the same directory through a symlink (#70890)",
+    async () => {
+      await withStateDirEnv("openclaw-agents-delete-symlink-workspace-", async ({ stateDir }) => {
+        const realWorkspace = path.join(stateDir, "workspace-real");
+        const aliasWorkspace = path.join(stateDir, "workspace-alias");
+        await fs.mkdir(realWorkspace, { recursive: true });
+        await fs.symlink(realWorkspace, aliasWorkspace, "dir");
+
+        const now = Date.now();
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              { id: "main", workspace: realWorkspace },
+              { id: "ops", workspace: aliasWorkspace },
+            ],
+          },
+        } satisfies OpenClawConfig;
+        await arrangeAgentsDeleteTest({
+          stateDir,
+          cfg,
+          deletedAgentId: "ops",
+          sessions: {
+            "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+            "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
+          },
+        });
+
+        await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+        expect(readJsonLogs()[0]).toMatchObject({
+          workspaceRetained: true,
+          workspaceSharedWith: ["main"],
+        });
+        expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
+          ["trash", aliasWorkspace],
+          { timeoutMs: 5000 },
+        );
+      });
+    },
+  );
+
+  it("trashes workspace when no other agent shares it", async () => {
+    await withStateDirEnv("openclaw-agents-delete-unique-workspace-", async ({ stateDir }) => {
+      const opsWorkspace = path.join(stateDir, "workspace-ops");
+      const mainWorkspace = path.join(stateDir, "workspace-main");
+      await fs.mkdir(opsWorkspace, { recursive: true });
+      await fs.mkdir(mainWorkspace, { recursive: true });
+
+      const now = Date.now();
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: mainWorkspace },
+            { id: "ops", workspace: opsWorkspace },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
+        },
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      // trash command should have been called for the workspace
+      expect(processMocks.runCommandWithTimeout).toHaveBeenCalledWith(["trash", opsWorkspace], {
+        timeoutMs: 5000,
       });
     });
   });

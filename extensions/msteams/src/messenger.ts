@@ -1,15 +1,15 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
-  type ChunkMode,
   isSilentReplyText,
-  loadWebMedia,
-  type MarkdownTableMode,
-  type MSTeamsReplyStyle,
-  type ReplyPayload,
-  resolveSendableOutboundReplyParts,
   SILENT_REPLY_TOKEN,
-  sleep,
-} from "../runtime-api.js";
+  type ChunkMode,
+} from "openclaw/plugin-sdk/reply-chunking";
+import {
+  resolveSendableOutboundReplyParts,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
+import { normalizeOptionalLowercaseString, sleep } from "openclaw/plugin-sdk/text-runtime";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import type { MarkdownTableMode, MSTeamsReplyStyle } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";

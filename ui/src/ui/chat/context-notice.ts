@@ -1,5 +1,15 @@
 import { html, nothing } from "lit";
+import { icons } from "../icons.ts";
 import type { GatewaySessionRow } from "../types.ts";
+
+const CONTEXT_NOTICE_RATIO = 0.85;
+const CONTEXT_COMPACT_RATIO = 0.9;
+
+export type ContextNoticeOptions = {
+  compactBusy?: boolean;
+  compactDisabled?: boolean;
+  onCompact?: () => void | Promise<void>;
+};
 
 /** Parse a 6-digit CSS hex color string to [r, g, b] integer components. */
 function parseHexRgb(hex: string): [number, number, number] | null {
@@ -49,6 +59,7 @@ export function getContextNoticeViewModel(
   detail: string;
   color: string;
   bg: string;
+  compactRecommended: boolean;
 } | null {
   if (session?.totalTokensFresh === false) {
     return null;
@@ -59,7 +70,7 @@ export function getContextNoticeViewModel(
     return null;
   }
   const ratio = used / limit;
-  if (ratio < 0.85) {
+  if (ratio < CONTEXT_NOTICE_RATIO) {
     return null;
   }
   const pct = Math.min(Math.round(ratio * 100), 100);
@@ -79,17 +90,21 @@ export function getContextNoticeViewModel(
     detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
     color,
     bg,
+    compactRecommended: ratio >= CONTEXT_COMPACT_RATIO,
   };
 }
 
 export function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
+  options: ContextNoticeOptions = {},
 ) {
   const model = getContextNoticeViewModel(session, defaultContextTokens);
   if (!model) {
     return nothing;
   }
+  const canRenderCompact = model.compactRecommended && options.onCompact;
+  const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
   return html`
     <div
       class="context-notice"
@@ -113,6 +128,30 @@ export function renderContextNotice(
       </svg>
       <span>${model.pct}% context used</span>
       <span class="context-notice__detail">${model.detail}</span>
+      ${canRenderCompact
+        ? html`
+            <button
+              class="context-notice__action ${options.compactBusy
+                ? "context-notice__action--busy"
+                : ""}"
+              type="button"
+              title="Compact session context"
+              aria-label="Compact recommended session context"
+              ?disabled=${compactDisabled}
+              @click=${(event: Event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (compactDisabled) {
+                  return;
+                }
+                void options.onCompact?.();
+              }}
+            >
+              ${options.compactBusy ? icons.loader : icons.minimize}
+              <span>${options.compactBusy ? "Compacting" : "Compact"}</span>
+            </button>
+          `
+        : nothing}
     </div>
   `;
 }

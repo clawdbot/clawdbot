@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCliCommand } from "./agent-via-gateway.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
@@ -14,6 +15,14 @@ const agentCommand = vi.hoisted(() => vi.fn());
 const runtime: RuntimeEnv = {
   log: vi.fn(),
   error: vi.fn(),
+  exit: vi.fn(),
+};
+
+const jsonRuntime = {
+  log: vi.fn(),
+  error: vi.fn(),
+  writeStdout: vi.fn(),
+  writeJson: vi.fn(),
   exit: vi.fn(),
 };
 
@@ -76,8 +85,16 @@ vi.mock("../gateway/call.js", () => ({
 }));
 vi.mock("./agent.js", () => ({ agentCommand }));
 
+let originalForceConsoleToStderr = false;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
+  loggingState.forceConsoleToStderr = false;
+});
+
+afterEach(() => {
+  loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
 });
 
 describe("agentCliCommand", () => {
@@ -100,8 +117,35 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
+        params: {
+          cleanupBundleMcpOnRunEnd: true,
+        },
+      });
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
+    });
+  });
+
+  it("routes diagnostics to stderr before JSON gateway execution", async () => {
+    await withTempStore(async () => {
+      const response = {
+        runId: "idem-1",
+        status: "ok",
+        result: {
+          payloads: [{ text: "hello" }],
+          meta: { stub: true },
+        },
+      };
+      callGateway.mockImplementationOnce(async () => {
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+        return response;
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
+
+      expect(jsonRuntime.writeJson).toHaveBeenCalledWith(response, 2);
+      expect(jsonRuntime.log).not.toHaveBeenCalled();
     });
   });
 
@@ -115,6 +159,25 @@ describe("agentCliCommand", () => {
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("keeps diagnostics on stderr before JSON embedded fallback", async () => {
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(new Error("gateway not connected"));
+      agentCommand.mockImplementationOnce(async (_opts, rt) => {
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+        rt?.log?.("local");
+        return {
+          payloads: [{ text: "local" }],
+          meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
+        } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
+
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(loggingState.forceConsoleToStderr).toBe(true);
     });
   });
 
@@ -140,7 +203,7 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("does not force bundle MCP cleanup on gateway fallback", async () => {
+  it("forces bundle MCP cleanup on embedded fallback", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(new Error("gateway not connected"));
       mockLocalAgentReply();
@@ -148,7 +211,7 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).not.toMatchObject({
+      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
       });
     });

@@ -6,6 +6,14 @@ import {
   wrapCopilotProviderStream,
 } from "./stream.js";
 
+function requireStreamFn(streamFn: ReturnType<typeof wrapCopilotProviderStream>) {
+  expect(streamFn).toBeTypeOf("function");
+  if (!streamFn) {
+    throw new Error("expected stream fn");
+  }
+  return streamFn;
+}
+
 describe("wrapCopilotAnthropicStream", () => {
   it("adds Copilot headers and Anthropic cache markers for Claude payloads", async () => {
     const payloads: Array<{
@@ -28,7 +36,7 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never;
     });
 
-    const wrapped = wrapCopilotAnthropicStream(baseStreamFn);
+    const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
     const messages = [
       {
         role: "user",
@@ -77,7 +85,7 @@ describe("wrapCopilotAnthropicStream", () => {
 
   it("leaves non-Anthropic Copilot models untouched", () => {
     const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
-    const wrapped = wrapCopilotAnthropicStream(baseStreamFn);
+    const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
     const options = { headers: { Existing: "1" } };
 
     void wrapped(
@@ -93,7 +101,7 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn).toHaveBeenCalledWith(expect.anything(), expect.anything(), options);
   });
 
-  it("rewrites Copilot Responses connection-bound IDs before payload send", () => {
+  it("adds Copilot headers and rewrites Responses connection-bound IDs before payload send", () => {
     const connectionBoundId = Buffer.from(`reasoning-${"x".repeat(24)}`).toString("base64");
     const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
@@ -105,7 +113,20 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never;
     });
 
-    const wrapped = wrapCopilotOpenAIResponsesStream(baseStreamFn);
+    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    const messages = [
+      {
+        role: "toolResult",
+        content: [
+          { type: "text", text: "look" },
+          { type: "image", image: "data:image/png;base64,abc" },
+        ],
+      },
+    ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
+    const expectedCopilotHeaders = buildCopilotDynamicHeaders({
+      messages,
+      hasImages: true,
+    });
 
     void wrapped(
       {
@@ -113,10 +134,16 @@ describe("wrapCopilotAnthropicStream", () => {
         api: "openai-responses",
         id: "gpt-5.4",
       } as never,
-      { messages: [{ role: "user", content: "hi" }] } as never,
-      {},
+      { messages } as never,
+      { headers: { "X-Test": "1" } },
     );
 
+    expect(baseStreamFn.mock.calls[0]?.[2]).toMatchObject({
+      headers: {
+        ...expectedCopilotHeaders,
+        "X-Test": "1",
+      },
+    });
     expect(payloads[0]?.input[0]?.id).toMatch(/^rs_[a-f0-9]{16}$/);
   });
 
@@ -130,7 +157,7 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never;
     });
 
-    const wrapped = wrapCopilotOpenAIResponsesStream(baseStreamFn);
+    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
 
     await wrapped(
       {
@@ -152,9 +179,11 @@ describe("wrapCopilotAnthropicStream", () => {
   it("adapts provider stream context without changing wrapper behavior", () => {
     const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
 
-    const wrapped = wrapCopilotProviderStream({
-      streamFn: baseStreamFn,
-    } as never);
+    const wrapped = requireStreamFn(
+      wrapCopilotProviderStream({
+        streamFn: baseStreamFn,
+      } as never),
+    );
 
     void wrapped(
       {
@@ -167,5 +196,13 @@ describe("wrapCopilotAnthropicStream", () => {
     );
 
     expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("does not claim provider transport before OpenClaw chooses one", () => {
+    expect(
+      wrapCopilotProviderStream({
+        streamFn: undefined,
+      } as never),
+    ).toBeUndefined();
   });
 });

@@ -126,6 +126,47 @@ describe("createSlackMessageHandler", () => {
     expect(enqueueMock).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts thread_broadcast messages from the message stream", async () => {
+    const { handler, trackEvent } = createHandlerWithTracker();
+
+    await handler(
+      {
+        type: "message",
+        subtype: "thread_broadcast",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000300",
+        text: "also send to channel",
+        thread_ts: "1709000000.000100",
+      } as never,
+      { source: "message" },
+    );
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+    expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops message subtypes that do not carry user message text", async () => {
+    const { handler, trackEvent } = createHandlerWithTracker();
+
+    await handler(
+      {
+        type: "message",
+        subtype: "channel_join",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000400",
+        text: "<@U111> joined the channel",
+      } as never,
+      { source: "message" },
+    );
+
+    expect(trackEvent).not.toHaveBeenCalled();
+    expect(resolveThreadTsMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
+
   it("flushes pending top-level buffered keys before immediate non-debounce follow-ups", async () => {
     const handler = createSlackMessageHandler({
       ctx: createContext(),

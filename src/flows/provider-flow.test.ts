@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type ResolveProviderInstallCatalogEntries =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntries;
+type ResolveManifestProviderAuthChoices =
+  typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoices;
 type ResolveProviderWizardOptions =
   typeof import("../plugins/provider-wizard.js").resolveProviderWizardOptions;
 type ResolveProviderModelPickerEntries =
@@ -14,6 +16,13 @@ const resolveProviderInstallCatalogEntries = vi.hoisted(() =>
 );
 vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries,
+}));
+
+const resolveManifestProviderAuthChoices = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoices>(() => []),
+);
+vi.mock("../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoices,
 }));
 
 const resolveProviderWizardOptions = vi.hoisted(() =>
@@ -39,7 +48,117 @@ import {
 
 describe("provider flow install catalog contributions", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resolveManifestProviderAuthChoices.mockReset();
+    resolveManifestProviderAuthChoices.mockReturnValue([]);
+    resolveProviderInstallCatalogEntries.mockReset();
+    resolveProviderInstallCatalogEntries.mockReturnValue([]);
+    resolveProviderWizardOptions.mockReset();
+    resolveProviderWizardOptions.mockReturnValue([]);
+    resolveProviderModelPickerEntries.mockReset();
+    resolveProviderModelPickerEntries.mockReturnValue([]);
+    resolvePluginProviders.mockReset();
+    resolvePluginProviders.mockReturnValue([]);
+  });
+
+  it("surfaces manifest provider auth choices before setup runtime loads", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "openai-compatible",
+        providerId: "openai-compatible",
+        methodId: "api-key",
+        choiceId: "openai-compatible-api-key",
+        choiceLabel: "OpenAI-compatible API key",
+        choiceHint: "Use a compatible endpoint",
+        assistantPriority: -5,
+        assistantVisibility: "visible",
+        groupId: "openai-compatible",
+        groupLabel: "OpenAI-compatible",
+        groupHint: "Self-hosted and compatible providers",
+        onboardingScopes: ["text-inference"],
+      },
+    ]);
+
+    expect(resolveProviderSetupFlowContributions()).toEqual([
+      {
+        id: "provider:setup:openai-compatible-api-key",
+        kind: "provider",
+        surface: "setup",
+        providerId: "openai-compatible",
+        pluginId: "openai-compatible",
+        option: {
+          value: "openai-compatible-api-key",
+          label: "OpenAI-compatible API key",
+          hint: "Use a compatible endpoint",
+          assistantPriority: -5,
+          assistantVisibility: "visible",
+          group: {
+            id: "openai-compatible",
+            label: "OpenAI-compatible",
+            hint: "Self-hosted and compatible providers",
+          },
+        },
+        onboardingScopes: ["text-inference"],
+        source: "manifest",
+      },
+    ]);
+    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
+  });
+
+  it("prefers manifest setup contributions over duplicate runtime and install-catalog entries", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+      },
+    ]);
+    resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "openai-api-key",
+        label: "Runtime OpenAI API key",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+      },
+    ]);
+    resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "Catalog OpenAI API key",
+        label: "OpenAI",
+        origin: "bundled",
+        install: {
+          npmSpec: "@openclaw/openai",
+        },
+      },
+    ]);
+
+    expect(resolveProviderSetupFlowContributions()).toEqual([
+      {
+        id: "provider:setup:openai-api-key",
+        kind: "provider",
+        surface: "setup",
+        providerId: "openai",
+        pluginId: "openai",
+        option: {
+          value: "openai-api-key",
+          label: "OpenAI API key",
+          group: {
+            id: "openai",
+            label: "OpenAI API key",
+          },
+        },
+        source: "manifest",
+      },
+    ]);
   });
 
   it("surfaces install-catalog provider choices when runtime setup options are absent", () => {

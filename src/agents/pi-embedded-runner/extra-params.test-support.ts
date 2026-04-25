@@ -56,6 +56,7 @@ export function runExtraParamsCase<
   if (params.mockProviderRuntime === true) {
     extraParamsTesting.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: () => undefined,
+      resolveProviderExtraParamsForTransport: () => undefined,
       wrapProviderStreamFn: () => undefined,
     });
   }

@@ -38,8 +38,9 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force the built-in local embedding provider, point `local.modelPath` at a
-GGUF file:
+To force the built-in local embedding provider, install the optional
+`node-llama-cpp` runtime package next to OpenClaw, then point `local.modelPath`
+at a GGUF file:
 
 ```json5
 {
@@ -66,7 +67,7 @@ GGUF file:
 | Voyage   | `voyage`  | Yes           |                                     |
 | Mistral  | `mistral` | Yes           |                                     |
 | Ollama   | `ollama`  | No            | Local, set explicitly               |
-| Local    | `local`   | Yes (first)   | GGUF model, ~0.6 GB download        |
+| Local    | `local`   | Yes (first)   | Optional `node-llama-cpp` runtime   |
 
 Auto-detection picks the first provider whose API key can be resolved, in the
 order shown. Set `memorySearch.provider` to override.

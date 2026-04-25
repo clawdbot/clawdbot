@@ -273,4 +273,35 @@ describe("chat session controls", () => {
     expect(rerendered?.value).toBe("openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
+
+  it("uses default thinking options when the active session is absent", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai-codex",
+      defaultsThinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "adaptive", label: "adaptive" },
+        { id: "xhigh", label: "xhigh" },
+        { id: "max", label: "maximum" },
+      ],
+      omitSessionFromList: true,
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    const options = [...(thinkingSelect?.options ?? [])].map((option) => option.value);
+
+    expect(options).toContain("adaptive");
+    expect(options).toContain("xhigh");
+    expect(options).toContain("max");
+    expect(
+      [...(thinkingSelect?.options ?? [])]
+        .find((option) => option.value === "max")
+        ?.textContent?.trim(),
+    ).toBe("maximum");
+  });
 });

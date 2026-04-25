@@ -1562,7 +1562,7 @@ export const registerTelegramHandlers = ({
         } catch (err) {
           throw new TelegramRetryableCallbackError(err);
         }
-        const { byProvider, providers } = modelData;
+        const { byProvider, providers, modelNames } = modelData;
 
         const editMessageWithButtons = async (
           text: string,
@@ -1646,6 +1646,7 @@ export const registerTelegramHandlers = ({
             currentPage: safePage,
             totalPages,
             pageSize,
+            modelNames,
           });
           const text = formatModelsAvailableHeader({
             provider,

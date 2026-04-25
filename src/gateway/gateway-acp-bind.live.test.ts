@@ -583,7 +583,6 @@ describeLive("gateway live (ACP bind)", () => {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
-        awaitStartupSidecars: true,
       });
       logLiveStep("gateway startup returned");
       await waitForGatewayPort({ host: "127.0.0.1", port, timeoutMs: CONNECT_TIMEOUT_MS });

@@ -177,6 +177,38 @@ describe("CallManager notify and mapping", () => {
     expectFirstPlayTtsText(provider, "Twilio non-stream");
   });
 
+  it("lets realtime conversations own the initial greeting instead of posting legacy TwiML", async () => {
+    const { manager, provider } = await createManagerHarness(
+      { realtime: { enabled: true, provider: "openai" } },
+      new FakeProvider("twilio"),
+    );
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000010",
+      "Tell Nana dinner is at 6pm.",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-twilio-realtime");
+
+    expect(provider.playTtsCalls).toHaveLength(0);
+    expect(requireCall(manager, callId).metadata).toEqual(
+      expect.objectContaining({ initialMessage: "Tell Nana dinner is at 6pm." }),
+    );
+  });
+
+  it("still speaks initial message in notify mode when realtime is enabled", async () => {
+    const { manager, provider } = await createManagerHarness(
+      { realtime: { enabled: true, provider: "openai" } },
+      new FakeProvider("twilio"),
+    );
+
+    const callId = await initiateCallWithMessage(manager, "+15550000011", "Notify text", "notify");
+    await answerCall(manager, callId, "evt-notify-twilio-realtime");
+
+    expectFirstPlayTtsText(provider, "Notify text");
+  });
+
   it("waits for stream connect in conversation mode when Twilio streaming is enabled", async () => {
     const { manager, provider } = await createManagerHarness(
       { streaming: { enabled: true } },
@@ -211,6 +243,27 @@ describe("CallManager notify and mapping", () => {
     await answerCall(manager, callId, "evt-conversation-twilio-stream-unavailable");
 
     expectFirstPlayTtsText(provider, "Twilio stream unavailable");
+  });
+
+  it("starts listening after the initial greeting for Telnyx conversation calls", async () => {
+    const { manager, provider } = await createManagerHarness({}, new FakeProvider("telnyx"));
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000012",
+      "Telnyx hello",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-telnyx");
+
+    expectFirstPlayTtsText(provider, "Telnyx hello");
+    expect(provider.startListeningCalls).toEqual([
+      expect.objectContaining({
+        callId,
+        providerCallId: "call-uuid",
+      }),
+    ]);
+    expect(requireCall(manager, callId).state).toBe("listening");
   });
 
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
+import {
+  canonicalizeCodexResponsesBaseUrl,
+  isOpenAIApiBaseUrl,
+  isOpenAICodexBaseUrl,
+  OPENAI_CODEX_RESPONSES_BASE_URL,
+} from "./base-url.js";
 
 describe("openai base URL helpers", () => {
   it("recognizes direct OpenAI API routes", () => {
@@ -35,5 +40,21 @@ describe("openai base URL helpers", () => {
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v2")).toBe(false);
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/v2")).toBe(false);
     expect(isOpenAICodexBaseUrl(undefined)).toBe(false);
+  });
+
+  it("canonicalizes legacy Codex Responses base URLs", () => {
+    expect(canonicalizeCodexResponsesBaseUrl("https://chatgpt.com/backend-api")).toBe(
+      OPENAI_CODEX_RESPONSES_BASE_URL,
+    );
+    expect(canonicalizeCodexResponsesBaseUrl("https://chatgpt.com/backend-api/v1")).toBe(
+      OPENAI_CODEX_RESPONSES_BASE_URL,
+    );
+    expect(canonicalizeCodexResponsesBaseUrl("https://chatgpt.com/backend-api/codex/v1")).toBe(
+      OPENAI_CODEX_RESPONSES_BASE_URL,
+    );
+    expect(canonicalizeCodexResponsesBaseUrl("https://proxy.example.com/v1")).toBe(
+      "https://proxy.example.com/v1",
+    );
+    expect(canonicalizeCodexResponsesBaseUrl(undefined)).toBeUndefined();
   });
 });

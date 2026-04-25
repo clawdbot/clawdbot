@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
+import { collectInstalledRootDependencyManifestErrors } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
@@ -77,6 +78,7 @@ describe("packed CLI smoke", () => {
           SystemRoot: "C:\\Windows",
           GITHUB_TOKEN: "redacted",
           OPENAI_API_KEY: "real-secret",
+          OPENCLAW_CONFIG_PATH: "/tmp/leaky-config.json",
         },
         { HOME: "/tmp/smoke-home", OPENCLAW_STATE_DIR: "/tmp/smoke-state" },
       ),
@@ -271,6 +273,62 @@ describe("bundled plugin root runtime mirrors", () => {
       });
 
       expect([...mirrors.keys()]).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not require root deps for root chunks sourced from the owning installed plugin", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, "package.json"),
+        `{"name":"openclaw","dependencies":{}}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"),
+        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("@lancedb/lancedb");\n`,
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("still requires root deps for root-owned installed chunks", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-missing-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, "package.json"),
+        `{"name":"openclaw","dependencies":{}}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(tempRoot, "dist", "root-runtime.js"),
+        `import("@lancedb/lancedb");\n`,
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@lancedb/lancedb' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

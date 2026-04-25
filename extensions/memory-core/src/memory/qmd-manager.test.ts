@@ -4329,6 +4329,82 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("restricts qmd search to session collections before result limiting", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          sessions: { enabled: true },
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search" && args.includes("workspace-main")) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              file: "qmd://workspace-main/notes.md",
+              score: 0.99,
+              snippet: "@@ -1,1\nmemory hit",
+            },
+          ]),
+        );
+        return child;
+      }
+      if (args[0] === "search" && args.includes("sessions-main")) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              file: "qmd://sessions-main/session-1.md",
+              score: 0.8,
+              snippet: "@@ -2,1\nsession hit",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    const results = await manager.search("hit", {
+      sessionKey: "agent:main:slack:dm:u123",
+      sources: ["sessions"],
+      maxResults: 1,
+    });
+
+    expect(results).toEqual([
+      {
+        path: "qmd/sessions-main/session-1.md",
+        startLine: 2,
+        endLine: 2,
+        score: 0.8,
+        snippet: "@@ -2,1\nsession hit",
+        source: "sessions",
+      },
+    ]);
+
+    const searchCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args) => args[0] === "search");
+    expect(searchCalls).toHaveLength(1);
+    expect(searchCalls[0]).toContain("sessions-main");
+    expect(searchCalls[0]).not.toContain("workspace-main");
+
+    await manager.close();
+  });
+
   it("preserves multi-collection qmd search hits when results only include file URIs", async () => {
     cfg = {
       ...cfg,

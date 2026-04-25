@@ -60,7 +60,11 @@ describe("memory hybrid helpers", () => {
     const a = merged.find((r) => r.path === "memory/a.md");
     const b = merged.find((r) => r.path === "memory/b.md");
     expect(a?.score).toBeCloseTo(0.7 * 0.9);
+    expect(a?.vectorScore).toBeCloseTo(0.9);
+    expect(a?.textScore).toBe(0);
     expect(b?.score).toBeCloseTo(0.3 * 1.0);
+    expect(b?.vectorScore).toBe(0);
+    expect(b?.textScore).toBeCloseTo(1.0);
   });
 
   it("mergeHybridResults prefers keyword snippet when ids overlap", async () => {
@@ -94,5 +98,7 @@ describe("memory hybrid helpers", () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]?.snippet).toBe("kw-a");
     expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 1.0);
+    expect(merged[0]?.vectorScore).toBeCloseTo(0.2);
+    expect(merged[0]?.textScore).toBeCloseTo(1.0);
   });
 });

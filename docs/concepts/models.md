@@ -10,6 +10,11 @@ title: "Models CLI"
 See [/concepts/model-failover](/concepts/model-failover) for auth profile
 rotation, cooldowns, and how that interacts with fallbacks.
 Quick provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
+Model refs choose a provider and model. They do not usually choose the
+low-level agent runtime. For example, `openai/gpt-5.5` can run through the
+normal OpenAI provider path or through the Codex app-server runtime, depending
+on `agents.defaults.embeddedHarness.runtime`. See
+[/concepts/agent-runtimes](/concepts/agent-runtimes).
 
 ## How model selection works
 
@@ -82,6 +87,10 @@ provided value should become the complete target value.
 Interactive provider setup and `openclaw configure --section model` also merge
 provider-scoped selections into the existing allowlist, so adding Codex,
 Ollama, or another provider does not drop unrelated model entries.
+Configure preserves an existing `agents.defaults.model.primary` when provider
+auth is re-applied. Explicit default-setting commands such as
+`openclaw models auth login --provider <id> --set-default` and
+`openclaw models set <model>` still replace `agents.defaults.model.primary`.
 
 ## "Model is not allowed" (and why replies stop)
 
@@ -130,9 +139,7 @@ Notes:
 
 - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
 - On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
-- `/models add` is available by default and can be disabled with `commands.modelsWrite=false`.
-- When enabled, `/models add <provider> <modelId>` is the fastest path; bare `/models add` starts a provider-first guided flow where supported.
-- After `/models add`, the new model becomes available in `/models` and `/model` without restarting the gateway.
+- `/models add` is deprecated and now returns a deprecation message instead of registering models from chat.
 - `/model <#>` selects from that picker.
 - `/model` persists the new session selection immediately.
 - If the agent is idle, the next run uses the new model right away.
@@ -150,14 +157,6 @@ Notes:
      surfacing a stale removed-provider default.
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
-
-Examples:
-
-```text
-/models add
-/models add ollama glm-5.1:cloud
-/models add lmstudio qwen/qwen3.5-9b
-```
 
 ## CLI commands
 
@@ -284,6 +283,7 @@ This applies whenever OpenClaw regenerates `models.json`, including command-driv
 ## Related
 
 - [Model Providers](/concepts/model-providers) — provider routing and auth
+- [Agent Runtimes](/concepts/agent-runtimes) — PI, Codex, and other agent loop runtimes
 - [Model Failover](/concepts/model-failover) — fallback chains
 - [Image Generation](/tools/image-generation) — image model configuration
 - [Music Generation](/tools/music-generation) — music model configuration

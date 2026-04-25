@@ -74,6 +74,38 @@ function buildMatrixQaSummaryInput(
 }
 
 describe("matrix live qa runtime", () => {
+  it("prints Matrix QA progress by default for non-interactive runs", () => {
+    const previous = process.env.OPENCLAW_QA_MATRIX_PROGRESS;
+    delete process.env.OPENCLAW_QA_MATRIX_PROGRESS;
+    try {
+      expect(liveTesting.shouldWriteMatrixQaProgress()).toBe(true);
+      process.env.OPENCLAW_QA_MATRIX_PROGRESS = "0";
+      expect(liveTesting.shouldWriteMatrixQaProgress()).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_QA_MATRIX_PROGRESS;
+      } else {
+        process.env.OPENCLAW_QA_MATRIX_PROGRESS = previous;
+      }
+    }
+  });
+
+  it("normalizes the Matrix QA hard timeout env", () => {
+    const previous = process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS;
+    try {
+      process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "12345";
+      expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(12345);
+      process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "nope";
+      expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(30 * 60_000);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = previous;
+      }
+    }
+  });
+
   it("injects a temporary Matrix account into the QA gateway config", () => {
     const baseCfg: OpenClawConfig = {
       plugins: {

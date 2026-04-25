@@ -15,7 +15,9 @@ export type {
 
 export {
   describeImageWithModel,
+  describeImageWithModelPayloadTransform,
   describeImagesWithModel,
+  describeImagesWithModelPayloadTransform,
 } from "../media-understanding/image-runtime.js";
 export {
   buildOpenAiCompatibleVideoRequestBody,

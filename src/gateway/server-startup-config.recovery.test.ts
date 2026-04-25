@@ -8,6 +8,16 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: vi.fn(),
   recoverConfigFromLastKnownGood: vi.fn(),
   recoverConfigFromJsonRootSuffix: vi.fn(),
+  shouldAttemptLastKnownGoodRecovery: vi.fn((snapshot: ConfigFileSnapshot) => {
+    if (snapshot.valid) {
+      return false;
+    }
+    return !(
+      snapshot.legacyIssues.length === 0 &&
+      snapshot.issues.length > 0 &&
+      snapshot.issues.every((issue) => issue.path.startsWith("plugins.entries."))
+    );
+  }),
   writeConfigFile: vi.fn(),
 }));
 
@@ -107,6 +117,62 @@ describe("gateway startup config recovery", () => {
       `Invalid config at ${configPath}.\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.`,
     );
 
+    expect(recoveryNotice.enqueueConfigRecoveryNotice).not.toHaveBeenCalled();
+  });
+
+  it("does not restore last-known-good for plugin-local startup invalidity", async () => {
+    const invalidSnapshot = buildTestConfigSnapshot({
+      path: configPath,
+      exists: true,
+      raw: `${JSON.stringify({
+        gateway: { mode: "local" },
+        plugins: {
+          entries: {
+            feishu: { enabled: true },
+          },
+        },
+      })}\n`,
+      parsed: {
+        gateway: { mode: "local" },
+        plugins: {
+          entries: {
+            feishu: { enabled: true },
+          },
+        },
+      },
+      valid: false,
+      config: {
+        gateway: { mode: "local" },
+        plugins: {
+          entries: {
+            feishu: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      issues: [
+        {
+          path: "plugins.entries.feishu",
+          message:
+            "plugin feishu: plugin requires OpenClaw >=2026.4.23, but this host is 2026.4.22; skipping load",
+        },
+      ],
+      legacyIssues: [],
+    });
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await expect(
+      loadGatewayStartupConfigSnapshot({
+        minimalTestGateway: true,
+        log,
+      }),
+    ).rejects.toThrow(`Invalid config at ${configPath}.`);
+
+    expect(configIo.recoverConfigFromLastKnownGood).not.toHaveBeenCalled();
+    expect(configIo.recoverConfigFromJsonRootSuffix).toHaveBeenCalledWith(invalidSnapshot);
+    expect(log.warn).toHaveBeenCalledWith(
+      `gateway: last-known-good recovery skipped for plugin-local config invalidity: ${configPath}`,
+    );
     expect(recoveryNotice.enqueueConfigRecoveryNotice).not.toHaveBeenCalled();
   });
 

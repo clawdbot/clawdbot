@@ -6,8 +6,6 @@ read_when:
 title: "Multiple gateways"
 ---
 
-# Multiple Gateways (same host)
-
 Most setups should use one Gateway because a single Gateway can handle multiple messaging connections and agents. If you need stronger isolation or redundancy (e.g., a rescue bot), run separate Gateways with isolated profiles/ports.
 
 ## Best Recommended Setup

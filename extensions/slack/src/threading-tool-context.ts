@@ -5,6 +5,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount, resolveSlackReplyToMode } from "./accounts.js";
+import { normalizeSlackThreadTsCandidate } from "./thread-ts.js";
 
 export function buildSlackThreadingToolContext(params: {
   cfg: OpenClawConfig;
@@ -28,7 +29,7 @@ export function buildSlackThreadingToolContext(params: {
     : normalizeOptionalString(params.context.NativeChannelId);
   return {
     currentChannelId,
-    currentThreadTs: threadId != null ? String(threadId) : undefined,
+    currentThreadTs: normalizeSlackThreadTsCandidate(threadId),
     replyToMode: effectiveReplyToMode,
     hasRepliedRef: params.hasRepliedRef,
   };

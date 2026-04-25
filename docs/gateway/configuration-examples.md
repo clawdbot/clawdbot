@@ -501,6 +501,28 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 }
 ```
 
+### Trusted node network auto-approval
+
+Keep device pairing manual unless you control the network path. For a dedicated
+lab or tailnet subnet, you can opt in to first-time node device auto-approval
+with exact CIDRs or IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24", "fd00:1234:5678::/64"],
+      },
+    },
+  },
+}
+```
+
+This remains off when unset. It only applies to fresh `role: node` pairing with
+no requested scopes. Operator/browser clients and role, scope, metadata, or
+public-key upgrades still require manual approval.
+
 ### Secure DM mode (shared inbox / multi-user DMs)
 
 If more than one person can DM your bot (multiple entries in `allowFrom`, pairing approvals for multiple people, or `dmPolicy: "open"`), enable **secure DM mode** so DMs from different senders don’t share one context by default:

@@ -42,7 +42,12 @@ export function createExistingSessionAgentSharedModule() {
         profileCtx: existingSessionRouteState.profileCtx,
         cdpUrl: "http://127.0.0.1:18800",
         tab: existingSessionRouteState.tab,
+        resolveTabUrl: vi.fn(async (fallbackUrl?: string) => fallbackUrl ?? routeStateUrl()),
       });
     }),
   };
+}
+
+function routeStateUrl() {
+  return existingSessionRouteState.tab.url;
 }

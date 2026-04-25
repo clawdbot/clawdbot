@@ -202,6 +202,7 @@ export const ModelCompatSchema = z
       .union([
         z.literal("openai"),
         z.literal("openrouter"),
+        z.literal("deepseek"),
         z.literal("zai"),
         z.literal("qwen"),
         z.literal("qwen-chat-template"),

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import {
@@ -82,6 +84,16 @@ describe("browser plugin", () => {
     expect(browserSecurityAuditCollectors).toHaveLength(1);
   });
 
+  it("bundles the browser automation skill with the plugin", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "openclaw.plugin.json"), "utf8"),
+    ) as { skills?: string[] };
+    const skillPath = path.join(__dirname, "skills", "browser-automation", "SKILL.md");
+
+    expect(manifest.skills).toEqual(["./skills"]);
+    expect(fs.readFileSync(skillPath, "utf8")).toContain("name: browser-automation");
+  });
+
   it("forwards per-session browser options into the tool factory", async () => {
     const { api, registerTool } = createApi();
     registerBrowserPlugin(api);
@@ -104,6 +116,17 @@ describe("browser plugin", () => {
       allowHostControl: true,
       agentSessionKey: "agent:main:webchat:direct:123",
     });
+  });
+
+  it("registers browser.request as an admin gateway method", () => {
+    const { api, registerGatewayMethod } = createApi();
+    registerBrowserPlugin(api);
+
+    expect(registerGatewayMethod).toHaveBeenCalledWith(
+      "browser.request",
+      runtimeApiMocks.handleBrowserGatewayRequest,
+      { scope: "operator.admin" },
+    );
   });
 
   it("declares setup auto-enable reasons for browser config surfaces", () => {

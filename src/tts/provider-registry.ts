@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.js";
-import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import {
+  resolvePluginCapabilityProvider,
+  resolvePluginCapabilityProviders,
+} from "../plugins/capability-provider-runtime.js";
 import {
   buildCapabilityProviderMaps,
   normalizeCapabilityProviderId,
@@ -39,7 +42,13 @@ export function getSpeechProvider(
   if (!normalized) {
     return undefined;
   }
-  return buildProviderMaps(cfg).aliases.get(normalized);
+  return (
+    resolvePluginCapabilityProvider({
+      key: "speechProviders",
+      providerId: normalized,
+      cfg,
+    }) ?? buildProviderMaps(cfg).aliases.get(normalized)
+  );
 }
 
 export function canonicalizeSpeechProviderId(

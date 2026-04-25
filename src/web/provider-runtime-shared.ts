@@ -133,8 +133,7 @@ export function resolveWebProviderDefinition<
     providers,
   });
   const providerId =
-    params.providerId ??
-    (params.runtimeMetadata ? params.runtimeMetadata.selectedProvider : autoProviderId);
+    params.providerId ?? params.runtimeMetadata?.selectedProvider ?? autoProviderId;
   if (!providerId) {
     return null;
   }

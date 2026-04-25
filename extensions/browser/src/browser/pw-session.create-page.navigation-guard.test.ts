@@ -345,6 +345,34 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(pageClose).not.toHaveBeenCalled();
   });
 
+  it("ignores already-handled route races during guarded navigation", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    const route = createMockRoute({
+      continue: vi.fn(async () => {
+        throw new Error("Route is already handled");
+      }),
+    });
+    pageGoto.mockImplementationOnce(async () => {
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        url: "https://example.com",
+        route,
+      });
+      return null;
+    });
+
+    const created = await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "https://example.com",
+    });
+
+    expect(created.targetId).toBe("TARGET_1");
+    expect(route.continue).toHaveBeenCalledTimes(1);
+    expect(pageGoto).toHaveBeenCalledTimes(1);
+    expect(pageClose).not.toHaveBeenCalled();
+  });
+
   it("propagates unsupported redirect protocols as navigation errors", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
     mockBlockedRedirectNavigation({

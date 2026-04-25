@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -17,6 +18,10 @@ import {
   requireInRange,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
@@ -292,32 +297,40 @@ export async function listElevenLabsVoices(params: {
   apiKey: string;
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
-  const res = await fetch(`${normalizeElevenLabsBaseUrl(params.baseUrl)}/v1/voices`, {
-    headers: {
-      "xi-api-key": params.apiKey,
+  const normalizedBaseUrl = normalizeElevenLabsBaseUrl(params.baseUrl);
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `${normalizedBaseUrl}/v1/voices`,
+    init: {
+      headers: {
+        "xi-api-key": params.apiKey,
+      },
     },
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
+    auditContext: "elevenlabs.voices",
   });
-  if (!res.ok) {
-    throw new Error(`ElevenLabs voices API error (${res.status})`);
+  try {
+    await assertOkOrThrowProviderError(response, "ElevenLabs voices API error");
+    const json = (await response.json()) as {
+      voices?: Array<{
+        voice_id?: string;
+        name?: string;
+        category?: string;
+        description?: string;
+      }>;
+    };
+    return Array.isArray(json.voices)
+      ? json.voices
+          .map((voice) => ({
+            id: voice.voice_id?.trim() ?? "",
+            name: trimToUndefined(voice.name),
+            category: trimToUndefined(voice.category),
+            description: trimToUndefined(voice.description),
+          }))
+          .filter((voice) => voice.id.length > 0)
+      : [];
+  } finally {
+    await release();
   }
-  const json = (await res.json()) as {
-    voices?: Array<{
-      voice_id?: string;
-      name?: string;
-      category?: string;
-      description?: string;
-    }>;
-  };
-  return Array.isArray(json.voices)
-    ? json.voices
-        .map((voice) => ({
-          id: voice.voice_id?.trim() ?? "",
-          name: trimToUndefined(voice.name),
-          category: trimToUndefined(voice.category),
-          description: trimToUndefined(voice.description),
-        }))
-        .filter((voice) => voice.id.length > 0)
-    : [];
 }
 
 export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {

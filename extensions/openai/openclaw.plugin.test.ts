@@ -74,21 +74,28 @@ describe("OpenAI plugin manifest", () => {
     expect(codexBrowserLogin).toMatchObject({
       choiceLabel: "OpenAI Codex Browser Login",
       choiceHint: "Sign in with OpenAI in your browser",
-      groupHint: "API key or Codex sign-in",
+      groupId: "openai-codex",
+      groupLabel: "OpenAI Codex",
+      groupHint: "ChatGPT/Codex sign-in",
     });
     expect(codexDeviceCode).toMatchObject({
       choiceLabel: "OpenAI Codex Device Pairing",
       choiceHint: "Pair in browser with a device code",
-      groupHint: "API key or Codex sign-in",
+      groupId: "openai-codex",
+      groupLabel: "OpenAI Codex",
+      groupHint: "ChatGPT/Codex sign-in",
     });
     expect(apiKey).toMatchObject({
       choiceLabel: "OpenAI API Key",
-      groupHint: "API key or Codex sign-in",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "Direct API key",
     });
     expect(choices.map((choice) => choice.choiceLabel)).not.toContain(
       "OpenAI Codex (ChatGPT OAuth)",
     );
     expect(choices.map((choice) => choice.groupHint)).not.toContain("Codex OAuth + API key");
+    expect(choices.map((choice) => choice.groupHint)).not.toContain("API key or Codex sign-in");
   });
 
   it("keeps auth choice copy aligned with provider wizard metadata", () => {

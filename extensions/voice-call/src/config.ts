@@ -1,6 +1,13 @@
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES,
+  type RealtimeVoiceAgentConsultToolPolicy,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { z } from "openclaw/plugin-sdk/zod";
 import { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
+import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
+
+export { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
 // Phone Number Validation
@@ -205,6 +212,9 @@ export type VoiceCallRealtimeProvidersConfig = z.infer<
   typeof VoiceCallRealtimeProvidersConfigSchema
 >;
 
+export const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
+export type VoiceCallRealtimeToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
+
 export const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
@@ -221,14 +231,22 @@ export const VoiceCallRealtimeConfigSchema = z
     /** Optional override for the local WebSocket route path. */
     streamPath: z.string().min(1).optional(),
     /** System instructions passed to the realtime provider. */
-    instructions: z.string().optional(),
+    instructions: z.string().default(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS),
+    /** Tool policy for the shared OpenClaw agent consult tool. */
+    toolPolicy: VoiceCallRealtimeToolPolicySchema.default("safe-read-only"),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallRealtimeProvidersConfigSchema,
   })
   .strict()
-  .default({ enabled: false, tools: [], providers: {} });
+  .default({
+    enabled: false,
+    instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
+    toolPolicy: "safe-read-only",
+    tools: [],
+    providers: {},
+  });
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
 
 // -----------------------------------------------------------------------------
@@ -313,11 +331,10 @@ export const VoiceCallConfigSchema = z
 
     /**
      * Maximum age of a call in seconds before it is automatically reaped.
-     * Catches calls stuck in unexpected states (e.g., notify-mode calls that
-     * never receive a terminal webhook). Set to 0 to disable.
-     * Default: 0 (disabled). Recommended: 120-300 for production.
+     * Catches calls stuck before answer (for example, local mock calls that
+     * never receive provider webhooks). Set to 0 to disable.
      */
-    staleCallReaperSeconds: z.number().int().nonnegative().default(0),
+    staleCallReaperSeconds: z.number().int().nonnegative().default(120),
 
     /** Silence timeout for end-of-speech detection (ms) */
     silenceTimeoutMs: z.number().int().positive().default(800),
@@ -360,6 +377,9 @@ export const VoiceCallConfigSchema = z
 
     /** Store path for call logs */
     store: z.string().optional(),
+
+    /** Agent ID to use for voice response generation. Defaults to "main". */
+    agentId: z.string().min(1).optional(),
 
     /** Optional model override for generating voice responses. */
     responseModel: z.string().optional(),

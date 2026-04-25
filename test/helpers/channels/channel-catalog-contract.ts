@@ -209,5 +209,43 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
       expect(entry?.meta.label).toBe(params.externalLabel);
       expect(entry?.pluginId).toBeUndefined();
     });
+
+    it("surfaces package-name drift in external channel catalog install metadata", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-drifted-catalog-"));
+      const catalogPath = path.join(dir, "catalog.json");
+      fs.writeFileSync(
+        catalogPath,
+        JSON.stringify({
+          entries: [
+            {
+              name: params.packageName,
+              openclaw: {
+                channel: params.meta,
+                install: {
+                  npmSpec: `${params.packageName}-fork@1.2.3`,
+                  expectedIntegrity: "sha512-drifted",
+                },
+              },
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const entry = listChannelPluginCatalogEntries({
+        catalogPaths: [catalogPath],
+        officialCatalogPaths: [],
+        env: {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+      }).find((item) => item.id === params.channelId);
+
+      expect(entry?.installSource?.npm).toMatchObject({
+        packageName: `${params.packageName}-fork`,
+        expectedPackageName: params.packageName,
+      });
+      expect(entry?.installSource?.warnings).toEqual(["npm-spec-package-name-mismatch"]);
+    });
   });
 }

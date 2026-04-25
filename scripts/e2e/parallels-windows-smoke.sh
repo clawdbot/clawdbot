@@ -413,27 +413,50 @@ host_timeout_exec() {
   shift
   HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
 import os
+import signal
 import subprocess
 import sys
 
 timeout = int(os.environ["HOST_TIMEOUT_S"])
 args = sys.argv[1:]
 
+process = subprocess.Popen(
+    args,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    start_new_session=True,
+)
 try:
-    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
-except subprocess.TimeoutExpired as exc:
-    if exc.stdout:
-        sys.stdout.buffer.write(exc.stdout)
-    if exc.stderr:
-        sys.stderr.buffer.write(exc.stderr)
+    stdout, stderr = process.communicate(timeout=timeout)
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        pass
+    try:
+        stdout, stderr = process.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            pass
+        stdout, stderr = process.communicate()
+    if stdout:
+        sys.stdout.buffer.write(stdout)
+    if stderr:
+        sys.stderr.buffer.write(stderr)
     sys.stderr.write(f"host timeout after {timeout}s\n")
     raise SystemExit(124)
 
-if completed.stdout:
-    sys.stdout.buffer.write(completed.stdout)
-if completed.stderr:
-    sys.stderr.buffer.write(completed.stderr)
-raise SystemExit(completed.returncode)
+if stdout:
+    sys.stdout.buffer.write(stdout)
+if stderr:
+    sys.stderr.buffer.write(stderr)
+raise SystemExit(process.returncode)
 PY
 }
 
@@ -690,6 +713,16 @@ show_log_excerpt() {
   tail -n 80 "$log_path" >&2 || true
 }
 
+terminate_process_tree() {
+  local pid="$1"
+  local signal_name="${2:-TERM}"
+  local child
+  pgrep -P "$pid" 2>/dev/null | while read -r child; do
+    terminate_process_tree "$child" "$signal_name"
+  done
+  kill "-$signal_name" "$pid" >/dev/null 2>&1 || true
+}
+
 phase_run() {
   local phase_id="$1"
   local timeout_s="$2"
@@ -716,9 +749,9 @@ phase_run() {
     fi
     if (( SECONDS - start >= timeout_s )); then
       timed_out=1
-      kill "$pid" >/dev/null 2>&1 || true
+      terminate_process_tree "$pid" TERM
       sleep 2
-      kill -9 "$pid" >/dev/null 2>&1 || true
+      terminate_process_tree "$pid" KILL
       break
     fi
     sleep 1

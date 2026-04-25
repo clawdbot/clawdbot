@@ -27,7 +27,7 @@ This is the difference between telling your assistant "send the weekly report" e
 - You only get involved for exceptions and approvals
 - The agent fills idle time productively
 
-## How They Work
+## How they work
 
 Standing orders are defined in your [agent workspace](/concepts/agent-workspace) files. The recommended approach is to include them directly in `AGENTS.md` (which is auto-injected every session) so the agent always has them in context. For larger configurations, you can also place them in a dedicated file like `standing-orders.md` and reference it from `AGENTS.md`.
 
@@ -198,8 +198,6 @@ This pattern prevents the most common agent failure mode: acknowledging a task w
 For agents managing multiple concerns, organize standing orders as separate programs with clear boundaries:
 
 ```markdown
-# Standing Orders
-
 ## Program 1: [Domain A] (Weekly)
 
 ...

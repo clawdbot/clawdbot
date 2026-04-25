@@ -94,8 +94,12 @@ export async function loadWhatsAppChannelRuntime() {
   return await import("./channel.runtime.js");
 }
 
+async function loadWhatsAppSetupSurface() {
+  return await import("./setup-surface.js");
+}
+
 export const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(
-  async () => (await loadWhatsAppChannelRuntime()).whatsappSetupWizard,
+  async () => (await loadWhatsAppSetupSurface()).whatsappSetupWizard,
 );
 
 const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppAccount>({

@@ -16,6 +16,14 @@ type SlackSocketShutdownClient = {
   shuttingDown?: boolean;
 };
 type Constructor = abstract new (...args: never[]) => unknown;
+type SlackSelfFilterArgs = {
+  context?: {
+    botId?: string;
+    botUserId?: string;
+  };
+  event?: unknown;
+  message?: unknown;
+};
 
 function isConstructorFunction<
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Constructor guard preserves the requested concrete Slack constructor type.
@@ -118,6 +126,39 @@ export function publishSlackDisconnectedStatus(
   });
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
+  const botId = args.context?.botId;
+  const botUserId = args.context?.botUserId;
+  const message = asRecord(args.message);
+  if (message?.subtype === "bot_message" && botId && message.bot_id === botId) {
+    return true;
+  }
+
+  const event = asRecord(args.event);
+  if (
+    event?.type === "message" &&
+    event.subtype === "message_changed" &&
+    event.user === botUserId
+  ) {
+    return false;
+  }
+
+  const eventsWhichShouldBeKept = new Set(["member_joined_channel", "member_left_channel"]);
+  return Boolean(
+    botUserId &&
+    event &&
+    event.user === botUserId &&
+    typeof event.type === "string" &&
+    !eventsWhichShouldBeKept.has(event.type),
+  );
+}
+
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
   slackMode: "socket" | "http";
@@ -144,6 +185,13 @@ export function createSlackBoltApp(params: {
     token: params.botToken,
     receiver,
     clientOptions: params.clientOptions,
+    ignoreSelf: false,
+  });
+  app.use(async (args) => {
+    if (shouldSkipOpenClawSlackSelfEvent(args)) {
+      return;
+    }
+    await args.next();
   });
   return { app, receiver };
 }

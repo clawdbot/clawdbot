@@ -72,6 +72,7 @@ function loadChannelSetupPluginRegistry(params: {
   onlyPluginIds?: string[];
   activate?: boolean;
   installRuntimeDeps?: boolean;
+  forceSetupOnlyChannelPlugins?: boolean;
 }): PluginRegistry {
   clearPluginDiscoveryCache();
   const autoEnabled = applyPluginAutoEnable({ config: params.cfg, env: process.env });
@@ -89,7 +90,8 @@ function loadChannelSetupPluginRegistry(params: {
     logger: createPluginLoaderLogger(log),
     onlyPluginIds: params.onlyPluginIds,
     includeSetupOnlyChannelPlugins: true,
-    forceSetupOnlyChannelPlugins: params.installRuntimeDeps === false,
+    forceSetupOnlyChannelPlugins:
+      params.forceSetupOnlyChannelPlugins ?? params.installRuntimeDeps === false,
     activate: params.activate,
     installBundledRuntimeDeps: params.installRuntimeDeps !== false,
   });
@@ -160,6 +162,7 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   pluginId?: string;
   workspaceDir?: string;
   installRuntimeDeps?: boolean;
+  forceSetupOnlyChannelPlugins?: boolean;
 }): PluginRegistry {
   const scopedPluginId = resolveScopedChannelPluginId({
     cfg: params.cfg,

@@ -79,6 +79,7 @@ describe("subagent registry persistence resume", () => {
     sessionKey: string;
     sessionId?: string;
     updatedAt?: number;
+    abortedLastRun?: boolean;
   }) => {
     if (!tempStateDir) {
       throw new Error("tempStateDir not initialized");
@@ -89,6 +90,7 @@ describe("subagent registry persistence resume", () => {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       updatedAt: params.updatedAt,
+      abortedLastRun: params.abortedLastRun,
       defaultSessionId: `sess-${Date.now()}`,
     });
   };

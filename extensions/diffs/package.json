@@ -11,7 +11,7 @@
     "@pierre/diffs": "1.1.16",
     "@pierre/theme": "0.0.29",
     "playwright-core": "1.59.1",
-    "typebox": "1.1.28"
+    "typebox": "1.1.31"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

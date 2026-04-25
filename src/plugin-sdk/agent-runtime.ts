@@ -13,6 +13,7 @@ export * from "../agents/model-selection.js";
 export * from "../agents/simple-completion-runtime.js";
 export * from "../agents/pi-embedded-block-chunker.js";
 export * from "../agents/pi-embedded-utils.js";
+export * from "../agents/provider-auth-aliases.js";
 export * from "../agents/provider-id.js";
 export * from "../agents/sandbox-paths.js";
 export * from "../agents/schema/typebox.js";

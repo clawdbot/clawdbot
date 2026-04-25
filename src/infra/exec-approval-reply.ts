@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 import {
   describeNativeExecApprovalClientSetup,
   listNativeExecApprovalClientLabels,
@@ -322,7 +323,7 @@ export function buildExecApprovalPendingReplyPayload(
     info.push(`Node: ${params.nodeId}`);
   }
   if (params.cwd) {
-    info.push(`CWD: ${params.cwd}`);
+    info.push(`CWD: ${formatApprovalDisplayPath(params.cwd)}`);
   }
   if (typeof params.expiresAtMs === "number" && Number.isFinite(params.expiresAtMs)) {
     info.push(

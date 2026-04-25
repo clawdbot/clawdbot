@@ -55,6 +55,7 @@ describe("context notice", () => {
 
     expect(container.textContent).toContain("95% context used");
     expect(container.textContent).toContain("190k / 200k");
+    expect(getContextNoticeViewModel(session, 200_000)?.compactRecommended).toBe(true);
     expect(container.textContent).not.toContain("757.3k / 200k");
     const notice = container.querySelector<HTMLElement>(".context-notice");
     expect(notice).not.toBeNull();
@@ -70,6 +71,12 @@ describe("context notice", () => {
     expect(icon?.getAttribute("width")).toBe("16");
     expect(icon?.getAttribute("height")).toBe("16");
     expect(icon?.querySelector("path")).not.toBeNull();
+
+    const onCompact = vi.fn();
+    render(renderContextNotice(session, 200_000, { onCompact }), container);
+    expect(container.textContent).toContain("Compact");
+    container.querySelector<HTMLButtonElement>(".context-notice__action")?.click();
+    expect(onCompact).toHaveBeenCalledTimes(1);
 
     expect(
       getContextNoticeViewModel(

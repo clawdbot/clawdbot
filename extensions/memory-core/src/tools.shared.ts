@@ -2,7 +2,6 @@ import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
   resolveSessionAgentId,
-  type MemoryCorpusGetResult,
   type MemoryCorpusSearchResult,
   type AnyAgentTool,
   type OpenClawConfig,
@@ -27,7 +26,12 @@ export const MemorySearchSchema = Type.Object({
   maxResults: Type.Optional(Type.Number()),
   minScore: Type.Optional(Type.Number()),
   corpus: Type.Optional(
-    Type.Union([Type.Literal("memory"), Type.Literal("wiki"), Type.Literal("all")]),
+    Type.Union([
+      Type.Literal("memory"),
+      Type.Literal("wiki"),
+      Type.Literal("all"),
+      Type.Literal("sessions"),
+    ]),
   ),
 });
 
@@ -145,9 +149,9 @@ export async function searchMemoryCorpusSupplements(params: {
   query: string;
   maxResults?: number;
   agentSessionKey?: string;
-  corpus?: "memory" | "wiki" | "all";
+  corpus?: "memory" | "wiki" | "all" | "sessions";
 }): Promise<MemoryCorpusSearchResult[]> {
-  if (params.corpus === "memory") {
+  if (params.corpus === "memory" || params.corpus === "sessions") {
     return [];
   }
   const supplements = listMemoryCorpusSupplements();
@@ -174,9 +178,9 @@ export async function getMemoryCorpusSupplementResult(params: {
   fromLine?: number;
   lineCount?: number;
   agentSessionKey?: string;
-  corpus?: "memory" | "wiki" | "all";
-}): Promise<MemoryCorpusGetResult | null> {
-  if (params.corpus === "memory") {
+  corpus?: "memory" | "wiki" | "all" | "sessions";
+}) {
+  if (params.corpus === "memory" || params.corpus === "sessions") {
     return null;
   }
   for (const registration of listMemoryCorpusSupplements()) {

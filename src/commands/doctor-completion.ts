@@ -16,6 +16,8 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type CompletionShell = "zsh" | "bash" | "fish" | "powershell";
 
+const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+
 /** Generate the completion cache by spawning the CLI. */
 async function generateCompletionCache(): Promise<boolean> {
   const root = await resolveOpenClawPackageRoot({
@@ -32,6 +34,7 @@ async function generateCompletionCache(): Promise<boolean> {
     cwd: root,
     env: process.env,
     encoding: "utf-8",
+    timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   });
 
   return result.status === 0;

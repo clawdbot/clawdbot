@@ -1,10 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import { registerProviderPlugin } from "../../test/helpers/plugins/provider-registration.js";
 import { expectPassthroughReplayPolicy } from "../../test/helpers/provider-replay-policy.ts";
 import openrouterPlugin from "./index.js";
 import { buildOpenrouterProvider } from "./provider-catalog.js";
 
 describe("openrouter provider hooks", () => {
+  it("registers OpenRouter speech alongside model and media providers", async () => {
+    const { providers, speechProviders, mediaProviders, imageProviders } =
+      await registerProviderPlugin({
+        plugin: openrouterPlugin,
+        id: "openrouter",
+        name: "OpenRouter Provider",
+      });
+
+    expect(providers).toEqual([expect.objectContaining({ id: "openrouter" })]);
+    expect(speechProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
+    expect(mediaProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
+    expect(imageProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
+  });
+
   it("includes Kimi K2.6 in the bundled catalog", () => {
     expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain(
       "moonshotai/kimi-k2.6",

@@ -147,6 +147,7 @@ const pwMocks = vi.hoisted(() => ({
   armDialogViaPlaywright: vi.fn(async () => {}),
   armFileUploadViaPlaywright: vi.fn(async () => {}),
   batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
+  clickCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
@@ -192,6 +193,11 @@ const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   click: {
     mock: pwMocks.clickViaPlaywright,
     fields: ["ref", "selector", "doubleClick", "button", "modifiers", "delayMs", "timeoutMs"],
+    includeSsrf: true,
+  },
+  clickCoords: {
+    mock: pwMocks.clickCoordsViaPlaywright,
+    fields: ["x", "y", "doubleClick", "button", "delayMs", "timeoutMs"],
     includeSsrf: true,
   },
   type: {
@@ -301,6 +307,7 @@ export function getPwMocks(): Record<string, MockFn> {
 }
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   closeChromeMcpSession: vi.fn(async () => true),
   closeChromeMcpTab: vi.fn(async () => {}),

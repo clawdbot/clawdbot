@@ -1,4 +1,4 @@
-import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { consumeAdjustedParamsForToolCall } from "../pi-tools.before-tool-call.js";
@@ -13,7 +13,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
   sessionId?: string;
   sessionKey?: string;
   startArgs: Record<string, unknown>;
-  result?: AgentToolResult<unknown>;
+  result?: unknown;
   error?: string;
   startedAt?: number;
 }): Promise<void> {

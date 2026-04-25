@@ -51,9 +51,9 @@ const prepareDeps = {
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
-  resolveOpenClawDocsPath: async (
-    params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
-  ) => (await import("../docs-path.js")).resolveOpenClawDocsPath(params),
+  resolveOpenClawReferencePaths: async (
+    params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
+  ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
 };
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
@@ -264,7 +264,7 @@ export async function prepareCliRunContext(
     agentId: sessionAgentId,
     defaultAgentId,
   });
-  const docsPath = await prepareDeps.resolveOpenClawDocsPath({
+  const openClawReferences = await prepareDeps.resolveOpenClawReferencePaths({
     workspaceDir,
     argv1: process.argv[1],
     cwd: process.cwd(),
@@ -288,7 +288,8 @@ export async function prepareCliRunContext(
       extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
       heartbeatPrompt,
-      docsPath: docsPath ?? undefined,
+      docsPath: openClawReferences.docsPath ?? undefined,
+      sourcePath: openClawReferences.sourcePath ?? undefined,
       skillsPrompt,
       tools: [],
       contextFiles,

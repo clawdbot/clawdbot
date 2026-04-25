@@ -111,8 +111,12 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   loadSetupSecrets?: (
     options?: BundledEntryModuleLoadOptions,
   ) => ChannelPlugin["secrets"] | undefined;
-  loadLegacyStateMigrationDetector?: () => BundledChannelLegacyStateMigrationDetector;
-  loadLegacySessionSurface?: () => BundledChannelLegacySessionSurface;
+  loadLegacyStateMigrationDetector?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => BundledChannelLegacyStateMigrationDetector;
+  loadLegacySessionSurface?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => BundledChannelLegacySessionSurface;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
@@ -479,11 +483,15 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         return;
       }
       const profile = createProfiler({ pluginId: id, source: importMetaUrl });
-      profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
       const channelPlugin = profile("bundled-register:loadChannelPlugin", loadChannelPlugin);
       profile("bundled-register:registerChannel", () =>
         api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
       );
+      if (api.registrationMode === "discovery") {
+        profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
+        return;
+      }
+      profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
       if (api.registrationMode !== "full") {
         return;
       }
@@ -519,17 +527,19 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
       }
     : undefined;
   const loadLegacyStateMigrationDetector = legacyStateMigrations
-    ? () =>
+    ? (options?: BundledEntryModuleLoadOptions) =>
         loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>(
           importMetaUrl,
           legacyStateMigrations,
+          options,
         )
     : undefined;
   const loadLegacySessionSurface = legacySessionSurface
-    ? () =>
+    ? (options?: BundledEntryModuleLoadOptions) =>
         loadBundledEntryExportSync<BundledChannelLegacySessionSurface>(
           importMetaUrl,
           legacySessionSurface,
+          options,
         )
     : undefined;
   return {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildExecOverridePromptHint } from "./get-reply-run.js";
+import {
+  buildExecOverridePromptHint,
+  resolvePromptSilentReplyConversationType,
+} from "./get-reply-run.js";
+import { buildGetReplyCtx, buildGetReplyGroupCtx } from "./get-reply.test-fixtures.js";
 
 describe("buildExecOverridePromptHint", () => {
   it("returns undefined when exec state is fully inherited and elevated is off", () => {
@@ -50,5 +54,55 @@ describe("buildExecOverridePromptHint", () => {
     expect(result).toContain(
       "Auto-approved /elevated full is unavailable here (runtime). Do not ask the user to switch to /elevated full.",
     );
+  });
+});
+
+describe("resolvePromptSilentReplyConversationType", () => {
+  it("treats direct and dm chat types as direct prompt policy context", () => {
+    expect(
+      resolvePromptSilentReplyConversationType({
+        ctx: buildGetReplyCtx({
+          ChatType: "dm",
+          SessionKey: "agent:main:main",
+        }),
+      }),
+    ).toBe("direct");
+  });
+
+  it("treats group and channel chat types as group prompt policy context", () => {
+    expect(
+      resolvePromptSilentReplyConversationType({
+        ctx: buildGetReplyGroupCtx({
+          ChatType: "channel",
+        }),
+      }),
+    ).toBe("group");
+  });
+
+  it("does not override a native cross-session target policy with the source chat type", () => {
+    expect(
+      resolvePromptSilentReplyConversationType({
+        ctx: buildGetReplyGroupCtx({
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:group:source",
+          CommandTargetSessionKey: "agent:main:telegram:direct:target",
+          ChatType: "group",
+        }),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses the inbound session key when session context was rewritten to the target", () => {
+    expect(
+      resolvePromptSilentReplyConversationType({
+        ctx: buildGetReplyGroupCtx({
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:direct:target",
+          CommandTargetSessionKey: "agent:main:telegram:direct:target",
+          ChatType: "group",
+        }),
+        inboundSessionKey: "agent:main:telegram:group:source",
+      }),
+    ).toBeUndefined();
   });
 });

@@ -94,15 +94,16 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Compactions: 2");
     expect(normalized).toContain("Session: agent:main:main");
     expect(normalized).toContain("updated 10m ago");
-    expect(normalized).toContain("Runtime: direct");
-    expect(normalized).toContain("Runner: pi (embedded)");
+    expect(normalized).toContain("Execution: direct");
+    expect(normalized).toContain("Runtime: OpenClaw Pi Default");
+    expect(normalized).not.toContain("Runner:");
     expect(normalized).toContain("Think: medium");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
   });
 
-  it("shows the CLI runner for CLI-backed providers", () => {
+  it("shows the model runtime for CLI-backed providers", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
@@ -126,7 +127,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Runner: claude-cli (cli)");
+    expect(normalizeTestText(text)).toContain("Runtime: Claude CLI");
   });
 
   it("falls back to the configured CLI provider when session provider fields are empty", () => {
@@ -151,10 +152,10 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Runner: claude-cli (cli)");
+    expect(normalizeTestText(text)).toContain("Runtime: Claude CLI");
   });
 
-  it("shows the ACP harness agent and backend when ACP owns the session", () => {
+  it("shows the ACP runtime agent and backend when ACP owns the session", () => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-6",
@@ -175,10 +176,10 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Runner: gemini (acp/acpx)");
+    expect(normalizeTestText(text)).toContain("Runtime: gemini (acp/acpx)");
   });
 
-  it("sanitizes runner labels sourced from session metadata", () => {
+  it("sanitizes runtime labels sourced from session metadata", () => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-6",
@@ -200,7 +201,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Runner: gemini (acp/acpx\\nrewritten)");
+    expect(normalized).toContain("Runtime: gemini (acp/acpx\\nrewritten)");
     expect(normalized).not.toContain("\u001b");
   });
 
@@ -382,7 +383,7 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Fast");
   });
 
-  it("shows a non-PI harness next to fast mode when resolved", () => {
+  it("shows the Codex harness as the model runtime when resolved", () => {
     const text = buildStatusMessage({
       agent: {
         model: "openai/gpt-5.4",
@@ -397,10 +398,13 @@ describe("buildStatusMessage", () => {
       resolvedHarness: "codex",
     });
 
-    expect(normalizeTestText(text)).toContain("Fast · codex");
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("Runtime: OpenAI Codex");
+    expect(normalized).not.toContain("· codex");
   });
 
-  it("hides the default PI harness label", () => {
+  it("shows the default PI harness as the model runtime", () => {
     const text = buildStatusMessage({
       agent: {
         model: "openai/gpt-5.4",
@@ -415,8 +419,10 @@ describe("buildStatusMessage", () => {
       resolvedHarness: "pi",
     });
 
-    expect(normalizeTestText(text)).toContain("Fast");
-    expect(normalizeTestText(text)).not.toContain("· pi");
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("Runtime: OpenClaw Pi Default");
+    expect(normalized).not.toContain("· pi");
   });
 
   it("hides fast mode when disabled", () => {
@@ -941,7 +947,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Runtime: docker/all");
+    expect(normalizeTestText(text)).toContain("Execution: docker/all");
   });
 
   it("shows verbose/elevated labels only when enabled", () => {
@@ -1861,7 +1867,7 @@ describe("buildCommandsMessage", () => {
     expect(text).toContain("/skill - Run a skill by name.");
     expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
     expect(text).toContain("/compact - Compact the session context.");
-    expect(text).toContain("/models - List model providers/models or add a model.");
+    expect(text).toContain("/models - List model providers/models.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });

@@ -137,6 +137,10 @@ function readSlackBlocksParam(params: Record<string, unknown>) {
   return slackActionRuntime.parseSlackBlocksInput(params.blocks);
 }
 
+function isImageContentType(value: string | undefined): boolean {
+  return value?.trim().toLowerCase().startsWith("image/") === true;
+}
+
 export async function handleSlackAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
@@ -395,11 +399,28 @@ export async function handleSlackAction(
             error: "File could not be downloaded (not found, too large, or inaccessible).",
           });
         }
+        if (!isImageContentType(downloaded.contentType)) {
+          return jsonResult({
+            ok: true,
+            fileId,
+            path: downloaded.path,
+            contentType: downloaded.contentType,
+            placeholder: downloaded.placeholder,
+            media: {
+              mediaUrl: downloaded.path,
+              ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
+            },
+          });
+        }
         return await imageResultFromFile({
           label: "slack-file",
           path: downloaded.path,
           extraText: downloaded.placeholder,
-          details: { fileId, path: downloaded.path },
+          details: {
+            fileId,
+            path: downloaded.path,
+            ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
+          },
         });
       }
       default:

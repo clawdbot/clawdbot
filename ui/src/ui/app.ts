@@ -1,6 +1,5 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -77,8 +76,10 @@ import type {
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
+import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
@@ -155,6 +156,11 @@ export class OpenClawApp extends LitElement {
   @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
   @state() themeOrder: ThemeName[] = this.buildThemeOrder(this.theme);
+  @state() customThemeImportUrl = "";
+  @state() customThemeImportBusy = false;
+  @state() customThemeImportMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() customThemeImportExpanded = false;
+  @state() customThemeImportFocusToken = 0;
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
@@ -670,6 +676,61 @@ export class OpenClawApp extends LitElement {
       next,
       context,
     );
+  }
+
+  setCustomThemeImportUrl(next: string) {
+    this.customThemeImportUrl = next;
+    if (this.customThemeImportMessage?.kind === "error") {
+      this.customThemeImportMessage = null;
+    }
+  }
+
+  openCustomThemeImport() {
+    this.customThemeImportExpanded = true;
+    this.customThemeImportFocusToken += 1;
+  }
+
+  async importCustomTheme() {
+    if (this.customThemeImportBusy) {
+      return;
+    }
+    this.customThemeImportExpanded = true;
+    this.customThemeImportBusy = true;
+    this.customThemeImportMessage = null;
+    try {
+      const customTheme = await importCustomThemeFromUrl(this.customThemeImportUrl);
+      applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
+        ...this.settings,
+        customTheme,
+      });
+      this.customThemeImportUrl = "";
+      this.customThemeImportMessage = {
+        kind: "success",
+        text: `Imported ${customTheme.label}.`,
+      };
+    } catch (error) {
+      this.customThemeImportMessage = {
+        kind: "error",
+        text: error instanceof Error ? error.message : "Failed to import tweakcn theme.",
+      };
+    } finally {
+      this.customThemeImportBusy = false;
+    }
+  }
+
+  clearCustomTheme() {
+    const nextTheme = this.theme === "custom" ? "claw" : this.theme;
+    this.customThemeImportExpanded = true;
+    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
+      ...this.settings,
+      theme: nextTheme,
+      customTheme: undefined,
+    });
+    this.themeOrder = this.buildThemeOrder(nextTheme);
+    this.customThemeImportMessage = {
+      kind: "success",
+      text: "Cleared custom theme.",
+    };
   }
 
   setBorderRadius(value: number) {

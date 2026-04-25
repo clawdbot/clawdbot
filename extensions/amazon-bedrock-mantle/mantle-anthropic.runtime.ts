@@ -5,6 +5,8 @@ import { streamAnthropic } from "@mariozechner/pi-ai/anthropic";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
+type AnthropicStreamOptions = NonNullable<Parameters<typeof streamAnthropic>[2]>;
+type AnthropicStreamClient = NonNullable<AnthropicStreamOptions["client"]>;
 
 export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");
@@ -98,10 +100,13 @@ export function createMantleAnthropicStreamFn(deps?: {
       ),
     });
     const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
+    // Staged plugin runtime deps can give this plugin a distinct physical SDK copy.
+    // The client API is the same, but the SDK class private field makes types nominal.
+    const streamClient = client as unknown as AnthropicStreamClient;
     if (!options?.reasoning || requiresDefaultSampling(model.id)) {
       return stream(model as Model<"anthropic-messages">, context, {
         ...base,
-        client,
+        client: streamClient,
         thinkingEnabled: false,
       });
     }
@@ -114,7 +119,7 @@ export function createMantleAnthropicStreamFn(deps?: {
     );
     return stream(model as Model<"anthropic-messages">, context, {
       ...base,
-      client,
+      client: streamClient,
       maxTokens: adjusted.maxTokens,
       thinkingEnabled: true,
       thinkingBudgetTokens: adjusted.thinkingBudget,

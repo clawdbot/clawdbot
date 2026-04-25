@@ -11,6 +11,10 @@ import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
 import { formatErrorMessage } from "../dreaming-shared.js";
 import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
 
+const NODE_LLAMA_CPP_RUNTIME_PACKAGE = "node-llama-cpp";
+const NODE_LLAMA_CPP_RUNTIME_VERSION = "3.18.1";
+const NODE_LLAMA_CPP_INSTALL_SPEC = `${NODE_LLAMA_CPP_RUNTIME_PACKAGE}@${NODE_LLAMA_CPP_RUNTIME_VERSION}`;
+
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   providerId: string;
   authProviderId: string;
@@ -24,7 +28,7 @@ function isNodeLlamaCppMissing(err: unknown): boolean {
     return false;
   }
   const code = (err as Error & { code?: unknown }).code;
-  return code === "ERR_MODULE_NOT_FOUND" && err.message.includes("node-llama-cpp");
+  return code === "ERR_MODULE_NOT_FOUND" && err.message.includes(NODE_LLAMA_CPP_RUNTIME_PACKAGE);
 }
 
 function listRemoteEmbeddingSetupHints(): string[] {
@@ -55,9 +59,9 @@ function formatLocalSetupError(err: unknown): string {
     "To enable local embeddings:",
     "1) Use Node 24 (recommended for installs/updates; Node 22 LTS, currently 22.14+, remains supported)",
     missing
-      ? "2) Reinstall OpenClaw (this should install node-llama-cpp): npm i -g openclaw@latest"
+      ? `2) Install optional local embedding runtime next to OpenClaw: npm i -g ${NODE_LLAMA_CPP_INSTALL_SPEC}`
       : null,
-    "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
+    `3) If you use pnpm: pnpm approve-builds (select ${NODE_LLAMA_CPP_RUNTIME_PACKAGE}), then pnpm rebuild ${NODE_LLAMA_CPP_RUNTIME_PACKAGE}`,
     ...listRemoteEmbeddingSetupHints(),
   ]
     .filter(Boolean)

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean }} ChangedScope */
+/** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
 /** @typedef {{ runFastInstallSmoke: boolean; runFullInstallSmoke: boolean }} InstallSmokeScope */
 
 const FULL_SCOPE = {
@@ -45,10 +46,17 @@ const CONTROL_UI_I18N_SCOPE_RE =
 const NATIVE_ONLY_RE =
   /^(apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|Swabble\/|appcast\.xml$)/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
-  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|gateway-network-docker\.sh|bundled-channel-runtime-deps-docker\.sh)$|src\/plugins\/bundled-runtime-deps\.ts$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
+  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|agents-delete-shared-workspace-docker\.sh|gateway-network-docker\.sh|bundled-channel-runtime-deps-docker\.sh)$|src\/plugins\/bundled-runtime-deps\.ts$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FULL_INSTALL_SMOKE_SCOPE_RE =
   /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/install\.sh$|scripts\/test-install-sh-docker\.sh$|scripts\/docker\/|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|qr-import-docker\.sh|bun-global-install-smoke\.sh)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE = /^src\/(?:channels|gateway|plugin-sdk|plugins)\//;
+const NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE =
+  /^(src\/plugins\/contracts\/(?:inventory\/bundled-capability-metadata|registry)\.ts$|test\/helpers\/plugins\/tts-contract-suites\.ts$|scripts\/test-projects(?:\.test-support)?\.mjs$|test\/scripts\/test-projects\.test\.ts$)/;
+const NODE_FAST_CI_ROUTING_SCOPE_RE =
+  /^(scripts\/ci-changed-scope\.mjs$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope\.test\.ts$|\.github\/workflows\/ci\.yml$)/;
+const NODE_FAST_SCOPE_RE = new RegExp(
+  `${NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE.source}|${NODE_FAST_CI_ROUTING_SCOPE_RE.source}`,
+);
 
 /**
  * @param {string[]} changedPaths
@@ -145,6 +153,42 @@ export function detectChangedScope(changedPaths) {
 }
 
 /**
+ * @param {string[]} changedPaths
+ * @returns {NodeFastScope}
+ */
+export function detectNodeFastScope(changedPaths) {
+  if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
+    return { runFastOnly: false, runPluginContracts: false, runCiRouting: false };
+  }
+
+  let hasNonDocs = false;
+  let runPluginContracts = false;
+  let runCiRouting = false;
+
+  for (const rawPath of changedPaths) {
+    const path = rawPath.trim();
+    if (!path || DOCS_PATH_RE.test(path)) {
+      continue;
+    }
+
+    hasNonDocs = true;
+    runPluginContracts ||= NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE.test(path);
+    runCiRouting ||= NODE_FAST_CI_ROUTING_SCOPE_RE.test(path);
+
+    if (!NODE_FAST_SCOPE_RE.test(path)) {
+      return { runFastOnly: false, runPluginContracts: false, runCiRouting: false };
+    }
+  }
+
+  const runFastOnly = hasNonDocs && (runPluginContracts || runCiRouting);
+  return {
+    runFastOnly,
+    runPluginContracts: runFastOnly && runPluginContracts,
+    runCiRouting: runFastOnly && runCiRouting,
+  };
+}
+
+/**
  * @param {string} path
  * @returns {InstallSmokeScope}
  */
@@ -211,6 +255,7 @@ export function writeGitHubOutput(
     runFastInstallSmoke: scope.runChangedSmoke,
     runFullInstallSmoke: scope.runChangedSmoke,
   },
+  nodeFastScope = { runFastOnly: false, runPluginContracts: false, runCiRouting: false },
 ) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
@@ -221,6 +266,13 @@ export function writeGitHubOutput(
   appendFileSync(outputPath, `run_windows=${scope.runWindows}\n`, "utf8");
   appendFileSync(outputPath, `run_skills_python=${scope.runSkillsPython}\n`, "utf8");
   appendFileSync(outputPath, `run_changed_smoke=${scope.runChangedSmoke}\n`, "utf8");
+  appendFileSync(outputPath, `run_node_fast_only=${nodeFastScope.runFastOnly}\n`, "utf8");
+  appendFileSync(
+    outputPath,
+    `run_node_fast_plugin_contracts=${nodeFastScope.runPluginContracts}\n`,
+    "utf8",
+  );
+  appendFileSync(outputPath, `run_node_fast_ci_routing=${nodeFastScope.runCiRouting}\n`, "utf8");
   appendFileSync(
     outputPath,
     `run_fast_install_smoke=${installSmokeScope.runFastInstallSmoke}\n`,
@@ -268,6 +320,7 @@ if (isDirectRun()) {
       detectChangedScope(changedPaths),
       process.env.GITHUB_OUTPUT,
       detectInstallSmokeScope(changedPaths),
+      detectNodeFastScope(changedPaths),
     );
   } catch {
     writeGitHubOutput(FULL_SCOPE);

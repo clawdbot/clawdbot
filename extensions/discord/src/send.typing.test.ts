@@ -1,6 +1,7 @@
 import type { RequestClient } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "./test-support/config.js";
 
 const resolveDiscordRestMock = vi.hoisted(() => vi.fn());
 
@@ -25,9 +26,15 @@ describe("sendTypingDiscord", () => {
       post,
     } as unknown as RequestClient);
 
-    const result = await sendTypingDiscord("12345", { accountId: "ops" });
+    const result = await sendTypingDiscord("12345", {
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      accountId: "ops",
+    });
 
-    expect(resolveDiscordRestMock).toHaveBeenCalledWith({ accountId: "ops" });
+    expect(resolveDiscordRestMock).toHaveBeenCalledWith({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      accountId: "ops",
+    });
     expect(post).toHaveBeenCalledWith(Routes.channelTyping("12345"));
     expect(result).toEqual({ ok: true, channelId: "12345" });
   });

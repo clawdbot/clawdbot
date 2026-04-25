@@ -148,9 +148,12 @@ reserve root command names before parsing.
 
 The important design boundary:
 
-- discovery + config validation should work from **manifest/schema metadata**
+- manifest/config validation should work from **manifest/schema metadata**
   without executing plugin code
+- native capability discovery may load trusted plugin entry code to build a
+  non-activating registry snapshot
 - native runtime behavior comes from the plugin module's `register(api)` path
+  with `api.registrationMode === "full"`
 
 That split lets OpenClaw validate config, explain missing/disabled plugins, and
 build UI/schema hints before the full runtime is active.

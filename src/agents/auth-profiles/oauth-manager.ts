@@ -1,5 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
-import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
+import { withFileLock } from "../../infra/file-lock.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
   OAUTH_REFRESH_CALL_TIMEOUT_MS,
@@ -7,6 +7,10 @@ import {
   log,
 } from "./constants.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
+import {
+  buildRefreshContentionError,
+  isGlobalRefreshLockTimeoutError,
+} from "./oauth-refresh-lock-errors.js";
 import {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
@@ -128,33 +132,6 @@ function hasOAuthCredentialChanged(
     previous.access !== current.access ||
     previous.refresh !== current.refresh ||
     previous.expires !== current.expires
-  );
-}
-
-function isGlobalRefreshLockTimeoutError(error: unknown, lockPath: string): boolean {
-  const candidate =
-    typeof error === "object" && error !== null
-      ? (error as { code?: unknown; lockPath?: unknown })
-      : undefined;
-  return (
-    candidate?.code === FILE_LOCK_TIMEOUT_ERROR_CODE && candidate.lockPath === `${lockPath}.lock`
-  );
-}
-
-function buildRefreshContentionError(params: {
-  provider: string;
-  profileId: string;
-  cause: unknown;
-}): Error & { code: "refresh_contention"; cause: unknown } {
-  return Object.assign(
-    new Error(
-      `OAuth refresh failed (refresh_contention): another process is already refreshing ${params.provider} for ${params.profileId}. Please wait for the in-flight refresh to finish and retry.`,
-      { cause: params.cause },
-    ),
-    {
-      code: "refresh_contention" as const,
-      cause: params.cause,
-    },
   );
 }
 

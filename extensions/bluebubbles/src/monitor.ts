@@ -1,9 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBlueBubblesEffectiveAllowPrivateNetwork } from "./accounts.js";
-import { runBlueBubblesCatchup } from "./catchup.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import {
   asRecord,
@@ -385,11 +384,13 @@ export async function monitorBlueBubblesProvider(
     // same processMessage path webhooks use, and #66230's inbound dedupe
     // drops any GUID that was already handled, so this is safe even if a
     // live webhook raced the startup replay. See #66721.
-    runBlueBubblesCatchup(target).catch((err) => {
-      runtime.error?.(
-        `[${account.accountId}] BlueBubbles catchup: unexpected failure: ${String(err)}`,
-      );
-    });
+    import("./catchup.js")
+      .then(({ runBlueBubblesCatchup }) => runBlueBubblesCatchup(target))
+      .catch((err) => {
+        runtime.error?.(
+          `[${account.accountId}] BlueBubbles catchup: unexpected failure: ${String(err)}`,
+        );
+      });
   });
 }
 

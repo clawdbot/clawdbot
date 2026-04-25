@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { runBeforeToolCallHook, type HookContext } from "../agents/pi-tools.before-tool-call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,
@@ -35,6 +36,8 @@ export async function handleMcpJsonRpc(params: {
   message: JsonRpcRequest;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
+  hookContext?: HookContext;
+  signal?: AbortSignal;
 }): Promise<object | null> {
   const { id, method, params: methodParams } = params.message;
 
@@ -70,7 +73,20 @@ export async function handleMcpJsonRpc(params: {
       }
       const toolCallId = `mcp-${crypto.randomUUID()}`;
       try {
-        const result = await tool.execute(toolCallId, toolArgs);
+        const hookResult = await runBeforeToolCallHook({
+          toolName,
+          params: toolArgs,
+          toolCallId,
+          ctx: params.hookContext,
+          signal: params.signal,
+        });
+        if (hookResult.blocked) {
+          return jsonRpcResult(id, {
+            content: [{ type: "text", text: hookResult.reason }],
+            isError: true,
+          });
+        }
+        const result = await tool.execute(toolCallId, hookResult.params, params.signal);
         return jsonRpcResult(id, {
           content: normalizeToolCallContent(result),
           isError: false,

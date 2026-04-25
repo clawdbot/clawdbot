@@ -1,5 +1,6 @@
 import {
   type AgentApprovalEventData,
+  formatApprovalDisplayPath,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -259,10 +260,10 @@ function commandApprovalDecision(
   outcome: AppServerApprovalOutcome,
 ): JsonValue {
   if (outcome === "cancelled") {
-    return "cancel";
+    return commandRejectionDecision(requestParams, "cancel");
   }
   if (outcome === "denied" || outcome === "unavailable") {
-    return "decline";
+    return commandRejectionDecision(requestParams, "decline");
   }
   if (outcome === "approved-session") {
     if (hasAvailableDecision(requestParams, "acceptForSession")) {
@@ -273,7 +274,9 @@ function commandApprovalDecision(
       return amendmentDecision;
     }
   }
-  return "accept";
+  return hasAvailableDecision(requestParams, "accept")
+    ? "accept"
+    : commandRejectionDecision(requestParams, "decline");
 }
 
 function fileChangeApprovalDecision(outcome: AppServerApprovalOutcome): JsonValue {
@@ -319,8 +322,9 @@ function describeRequestedPermissions(requestParams: JsonObject | undefined): st
   if (kinds.length > 0) {
     lines.push(`Permissions: ${kinds.join(", ")}`);
   }
+  let networkSummary: string | undefined;
   if (isJsonObject(permissions.network)) {
-    const networkSummary = summarizePermissionRecord(permissions.network, risks, [
+    networkSummary = summarizePermissionRecord(permissions.network, risks, [
       {
         key: "allowHosts",
         label: "allowHosts",
@@ -328,12 +332,10 @@ function describeRequestedPermissions(requestParams: JsonObject | undefined): st
         risksFor: permissionHostRisks,
       },
     ]);
-    if (networkSummary) {
-      lines.push(`Network ${networkSummary}`);
-    }
   }
+  let fileSystemSummary: string | undefined;
   if (isJsonObject(permissions.fileSystem)) {
-    const fileSystemSummary = summarizePermissionRecord(permissions.fileSystem, risks, [
+    fileSystemSummary = summarizePermissionRecord(permissions.fileSystem, risks, [
       {
         key: "roots",
         label: "roots",
@@ -353,12 +355,15 @@ function describeRequestedPermissions(requestParams: JsonObject | undefined): st
         risksFor: permissionPathRisks,
       },
     ]);
-    if (fileSystemSummary) {
-      lines.push(`File system ${fileSystemSummary}`);
-    }
   }
   if (risks.size > 0) {
     lines.push(`High-risk targets: ${[...risks].join(", ")}`);
+  }
+  if (networkSummary) {
+    lines.push(`Network ${networkSummary}`);
+  }
+  if (fileSystemSummary) {
+    lines.push(`File system ${fileSystemSummary}`);
   }
   return lines;
 }
@@ -429,12 +434,10 @@ function sanitizePermissionHostValue(value: string): string {
 }
 
 function sanitizePermissionPathValue(value: string): string {
-  const normalized = sanitizePermissionScalar(value);
-  const homeCompacted = normalized
-    .replace(/^\/home\/[^/]+(?=\/|$)/, "~")
-    .replace(/^\/Users\/[^/]+(?=\/|$)/, "~")
-    .replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/, "~");
-  return truncate(homeCompacted, PERMISSION_VALUE_MAX_LENGTH);
+  return truncate(
+    formatApprovalDisplayPath(sanitizePermissionScalar(value)),
+    PERMISSION_VALUE_MAX_LENGTH,
+  );
 }
 
 function sanitizePermissionScalar(value: string): string {
@@ -454,13 +457,10 @@ function permissionHostRisks(value: string): string[] {
 }
 
 function permissionPathRisks(value: string): string[] {
-  const normalized = sanitizePermissionPathValue(value);
+  const normalized = sanitizePermissionScalar(value);
   const risks: string[] = [];
   if (normalized === "/" || normalized === "\\" || /^[A-Za-z]:[\\/]*$/.test(normalized)) {
     risks.push("filesystem root");
-  }
-  if (normalized === "~" || normalized === "~/" || normalized === "~\\") {
-    risks.push("home directory");
   }
   return risks;
 }
@@ -517,6 +517,24 @@ function findAvailableCommandAmendmentDecision(
       (isJsonObject(entry.acceptWithExecpolicyAmendment) ||
         isJsonObject(entry.applyNetworkPolicyAmendment)),
   );
+}
+
+function commandRejectionDecision(
+  requestParams: JsonObject | undefined,
+  preferred: "decline" | "cancel",
+): JsonValue {
+  const available = requestParams?.availableDecisions;
+  if (!Array.isArray(available)) {
+    return preferred;
+  }
+  if (available.includes(preferred)) {
+    return preferred;
+  }
+  const alternate = preferred === "decline" ? "cancel" : "decline";
+  if (available.includes(alternate)) {
+    return alternate;
+  }
+  return preferred;
 }
 
 function approvalResolutionMessage(outcome: AppServerApprovalOutcome): string {

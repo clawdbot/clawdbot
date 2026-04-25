@@ -67,6 +67,29 @@ describe("media understanding attachments SSRF", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("allows RFC2544 benchmark-range URLs only when media fetch policy opts in", async () => {
+    const url = "http://198.18.0.153/file.jpg";
+    const deniedCache = new MediaAttachmentCache([{ index: 0, url }]);
+    await expect(
+      deniedCache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response("image", {
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy);
+    const allowedCache = new MediaAttachmentCache([{ index: 0, url }], {
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    await expect(
+      allowedCache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+    ).resolves.toMatchObject({ mime: "image/jpeg" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("reads local attachments inside configured roots", async () => {
     await withLocalAttachmentCache("openclaw-media-cache-allowed-", async ({ cache }) => {
       const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });

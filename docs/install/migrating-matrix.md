@@ -105,6 +105,17 @@ If your old installation had local-only encrypted history that was never backed 
    openclaw matrix verify device "<your-recovery-key>"
    ```
 
+   If the recovery key is accepted and backup is usable, but `Cross-signing verified`
+   is still `no`, complete self-verification from another Matrix client:
+
+   ```bash
+   openclaw matrix verify self
+   ```
+
+   Accept the request in another Matrix client, compare the emoji or decimals,
+   and type `yes` only when they match. The command exits successfully only
+   after `Cross-signing verified` becomes `yes`.
+
 7. If you are intentionally abandoning unrecoverable old history and want a fresh backup baseline for future messages, run:
 
    ```bash
@@ -293,10 +304,17 @@ new backup key can load correctly after restart.
 - Meaning: the provided key could not be parsed or did not match the expected format.
 - What to do: retry with the exact recovery key from your Matrix client or recovery-key file.
 
-`Matrix device is still unverified after applying recovery key. Verify your recovery key and ensure cross-signing is available.`
+`Matrix recovery key was applied, but this device still lacks full Matrix identity trust.`
 
-- Meaning: the key was applied, but the device still could not complete verification.
-- What to do: confirm you used the correct key and that cross-signing is available on the account, then retry.
+- Meaning: OpenClaw could apply the recovery key, but Matrix still has not
+  established full cross-signing identity trust for this device. Check the
+  command output for `Recovery key accepted`, `Backup usable`,
+  `Cross-signing verified`, and `Device verified by owner`.
+- What to do: run `openclaw matrix verify self`, accept the request in another
+  Matrix client, compare the SAS, and type `yes` only when it matches. The
+  command waits for full Matrix identity trust before reporting success. Use
+  `openclaw matrix verify bootstrap --recovery-key "<your-recovery-key>" --force-reset-cross-signing`
+  only when you intentionally want to replace the current cross-signing identity.
 
 `Matrix key backup is not active on this device after loading from secret storage.`
 

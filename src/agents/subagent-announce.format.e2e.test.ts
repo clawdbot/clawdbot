@@ -249,6 +249,17 @@ describe("subagent announce formatting", () => {
       callGateway: async <T = Record<string, unknown>>(
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
+      loadConfig: () => configOverride,
+      getRequesterSessionActivity: (requesterSessionKey: string) => {
+        const entry = loadSessionStoreFixture()[requesterSessionKey];
+        const sessionId = entry?.sessionId;
+        return {
+          sessionId,
+          isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedPiRunActive(sessionId)),
+        };
+      },
+      queueEmbeddedPiMessage: (sessionId: string, text: string) =>
+        embeddedRunMock.queueEmbeddedPiMessage(sessionId, text),
     });
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");

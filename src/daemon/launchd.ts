@@ -601,6 +601,40 @@ export async function installLaunchAgent(
   return { plistPath };
 }
 
+async function rewriteLaunchAgentPlistForRestart({
+  env,
+  label,
+  plistPath,
+}: {
+  env: GatewayServiceEnv;
+  label: string;
+  plistPath: string;
+}): Promise<void> {
+  const existing = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  if (!existing?.programArguments.length) {
+    return;
+  }
+
+  const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
+  await ensureSecureDirectory(logDir);
+
+  const serviceDescription = resolveGatewayServiceDescription({
+    env,
+    environment: existing.environment,
+  });
+  const plist = buildLaunchAgentPlist({
+    label,
+    comment: serviceDescription,
+    programArguments: existing.programArguments,
+    workingDirectory: existing.workingDirectory,
+    stdoutPath,
+    stderrPath,
+    environment: existing.environment,
+  });
+  await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
+  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+}
+
 async function ensureLaunchAgentLoadedAfterFailure(params: {
   domain: string;
   serviceTarget: string;
@@ -669,6 +703,7 @@ export async function restartLaunchAgent({
   }
 
   // If the service was previously booted out, re-register the plist and retry.
+  await rewriteLaunchAgentPlistForRestart({ env: serviceEnv, label, plistPath });
   await bootstrapLaunchAgentOrThrow({
     domain,
     serviceTarget,

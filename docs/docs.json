@@ -1085,6 +1085,7 @@
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",
+                  "concepts/agent-runtimes",
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/context-engine",
@@ -1092,7 +1093,8 @@
                   "concepts/soul",
                   "concepts/oauth",
                   "start/bootstrapping",
-                  "concepts/experimental-features"
+                  "concepts/experimental-features",
+                  "concepts/qa-e2e-automation"
                 ]
               },
               {
@@ -1153,13 +1155,17 @@
                   "plugins/webhooks",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/message-presentation",
+                  "plugins/skill-workshop",
                   "plugins/zalouser",
                   {
                     "group": "Building plugins",
                     "pages": [
                       "plugins/building-plugins",
+                      "plugins/hooks",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
+                      "plugins/compatibility",
                       "plugins/sdk-migration"
                     ]
                   },
@@ -1299,6 +1305,7 @@
                   "providers/github-copilot",
                   "providers/glm",
                   "providers/google",
+                  "providers/gradium",
                   "providers/groq",
                   "providers/huggingface",
                   "providers/inferrs",
@@ -1594,6 +1601,7 @@
                       "cli/dns",
                       "cli/docs",
                       "cli/mcp",
+                      "cli/proxy",
                       "cli/wiki"
                     ]
                   }
@@ -1640,7 +1648,9 @@
                   "concepts/markdown-formatting",
                   "concepts/typing-indicators",
                   "concepts/usage-tracking",
-                  "concepts/timezone"
+                  "concepts/timezone",
+                  "help/gpt54-codex-agentic-parity",
+                  "help/gpt54-codex-agentic-parity-maintainers"
                 ]
               },
               {

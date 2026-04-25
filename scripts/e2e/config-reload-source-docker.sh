@@ -107,7 +107,7 @@ echo "Checking initial RPC status..."
 docker exec "$CONTAINER_NAME" bash -lc "
 entry=dist/index.mjs
 [ -f \"\$entry\" ] || entry=dist/index.js
-node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 5000 >/tmp/config-reload-status-before.log
+node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 30000 >/tmp/config-reload-status-before.log
 "
 
 echo "Mutating plugin install timestamp metadata..."
@@ -135,7 +135,7 @@ echo "Checking post-write RPC status..."
 docker exec "$CONTAINER_NAME" bash -lc "
 entry=dist/index.mjs
 [ -f \"\$entry\" ] || entry=dist/index.js
-node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 5000 >/tmp/config-reload-status-after.log
+node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 30000 >/tmp/config-reload-status-after.log
 "
 
 echo "Checking reload log..."

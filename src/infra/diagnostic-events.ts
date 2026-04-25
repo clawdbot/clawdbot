@@ -84,6 +84,30 @@ export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
   error?: string;
 };
 
+export type DiagnosticMessageDeliveryKind = "text" | "media" | "edit" | "reaction" | "other";
+
+type DiagnosticMessageDeliveryBaseEvent = DiagnosticBaseEvent & {
+  channel: string;
+  sessionKey?: string;
+  deliveryKind: DiagnosticMessageDeliveryKind;
+};
+
+export type DiagnosticMessageDeliveryStartedEvent = DiagnosticMessageDeliveryBaseEvent & {
+  type: "message.delivery.started";
+};
+
+export type DiagnosticMessageDeliveryCompletedEvent = DiagnosticMessageDeliveryBaseEvent & {
+  type: "message.delivery.completed";
+  durationMs: number;
+  resultCount: number;
+};
+
+export type DiagnosticMessageDeliveryErrorEvent = DiagnosticMessageDeliveryBaseEvent & {
+  type: "message.delivery.error";
+  durationMs: number;
+  errorCategory: string;
+};
+
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   type: "session.state";
   sessionKey?: string;
@@ -185,6 +209,75 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   errorCode?: string;
 };
 
+export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
+  type: "exec.process.completed";
+  sessionKey?: string;
+  target: "host" | "sandbox";
+  mode: "child" | "pty";
+  outcome: "completed" | "failed";
+  durationMs: number;
+  commandLength: number;
+  exitCode?: number;
+  exitSignal?: string;
+  timedOut?: boolean;
+  failureKind?:
+    | "shell-command-not-found"
+    | "shell-not-executable"
+    | "overall-timeout"
+    | "no-output-timeout"
+    | "signal"
+    | "aborted"
+    | "runtime-error";
+};
+
+type DiagnosticRunBaseEvent = DiagnosticBaseEvent & {
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  trigger?: string;
+  channel?: string;
+};
+
+export type DiagnosticRunStartedEvent = DiagnosticRunBaseEvent & {
+  type: "run.started";
+};
+
+export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
+  type: "run.completed";
+  durationMs: number;
+  outcome: "completed" | "aborted" | "error";
+  errorCategory?: string;
+};
+
+type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
+  type: "model.call.started" | "model.call.completed" | "model.call.error";
+  runId: string;
+  callId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider: string;
+  model: string;
+  api?: string;
+  transport?: string;
+};
+
+export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
+  type: "model.call.started";
+};
+
+export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
+  type: "model.call.completed";
+  durationMs: number;
+};
+
+export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
+  type: "model.call.error";
+  durationMs: number;
+  errorCategory: string;
+};
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   heapTotalBytes: number;
@@ -221,6 +314,19 @@ export type DiagnosticPayloadLargeEvent = DiagnosticBaseEvent & {
   reason?: string;
 };
 
+export type DiagnosticLogRecordEvent = DiagnosticBaseEvent & {
+  type: "log.record";
+  level: string;
+  message: string;
+  loggerName?: string;
+  loggerParents?: string[];
+  attributes?: Record<string, string | number | boolean>;
+  code?: {
+    line?: number;
+    functionName?: string;
+  };
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -228,6 +334,9 @@ export type DiagnosticEventPayload =
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
   | DiagnosticMessageProcessedEvent
+  | DiagnosticMessageDeliveryStartedEvent
+  | DiagnosticMessageDeliveryCompletedEvent
+  | DiagnosticMessageDeliveryErrorEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionStuckEvent
   | DiagnosticLaneEnqueueEvent
@@ -238,9 +347,16 @@ export type DiagnosticEventPayload =
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
   | DiagnosticToolExecutionErrorEvent
+  | DiagnosticExecProcessCompletedEvent
+  | DiagnosticRunStartedEvent
+  | DiagnosticRunCompletedEvent
+  | DiagnosticModelCallStartedEvent
+  | DiagnosticModelCallCompletedEvent
+  | DiagnosticModelCallErrorEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
-  | DiagnosticPayloadLargeEvent;
+  | DiagnosticPayloadLargeEvent
+  | DiagnosticLogRecordEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
@@ -253,7 +369,24 @@ type DiagnosticEventsGlobalState = {
   seq: number;
   listeners: Set<(evt: DiagnosticEventPayload) => void>;
   dispatchDepth: number;
+  asyncQueue: DiagnosticEventPayload[];
+  asyncDrainScheduled: boolean;
 };
+
+const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
+const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+  "tool.execution.started",
+  "tool.execution.completed",
+  "tool.execution.error",
+  "exec.process.completed",
+  "message.delivery.started",
+  "message.delivery.completed",
+  "message.delivery.error",
+  "model.call.started",
+  "model.call.completed",
+  "model.call.error",
+  "log.record",
+]);
 
 function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
   const globalStore = globalThis as typeof globalThis & {
@@ -265,6 +398,8 @@ function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
       seq: 0,
       listeners: new Set<(evt: DiagnosticEventPayload) => void>(),
       dispatchDepth: 0,
+      asyncQueue: [],
+      asyncDrainScheduled: false,
     };
   }
   return globalStore.__openclawDiagnosticEventsState;
@@ -282,15 +417,60 @@ export function areDiagnosticsEnabledForProcess(): boolean {
   return getDiagnosticEventsState().enabled;
 }
 
+function dispatchDiagnosticEvent(
+  state: DiagnosticEventsGlobalState,
+  enriched: DiagnosticEventPayload,
+): void {
+  if (state.dispatchDepth > 100) {
+    console.error(
+      `[diagnostic-events] recursion guard tripped at depth=${state.dispatchDepth}, dropping type=${enriched.type}`,
+    );
+    return;
+  }
+
+  state.dispatchDepth += 1;
+  try {
+    for (const listener of state.listeners) {
+      try {
+        listener(enriched);
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error
+            ? (err.stack ?? err.message)
+            : typeof err === "string"
+              ? err
+              : String(err);
+        console.error(
+          `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
+        );
+        // Ignore listener failures.
+      }
+    }
+  } finally {
+    state.dispatchDepth -= 1;
+  }
+}
+
+function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void {
+  if (state.asyncDrainScheduled) {
+    return;
+  }
+  state.asyncDrainScheduled = true;
+  setImmediate(() => {
+    state.asyncDrainScheduled = false;
+    const batch = state.asyncQueue.splice(0);
+    for (const event of batch) {
+      dispatchDiagnosticEvent(state, event);
+    }
+    if (state.asyncQueue.length > 0) {
+      scheduleAsyncDiagnosticDrain(state);
+    }
+  });
+}
+
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   const state = getDiagnosticEventsState();
   if (!state.enabled) {
-    return;
-  }
-  if (state.dispatchDepth > 100) {
-    console.error(
-      `[diagnostic-events] recursion guard tripped at depth=${state.dispatchDepth}, dropping type=${event.type}`,
-    );
     return;
   }
 
@@ -299,32 +479,36 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
     seq: (state.seq += 1),
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
-  state.dispatchDepth += 1;
-  for (const listener of state.listeners) {
-    try {
-      listener(enriched);
-    } catch (err) {
-      const errorMessage =
-        err instanceof Error
-          ? (err.stack ?? err.message)
-          : typeof err === "string"
-            ? err
-            : String(err);
-      console.error(
-        `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
-      );
-      // Ignore listener failures.
+
+  if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
+    if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
+      return;
     }
+    state.asyncQueue.push(enriched);
+    scheduleAsyncDiagnosticDrain(state);
+    return;
   }
-  state.dispatchDepth -= 1;
+
+  dispatchDiagnosticEvent(state, enriched);
 }
 
-export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
+export function onInternalDiagnosticEvent(
+  listener: (evt: DiagnosticEventPayload) => void,
+): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
   return () => {
     state.listeners.delete(listener);
   };
+}
+
+export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
+  return onInternalDiagnosticEvent((event) => {
+    if (event.type === "log.record") {
+      return;
+    }
+    listener(event);
+  });
 }
 
 export function resetDiagnosticEventsForTest(): void {
@@ -333,4 +517,6 @@ export function resetDiagnosticEventsForTest(): void {
   state.seq = 0;
   state.listeners.clear();
   state.dispatchDepth = 0;
+  state.asyncQueue = [];
+  state.asyncDrainScheduled = false;
 }

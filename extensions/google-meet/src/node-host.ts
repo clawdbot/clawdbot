@@ -18,6 +18,11 @@ type NodeBridgeSession = {
   chunks: Buffer[];
   waiters: Array<() => void>;
   closed: boolean;
+  createdAt: string;
+  lastInputAt?: string;
+  lastOutputAt?: string;
+  lastInputBytes: number;
+  lastOutputBytes: number;
 };
 
 const sessions = new Map<string, NodeBridgeSession>();
@@ -112,6 +117,9 @@ function startCommandPair(params: {
     chunks: [],
     waiters: [],
     closed: false,
+    createdAt: new Date().toISOString(),
+    lastInputBytes: 0,
+    lastOutputBytes: 0,
   };
   const outputProcess = spawn(output.command, output.args, {
     stdio: ["pipe", "ignore", "pipe"],
@@ -122,7 +130,10 @@ function startCommandPair(params: {
   session.input = inputProcess;
   session.output = outputProcess;
   inputProcess.stdout?.on("data", (chunk) => {
-    session.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const audio = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    session.lastInputAt = new Date().toISOString();
+    session.lastInputBytes += audio.byteLength;
+    session.chunks.push(audio);
     if (session.chunks.length > 200) {
       session.chunks.splice(0, session.chunks.length - 200);
     }
@@ -172,7 +183,10 @@ function pushAudio(params: Record<string, unknown>) {
   if (!session || session.closed) {
     throw new Error(`bridge is not open: ${bridgeId}`);
   }
-  session.output?.stdin?.write(Buffer.from(base64, "base64"));
+  const audio = Buffer.from(base64, "base64");
+  session.lastOutputAt = new Date().toISOString();
+  session.lastOutputBytes += audio.byteLength;
+  session.output?.stdin?.write(audio);
   return { bridgeId, ok: true };
 }
 
@@ -239,7 +253,41 @@ function startChrome(params: Record<string, unknown>) {
     }
   }
 
-  return { launched: params.launch !== false, bridgeId, audioBridge };
+  return {
+    launched: params.launch !== false,
+    bridgeId,
+    audioBridge,
+    browser:
+      params.launch !== false
+        ? {
+            status: "chrome-opened",
+            browserUrl: url,
+            notes: [
+              "Browser page control is handled by OpenClaw browser automation when using chrome-node.",
+            ],
+          }
+        : undefined,
+  };
+}
+
+function bridgeStatus(params: Record<string, unknown>) {
+  const bridgeId = readString(params.bridgeId);
+  const session = bridgeId ? sessions.get(bridgeId) : undefined;
+  return {
+    bridge: session
+      ? {
+          bridgeId,
+          closed: session.closed,
+          createdAt: session.createdAt,
+          lastInputAt: session.lastInputAt,
+          lastOutputAt: session.lastOutputAt,
+          lastInputBytes: session.lastInputBytes,
+          lastOutputBytes: session.lastOutputBytes,
+        }
+      : bridgeId
+        ? { bridgeId, closed: true }
+        : undefined,
+  };
 }
 
 function stopChrome(params: Record<string, unknown>) {
@@ -268,6 +316,9 @@ export async function handleGoogleMeetNodeHostCommand(paramsJSON?: string | null
       break;
     case "start":
       result = startChrome(params);
+      break;
+    case "status":
+      result = bridgeStatus(params);
       break;
     case "pullAudio":
       result = await pullAudio(params);

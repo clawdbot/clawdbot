@@ -77,6 +77,27 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBeNull();
     expect(extractTextCached(message)).toBeNull();
   });
+
+  it("strips internal runtime context blocks from user text", () => {
+    const message = {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "internal subagent payload",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "",
+            "visible ask",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    expect(extractText(message)).toBe("visible ask");
+    expect(extractTextCached(message)).toBe("visible ask");
+  });
 });
 
 describe("extractThinkingCached", () => {

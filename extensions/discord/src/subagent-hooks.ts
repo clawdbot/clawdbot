@@ -126,6 +126,7 @@ export async function handleDiscordSubagentSpawning(
   try {
     const agentId = event.agentId?.trim() || "subagent";
     const binding = await autoBindSpawnedDiscordSubagent({
+      cfg: api.config,
       accountId: event.requester?.accountId,
       channel: event.requester?.channel,
       to: event.requester?.to,

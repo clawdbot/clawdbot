@@ -12,6 +12,7 @@ vi.mock("./monitor/media.js", () => ({
 vi.mock("./client.js", () => ({
   createSlackWebClient: createSlackWebClientMock,
   createSlackWriteClient: createSlackWebClientMock,
+  getSlackWriteClient: createSlackWebClientMock,
 }));
 
 let downloadSlackFile: typeof import("./actions.js").downloadSlackFile;
@@ -38,11 +39,12 @@ function makeSlackFileInfo(overrides?: Record<string, unknown>) {
   };
 }
 
-function makeResolvedSlackMedia() {
+function makeResolvedSlackMedia(overrides?: Record<string, unknown>) {
   return {
     path: "/tmp/image.png",
     contentType: "image/png",
     placeholder: "[Slack file: image.png]",
+    ...overrides,
   };
 }
 
@@ -116,6 +118,51 @@ describe("downloadSlackFile", () => {
     expect(client.files.info).toHaveBeenCalledWith({ file: "F123" });
     expectResolveSlackMediaCalledWithDefaults();
     expect(result).toEqual(makeResolvedSlackMedia());
+  });
+
+  it("preserves non-image download metadata", async () => {
+    const client = createClient();
+    client.files.info.mockResolvedValueOnce({
+      file: makeSlackFileInfo({
+        name: "report.pdf",
+        mimetype: "application/pdf",
+        url_private_download: "https://files.slack.com/files-pri/T1-F123/report.pdf",
+      }),
+    });
+    resolveSlackMedia.mockResolvedValueOnce([
+      makeResolvedSlackMedia({
+        path: "/tmp/report.pdf",
+        contentType: "application/pdf",
+        placeholder: "[Slack file: report.pdf (fileId: F123)]",
+      }),
+    ]);
+
+    const result = await downloadSlackFile("F123", {
+      client,
+      token: "xoxb-test",
+      maxBytes: 1024,
+    });
+
+    expect(resolveSlackMedia).toHaveBeenCalledWith({
+      files: [
+        {
+          id: "F123",
+          name: "report.pdf",
+          mimetype: "application/pdf",
+          url_private: undefined,
+          url_private_download: "https://files.slack.com/files-pri/T1-F123/report.pdf",
+        },
+      ],
+      token: "xoxb-test",
+      maxBytes: 1024,
+    });
+    expect(result).toEqual(
+      makeResolvedSlackMedia({
+        path: "/tmp/report.pdf",
+        contentType: "application/pdf",
+        placeholder: "[Slack file: report.pdf (fileId: F123)]",
+      }),
+    );
   });
 
   it("returns null when channel scope definitely mismatches file shares", async () => {

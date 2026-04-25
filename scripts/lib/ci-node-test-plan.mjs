@@ -131,6 +131,7 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.runtime-config.config.ts",
         ],
         requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
       },
       {
         shardName: "core-runtime-media-ui",
@@ -177,6 +178,7 @@ const SPLIT_NODE_SHARDS = new Map([
         shardName: "agentic-control-plane",
         configs: ["test/vitest/vitest.gateway-server.config.ts"],
         requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
       },
       {
         shardName: "agentic-commands",
@@ -248,6 +250,7 @@ export function createNodeTestShards() {
             shardName: splitShard.shardName,
             configs: splitConfigs,
             ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
+            ...(splitShard.runner ? { runner: splitShard.runner } : {}),
             requiresDist: splitShard.requiresDist,
           },
         ];

@@ -87,6 +87,7 @@ describe("buildStatusScanResult", () => {
       {
         pluginId: "legacy",
         code: "legacy-before-agent-start" as const,
+        compatCode: "legacy-before-agent-start" as const,
         severity: "warn" as const,
         message: "warn",
       },

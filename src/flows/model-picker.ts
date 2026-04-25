@@ -3,6 +3,10 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
+  isModelPickerVisibleModelRef,
+  isModelPickerVisibleProvider,
+} from "../agents/model-picker-visibility.js";
+import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
@@ -142,7 +146,11 @@ function addModelSelectOption(params: {
   hasAuth: (provider: string) => boolean;
 }) {
   const key = modelKey(params.entry.provider, params.entry.id);
-  if (params.seen.has(key) || HIDDEN_ROUTER_MODELS.has(key)) {
+  if (
+    params.seen.has(key) ||
+    HIDDEN_ROUTER_MODELS.has(key) ||
+    !isModelPickerVisibleProvider(params.entry.provider)
+  ) {
     return;
   }
   const hints: string[] = [];
@@ -263,15 +271,13 @@ async function maybeFilterModelsByProvider(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<typeof params.models> {
-  const providerIds = Array.from(new Set(params.models.map((entry) => entry.provider))).toSorted(
-    (a, b) => a.localeCompare(b),
+  let next = params.models.filter((entry) => isModelPickerVisibleProvider(entry.provider));
+  const providerIds = Array.from(new Set(next.map((entry) => entry.provider))).toSorted((a, b) =>
+    a.localeCompare(b),
   );
   const hasPreferredProvider = !!params.preferredProvider;
   const shouldPromptProvider =
-    !hasPreferredProvider &&
-    providerIds.length > 1 &&
-    params.models.length > PROVIDER_FILTER_THRESHOLD;
-  let next = params.models;
+    !hasPreferredProvider && providerIds.length > 1 && next.length > PROVIDER_FILTER_THRESHOLD;
   const matchesPreferredProvider = params.preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider: params.preferredProvider,
@@ -473,6 +479,13 @@ export async function promptDefaultModel(
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+  if (filteredModels.length === 0) {
+    return promptManualModel({
+      prompter: params.prompter,
+      allowBlank: allowKeep,
+      initialValue: configuredRaw || resolvedKey || undefined,
+    });
+  }
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider,
@@ -609,7 +622,7 @@ export async function promptModelAllowlist(params: {
   ]);
   const initialKeys = allowedKeySet
     ? initialSeeds.filter((key) => allowedKeySet.has(key))
-    : initialSeeds;
+    : initialSeeds.filter(isModelPickerVisibleModelRef);
 
   const allowlistProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
@@ -650,9 +663,11 @@ export async function promptModelAllowlist(params: {
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
-  const allowedCatalog = allowedKeySet
-    ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
-    : catalog;
+  const allowedCatalog = (
+    allowedKeySet
+      ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
+      : catalog
+  ).filter((entry) => isModelPickerVisibleProvider(entry.provider));
   const filteredCatalog =
     preferredProvider && allowedCatalog.some((entry) => matchesPreferredProvider?.(entry.provider))
       ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
@@ -668,7 +683,9 @@ export async function promptModelAllowlist(params: {
     addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
   }
 
-  const supplementalKeys = allowedKeySet ? allowedKeys : existingKeys;
+  const supplementalKeys = (allowedKeySet ? allowedKeys : existingKeys).filter(
+    isModelPickerVisibleModelRef,
+  );
   for (const key of supplementalKeys) {
     if (seen.has(key)) {
       continue;
@@ -830,7 +847,7 @@ export function applyModelFallbacksFromSelection(
         ...defaults,
         model: {
           ...(typeof existingModel === "object" ? existingModel : undefined),
-          primary: existingPrimary ?? resolvedKey,
+          ...(existingPrimary != null ? { primary: existingPrimary } : {}),
           fallbacks,
         },
       },

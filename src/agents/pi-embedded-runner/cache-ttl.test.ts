@@ -16,7 +16,7 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
         return true;
       }
       if (params.context.provider === "openrouter") {
-        return ["anthropic/", "moonshot/", "moonshotai/", "zai/"].some((prefix) =>
+        return ["anthropic/", "deepseek/", "moonshot/", "moonshotai/", "zai/"].some((prefix) =>
           params.context.modelId.startsWith(prefix),
         );
       }
@@ -44,6 +44,7 @@ describe("isCacheTtlEligibleProvider", () => {
 
   it("allows openrouter cache-ttl models", () => {
     expect(isCacheTtlEligibleProvider("openrouter", "anthropic/claude-sonnet-4")).toBe(true);
+    expect(isCacheTtlEligibleProvider("openrouter", "deepseek/deepseek-v3.2")).toBe(true);
     expect(isCacheTtlEligibleProvider("openrouter", "moonshotai/kimi-k2.5")).toBe(true);
     expect(isCacheTtlEligibleProvider("openrouter", "moonshot/kimi-k2.5")).toBe(true);
     expect(isCacheTtlEligibleProvider("openrouter", "zai/glm-5")).toBe(true);

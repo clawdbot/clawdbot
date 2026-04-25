@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import type { AssistantIdentity } from "../assistant-identity.ts";
+import { DEFAULT_ASSISTANT_AVATAR, type AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -638,6 +638,7 @@ function renderAvatar(
   const normalized = normalizeRoleForGrouping(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
+  const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);
   const userName = resolveLocalUserName(user);
   const userAvatarUrl = resolveLocalUserAvatarUrl(user);
   const userAvatarText = resolveLocalUserAvatarText(user);
@@ -712,6 +713,11 @@ function renderAvatar(
         alt="${assistantName}"
       />`;
     }
+    if (assistantAvatarText) {
+      return html`<div class="chat-avatar ${className}" aria-label="${assistantName}">
+        ${assistantAvatarText}
+      </div>`;
+    }
     return html`<img
       class="chat-avatar ${className} chat-avatar--logo"
       src="${agentLogoUrl(basePath ?? "")}"
@@ -733,7 +739,29 @@ function renderAvatar(
 }
 
 function isAvatarUrl(value: string): boolean {
-  return isRenderableControlUiAvatarUrl(value);
+  const trimmed = value.trim();
+  return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
+}
+
+const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
+
+export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === DEFAULT_ASSISTANT_AVATAR) {
+    return null;
+  }
+  if (isAvatarUrl(trimmed)) {
+    return null;
+  }
+  if (
+    trimmed.length > 8 ||
+    /\s/.test(trimmed) ||
+    /[\\/.:]/.test(trimmed) ||
+    UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS.test(trimmed)
+  ) {
+    return null;
+  }
+  return trimmed;
 }
 
 function resolveRenderableMessageImages(
@@ -1376,7 +1404,13 @@ function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in"]
+  const isToolMessage = normalizedRole === "tool" || isToolResult;
+  const bubbleClasses = [
+    "chat-bubble",
+    isToolMessage ? "chat-bubble--tool-shell" : "",
+    opts.isStreaming ? "streaming" : "",
+    "fade-in",
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -1393,7 +1427,6 @@ function renderGroupedMessage(
     return nothing;
   }
 
-  const isToolMessage = normalizedRole === "tool" || isToolResult;
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];

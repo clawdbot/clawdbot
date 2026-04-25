@@ -4,6 +4,7 @@ import { createClientHarness } from "./test-support.js";
 
 const mocks = vi.hoisted(() => {
   const authBridge = {
+    applyAuthProfile: vi.fn(async () => undefined),
     startOptions: vi.fn(async ({ startOptions }) => startOptions),
   };
   const providerAuth = {
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("./auth-bridge.js", () => ({
+  applyCodexAppServerAuthProfile: mocks.authBridge.applyAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
 }));
 
@@ -34,6 +36,7 @@ describe("listCodexAppServerModels", () => {
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
     vi.restoreAllMocks();
+    mocks.authBridge.applyAuthProfile.mockClear();
     mocks.authBridge.startOptions.mockClear();
     mocks.providerAuth.agentDir.mockClear();
   });

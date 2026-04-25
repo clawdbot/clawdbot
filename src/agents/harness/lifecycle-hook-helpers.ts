@@ -9,11 +9,14 @@ import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-cont
 
 const log = createSubsystemLogger("agents/harness");
 
+type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
+
 export function runAgentHarnessLlmInputHook(params: {
   event: PluginHookLlmInputEvent;
   ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
 }): void {
-  const hookRunner = getGlobalHookRunner();
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("llm_input")) {
     return;
   }
@@ -25,8 +28,9 @@ export function runAgentHarnessLlmInputHook(params: {
 export function runAgentHarnessLlmOutputHook(params: {
   event: PluginHookLlmOutputEvent;
   ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
 }): void {
-  const hookRunner = getGlobalHookRunner();
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("llm_output")) {
     return;
   }
@@ -38,8 +42,9 @@ export function runAgentHarnessLlmOutputHook(params: {
 export function runAgentHarnessAgentEndHook(params: {
   event: PluginHookAgentEndEvent;
   ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
 }): void {
-  const hookRunner = getGlobalHookRunner();
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("agent_end")) {
     return;
   }

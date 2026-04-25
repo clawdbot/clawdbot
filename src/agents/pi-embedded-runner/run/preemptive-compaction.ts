@@ -40,6 +40,7 @@ export function estimatePrePromptTokens(params: {
 
 export function shouldPreemptivelyCompactBeforePrompt(params: {
   messages: AgentMessage[];
+  unwindowedMessages?: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
   contextTokenBudget: number;
@@ -54,7 +55,23 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   toolResultReducibleChars: number;
   effectiveReserveTokens: number;
 } {
-  const estimatedPromptTokens = estimatePrePromptTokens(params);
+  let messagesForPressure = params.messages;
+  let estimatedPromptTokens = estimatePrePromptTokens({
+    messages: params.messages,
+    systemPrompt: params.systemPrompt,
+    prompt: params.prompt,
+  });
+  if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
+    const unwindowedEstimatedPromptTokens = estimatePrePromptTokens({
+      messages: params.unwindowedMessages,
+      systemPrompt: params.systemPrompt,
+      prompt: params.prompt,
+    });
+    if (unwindowedEstimatedPromptTokens > estimatedPromptTokens) {
+      estimatedPromptTokens = unwindowedEstimatedPromptTokens;
+      messagesForPressure = params.unwindowedMessages;
+    }
+  }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
   const minPromptBudget = Math.min(
@@ -68,7 +85,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({
-    messages: params.messages,
+    messages: messagesForPressure,
     contextWindowTokens: params.contextTokenBudget,
     maxCharsOverride: params.toolResultMaxChars,
   });

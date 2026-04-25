@@ -18,6 +18,7 @@ export type SecretRef = {
 export type SecretInput = string | SecretRef;
 export const DEFAULT_SECRET_PROVIDER_ALIAS = "default"; // pragma: allowlist secret
 export const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
+export const LEGACY_SECRETREF_ENV_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 const ENV_SECRET_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
 export type SecretInputStringResolutionMode = "strict" | "inspect";
 export type SecretInputStringResolution =
@@ -79,6 +80,28 @@ export function parseEnvTemplateSecretRef(
     source: "env",
     provider: provider.trim() || DEFAULT_SECRET_PROVIDER_ALIAS,
     id: match[1],
+  };
+}
+
+export function parseLegacySecretRefEnvMarker(
+  value: unknown,
+  provider = DEFAULT_SECRET_PROVIDER_ALIAS,
+): SecretRef | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith(LEGACY_SECRETREF_ENV_MARKER_PREFIX)) {
+    return null;
+  }
+  const id = trimmed.slice(LEGACY_SECRETREF_ENV_MARKER_PREFIX.length);
+  if (!ENV_SECRET_REF_ID_RE.test(id)) {
+    return null;
+  }
+  return {
+    source: "env",
+    provider: provider.trim() || DEFAULT_SECRET_PROVIDER_ALIAS,
+    id,
   };
 }
 

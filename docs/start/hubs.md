@@ -164,6 +164,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 - [Plugins overview](/tools/plugin)
 - [Building plugins](/plugins/building-plugins)
+- [Plugin hooks](/plugins/hooks)
 - [Plugin manifest](/plugins/manifest)
 - [Agent tools](/plugins/building-plugins#registering-agent-tools)
 - [Plugin bundles](/plugins/bundles)

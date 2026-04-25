@@ -16,6 +16,10 @@ type OpenAIReasoningSignature = {
   type: string;
 };
 
+type DowngradeOpenAIReasoningBlocksOptions = {
+  dropReplayableReasoning?: boolean;
+};
+
 function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
   if (!value) {
     return null;
@@ -201,12 +205,15 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
 
 /**
  * OpenAI Responses API can reject transcripts that contain a standalone `reasoning` item id
- * without the required following item.
+ * without the required following item, or stale encrypted reasoning after a model route switch.
  *
  * OpenClaw persists provider-specific reasoning metadata in `thinkingSignature`; if that metadata
- * is incomplete, drop the block to keep history usable.
+ * is incomplete or no longer replay-safe, drop the block to keep history usable.
  */
-export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentMessage[] {
+export function downgradeOpenAIReasoningBlocks(
+  messages: AgentMessage[],
+  options: DowngradeOpenAIReasoningBlocksOptions = {},
+): AgentMessage[] {
   let anyChanged = false;
   const out: AgentMessage[] = [];
 
@@ -246,6 +253,10 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
       const signature = parseOpenAIReasoningSignature(record.thinkingSignature);
       if (!signature) {
         nextContent.push(block);
+        continue;
+      }
+      if (options.dropReplayableReasoning) {
+        changed = true;
         continue;
       }
       if (hasFollowingNonThinkingBlock(assistantMsg.content, i)) {

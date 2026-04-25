@@ -7,7 +7,11 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/config-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
-import { estimateBase64DecodedBytes, saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import {
+  detectMime,
+  estimateBase64DecodedBytes,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -294,11 +298,16 @@ async function fetchAttachment(params: {
     );
   }
   const buffer = Buffer.from(result.data, "base64");
+  const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
+  const contentType =
+    normalizeOptionalString(attachment.contentType ?? undefined) ??
+    (await detectMime({ buffer, filePath: originalFilename }));
   const saved = await saveMediaBuffer(
     buffer,
-    attachment.contentType ?? undefined,
+    contentType,
     "inbound",
     params.maxBytes,
+    originalFilename,
   );
   return { path: saved.path, contentType: saved.contentType };
 }

@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.61.1",
-    "typebox": "1.1.28"
+    "typebox": "1.1.31"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

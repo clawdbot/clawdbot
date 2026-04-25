@@ -1759,8 +1759,7 @@ async function runInstalledAgentTurn(params) {
     logPath: params.logPath,
     timeoutMs: 10 * 60 * 1000,
   });
-  const payloadTexts = parseAgentPayloadTexts(result.stdout);
-  if (!payloadTexts.some((text) => text.trim() === "OK")) {
+  if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
     throw new Error("Agent output did not contain the expected OK marker.");
   }
   return result;
@@ -2405,27 +2404,57 @@ async function runAgentTurn(params) {
     logPath: params.logPath,
     timeoutMs: 10 * 60 * 1000,
   });
-  const payloadTexts = parseAgentPayloadTexts(result.stdout);
-  if (!payloadTexts.some((text) => text.trim() === "OK")) {
+  if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
     throw new Error("Agent output did not contain the expected OK marker.");
   }
   return result;
 }
 
+export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
+  const payloadTexts = parseAgentPayloadTexts(stdout);
+  if (payloadTexts.some((text) => text.trim() === "OK")) {
+    return true;
+  }
+  if (typeof options.logPath !== "string") {
+    return false;
+  }
+  try {
+    const logTexts = parseAgentPayloadTexts(readFileSync(options.logPath, "utf8"));
+    return logTexts.some((text) => text.trim() === "OK");
+  } catch {
+    return false;
+  }
+}
+
 function parseAgentPayloadTexts(stdout) {
   try {
     const payload = JSON.parse(stdout);
+    const directTexts = [
+      payload?.finalAssistantVisibleText,
+      payload?.finalAssistantRawText,
+      payload?.meta?.finalAssistantVisibleText,
+      payload?.meta?.finalAssistantRawText,
+      payload?.result?.finalAssistantVisibleText,
+      payload?.result?.finalAssistantRawText,
+      payload?.result?.meta?.finalAssistantVisibleText,
+      payload?.result?.meta?.finalAssistantRawText,
+    ].filter((text): text is string => typeof text === "string");
     const entries = Array.isArray(payload?.payloads)
       ? payload.payloads
       : Array.isArray(payload?.result?.payloads)
         ? payload.result.payloads
         : [];
-    if (!Array.isArray(entries)) {
-      return [];
-    }
-    return entries.flatMap((entry) => (typeof entry?.text === "string" ? [entry.text] : []));
+    const payloadTexts = Array.isArray(entries)
+      ? entries.flatMap((entry) => (typeof entry?.text === "string" ? [entry.text] : []))
+      : [];
+    return [...directTexts, ...payloadTexts];
   } catch {
-    return stdout.trim() ? [stdout] : [];
+    const finalTextMatches = [
+      ...stdout.matchAll(
+        /"(?:finalAssistantVisibleText|finalAssistantRawText|text)"\s*:\s*"([^"]*)"/gu,
+      ),
+    ].map((match) => match[1]);
+    return finalTextMatches.length > 0 ? finalTextMatches : stdout.trim() ? [stdout] : [];
   }
 }
 

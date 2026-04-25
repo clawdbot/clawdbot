@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawProtocol
 import OSLog
 import Speech
 
@@ -475,7 +476,16 @@ actor TalkModeRuntime {
                 self.ttsLogger
                     .error(
                         "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
-                            "falling back to system voice")
+                            "retrying gateway talk.speak")
+                do {
+                    try await self.playGatewayTalkSpeak(input: input)
+                    return
+                } catch {
+                    self.ttsLogger
+                        .error(
+                            "talk gateway TTS failed: \(error.localizedDescription, privacy: .public); " +
+                                "falling back to system voice")
+                }
                 do {
                     try await self.playSystemVoice(input: input)
                 } catch {
@@ -720,6 +730,42 @@ actor TalkModeRuntime {
         return await self.playMP3(stream: stream)
     }
 
+    private func playGatewayTalkSpeak(input: TalkPlaybackInput) async throws {
+        let params = Self.makeTalkSpeakParams(
+            text: input.cleanedText,
+            voiceId: input.voiceId,
+            modelId: self.currentModelId ?? self.defaultModelId,
+            outputFormat: self.defaultOutputFormat,
+            directive: input.directive)
+        let result: TalkSpeakResult = try await GatewayConnection.shared.requestDecoded(
+            method: .talkSpeak,
+            params: params,
+            timeoutMs: max(30000, input.synthTimeoutSeconds * 1000 + 5000))
+        guard let audioData = Data(base64Encoded: result.audiobase64), !audioData.isEmpty else {
+            throw NSError(domain: "TalkSpeak", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "gateway talk.speak returned empty audio",
+            ])
+        }
+        _ = await self.stopPCM()
+        _ = await self.stopMP3()
+        if self.interruptOnSpeech {
+            guard await self.prepareForPlayback(generation: input.generation) else { return }
+        }
+        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
+        self.phase = .speaking
+        let playback = await self.playTalkAudio(data: audioData)
+        self.ttsLogger
+            .info(
+                "talk gateway audio provider=\(result.provider, privacy: .public) " +
+                    "format=\(result.outputformat ?? "unknown", privacy: .public) " +
+                    "finished=\(playback.finished, privacy: .public)")
+        if !playback.finished, playback.interruptedAt == nil {
+            throw NSError(domain: "TalkSpeak", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "gateway talk.speak audio playback failed",
+            ])
+        }
+    }
+
     private func playSystemVoice(input: TalkPlaybackInput) async throws {
         self.ttsLogger.info("talk system voice start chars=\(input.cleanedText.count, privacy: .public)")
         if self.interruptOnSpeech {
@@ -847,6 +893,54 @@ actor TalkModeRuntime {
 }
 
 extension TalkModeRuntime {
+    static func makeTalkSpeakParams(
+        text: String,
+        voiceId: String?,
+        modelId: String?,
+        outputFormat: String?,
+        directive: TalkDirective?) -> [String: AnyCodable]
+    {
+        var params: [String: AnyCodable] = ["text": AnyCodable(text)]
+
+        func addString(_ key: String, _ value: String?) {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !trimmed.isEmpty else { return }
+            params[key] = AnyCodable(trimmed)
+        }
+
+        addString("voiceId", voiceId)
+        addString("modelId", directive?.modelId ?? modelId)
+        addString("outputFormat", directive?.outputFormat ?? outputFormat)
+        if let speed = directive?.speed {
+            params["speed"] = AnyCodable(speed)
+        }
+        if let rateWPM = directive?.rateWPM {
+            params["rateWpm"] = AnyCodable(rateWPM)
+        }
+        if let stability = directive?.stability {
+            params["stability"] = AnyCodable(stability)
+        }
+        if let similarity = directive?.similarity {
+            params["similarity"] = AnyCodable(similarity)
+        }
+        if let style = directive?.style {
+            params["style"] = AnyCodable(style)
+        }
+        if let speakerBoost = directive?.speakerBoost {
+            params["speakerBoost"] = AnyCodable(speakerBoost)
+        }
+        if let seed = directive?.seed {
+            params["seed"] = AnyCodable(seed)
+        }
+        addString("normalize", directive?.normalize)
+        addString("language", directive?.language)
+        if let latencyTier = directive?.latencyTier {
+            params["latencyTier"] = AnyCodable(latencyTier)
+        }
+
+        return params
+    }
+
     // MARK: - Audio playback (MainActor helpers)
 
     @MainActor

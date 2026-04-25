@@ -11,6 +11,7 @@ import type {
   ChannelDoctorSequenceResult,
 } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorEntry = {
   doctor: ChannelDoctorAdapter;
@@ -59,6 +60,9 @@ export type ChannelDoctorEmptyAllowlistPolicyHooks = {
 };
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
+  if (cfg.plugins?.enabled === false) {
+    return [];
+  }
   const channels =
     cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
       ? cfg.channels
@@ -72,6 +76,9 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
       if (channelId === "defaults") {
         return false;
       }
+      if (isChannelDoctorBlockedByConfig(channelId, cfg)) {
+        return false;
+      }
       const entry = channelEntries[channelId];
       return (
         !entry ||
@@ -81,6 +88,21 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
       );
     })
     .toSorted();
+}
+
+function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig): boolean {
+  if (cfg.plugins?.enabled === false) {
+    return true;
+  }
+  const normalizedChannelId = normalizeOptionalLowercaseString(channelId) ?? channelId;
+  if (cfg.plugins?.entries?.[normalizedChannelId]?.enabled === false) {
+    return true;
+  }
+  const channelEntry = (cfg.channels as Record<string, unknown> | undefined)?.[normalizedChannelId];
+  return (
+    Boolean(channelEntry && typeof channelEntry === "object" && !Array.isArray(channelEntry)) &&
+    (channelEntry as { enabled?: unknown }).enabled === false
+  );
 }
 
 function safeGetLoadedChannelPlugin(id: string) {
@@ -180,7 +202,12 @@ function listChannelDoctorEntries(
   if (channelIds.length === 0) {
     return [];
   }
-  const selectedIds = new Set(channelIds);
+  const selectedIds = new Set(
+    channelIds.filter((id) => !isChannelDoctorBlockedByConfig(id, context.cfg)),
+  );
+  if (selectedIds.size === 0) {
+    return [];
+  }
   const readOnlyPluginsById =
     options.readOnlyPluginsById ?? listReadOnlyChannelPluginsById(context);
 

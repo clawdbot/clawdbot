@@ -1,3 +1,4 @@
+import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
@@ -45,7 +46,11 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     ...resolveOpenClawPluginToolInputs({
       options: params.options,
       resolvedConfig: params.resolvedConfig,
-      runtimeConfig: runtimeSnapshot?.config,
+      runtimeConfig: selectApplicableRuntimeConfig({
+        inputConfig: params.resolvedConfig ?? params.options?.config,
+        runtimeConfig: runtimeSnapshot?.config,
+        runtimeSourceConfig: runtimeSnapshot?.sourceConfig,
+      }),
     }),
     existingToolNames: params.existingToolNames ?? new Set<string>(),
     toolAllowlist: params.options?.pluginToolAllowlist,

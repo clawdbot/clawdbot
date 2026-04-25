@@ -49,6 +49,9 @@ type MatrixQaGatewayChild = {
   runtimeEnv?: NodeJS.ProcessEnv;
 };
 
+const DEFAULT_MATRIX_QA_RUN_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
+
 type MatrixQaLiveLaneGatewayHarness = {
   gateway: MatrixQaGatewayChild;
   stop(): Promise<void>;
@@ -150,7 +153,7 @@ function shouldWriteMatrixQaProgress() {
   if (override === "1") {
     return true;
   }
-  return process.stderr.isTTY;
+  return true;
 }
 
 function formatMatrixQaDurationMs(durationMs: number) {
@@ -162,6 +165,80 @@ function writeMatrixQaProgress(message: string) {
     return;
   }
   process.stderr.write(`[matrix-qa] ${message}\n`);
+}
+
+function parsePositiveMatrixQaEnvMs(name: string, fallback: number) {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
+function createMatrixQaRunDeadline() {
+  const timeoutMs = parsePositiveMatrixQaEnvMs(
+    "OPENCLAW_QA_MATRIX_TIMEOUT_MS",
+    DEFAULT_MATRIX_QA_RUN_TIMEOUT_MS,
+  );
+  return {
+    timeoutMs,
+    deadlineMs: Date.now() + timeoutMs,
+  };
+}
+
+function remainingMatrixQaRunMs(deadline: { deadlineMs: number }) {
+  return Math.max(1, deadline.deadlineMs - Date.now());
+}
+
+async function withMatrixQaTimeout<T>(
+  label: string,
+  timeoutMs: number,
+  task: () => Promise<T>,
+): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function withMatrixQaRunDeadline<T>(
+  deadline: { deadlineMs: number; timeoutMs: number },
+  label: string,
+  task: () => Promise<T>,
+) {
+  return await withMatrixQaTimeout(label, remainingMatrixQaRunMs(deadline), task);
+}
+
+async function cleanupMatrixQaResource(params: {
+  action: () => Promise<void>;
+  label: string;
+  recovery?: string;
+}) {
+  const timeoutMs = parsePositiveMatrixQaEnvMs(
+    "OPENCLAW_QA_MATRIX_CLEANUP_TIMEOUT_MS",
+    DEFAULT_MATRIX_QA_CLEANUP_TIMEOUT_MS,
+  );
+  try {
+    await withMatrixQaTimeout(params.label, timeoutMs, params.action);
+  } catch (error) {
+    const recovery = params.recovery ? `\nRecovery: ${params.recovery}` : "";
+    throw new Error(`${formatErrorMessage(error)}${recovery}`, { cause: error });
+  }
 }
 
 function countMatrixQaStatuses(entries: Array<{ status: "fail" | "pass" | "skip" }>) {
@@ -441,15 +518,18 @@ export async function runMatrixQaLive(params: {
   const startedAtDate = new Date();
   const startedAt = startedAtDate.toISOString();
   const runStartedAtMs = Date.now();
+  const runDeadline = createMatrixQaRunDeadline();
   writeMatrixQaProgress(
-    `suite start scenarios=${scenarios.length} provider=${providerMode} output=${outputDir}`,
+    `suite start scenarios=${scenarios.length} provider=${providerMode} output=${outputDir} timeout=${formatMatrixQaDurationMs(runDeadline.timeoutMs)}`,
   );
 
   const { durationMs: harnessBootMs, result: harness } = await measureMatrixQaStep(() =>
-    startMatrixQaHarness({
-      outputDir: path.join(outputDir, "matrix-harness"),
-      repoRoot,
-    }),
+    withMatrixQaRunDeadline(runDeadline, "Matrix harness boot", () =>
+      startMatrixQaHarness({
+        outputDir: path.join(outputDir, "matrix-harness"),
+        repoRoot,
+      }),
+    ),
   );
   writeMatrixQaProgress(
     `harness ready ${formatMatrixQaDurationMs(harnessBootMs)} baseUrl=${harness.baseUrl}`,
@@ -457,18 +537,24 @@ export async function runMatrixQaLive(params: {
   const { durationMs: provisioningMs, result: provisioning } = await (async () => {
     try {
       return await measureMatrixQaStep(() =>
-        provisionMatrixQaRoom({
-          baseUrl: harness.baseUrl,
-          driverLocalpart: `qa-driver-${runSuffix}`,
-          observerLocalpart: `qa-observer-${runSuffix}`,
-          registrationToken: harness.registrationToken,
-          roomName: `OpenClaw Matrix QA ${runSuffix}`,
-          sutLocalpart: `qa-sut-${runSuffix}`,
-          topology,
-        }),
+        withMatrixQaRunDeadline(runDeadline, "Matrix topology provisioning", () =>
+          provisionMatrixQaRoom({
+            baseUrl: harness.baseUrl,
+            driverLocalpart: `qa-driver-${runSuffix}`,
+            observerLocalpart: `qa-observer-${runSuffix}`,
+            registrationToken: harness.registrationToken,
+            roomName: `OpenClaw Matrix QA ${runSuffix}`,
+            sutLocalpart: `qa-sut-${runSuffix}`,
+            topology,
+          }),
+        ),
       );
     } catch (error) {
-      await harness.stop().catch(() => {});
+      await cleanupMatrixQaResource({
+        label: "Matrix homeserver cleanup after provisioning failure",
+        action: () => harness.stop(),
+        recovery: harness.stopCommand,
+      }).catch(() => {});
       throw error;
     }
   })();
@@ -530,33 +616,38 @@ export async function runMatrixQaLive(params: {
         };
       }
       if (gatewayHarness) {
-        await gatewayHarness.stop();
+        await cleanupMatrixQaResource({
+          label: "Matrix live gateway cleanup before config switch",
+          action: () => gatewayHarness!.stop(),
+        });
         gatewayHarness = null;
         gatewayHarnessKey = nextKey;
       }
       writeMatrixQaProgress("gateway boot start");
-      const { durationMs, result: started } = await measureMatrixQaStep(async () => {
-        const nextHarness = await startMatrixQaLiveLaneGateway({
-          repoRoot,
-          transport: {
-            requiredPluginIds: [],
-            createGatewayConfig: () => ({}),
-          },
-          transportBaseUrl: "http://127.0.0.1:43123",
-          providerMode,
-          primaryModel,
-          alternateModel,
-          fastMode: params.fastMode,
-          controlUiEnabled: false,
-          mutateConfig: (cfg) =>
-            buildMatrixQaConfig(cfg, {
-              ...gatewayConfigParams,
-              overrides,
-            }),
-        });
-        await waitForMatrixChannelReady(nextHarness.gateway, sutAccountId);
-        return nextHarness;
-      });
+      const { durationMs, result: started } = await measureMatrixQaStep(() =>
+        withMatrixQaRunDeadline(runDeadline, "Matrix gateway boot", async () => {
+          const nextHarness = await startMatrixQaLiveLaneGateway({
+            repoRoot,
+            transport: {
+              requiredPluginIds: [],
+              createGatewayConfig: () => ({}),
+            },
+            transportBaseUrl: "http://127.0.0.1:43123",
+            providerMode,
+            primaryModel,
+            alternateModel,
+            fastMode: params.fastMode,
+            controlUiEnabled: false,
+            mutateConfig: (cfg) =>
+              buildMatrixQaConfig(cfg, {
+                ...gatewayConfigParams,
+                overrides,
+              }),
+          });
+          await waitForMatrixChannelReady(nextHarness.gateway, sutAccountId);
+          return nextHarness;
+        }),
+      );
       writeMatrixQaProgress(`gateway boot done ${formatMatrixQaDurationMs(durationMs)}`);
       gatewayHarness = started;
       gatewayHarnessKey = nextKey;
@@ -580,16 +671,18 @@ export async function runMatrixQaLive(params: {
     try {
       writeMatrixQaProgress("canary start");
       const canaryMeasured = await measureMatrixQaStep(() =>
-        runMatrixQaCanary({
-          baseUrl: harness.baseUrl,
-          driverAccessToken: provisioning.driver.accessToken,
-          observedEvents,
-          roomId: provisioning.roomId,
-          syncState,
-          syncStreams,
-          sutUserId: provisioning.sut.userId,
-          timeoutMs: 45_000,
-        }),
+        withMatrixQaRunDeadline(runDeadline, "Matrix canary", () =>
+          runMatrixQaCanary({
+            baseUrl: harness.baseUrl,
+            driverAccessToken: provisioning.driver.accessToken,
+            observedEvents,
+            roomId: provisioning.roomId,
+            syncState,
+            syncStreams,
+            sutUserId: provisioning.sut.userId,
+            timeoutMs: 45_000,
+          }),
+        ),
       );
       canaryMs = canaryMeasured.durationMs;
       const canary = canaryMeasured.result;
@@ -631,108 +724,110 @@ export async function runMatrixQaLive(params: {
           gatewayBootMs = scenarioGateway.durationMs;
           scenarioGatewayBootMs += gatewayBootMs;
           const measuredScenario = await measureMatrixQaStep(() =>
-            runMatrixQaScenario(scenario, {
-              baseUrl: harness.baseUrl,
-              canary: canaryArtifact,
-              driverAccessToken: provisioning.driver.accessToken,
-              driverDeviceId: provisioning.driver.deviceId,
-              driverPassword: provisioning.driver.password,
-              driverUserId: provisioning.driver.userId,
-              interruptTransport: async () => {
-                writeMatrixQaProgress(`transport interrupt start ${scenario.id}`);
-                const measuredInterrupt = await measureMatrixQaStep(async () => {
-                  await harness.restartService();
-                  await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId, {
-                    timeoutMs: 90_000,
+            withMatrixQaRunDeadline(runDeadline, `Matrix scenario ${scenario.id}`, () =>
+              runMatrixQaScenario(scenario, {
+                baseUrl: harness.baseUrl,
+                canary: canaryArtifact,
+                driverAccessToken: provisioning.driver.accessToken,
+                driverDeviceId: provisioning.driver.deviceId,
+                driverPassword: provisioning.driver.password,
+                driverUserId: provisioning.driver.userId,
+                interruptTransport: async () => {
+                  writeMatrixQaProgress(`transport interrupt start ${scenario.id}`);
+                  const measuredInterrupt = await measureMatrixQaStep(async () => {
+                    await harness.restartService();
+                    await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId, {
+                      timeoutMs: 90_000,
+                    });
                   });
-                });
-                transportInterruptMs += measuredInterrupt.durationMs;
-                scenarioTransportInterruptMs += measuredInterrupt.durationMs;
-                writeMatrixQaProgress(
-                  `transport interrupt done ${scenario.id} ${formatMatrixQaDurationMs(measuredInterrupt.durationMs)}`,
-                );
-              },
-              observedEvents,
-              observerAccessToken: provisioning.observer.accessToken,
-              observerDeviceId: provisioning.observer.deviceId,
-              observerPassword: provisioning.observer.password,
-              observerUserId: provisioning.observer.userId,
-              gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
-              outputDir,
-              restartGateway: async () => {
-                if (!gatewayHarness) {
-                  throw new Error("Matrix restart scenario requires a live gateway");
-                }
-                writeMatrixQaProgress(`gateway restart start ${scenario.id}`);
-                const measuredRestart = await measureMatrixQaStep(async () => {
-                  await scenarioGateway.harness.gateway.restart();
-                  await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId);
-                });
-                gatewayRestartMs += measuredRestart.durationMs;
-                scenarioRestartGatewayMs += measuredRestart.durationMs;
-                writeMatrixQaProgress(
-                  `gateway restart done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
-                );
-              },
-              restartGatewayAfterStateMutation: async (mutateState) => {
-                if (!gatewayHarness) {
-                  throw new Error(
-                    "Matrix persisted-state restart scenario requires a live gateway",
+                  transportInterruptMs += measuredInterrupt.durationMs;
+                  scenarioTransportInterruptMs += measuredInterrupt.durationMs;
+                  writeMatrixQaProgress(
+                    `transport interrupt done ${scenario.id} ${formatMatrixQaDurationMs(measuredInterrupt.durationMs)}`,
                   );
-                }
-                const restartAfterStateMutation =
-                  scenarioGateway.harness.gateway.restartAfterStateMutation;
-                if (!restartAfterStateMutation) {
-                  throw new Error(
-                    "Matrix persisted-state restart scenario requires a hard restart callback",
+                },
+                observedEvents,
+                observerAccessToken: provisioning.observer.accessToken,
+                observerDeviceId: provisioning.observer.deviceId,
+                observerPassword: provisioning.observer.password,
+                observerUserId: provisioning.observer.userId,
+                gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
+                outputDir,
+                restartGateway: async () => {
+                  if (!gatewayHarness) {
+                    throw new Error("Matrix restart scenario requires a live gateway");
+                  }
+                  writeMatrixQaProgress(`gateway restart start ${scenario.id}`);
+                  const measuredRestart = await measureMatrixQaStep(async () => {
+                    await scenarioGateway.harness.gateway.restart();
+                    await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId);
+                  });
+                  gatewayRestartMs += measuredRestart.durationMs;
+                  scenarioRestartGatewayMs += measuredRestart.durationMs;
+                  writeMatrixQaProgress(
+                    `gateway restart done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
                   );
-                }
-                writeMatrixQaProgress(`gateway hard restart start ${scenario.id}`);
-                const measuredRestart = await measureMatrixQaStep(async () => {
-                  await restartAfterStateMutation(mutateState);
-                  await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId);
-                });
-                gatewayRestartMs += measuredRestart.durationMs;
-                scenarioRestartGatewayMs += measuredRestart.durationMs;
-                writeMatrixQaProgress(
-                  `gateway hard restart done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
-                );
-              },
-              restartGatewayWithQueuedMessage: async (queueMessage) => {
-                if (!gatewayHarness) {
-                  throw new Error("Matrix restart catchup scenario requires a live gateway");
-                }
-                writeMatrixQaProgress(`gateway restart+queue start ${scenario.id}`);
-                const measuredRestart = await measureMatrixQaStep(async () => {
-                  await scenarioGateway.harness.gateway.restart();
-                  await sleep(250);
-                  await queueMessage();
-                  await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId);
-                });
-                gatewayRestartMs += measuredRestart.durationMs;
-                scenarioRestartGatewayMs += measuredRestart.durationMs;
-                writeMatrixQaProgress(
-                  `gateway restart+queue done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
-                );
-              },
-              roomId: provisioning.roomId,
-              sutAccountId,
-              sutAccessToken: provisioning.sut.accessToken,
-              sutDeviceId: provisioning.sut.deviceId,
-              sutPassword: provisioning.sut.password,
-              syncState,
-              syncStreams,
-              sutUserId: provisioning.sut.userId,
-              timeoutMs: scenario.timeoutMs,
-              topology: provisioning.topology,
-              patchGatewayConfig: async (patch, opts) => {
-                await patchMatrixQaGatewayConfig({
-                  gateway: scenarioGateway.harness.gateway,
-                  patch,
-                  restartDelayMs: opts?.restartDelayMs,
-                });
-              },
-            }),
+                },
+                restartGatewayAfterStateMutation: async (mutateState) => {
+                  if (!gatewayHarness) {
+                    throw new Error(
+                      "Matrix persisted-state restart scenario requires a live gateway",
+                    );
+                  }
+                  const restartAfterStateMutation =
+                    scenarioGateway.harness.gateway.restartAfterStateMutation;
+                  if (!restartAfterStateMutation) {
+                    throw new Error(
+                      "Matrix persisted-state restart scenario requires a hard restart callback",
+                    );
+                  }
+                  writeMatrixQaProgress(`gateway hard restart start ${scenario.id}`);
+                  const measuredRestart = await measureMatrixQaStep(async () => {
+                    await restartAfterStateMutation(mutateState);
+                    await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId);
+                  });
+                  gatewayRestartMs += measuredRestart.durationMs;
+                  scenarioRestartGatewayMs += measuredRestart.durationMs;
+                  writeMatrixQaProgress(
+                    `gateway hard restart done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
+                  );
+                },
+                restartGatewayWithQueuedMessage: async (queueMessage) => {
+                  if (!gatewayHarness) {
+                    throw new Error("Matrix restart catchup scenario requires a live gateway");
+                  }
+                  writeMatrixQaProgress(`gateway restart+queue start ${scenario.id}`);
+                  const measuredRestart = await measureMatrixQaStep(async () => {
+                    await scenarioGateway.harness.gateway.restart();
+                    await sleep(250);
+                    await queueMessage();
+                    await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId);
+                  });
+                  gatewayRestartMs += measuredRestart.durationMs;
+                  scenarioRestartGatewayMs += measuredRestart.durationMs;
+                  writeMatrixQaProgress(
+                    `gateway restart+queue done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
+                  );
+                },
+                roomId: provisioning.roomId,
+                sutAccountId,
+                sutAccessToken: provisioning.sut.accessToken,
+                sutDeviceId: provisioning.sut.deviceId,
+                sutPassword: provisioning.sut.password,
+                syncState,
+                syncStreams,
+                sutUserId: provisioning.sut.userId,
+                timeoutMs: scenario.timeoutMs,
+                topology: provisioning.topology,
+                patchGatewayConfig: async (patch, opts) => {
+                  await patchMatrixQaGatewayConfig({
+                    gateway: scenarioGateway.harness.gateway,
+                    patch,
+                    restartDelayMs: opts?.restartDelayMs,
+                  });
+                },
+              }),
+            ),
           );
           const result = measuredScenario.result;
           scenarioTimings[originalIndex] = {
@@ -775,13 +870,20 @@ export async function runMatrixQaLive(params: {
   } finally {
     if (gatewayHarness) {
       try {
-        await gatewayHarness.stop();
+        await cleanupMatrixQaResource({
+          label: "Matrix live gateway cleanup",
+          action: () => gatewayHarness!.stop(),
+        });
       } catch (error) {
         appendLiveLaneIssue(cleanupErrors, "live gateway cleanup", error);
       }
     }
     try {
-      await harness.stop();
+      await cleanupMatrixQaResource({
+        label: "Matrix homeserver cleanup",
+        action: () => harness.stop(),
+        recovery: harness.stopCommand,
+      });
     } catch (error) {
       appendLiveLaneIssue(cleanupErrors, "Matrix harness cleanup", error);
     }
@@ -938,10 +1040,12 @@ export const __testing = {
   MATRIX_QA_SCENARIOS,
   buildMatrixQaConfig,
   buildMatrixQaConfigSnapshot,
+  createMatrixQaRunDeadline,
   findMatrixQaScenarios,
   isMatrixAccountReady,
   patchMatrixQaGatewayConfig,
   resolveMatrixQaModels,
+  shouldWriteMatrixQaProgress,
   summarizeMatrixQaConfigSnapshot,
   waitForMatrixChannelReady,
 };

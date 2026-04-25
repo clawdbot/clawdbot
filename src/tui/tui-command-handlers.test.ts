@@ -37,12 +37,14 @@ function createHarness(params?: {
   const refreshSessionInfo = params?.refreshSessionInfo ?? vi.fn().mockResolvedValue(undefined);
   const applySessionInfoFromPatch = params?.applySessionInfoFromPatch ?? vi.fn();
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
+  const requestExit = vi.fn();
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
     (params?.opts?.local
       ? (vi.fn().mockResolvedValue({ exitCode: 0, signal: null }) as unknown as RunAuthFlow)
       : undefined);
   const state = {
+    currentAgentId: "main",
     currentSessionKey: "agent:main:main",
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
@@ -72,7 +74,7 @@ function createHarness(params?: {
     forgetLocalRunId: vi.fn(),
     forgetLocalBtwRunId: vi.fn(),
     runAuthFlow,
-    requestExit: vi.fn(),
+    requestExit,
   });
 
   return {
@@ -92,6 +94,7 @@ function createHarness(params?: {
     setActivityStatus,
     noteLocalRunId,
     noteLocalBtwRunId,
+    requestExit,
     state,
   };
 }
@@ -171,6 +174,29 @@ describe("tui command handlers", () => {
     expect(sendChat).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("Gateway status");
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
+  });
+
+  it("returns to Crestodian with an optional request", async () => {
+    const { handleCommand, addSystem, requestExit, sendChat } = createHarness();
+
+    await handleCommand("/crestodian restart gateway");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("returning to Crestodian with request: restart gateway");
+    expect(requestExit).toHaveBeenCalledWith({
+      exitReason: "return-to-crestodian",
+      crestodianMessage: "restart gateway",
+    });
+  });
+
+  it("leaves a Crestodian breadcrumb after switching agents", async () => {
+    const { handleCommand, addSystem, setSession, state } = createHarness();
+
+    await handleCommand("/agent Work");
+
+    expect(state.currentAgentId).toBe("work");
+    expect(setSession).toHaveBeenCalledWith("");
+    expect(addSystem).toHaveBeenCalledWith("agent set to work; use /crestodian to return");
   });
 
   it("defers local run binding until gateway events provide a real run id", async () => {

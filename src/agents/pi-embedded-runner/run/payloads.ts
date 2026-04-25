@@ -293,20 +293,22 @@ export function buildEmbeddedRunPayloads(params: {
     const parsed = parseReplyDirectives(text);
     return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
   });
-  const normalizedAssistantTexts = normalizeTextForComparison(params.assistantTexts.join("\n\n"));
+  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
+  const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
   const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
   const shouldPreferRawAnswerText =
     rawAnswerHasMedia &&
-    (!params.assistantTexts.length ||
+    (!nonEmptyAssistantTexts.length ||
       (!assistantTextsHaveMedia &&
         normalizedAssistantTexts.length > 0 &&
         normalizedAssistantTexts === normalizedRawAnswerText));
+  const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts = suppressAssistantArtifacts
     ? []
     : (shouldPreferRawAnswerText && fallbackRawAnswerText
         ? [fallbackRawAnswerText]
-        : params.assistantTexts.length
-          ? params.assistantTexts
+        : hasAssistantTextPayload
+          ? nonEmptyAssistantTexts
           : fallbackAnswerText
             ? [fallbackAnswerText]
             : []
@@ -381,16 +383,27 @@ export function buildEmbeddedRunPayloads(params: {
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
-    .map((item) => ({
-      text: normalizeOptionalString(item.text),
-      mediaUrls: item.media?.length ? item.media : undefined,
-      mediaUrl: item.media?.[0],
-      isError: item.isError,
-      replyToId: item.replyToId,
-      replyToTag: item.replyToTag,
-      replyToCurrent: item.replyToCurrent,
-      audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
-    }))
+    .map((item) => {
+      const payload = {
+        text: normalizeOptionalString(item.text),
+        mediaUrls: item.media?.length ? item.media : undefined,
+        mediaUrl: item.media?.[0],
+        isError: item.isError,
+        replyToId: item.replyToId,
+        replyToTag: item.replyToTag,
+        replyToCurrent: item.replyToCurrent,
+        audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
+      };
+      if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
+        const silentText = payload.text;
+        payload.text = undefined;
+        if (hasOutboundReplyContent(payload)) {
+          return payload;
+        }
+        payload.text = silentText;
+      }
+      return payload;
+    })
     .filter((p) => {
       if (!hasOutboundReplyContent(p)) {
         return false;

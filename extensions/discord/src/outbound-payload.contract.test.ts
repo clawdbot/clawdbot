@@ -32,7 +32,7 @@ function createDiscordHarness(params: OutboundPayloadHarnessParams) {
 describe("Discord outbound payload contract", () => {
   installChannelOutboundPayloadContractSuite({
     channel: "discord",
-    chunking: { mode: "passthrough", longTextLength: 3000 },
+    chunking: { mode: "split", longTextLength: 3000, maxChunkLength: 2000 },
     createHarness: createDiscordHarness,
   });
 });

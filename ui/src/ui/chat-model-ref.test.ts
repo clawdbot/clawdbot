@@ -234,6 +234,20 @@ describe("chat-model-ref helpers", () => {
     );
   });
 
+  it("keeps nested provider-qualified server values stable when the catalog already confirms them", () => {
+    const nestedModel = {
+      id: "deepseek-ai/deepseek-v3.2",
+      name: "DeepSeek V3.2",
+      provider: "nvidia",
+    };
+
+    expect(
+      resolvePreferredServerChatModelValue("nvidia/deepseek-ai/deepseek-v3.2", "nvidia", [
+        nestedModel,
+      ]),
+    ).toBe("nvidia/deepseek-ai/deepseek-v3.2");
+  });
+
   it("uses catalog resolution for provider-less raw server model values", () => {
     expect(resolvePreferredServerChatModelValue("gpt-5-mini", null, [OPENAI_GPT5_MINI_MODEL])).toBe(
       "openai/gpt-5-mini",

@@ -5,7 +5,7 @@
   "description": "OpenClaw Fireworks provider plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.70.0"
+    "@mariozechner/pi-ai": "0.70.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

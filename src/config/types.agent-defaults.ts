@@ -15,7 +15,7 @@ import type {
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
-export type AgentContextInjection = "always" | "continuation-skip";
+export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
 export type Gpt5PromptOverlayConfig = {

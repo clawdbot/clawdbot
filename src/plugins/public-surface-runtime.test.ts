@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
+  normalizeBundledPluginDirName,
   resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
 } from "./public-surface-runtime.js";
@@ -95,5 +96,13 @@ describe("bundled plugin public surface runtime", () => {
     expect(() => normalizeBundledPluginArtifactSubpath("src/C:outside.js")).toThrow(
       /must stay plugin-local/,
     );
+  });
+
+  it("rejects bundled plugin directory traversal", () => {
+    expect(normalizeBundledPluginDirName("document-extract")).toBe("document-extract");
+    expect(() => normalizeBundledPluginDirName("../outside")).toThrow(/single directory/);
+    expect(() => normalizeBundledPluginDirName("nested/plugin")).toThrow(/single directory/);
+    expect(() => normalizeBundledPluginDirName("nested\\plugin")).toThrow(/single directory/);
+    expect(() => normalizeBundledPluginDirName("C:plugin")).toThrow(/single directory/);
   });
 });

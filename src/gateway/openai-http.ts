@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
-import { normalizeUsage, toOpenAiChatCompletionsUsage } from "../agents/usage.js";
+import {
+  hasNonzeroUsage,
+  normalizeUsage,
+  toOpenAiChatCompletionsUsage,
+  type NormalizedUsage,
+} from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
@@ -369,6 +374,7 @@ async function resolveImagesForRequest(
 export const __testOnlyOpenAiHttp = {
   resolveImagesForRequest,
   resolveOpenAiChatCompletionsLimits,
+  resolveChatCompletionUsage,
 };
 
 function buildAgentPrompt(
@@ -466,16 +472,26 @@ type AgentUsageMeta = {
   total?: number;
 };
 
-function resolveRawAgentUsage(result: unknown): AgentUsageMeta | undefined {
-  return (
+function resolveAgentRunUsage(result: unknown): NormalizedUsage | undefined {
+  const agentMeta = (
     result as {
       meta?: {
         agentMeta?: {
           usage?: AgentUsageMeta;
+          lastCallUsage?: AgentUsageMeta;
         };
       };
     } | null
-  )?.meta?.agentMeta?.usage;
+  )?.meta?.agentMeta;
+  const primary = normalizeUsage(agentMeta?.usage);
+  if (hasNonzeroUsage(primary)) {
+    return primary;
+  }
+  const fallback = normalizeUsage(agentMeta?.lastCallUsage);
+  if (hasNonzeroUsage(fallback)) {
+    return fallback;
+  }
+  return primary ?? fallback;
 }
 
 function resolveChatCompletionUsage(result: unknown): {
@@ -483,7 +499,7 @@ function resolveChatCompletionUsage(result: unknown): {
   completion_tokens: number;
   total_tokens: number;
 } {
-  return toOpenAiChatCompletionsUsage(normalizeUsage(resolveRawAgentUsage(result)));
+  return toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
 }
 
 function resolveIncludeUsageForStreaming(payload: OpenAiChatCompletionRequest): boolean {

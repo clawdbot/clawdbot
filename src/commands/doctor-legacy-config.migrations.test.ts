@@ -47,6 +47,64 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
   }),
 }));
 
+vi.mock("../secrets/target-registry.js", () => {
+  const entry = {
+    id: "channels.discord.token",
+    targetType: "channels.discord.token",
+    configFile: "openclaw.json",
+    pathPattern: "channels.discord.token",
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  };
+
+  const readRecord = (value: unknown): Record<string, unknown> | null =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+
+  return {
+    discoverConfigSecretTargets: (cfg: OpenClawConfig) => {
+      const targets: Array<{
+        entry: typeof entry;
+        path: string;
+        pathSegments: string[];
+        value: unknown;
+        accountId?: string;
+      }> = [];
+      const channels = readRecord(cfg.channels);
+      const discord = readRecord(channels?.discord);
+      if (!discord) {
+        return targets;
+      }
+      targets.push({
+        entry,
+        path: "channels.discord.token",
+        pathSegments: ["channels", "discord", "token"],
+        value: discord.token,
+      });
+
+      const accounts = readRecord(discord.accounts);
+      for (const [accountId, accountConfig] of Object.entries(accounts ?? {})) {
+        const account = readRecord(accountConfig);
+        if (!account) {
+          continue;
+        }
+        targets.push({
+          entry,
+          path: `channels.discord.accounts.${accountId}.token`,
+          pathSegments: ["channels", "discord", "accounts", accountId, "token"],
+          value: account.token,
+          accountId,
+        });
+      }
+      return targets;
+    },
+  };
+});
+
 describe("normalizeCompatibilityConfigValues", () => {
   let previousOauthDir: string | undefined;
   let tempOauthDir = "";
@@ -113,6 +171,57 @@ describe("normalizeCompatibilityConfigValues", () => {
       const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
       writeCreds(credsDir);
     });
+  });
+
+  it("migrates legacy secretref-env markers on SecretRef credential paths", () => {
+    const res = normalizeCompatibilityConfigValues({
+      secrets: {
+        defaults: {
+          env: "gateway-env",
+        },
+      },
+      channels: {
+        discord: {
+          token: "secretref-env:DISCORD_BOT_TOKEN",
+          accounts: {
+            work: {
+              token: "secretref-env:DISCORD_WORK_TOKEN",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.channels?.discord?.token).toBeUndefined();
+    expect(res.config.channels?.discord?.accounts?.default?.token).toEqual({
+      source: "env",
+      provider: "gateway-env",
+      id: "DISCORD_BOT_TOKEN",
+    });
+    expect(res.config.channels?.discord?.accounts?.work?.token).toEqual({
+      source: "env",
+      provider: "gateway-env",
+      id: "DISCORD_WORK_TOKEN",
+    });
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.default.token secretref-env:DISCORD_BOT_TOKEN marker → structured env SecretRef.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.work.token secretref-env:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
+    );
+  });
+
+  it("leaves invalid legacy secretref-env markers for validation to reject", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        discord: {
+          token: "secretref-env:not-valid",
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.channels?.discord?.token).toBe("secretref-env:not-valid");
+    expect(res.changes).toEqual([]);
   });
 
   it("moves WhatsApp access defaults into accounts.default for named accounts", () => {
@@ -219,6 +328,20 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
+  it("removes deprecated commands.modelsWrite from legacy configs", () => {
+    const res = normalizeCompatibilityConfigValues({
+      commands: {
+        text: true,
+        modelsWrite: false,
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.commands).toEqual({ text: true });
+    expect(res.changes).toContain(
+      "Removed deprecated commands.modelsWrite (/models add is deprecated).",
+    );
+  });
+
   it("marks legacy untagged /models add OpenAI Codex metadata rows for doctor repair", () => {
     const res = normalizeCompatibilityConfigValues({
       models: {
@@ -301,6 +424,178 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       },
     });
+    expect(res.changes).toEqual([]);
+  });
+
+  it("migrates legacy Codex primary refs to OpenAI refs plus explicit Codex harness", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          embeddedHarness: { runtime: "auto", fallback: "pi" },
+          model: {
+            primary: "codex/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "codex/gpt-5.4-mini"],
+          },
+          models: {
+            "codex/gpt-5.5": { alias: "legacy-codex" },
+            "openai/gpt-5.5": { alias: "gpt", params: { temperature: 0.2 } },
+            "codex/gpt-5.4-mini": {},
+          },
+        },
+        list: [
+          {
+            id: "reviewer",
+            model: "codex/gpt-5.4-mini",
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
+    });
+    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({
+      runtime: "codex",
+      fallback: "pi",
+    });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "gpt", params: { temperature: 0.2 } },
+      "openai/gpt-5.4-mini": {},
+    });
+    expect(res.config.agents?.list?.[0]).toMatchObject({
+      id: "reviewer",
+      embeddedHarness: { runtime: "codex" },
+      model: "openai/gpt-5.4-mini",
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved agents.defaults.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
+        "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
+        "Moved agents.list.reviewer.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
+      ]),
+    );
+  });
+
+  it("does not force Codex harness for legacy fallback-only refs", () => {
+    const input = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["codex/gpt-5.4-mini"],
+          },
+          models: {
+            "codex/gpt-5.4-mini": { alias: "legacy-codex" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toEqual([]);
+  });
+
+  it("migrates legacy Claude CLI primary refs to Anthropic refs plus explicit runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "claude-cli/claude-opus-4-7",
+            fallbacks: ["claude-cli/claude-sonnet-4-6"],
+          },
+          models: {
+            "claude-cli/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": { alias: "Anthropic Opus" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-7",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({ runtime: "claude-cli" });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-7": { alias: "Anthropic Opus" },
+    });
+  });
+
+  it("migrates legacy Codex CLI primary refs to OpenAI refs plus explicit runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex-cli/gpt-5.5",
+            fallbacks: ["codex-cli/gpt-5.4-mini"],
+          },
+          models: {
+            "codex-cli/gpt-5.5": { alias: "Codex CLI" },
+            "openai/gpt-5.5": { alias: "OpenAI GPT" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.4-mini"],
+    });
+    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({ runtime: "codex-cli" });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "OpenAI GPT" },
+    });
+  });
+
+  it("migrates legacy Gemini CLI primary refs to Google refs plus explicit runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "google-gemini-cli/gemini-3.1-pro-preview",
+            fallbacks: ["google-gemini-cli/gemini-3-flash-preview"],
+          },
+          models: {
+            "google-gemini-cli/gemini-3.1-pro-preview": { alias: "Gemini CLI" },
+            "google/gemini-3.1-pro-preview": { alias: "Gemini API" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3-flash-preview"],
+    });
+    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({
+      runtime: "google-gemini-cli",
+    });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": { alias: "Gemini API" },
+    });
+  });
+
+  it("preserves legacy runtime fallback-only refs because runtime is container-scoped", () => {
+    const input = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["claude-cli/claude-sonnet-4-6"],
+          },
+          models: {
+            "claude-cli/claude-sonnet-4-6": { alias: "CLI fallback" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
     expect(res.changes).toEqual([]);
   });
 

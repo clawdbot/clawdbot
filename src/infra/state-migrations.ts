@@ -669,7 +669,7 @@ async function collectChannelLegacyStateMigrationPlans(params: {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
   // Legacy state detection belongs on a narrow setup-entry surface so doctor
   // does not cold-load unrelated runtime channel code.
-  const detectors = listBundledChannelLegacyStateMigrationDetectors();
+  const detectors = listBundledChannelLegacyStateMigrationDetectors({ config: params.cfg });
   for (const detectLegacyStateMigrations of detectors) {
     const detected = await detectLegacyStateMigrations({
       cfg: params.cfg,

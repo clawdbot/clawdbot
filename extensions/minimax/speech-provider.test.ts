@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const runFfmpegMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  runFfmpeg: runFfmpegMock,
+}));
+
 import { buildMinimaxSpeechProvider } from "./speech-provider.js";
 
 describe("buildMinimaxSpeechProvider", () => {
@@ -213,6 +220,7 @@ describe("buildMinimaxSpeechProvider", () => {
 
     beforeEach(() => {
       vi.stubGlobal("fetch", vi.fn());
+      runFfmpegMock.mockReset();
     });
 
     afterEach(() => {
@@ -250,6 +258,44 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
       expect(body.voice_setting.voice_id).toBe("English_expressive_narrator");
+      expect(runFfmpegMock).not.toHaveBeenCalled();
+    });
+
+    it("transcodes MiniMax MP3 to Opus for voice-note targets", async () => {
+      const hexAudio = Buffer.from("fake-mp3-data").toString("hex");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { audio: hexAudio } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+        const outputPath = args.at(-1);
+        if (typeof outputPath !== "string") {
+          throw new Error("missing ffmpeg output path");
+        }
+        await import("node:fs/promises").then((fs) =>
+          fs.writeFile(outputPath, Buffer.from("fake-opus-data")),
+        );
+      });
+
+      const result = await provider.synthesize({
+        text: "Hello world",
+        cfg: {} as never,
+        providerConfig: { apiKey: "sk-test", baseUrl: "https://api.minimaxi.com" },
+        target: "voice-note",
+        timeoutMs: 30000,
+      });
+
+      expect(result.outputFormat).toBe("opus");
+      expect(result.fileExtension).toBe(".opus");
+      expect(result.voiceCompatible).toBe(true);
+      expect(result.audioBuffer.toString()).toBe("fake-opus-data");
+      expect(runFfmpegMock).toHaveBeenCalledWith(
+        expect.arrayContaining(["-c:a", "libopus", "-ar", "48000"]),
+        { timeoutMs: 30000 },
+      );
     });
 
     it("applies overrides", async () => {
@@ -263,7 +309,13 @@ describe("buildMinimaxSpeechProvider", () => {
         text: "Test",
         cfg: {} as never,
         providerConfig: { apiKey: "sk-test" },
-        providerOverrides: { model: "speech-01-240228", voiceId: "custom_voice", speed: 1.5 },
+        providerOverrides: {
+          model: "speech-01-240228",
+          voiceId: "custom_voice",
+          speed: 1.5,
+          vol: 1.5,
+          pitch: 0.5,
+        },
         target: "audio-file",
         timeoutMs: 30000,
       });
@@ -272,6 +324,8 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(body.model).toBe("speech-01-240228");
       expect(body.voice_setting.voice_id).toBe("custom_voice");
       expect(body.voice_setting.speed).toBe(1.5);
+      expect(body.voice_setting.vol).toBe(1.5);
+      expect(body.voice_setting.pitch).toBe(0);
     });
 
     it("throws when API key is missing", async () => {

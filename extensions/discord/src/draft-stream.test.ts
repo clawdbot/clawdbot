@@ -44,6 +44,7 @@ describe("createDiscordDraftStream", () => {
     expect(rest.post).toHaveBeenCalledWith(Routes.channelMessages("c1"), {
       body: {
         content: "first draft",
+        allowed_mentions: { parse: [] },
         message_reference: {
           message_id: "parent-1",
           fail_if_not_exists: false,
@@ -51,9 +52,40 @@ describe("createDiscordDraftStream", () => {
       },
     });
     expect(rest.patch).toHaveBeenCalledWith(Routes.channelMessage("c1", "m1"), {
-      body: { content: "second draft" },
+      body: { content: "second draft", allowed_mentions: { parse: [] } },
     });
     expect(stream.messageId()).toBe("m1");
+  });
+
+  it("suppresses mentions in preview creates and edits", async () => {
+    const rest = {
+      post: vi.fn(async () => ({ id: "m1" })),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+    });
+
+    stream.update("working @everyone <@123>");
+    await stream.flush();
+    stream.update("still working @here");
+    await stream.flush();
+
+    expect(rest.post).toHaveBeenCalledWith(Routes.channelMessages("c1"), {
+      body: {
+        content: "working @everyone <@123>",
+        allowed_mentions: { parse: [] },
+      },
+    });
+    expect(rest.patch).toHaveBeenCalledWith(Routes.channelMessage("c1", "m1"), {
+      body: {
+        content: "still working @here",
+        allowed_mentions: { parse: [] },
+      },
+    });
   });
 
   it("stops previewing and warns once text exceeds the configured limit", async () => {

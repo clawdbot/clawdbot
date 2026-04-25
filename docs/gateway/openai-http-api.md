@@ -5,8 +5,6 @@ read_when:
 title: "OpenAI chat completions"
 ---
 
-# OpenAI Chat Completions (HTTP)
-
 OpenClaw’s Gateway can serve a small OpenAI-compatible Chat Completions endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.

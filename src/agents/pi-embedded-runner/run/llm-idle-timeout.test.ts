@@ -50,13 +50,22 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
-  it("falls back to agents.defaults.timeoutSeconds when llm.idleTimeoutSeconds is not set", () => {
+  it("caps agents.defaults.timeoutSeconds fallback at the default idle watchdog", () => {
     const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(300_000);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
-  it("uses an explicit run timeout override when llm.idleTimeoutSeconds is not set", () => {
-    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000 })).toBe(900_000);
+  it("uses agents.defaults.timeoutSeconds when it is shorter than the default idle watchdog", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 30 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(30_000);
+  });
+
+  it("caps an explicit run timeout override at the default idle watchdog", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000 })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("uses an explicit run timeout override when shorter than the default idle watchdog", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 30_000 })).toBe(30_000);
   });
 
   it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
@@ -91,9 +100,9 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(0);
   });
 
-  it("uses agents.defaults.timeoutSeconds for cron before disabling the default idle timeout", () => {
+  it("caps agents.defaults.timeoutSeconds for cron before disabling the default idle timeout", () => {
     const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(300_000);
+    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("keeps an explicit cron idle timeout when configured", () => {

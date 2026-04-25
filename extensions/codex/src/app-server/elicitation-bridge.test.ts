@@ -188,6 +188,184 @@ describe("Codex app-server elicitation bridge", () => {
     expect(approvalRequest.description).toContain("Repository: openclaw/openclaw");
   });
 
+  it("strips control and invisible formatting from approval display text", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-sanitized", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-sanitized", decision: "allow-once" });
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildCurrentCodexApprovalElicitation(),
+        message: "Approve\u202e hidden",
+        serverName: "codex\u009b31m_apps__github",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          connector_name: "GitHub\nInjected: approve",
+          tool_title: "\u001b]8;;https://evil.example\u001b\\Visible tool\u001b]8;;\u001b\\",
+          tool_description: "Creates\u0000 a\u202e pull request",
+          tool_params_display: [
+            {
+              name: "repo",
+              display_name: "Repository\u202e",
+              value: "\u001b]8;;https://evil.example\u001b\\openclaw/openclaw\u001b]8;;\u001b\\",
+            },
+          ],
+        },
+        requestedSchema: {
+          type: "object",
+          properties: {
+            approve: {
+              type: "boolean",
+              title: "Approve\u202e this tool call",
+              description: "Confirm\u009b31m access",
+            },
+          },
+          required: ["approve"],
+        },
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+      title: string;
+      description: string;
+    };
+    expect(approvalRequest.title).toBe("Approve hidden");
+    expect(approvalRequest.description).toContain("GitHub Injected: approve");
+    expect(approvalRequest.description).toContain("Tool: Visible tool");
+    expect(approvalRequest.description).toContain("Repository: openclaw/openclaw");
+    expect(approvalRequest.description).toContain("- Approve this tool call: Confirm access");
+    expect(approvalRequest.description).not.toContain("https://evil.example");
+    expect(approvalRequest.description).not.toContain("\u001b");
+    expect(approvalRequest.description).not.toContain("\u009b");
+    expect(approvalRequest.description).not.toContain("\u202e");
+  });
+
+  it("falls back to stable names when display labels sanitize to empty", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-label-fallback", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-label-fallback", decision: "allow-once" });
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildCurrentCodexApprovalElicitation(),
+        message: "Approve",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          connector_name: "App",
+          tool_params_display: [
+            {
+              name: "repo",
+              display_name: "\u202e",
+              value: "openclaw/openclaw",
+            },
+          ],
+        },
+        requestedSchema: {
+          type: "object",
+          properties: {
+            approve: {
+              type: "boolean",
+              title: "\u202e",
+              description: "Confirm access",
+            },
+          },
+          required: ["approve"],
+        },
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+      description: string;
+    };
+    expect(approvalRequest.description).toContain("- repo: openclaw/openclaw");
+    expect(approvalRequest.description).toContain("- approve: Confirm access");
+    expect(approvalRequest.description).not.toContain("- field: Confirm access");
+  });
+
+  it("bounds deep approval display parameter values before forwarding them", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-bounded-params", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-bounded-params", decision: "allow-once" });
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildCurrentCodexApprovalElicitation(),
+        message: "Approve",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          connector_name: "App",
+          tool_title: "Tool",
+          tool_params_display: [
+            {
+              name: "payload",
+              value: {
+                key0: { nested: { deeper: { secret: "hidden" } } },
+                key1: 1,
+                key2: 2,
+                key3: 3,
+                key4: 4,
+                key5: 5,
+                key6: 6,
+                key7: 7,
+                key8: 8,
+              },
+            },
+          ],
+        },
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+      description: string;
+    };
+    expect(approvalRequest.description).toContain("payload");
+    expect(approvalRequest.description).toContain("key0");
+    expect(approvalRequest.description).not.toContain("key8");
+    expect(approvalRequest.description).not.toContain("hidden");
+  });
+
+  it("caps approval display parameter entries before forwarding them", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-capped-params", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-capped-params", decision: "allow-once" });
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildCurrentCodexApprovalElicitation(),
+        message: "Approve",
+        serverName: "",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          connector_name: "App",
+          tool_params_display: Array.from({ length: 9 }, (_, index) => ({
+            name: `p${index}`,
+            value: index,
+          })),
+        },
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+      description: string;
+    };
+    expect(approvalRequest.description).toContain("p0");
+    expect(approvalRequest.description).toContain("p7");
+    expect(approvalRequest.description).toContain("Additional parameters: 1 more");
+    expect(approvalRequest.description).not.toContain("p8");
+  });
+
   it("accepts approval elicitations with a null turn id when the thread matches", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-null-turn", status: "accepted" })

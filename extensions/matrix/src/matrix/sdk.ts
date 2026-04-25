@@ -72,8 +72,8 @@ export type MatrixOwnDeviceVerificationStatus = {
   encryptionEnabled: boolean;
   userId: string | null;
   deviceId: string | null;
-  // "verified" is intentionally strict: other Matrix clients should trust messages
-  // from this device without showing "not verified by its owner" warnings.
+  // "verified" is intentionally strict: this device must be trusted through the
+  // Matrix cross-signing identity chain, not merely signed by the owner key.
   verified: boolean;
   localVerified: boolean;
   crossSigningVerified: boolean;
@@ -128,6 +128,9 @@ export type MatrixRoomKeyBackupResetResult = {
 
 export type MatrixRecoveryKeyVerificationResult = MatrixOwnDeviceVerificationStatus & {
   success: boolean;
+  recoveryKeyAccepted: boolean;
+  backupUsable: boolean;
+  deviceOwnerVerified: boolean;
   verifiedAt?: string;
   error?: string;
 };
@@ -160,12 +163,15 @@ const MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS = {
 } satisfies MatrixCryptoBootstrapOptions;
 
 function createMatrixExplicitBootstrapOptions(params?: {
+  allowAutomaticCrossSigningReset?: boolean;
   forceResetCrossSigning?: boolean;
+  strict?: boolean;
 }): MatrixCryptoBootstrapOptions {
   return {
     forceResetCrossSigning: params?.forceResetCrossSigning === true,
+    allowAutomaticCrossSigningReset: params?.allowAutomaticCrossSigningReset !== false,
     allowSecretStorageRecreateWithoutRecoveryKey: true,
-    strict: true,
+    strict: params?.strict !== false,
   };
 }
 
@@ -362,7 +368,15 @@ export class MatrixClient {
       return;
     }
 
-    this.verificationManager ??= new runtime.MatrixVerificationManager();
+    this.verificationManager ??= new runtime.MatrixVerificationManager({
+      trustOwnDeviceAfterSas: async (deviceId: string) => {
+        const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
+        if (typeof crypto?.crossSignDevice !== "function") {
+          return;
+        }
+        await crypto.crossSignDevice(deviceId);
+      },
+    });
     this.cryptoBootstrapper ??= new runtime.MatrixCryptoBootstrapper<MatrixRawEvent>({
       getUserId: () => this.getUserId(),
       getPassword: () => this.password,
@@ -1110,12 +1124,10 @@ export class MatrixClient {
     const deviceId = this.client.getDeviceId()?.trim() || null;
     const backup = await this.getRoomKeyBackupStatus();
     const deviceVerification = await this.getDeviceVerificationStatus(userId, deviceId);
-    const ownerVerified =
-      deviceVerification.crossSigningVerified || deviceVerification.signedByOwner;
 
     return {
       ...deviceVerification,
-      verified: ownerVerified,
+      verified: deviceVerification.crossSigningVerified,
       recoveryKeyStored: Boolean(recoveryKey),
       recoveryKeyCreatedAt: recoveryKey?.createdAt ?? null,
       recoveryKeyId: recoveryKey?.keyId ?? null,
@@ -1124,14 +1136,67 @@ export class MatrixClient {
     };
   }
 
+  async getOwnDeviceIdentityVerificationStatus(): Promise<MatrixDeviceVerificationStatus> {
+    const userId = this.client.getUserId() ?? this.selfUserId ?? null;
+    const deviceId = this.client.getDeviceId()?.trim() || null;
+    const deviceVerification = await this.getDeviceVerificationStatus(userId, deviceId);
+    return {
+      ...deviceVerification,
+      verified: deviceVerification.crossSigningVerified,
+    };
+  }
+
+  async trustOwnIdentityAfterSelfVerification(): Promise<void> {
+    if (!this.encryptionEnabled) {
+      return;
+    }
+
+    await this.ensureStartedForCryptoControlPlane();
+    await this.ensureCryptoSupportInitialized();
+    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
+    const ownIdentity =
+      crypto && typeof crypto.getOwnIdentity === "function"
+        ? await crypto.getOwnIdentity().catch(() => undefined)
+        : undefined;
+    if (!ownIdentity) {
+      return;
+    }
+
+    try {
+      if (typeof ownIdentity.isVerified === "function" && ownIdentity.isVerified()) {
+        return;
+      }
+      if (typeof ownIdentity.verify !== "function") {
+        return;
+      }
+      await ownIdentity.verify();
+    } finally {
+      ownIdentity.free?.();
+    }
+  }
+
   async verifyWithRecoveryKey(
     rawRecoveryKey: string,
   ): Promise<MatrixRecoveryKeyVerificationResult> {
-    const fail = async (error: string): Promise<MatrixRecoveryKeyVerificationResult> => ({
-      success: false,
-      error,
-      ...(await this.getOwnDeviceVerificationStatus()),
-    });
+    const fail = async (
+      error: string,
+      fields: Partial<
+        Pick<
+          MatrixRecoveryKeyVerificationResult,
+          "backupUsable" | "deviceOwnerVerified" | "recoveryKeyAccepted"
+        >
+      > = {},
+    ): Promise<MatrixRecoveryKeyVerificationResult> => {
+      const status = await this.getOwnDeviceVerificationStatus();
+      return {
+        success: false,
+        recoveryKeyAccepted: fields.recoveryKeyAccepted ?? false,
+        backupUsable: fields.backupUsable ?? false,
+        deviceOwnerVerified: fields.deviceOwnerVerified ?? status.verified,
+        error,
+        ...status,
+      };
+    };
 
     if (!this.encryptionEnabled) {
       return await fail("Matrix encryption is disabled for this client");
@@ -1144,15 +1209,21 @@ export class MatrixClient {
       return await fail("Matrix crypto is not available (start client with encryption enabled)");
     }
 
+    const backupUsableBeforeStagedRecovery =
+      resolveMatrixRoomKeyBackupReadinessError(await this.getRoomKeyBackupStatus(), {
+        requireServerBackup: true,
+      }) === null;
     const trimmedRecoveryKey = rawRecoveryKey.trim();
     if (!trimmedRecoveryKey) {
       return await fail("Matrix recovery key is required");
     }
 
+    let stagedKeyId: string | null = null;
     try {
+      stagedKeyId = (await this.resolveDefaultSecretStorageKeyId(crypto)) ?? null;
       this.recoveryKeyStore.stageEncodedRecoveryKey({
         encodedPrivateKey: trimmedRecoveryKey,
-        keyId: await this.resolveDefaultSecretStorageKeyId(crypto),
+        keyId: stagedKeyId,
       });
     } catch (err) {
       return await fail(formatMatrixErrorMessage(err));
@@ -1168,33 +1239,88 @@ export class MatrixClient {
       });
       await this.enableTrustedRoomKeyBackupIfPossible(crypto);
       const status = await this.getOwnDeviceVerificationStatus();
-      if (!status.verified) {
-        this.recoveryKeyStore.discardStagedRecoveryKey();
-        return {
-          success: false,
-          error:
-            "Matrix device is still not verified by its owner after applying the recovery key. Ensure cross-signing is available and the device is signed.",
-          ...status,
-        };
-      }
       const backupError = resolveMatrixRoomKeyBackupReadinessError(status.backup, {
         requireServerBackup: false,
       });
+      const backupUsable =
+        resolveMatrixRoomKeyBackupReadinessError(status.backup, {
+          requireServerBackup: true,
+        }) === null;
+      const stagedRecoveryKeyUsed = this.recoveryKeyStore.hasStagedRecoveryKeyBeenUsed();
+      const secretStorageStatus =
+        typeof crypto.getSecretStorageStatus === "function"
+          ? await crypto.getSecretStorageStatus().catch(() => null)
+          : null;
+      const stagedRecoveryKeyConfirmedBySecretStorage =
+        Boolean(stagedKeyId) &&
+        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === true;
+      const stagedRecoveryKeyRejectedBySecretStorage =
+        Boolean(stagedKeyId) &&
+        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === false;
+      const stagedRecoveryKeyUnlockedBackup =
+        stagedRecoveryKeyUsed &&
+        !stagedRecoveryKeyRejectedBySecretStorage &&
+        !stagedRecoveryKeyConfirmedBySecretStorage &&
+        !backupUsableBeforeStagedRecovery &&
+        backupUsable;
+      const stagedRecoveryKeyValidated =
+        stagedRecoveryKeyUsed &&
+        (stagedRecoveryKeyConfirmedBySecretStorage || stagedRecoveryKeyUnlockedBackup);
+      const recoveryKeyAccepted = stagedRecoveryKeyValidated && (status.verified || backupUsable);
+      if (!status.verified) {
+        if (backupUsable && stagedRecoveryKeyValidated) {
+          this.recoveryKeyStore.commitStagedRecoveryKey({
+            keyId: stagedKeyId,
+          });
+        } else {
+          this.recoveryKeyStore.discardStagedRecoveryKey();
+        }
+        const committedStatus = recoveryKeyAccepted
+          ? await this.getOwnDeviceVerificationStatus()
+          : status;
+        return {
+          success: false,
+          recoveryKeyAccepted,
+          backupUsable,
+          deviceOwnerVerified: false,
+          error:
+            "Matrix recovery key was applied, but this device still lacks full Matrix identity trust. The recovery key can unlock usable backup material only when 'Backup usable' is yes; full identity trust still requires Matrix cross-signing verification.",
+          ...committedStatus,
+        };
+      }
       if (backupError) {
         this.recoveryKeyStore.discardStagedRecoveryKey();
         return {
           success: false,
+          recoveryKeyAccepted,
+          backupUsable,
+          deviceOwnerVerified: true,
           error: backupError,
+          ...status,
+        };
+      }
+      if (!stagedRecoveryKeyValidated) {
+        this.recoveryKeyStore.discardStagedRecoveryKey();
+        return {
+          success: false,
+          recoveryKeyAccepted: false,
+          backupUsable,
+          deviceOwnerVerified: true,
+          error:
+            "Matrix recovery key could not be verified against active Matrix backup material; existing backup may be usable from previously loaded recovery material.",
           ...status,
         };
       }
 
       this.recoveryKeyStore.commitStagedRecoveryKey({
-        keyId: await this.resolveDefaultSecretStorageKeyId(crypto),
+        keyId: stagedKeyId,
       });
       const committedStatus = await this.getOwnDeviceVerificationStatus();
       return {
         success: true,
+        recoveryKeyAccepted: true,
+        backupUsable,
+        deviceOwnerVerified: true,
         verifiedAt: new Date().toISOString(),
         ...committedStatus,
       };
@@ -1419,8 +1545,10 @@ export class MatrixClient {
   }
 
   async bootstrapOwnDeviceVerification(params?: {
+    allowAutomaticCrossSigningReset?: boolean;
     recoveryKey?: string;
     forceResetCrossSigning?: boolean;
+    strict?: boolean;
   }): Promise<MatrixVerificationBootstrapResult> {
     const pendingVerifications = async (): Promise<number> =>
       this.crypto ? (await this.crypto.listVerifications()).length : 0;
@@ -1680,12 +1808,15 @@ export class MatrixClient {
       "MatrixClientLite",
       "No room key backup version found on server, creating one via secret storage bootstrap",
     );
-    // matrix-js-sdk 41.3.0 can log a transient PerSessionKeyBackupDownloader
-    // "current backup version ... undefined" warning while setupNewKeyBackup creates
-    // the backup: resetKeyBackup emits key-backup cache events before its async
-    // checkKeyBackupAndEnable pass has populated active backup state. Keep the
-    // explicit server re-check below and do not hide the SDK logs; if this needs
-    // fixing in code, upstream a minimal Matrix SDK repro instead of patching here.
+    // matrix-js-sdk 41.3.0 can log transient PerSessionKeyBackupDownloader
+    // diagnostics while setupNewKeyBackup creates the first backup, including
+    // "Got current backup version from server: undefined" and
+    // "Unsupported algorithm undefined". This is an expected upstream
+    // matrix-js-sdk race: resetKeyBackup emits key-backup cache events before
+    // its async checkKeyBackupAndEnable pass has populated active backup state.
+    // Keep the explicit server re-check below and do not hide the SDK logs; if
+    // this needs fixing in code, upstream a minimal Matrix SDK repro instead of
+    // patching here.
     await this.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(crypto, {
       setupNewKeyBackup: true,
     });

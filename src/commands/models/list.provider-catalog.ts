@@ -5,6 +5,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  loadInstalledPluginIndex,
+  resolveInstalledPluginContributions,
+} from "../../plugins/installed-plugin-index.js";
+import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
   resolvePluginDiscoveryProviders,
@@ -31,6 +35,38 @@ function providerMatchesFilter(params: {
   ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
 }
 
+function collectMatchingContributionPluginIds(
+  contributions: ReadonlyMap<string, readonly string[]>,
+  providerFilter: string,
+): string[] {
+  const pluginIds: string[] = [];
+  for (const [contributionId, ownerPluginIds] of contributions) {
+    if (normalizeProviderId(contributionId) === providerFilter) {
+      pluginIds.push(...ownerPluginIds);
+    }
+  }
+  return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveInstalledIndexPluginIdsForProviderFilter(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  providerFilter: string;
+}): string[] | undefined {
+  const index = loadInstalledPluginIndex({
+    config: params.cfg,
+    env: params.env,
+  });
+  const contributions = resolveInstalledPluginContributions(index);
+  const pluginIds = [
+    ...collectMatchingContributionPluginIds(contributions.providers, params.providerFilter),
+    ...collectMatchingContributionPluginIds(contributions.cliBackends, params.providerFilter),
+  ];
+  return pluginIds.length > 0
+    ? [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
+
 export async function resolveProviderCatalogPluginIdsForFilter(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -39,6 +75,14 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   const providerFilter = normalizeProviderId(params.providerFilter);
   if (!providerFilter) {
     return undefined;
+  }
+  const installedIndexPluginIds = resolveInstalledIndexPluginIdsForProviderFilter({
+    cfg: params.cfg,
+    env: params.env,
+    providerFilter,
+  });
+  if (installedIndexPluginIds) {
+    return installedIndexPluginIds;
   }
   const manifestPluginIds = resolveOwningPluginIdsForProvider({
     provider: providerFilter,

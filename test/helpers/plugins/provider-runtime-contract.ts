@@ -563,7 +563,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
-    it("uses Pi registry metadata for codex gpt-5.5 models", () => {
+    it("keeps Pi cost metadata but applies Codex context metadata for gpt-5.5 models", () => {
       const provider = requireProviderContractProvider("openai-codex");
       const model = provider.resolveDynamicModel?.({
         provider: "openai-codex",
@@ -578,7 +578,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
                   baseUrl: "https://chatgpt.com/backend-api",
                   input: ["text", "image"],
                   cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                  contextWindow: 400_000,
+                  contextWindow: 272_000,
                   maxTokens: 128_000,
                 })
               : null,
@@ -590,6 +590,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider: "openai-codex",
         api: "openai-codex-responses",
         contextWindow: 400_000,
+        contextTokens: 272_000,
         maxTokens: 128_000,
       });
     });

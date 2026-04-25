@@ -1,6 +1,7 @@
 import { streamOpenAIResponses, type AssistantMessage, type Model } from "@mariozechner/pi-ai";
 import { buildCopilotDynamicHeaders } from "openclaw/plugin-sdk/provider-stream-shared";
 import { describe, expect, it } from "vitest";
+import { resolveFirstGithubToken } from "./auth.js";
 import { wrapCopilotOpenAIResponsesStream } from "./stream.js";
 import { resolveCopilotApiToken } from "./token.js";
 
@@ -8,14 +9,21 @@ const LIVE =
   process.env.OPENCLAW_LIVE_TEST === "1" ||
   process.env.LIVE === "1" ||
   process.env.GITHUB_COPILOT_LIVE_TEST === "1";
-const GITHUB_TOKEN =
+const ENV_GITHUB_TOKEN =
   process.env.OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN ??
   process.env.COPILOT_GITHUB_TOKEN ??
   process.env.GH_TOKEN ??
   process.env.GITHUB_TOKEN ??
   "";
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_GITHUB_COPILOT_MODEL?.trim() || "gpt-5.4";
-const describeLive = LIVE && GITHUB_TOKEN.trim().length > 0 ? describe : describe.skip;
+const describeLive = LIVE ? describe : describe.skip;
+
+type CopilotApiToken = {
+  token: string;
+  expiresAt: number;
+  source: string;
+  baseUrl: string;
+};
 
 const ZERO_USAGE = {
   input: 0,
@@ -99,6 +107,27 @@ function buildReplayAssistantMessage(connectionBoundId: string): AssistantMessag
   };
 }
 
+async function resolveGithubTokenCandidates(): Promise<Array<{ source: string; token: string }>> {
+  const candidates: Array<{ source: string; token: string }> = [];
+  const envToken = ENV_GITHUB_TOKEN.trim();
+  if (envToken) {
+    candidates.push({ source: "env", token: envToken });
+  }
+
+  const profileEnv = {
+    ...process.env,
+    COPILOT_GITHUB_TOKEN: "",
+    GH_TOKEN: "",
+    GITHUB_TOKEN: "",
+  };
+  const profile = await resolveFirstGithubToken({ env: profileEnv });
+  const profileToken = profile.githubToken.trim();
+  if (profileToken && !candidates.some((candidate) => candidate.token === profileToken)) {
+    candidates.push({ source: "auth-profile", token: profileToken });
+  }
+  return candidates;
+}
+
 function extractText(response: unknown): string {
   const content = (response as { content?: Array<{ type?: string; text?: string }> }).content;
   if (!Array.isArray(content)) {
@@ -114,22 +143,37 @@ function extractText(response: unknown): string {
 describeLive("github-copilot connection-bound Responses IDs live", () => {
   it("rewrites replayed connection-bound item IDs before sending to Copilot", async () => {
     logProgress("start");
-    let token;
-    try {
-      logProgress("exchanging GitHub token for Copilot token");
-      token = await withTimeout(
-        "Copilot token exchange",
-        resolveCopilotApiToken({
-          githubToken: GITHUB_TOKEN,
-          fetchImpl: fetchWithTimeout,
-        }),
-        15_000,
-      );
-    } catch (error) {
-      logProgress(`skip (${error instanceof Error ? error.message : String(error)})`);
-      return;
+    const candidates = await resolveGithubTokenCandidates();
+    if (candidates.length === 0) {
+      throw new Error("No GitHub Copilot token found in env or auth profile");
     }
-    logProgress(`token ok (${token.source.startsWith("cache:") ? "cache" : "fetched"})`);
+
+    let token: CopilotApiToken | undefined;
+    const failures: string[] = [];
+    for (const candidate of candidates) {
+      try {
+        logProgress(`exchanging ${candidate.source} GitHub token for Copilot token`);
+        token = await withTimeout(
+          "Copilot token exchange",
+          resolveCopilotApiToken({
+            githubToken: candidate.token,
+            fetchImpl: fetchWithTimeout,
+          }),
+          15_000,
+        );
+        logProgress(
+          `token ok via ${candidate.source} (${token.source.startsWith("cache:") ? "cache" : "fetched"})`,
+        );
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push(`${candidate.source}: ${message}`);
+        logProgress(`token exchange failed via ${candidate.source} (${message})`);
+      }
+    }
+    if (!token) {
+      throw new Error(`Copilot token exchange failed for all candidates: ${failures.join("; ")}`);
+    }
 
     const model = buildModel(token.baseUrl);
     const staleId = Buffer.from(`copilot-${"x".repeat(24)}`).toString("base64");
@@ -145,7 +189,11 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
     };
     let capturedPayload: Record<string, unknown> | undefined;
 
-    const stream = wrapCopilotOpenAIResponsesStream(streamOpenAIResponses as never)(
+    const wrappedStream = wrapCopilotOpenAIResponsesStream(streamOpenAIResponses as never);
+    if (!wrappedStream) {
+      throw new Error("expected Copilot Responses stream wrapper");
+    }
+    const stream = wrappedStream(
       model as never,
       context as never,
       {

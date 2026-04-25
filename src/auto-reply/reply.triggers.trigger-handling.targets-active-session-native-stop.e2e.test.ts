@@ -684,6 +684,65 @@ describe("trigger handling", () => {
     });
   });
 
+  it("applies native model changes to Telegram topic thread sessions", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          models: {
+            ...cfg.agents?.defaults?.models,
+            "deepseek/deepseek-v4-pro": {},
+          },
+        },
+      };
+      cfg.session = { ...cfg.session, store: join(home, "native-model-thread.sessions.json") };
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockReset();
+      const storePath = requireSessionStorePath(cfg);
+      const slashSessionKey = "agent:main:telegram:slash:7595562691";
+      const targetSessionKey = "agent:main:main:thread:7595562691:12812";
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [targetSessionKey]: {
+            sessionId: "session-target",
+            updatedAt: Date.now(),
+            providerOverride: "zai",
+            modelOverride: "glm-5.1",
+          },
+        }),
+      );
+
+      const res = await getReplyFromConfig(
+        makeNativeTelegramCommandMessage({
+          body: "/model deepseek/deepseek-v4-pro",
+          slashSessionKey,
+          targetSessionKey,
+        }),
+        {},
+        cfg,
+      );
+
+      expect(maybeReplyText(res)).toContain("Model set to deepseek/deepseek-v4-pro");
+
+      const store = loadSessionStore(storePath);
+      expect(store[targetSessionKey]?.providerOverride).toBe("deepseek");
+      expect(store[targetSessionKey]?.modelOverride).toBe("deepseek-v4-pro");
+      expect(store[slashSessionKey]).toBeUndefined();
+
+      await expectNextRunUsesTargetSession(
+        { cfg, targetSessionKey, runEmbeddedPiAgentMock },
+        {
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        },
+      );
+    });
+  });
+
   it("applies native model auth profile overrides to the target session", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);

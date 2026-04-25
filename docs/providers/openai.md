@@ -15,6 +15,19 @@ OpenAI provides developer APIs for GPT models. OpenClaw supports three OpenAI-fa
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
 
+Provider, model, runtime, and channel are separate layers. If those labels are
+getting mixed together, read [Agent runtimes](/concepts/agent-runtimes) before
+changing config.
+
+## Quick choice
+
+| Goal                                          | Use                                                      | Notes                                                                        |
+| --------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Direct API-key billing                        | `openai/gpt-5.4`                                         | Set `OPENAI_API_KEY` or run OpenAI API-key onboarding.                       |
+| GPT-5.5 with ChatGPT/Codex subscription auth  | `openai-codex/gpt-5.5`                                   | Default PI route for Codex OAuth. Best first choice for subscription setups. |
+| GPT-5.5 with native Codex app-server behavior | `openai/gpt-5.5` plus `embeddedHarness.runtime: "codex"` | Uses the Codex app-server harness, not the public OpenAI API route.          |
+| Image generation or editing                   | `openai/gpt-image-2`                                     | Works with either `OPENAI_API_KEY` or OpenAI Codex OAuth.                    |
+
 <Note>
 GPT-5.5 is currently available in OpenClaw through subscription/OAuth routes:
 `openai-codex/gpt-5.5` with the PI runner, or `openai/gpt-5.5` with the
@@ -87,7 +100,9 @@ Choose your preferred auth method and follow the setup steps.
     <Note>
     `openai/*` is the direct OpenAI API-key route unless you explicitly force
     the Codex app-server harness. GPT-5.5 itself is currently subscription/OAuth
-    only; use `openai-codex/*` for Codex OAuth through the default PI runner.
+    only; use `openai-codex/*` for Codex OAuth through the default PI runner, or
+    use `openai/gpt-5.5` with `embeddedHarness.runtime: "codex"` for native
+    Codex app-server execution.
     </Note>
 
     ### Config example
@@ -165,11 +180,10 @@ Choose your preferred auth method and follow the setup steps.
 
     ### Status indicator
 
-    Chat `/status` shows which embedded harness is active for the current
-    session. The default PI harness appears as `Runner: pi (embedded)` and does
-    not add a separate badge. When the bundled Codex app-server harness is
-    selected, `/status` appends the non-PI harness id next to `Fast`, for example
-    `Fast · codex`. Existing sessions keep their recorded harness id, so use
+    Chat `/status` shows which model runtime is active for the current session.
+    The default PI harness appears as `Runtime: OpenClaw Pi Default`. When the
+    bundled Codex app-server harness is selected, `/status` shows
+    `Runtime: OpenAI Codex`. Existing sessions keep their recorded harness id, so use
     `/new` or `/reset` after changing `embeddedHarness` if you want `/status` to
     reflect a new PI/Codex choice.
 
@@ -199,6 +213,14 @@ Choose your preferred auth method and follow the setup steps.
     <Note>
     Use `contextWindow` to declare native model metadata. Use `contextTokens` to limit the runtime context budget.
     </Note>
+
+    ### Catalog recovery
+
+    OpenClaw uses upstream Codex catalog metadata for `gpt-5.5` when it is
+    present. If live Codex discovery omits the `openai-codex/gpt-5.5` row while
+    the account is authenticated, OpenClaw synthesizes that OAuth model row so
+    cron, sub-agent, and configured default-model runs do not fail with
+    `Unknown model`.
 
   </Tab>
 </Tabs>
@@ -773,6 +795,8 @@ the Server-side compaction accordion below.
 
     **Proxy/compatible routes:**
     - Use looser compat behavior
+    - Strip Completions `store` from non-native `openai-completions` payloads
+    - Accept advanced `params.extra_body`/`params.extraBody` pass-through JSON for OpenAI-compatible Completions proxies
     - Do not force strict tool schemas or native-only headers
 
     Azure OpenAI uses native transport and compat behavior but does not receive the hidden attribution headers.

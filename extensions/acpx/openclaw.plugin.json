@@ -133,7 +133,7 @@
     },
     "probeAgent": {
       "label": "Health Probe Agent",
-      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to the runtime built-in probe agent (codex). Set this to another configured ACP agent id (for example `opencode` or `claude`) when the default probe agent is not installed or not authenticated, so the whole embedded ACP backend does not get marked unavailable.",
+      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to the first `acp.allowedAgents` entry when that allowlist is set, otherwise to the runtime built-in probe agent (codex). Set this explicitly (for example `opencode` or `claude`) when the default probe agent is not installed or not authenticated, so the whole embedded ACP backend does not get marked unavailable.",
       "advanced": true
     },
     "mcpServers": {

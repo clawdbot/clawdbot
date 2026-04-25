@@ -164,7 +164,7 @@ function expectLastRuntimeRegistryLoad(params?: {
 }) {
   expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
     expect.objectContaining({
-      cache: false,
+      cache: true,
       activate: false,
       ...(params?.env ? { env: params.env } : {}),
       ...(params?.onlyPluginIds !== undefined ? { onlyPluginIds: params.onlyPluginIds } : {}),
@@ -401,7 +401,7 @@ describe("resolvePluginProviders", () => {
       expect.objectContaining({
         workspaceDir: "/workspace/explicit",
         env,
-        cache: false,
+        cache: true,
         activate: false,
       }),
     );
@@ -764,7 +764,7 @@ describe("resolvePluginProviders", () => {
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: "/workspace/runtime",
-        cache: false,
+        cache: true,
         activate: false,
       }),
     );
@@ -790,7 +790,7 @@ describe("resolvePluginProviders", () => {
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: "/workspace/runtime",
-        cache: false,
+        cache: true,
         activate: false,
       }),
     );

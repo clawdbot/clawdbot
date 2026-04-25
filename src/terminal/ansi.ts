@@ -1,7 +1,8 @@
 // Full CSI: ESC [ <params> <final byte> covers cursor movement, erase, and SGR.
 const ANSI_CSI_PATTERN = "\\x1b\\[[\\x20-\\x3f]*[\\x40-\\x7e]";
-// OSC-8 hyperlinks: ESC ] 8 ; ; url ST ... ESC ] 8 ; ; ST
-const OSC8_PATTERN = "\\x1b\\]8;;.*?\\x1b\\\\|\\x1b\\]8;;\\x1b\\\\";
+// OSC-8 hyperlinks: ESC ] 8 ; ; url ST ... ESC ] 8 ; ; ST.
+// ST can be either ESC \ or BEL.
+const OSC8_PATTERN = "\\x1b\\]8;;.*?(?:\\x1b\\\\|\\x07)|\\x1b\\]8;;(?:\\x1b\\\\|\\x07)";
 
 const ANSI_CSI_REGEX = new RegExp(ANSI_CSI_PATTERN, "g");
 const OSC8_REGEX = new RegExp(OSC8_PATTERN, "g");

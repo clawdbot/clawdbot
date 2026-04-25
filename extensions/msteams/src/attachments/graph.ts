@@ -1,9 +1,9 @@
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import { downloadMSTeamsAttachments } from "./download.js";

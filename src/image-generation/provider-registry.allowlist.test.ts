@@ -26,6 +26,7 @@ describe("image-generation provider registry allowlist fallback", () => {
     expect(getImageGenerationProvider("openai", cfg as OpenClawConfig)).toBeUndefined();
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: compatConfig,
+      activate: false,
     });
   });
 });

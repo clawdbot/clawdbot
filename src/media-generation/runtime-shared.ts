@@ -178,6 +178,11 @@ export function resolveCapabilityModelCandidates(params: {
     candidates.push(parsed);
   };
 
+  const override = params.parseModelRef(params.modelOverride);
+  if (override) {
+    return [override];
+  }
+
   add(params.modelOverride);
   add(resolveAgentModelPrimaryValue(params.modelConfig));
   for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {

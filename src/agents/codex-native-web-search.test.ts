@@ -5,6 +5,7 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
   resolveCodexNativeWebSearchConfig,
+  isCodexNativeWebSearchRelevant,
   shouldSuppressManagedWebSearchTool,
 } from "./codex-native-web-search.js";
 
@@ -230,9 +231,7 @@ describe("shouldSuppressManagedWebSearchTool", () => {
 });
 
 describe("isCodexNativeWebSearchRelevant", () => {
-  it("treats a default model with model-level openai-codex-responses api as relevant", async () => {
-    const { isCodexNativeWebSearchRelevant } = await import("./codex-native-web-search.js");
-
+  it("treats a default model with model-level openai-codex-responses api as relevant", () => {
     expect(
       isCodexNativeWebSearchRelevant({
         config: {

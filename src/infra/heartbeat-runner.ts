@@ -667,9 +667,6 @@ function resolveHeartbeatRunPrompt(params: {
   heartbeatFileContent?: string;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
-  const pendingEvents = params.preflight.shouldInspectPendingEvents
-    ? pendingEventEntries.map((event) => event.text)
-    : [];
   const cronEvents = pendingEventEntries
     .filter(
       (event) =>
@@ -677,10 +674,14 @@ function resolveHeartbeatRunPrompt(params: {
         isCronSystemEvent(event.text),
     )
     .map((event) => event.text);
-  const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
+  const execEvents = params.preflight.shouldInspectPendingEvents
+    ? pendingEventEntries
+        .filter((event) => isExecCompletionEvent(event.text))
+        .map((event) => event.text)
+    : [];
+  const hasExecCompletion = execEvents.length > 0;
   const hasCronEvents = cronEvents.length > 0;
 
-  // If tasks are defined, build a batched prompt with due tasks
   if (params.preflight.tasks && params.preflight.tasks.length > 0) {
     const tasks = params.preflight.tasks;
     const dueTasks = tasks.filter((task) =>
@@ -699,7 +700,6 @@ ${taskList}
 
 After completing all due tasks, reply HEARTBEAT_OK.`;
 
-      // Preserve HEARTBEAT.md directives (non-task content)
       if (params.heartbeatFileContent) {
         const directives = params.heartbeatFileContent
           .replace(/^[\s\S]*?^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
@@ -710,13 +710,11 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
       }
       return { prompt, hasExecCompletion: false, hasCronEvents: false };
     }
-    // No tasks due - skip this heartbeat to avoid wasteful API calls
     return { prompt: null, hasExecCompletion: false, hasCronEvents: false };
   }
 
-  // Fallback to original behavior
   const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
+    ? buildExecEventPrompt(execEvents, { deliverToUser: params.canRelayToUser })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);

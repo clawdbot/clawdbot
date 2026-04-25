@@ -1,5 +1,5 @@
 import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/provider-auth";
-import { bridgeCodexAppServerStartOptions } from "./auth-bridge.js";
+import { applyCodexAppServerAuthProfile, bridgeCodexAppServerStartOptions } from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
 import {
   codexAppServerStartOptionsKey,
@@ -35,7 +35,9 @@ export async function getSharedCodexAppServerClient(options?: {
     agentDir: resolveOpenClawAgentDir(),
     authProfileId: options?.authProfileId,
   });
-  const key = codexAppServerStartOptionsKey(startOptions);
+  const key = codexAppServerStartOptionsKey(startOptions, {
+    authProfileId: options?.authProfileId,
+  });
   if (state.key && state.key !== key) {
     clearSharedCodexAppServerClient();
   }
@@ -48,6 +50,11 @@ export async function getSharedCodexAppServerClient(options?: {
       client.addCloseHandler(clearSharedClientIfCurrent);
       try {
         await client.initialize();
+        await applyCodexAppServerAuthProfile({
+          client,
+          agentDir: resolveOpenClawAgentDir(),
+          authProfileId: options?.authProfileId,
+        });
         return client;
       } catch (error) {
         // Startup failures happen before callers own the shared client, so close
@@ -84,6 +91,11 @@ export async function createIsolatedCodexAppServerClient(options?: {
   const initialize = client.initialize();
   try {
     await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
+    await applyCodexAppServerAuthProfile({
+      client,
+      agentDir: resolveOpenClawAgentDir(),
+      authProfileId: options?.authProfileId,
+    });
     return client;
   } catch (error) {
     client.close();

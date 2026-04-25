@@ -365,6 +365,7 @@ const entry = process.env.OPENCLAW_ENTRY;
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const mode = process.argv[2];
+const sessionKey = `agent:main:openai-web-search-minimal:${mode}`;
 const message =
   mode === "reject"
     ? "FORCE_SCHEMA_REJECT"
@@ -404,7 +405,7 @@ function gatewayCall(method, params) {
 }
 
 const sendRes = gatewayCall("chat.send", {
-  sessionKey: "agent:main:main",
+  sessionKey,
   message,
   thinking: "minimal",
   deliver: false,
@@ -423,7 +424,7 @@ if (!sendRes.ok) throw sendRes.error;
 
 const deadline = Date.now() + 120000;
 while (Date.now() < deadline) {
-  const history = gatewayCall("chat.history", { sessionKey: "agent:main:main" });
+  const history = gatewayCall("chat.history", { sessionKey });
   if (history.ok && JSON.stringify(history.value).includes("OPENCLAW_SCHEMA_E2E_OK")) {
     process.exit(0);
   }

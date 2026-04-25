@@ -8,6 +8,7 @@ import {
 } from "../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
 import {
@@ -19,9 +20,11 @@ import {
 describe("listSessionsFromStore subagent metadata", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
+    resetAgentRunContextForTest();
   });
   beforeEach(() => {
     resetSubagentRegistryForTests({ persist: false });
+    resetAgentRunContextForTest();
   });
 
   const cfg = {
@@ -69,6 +72,9 @@ describe("listSessionsFromStore subagent metadata", () => {
       createdAt: now - 10_000,
       startedAt: now - 9_000,
       model: "openai/gpt-5.4",
+    });
+    registerAgentRunContext("run-parent", {
+      sessionKey: "agent:main:subagent:parent",
     });
     addSubagentRunForTests({
       runId: "run-child",
@@ -135,6 +141,49 @@ describe("listSessionsFromStore subagent metadata", () => {
     const failed = result.sessions.find((session) => session.key === "agent:main:subagent:failed");
     expect(failed?.status).toBe("failed");
     expect(failed?.runtimeMs).toBe(5_000);
+  });
+
+  test("does not show stale registry-only subagent runs as actively running", () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:stale-display";
+    const store: Record<string, SessionEntry> = {
+      [childSessionKey]: {
+        sessionId: "sess-stale-display",
+        updatedAt: now - 250,
+        spawnedBy: "agent:main:main",
+        status: "done",
+        startedAt: now - 4_000,
+        endedAt: now - 500,
+        runtimeMs: 3_500,
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-stale-display",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale display task",
+      cleanup: "keep",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+      model: "openai/gpt-5.4",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const row = result.sessions.find((session) => session.key === childSessionKey);
+    expect(row?.status).toBe("done");
+    expect(row?.subagentRunState).toBe("historical");
+    expect(row?.hasActiveSubagentRun).toBe(false);
+    expect(row?.endedAt).toBe(now - 500);
+    expect(row?.runtimeMs).toBe(3_500);
   });
 
   test("does not keep childSessions attached to a stale older controller row", () => {
@@ -522,6 +571,9 @@ describe("listSessionsFromStore subagent metadata", () => {
       accumulatedRuntimeMs: 120_000,
       model: "openai/gpt-5.4",
     });
+    registerAgentRunContext("run-followup-new", {
+      sessionKey: "agent:main:subagent:followup",
+    });
 
     const result = listSessionsFromStore({
       cfg,
@@ -592,7 +644,7 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
   });
 
-  test("uses persisted active subagent runs when the local worker only has terminal snapshots", async () => {
+  test("prefers persisted terminal session state when only stale active subagent snapshots remain", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-subagent-"));
     const stateDir = path.join(tempRoot, "state");
     fs.mkdirSync(stateDir, { recursive: true });
@@ -662,10 +714,12 @@ describe("listSessionsFromStore subagent metadata", () => {
         },
       );
 
-      expect(row?.status).toBe("running");
+      expect(row?.status).toBe("done");
+      expect(row?.subagentRunState).toBe("historical");
+      expect(row?.hasActiveSubagentRun).toBe(false);
       expect(row?.startedAt).toBe(now - 9_000);
-      expect(row?.endedAt).toBeUndefined();
-      expect(row?.runtimeMs).toBeGreaterThanOrEqual(9_000);
+      expect(row?.endedAt).toBe(now - 1_800);
+      expect(row?.runtimeMs).toBe(100);
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -724,6 +778,184 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
 
     expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:dashboard:child"]);
+  });
+
+  test("does not reattach stale terminal store-only child links", () => {
+    resetSubagentRegistryForTests({ persist: false });
+    const now = Date.now();
+    const staleAt = now - 2 * 60 * 60_000;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      "agent:claude:acp:done-child": {
+        sessionId: "sess-done-child",
+        updatedAt: staleAt,
+        spawnedBy: "agent:main:main",
+        status: "done",
+        endedAt: staleAt,
+      } as SessionEntry,
+    };
+
+    const all = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+    const main = all.sessions.find((session) => session.key === "agent:main:main");
+    expect(main?.childSessions).toBeUndefined();
+
+    const filtered = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {
+        spawnedBy: "agent:main:main",
+      },
+    });
+    expect(filtered.sessions.map((session) => session.key)).toEqual([]);
+  });
+
+  test("does not reattach stale orphan store-only child links without lifecycle fields", () => {
+    resetSubagentRegistryForTests({ persist: false });
+    const now = Date.now();
+    const staleAt = now - 2 * 60 * 60_000;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      "agent:main:subagent:orphan": {
+        sessionId: "sess-orphan",
+        updatedAt: staleAt,
+        parentSessionKey: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    const all = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+    const main = all.sessions.find((session) => session.key === "agent:main:main");
+    expect(main?.childSessions).toBeUndefined();
+
+    const filtered = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {
+        spawnedBy: "agent:main:main",
+      },
+    });
+    expect(filtered.sessions.map((session) => session.key)).toEqual([]);
+  });
+
+  test("does not keep old ended registry runs attached as child sessions", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      "agent:main:subagent:old-ended": {
+        sessionId: "sess-old-ended",
+        updatedAt: now - 60 * 60_000,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-old-ended",
+      childSessionKey: "agent:main:subagent:old-ended",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old ended task",
+      cleanup: "keep",
+      createdAt: now - 60 * 60_000,
+      startedAt: now - 59 * 60_000,
+      endedAt: now - 31 * 60_000,
+      outcome: { status: "ok" },
+    });
+
+    const all = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+    const main = all.sessions.find((session) => session.key === "agent:main:main");
+    expect(main?.childSessions).toBeUndefined();
+
+    const filtered = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {
+        spawnedBy: "agent:main:main",
+      },
+    });
+    expect(filtered.sessions.map((session) => session.key)).toEqual([]);
+  });
+
+  test("keeps ended parents attached while live descendants are still running", () => {
+    const now = Date.now();
+    const parentKey = "agent:main:subagent:ended-parent";
+    const childKey = "agent:main:subagent:ended-parent:subagent:live-child";
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      [parentKey]: {
+        sessionId: "sess-ended-parent",
+        updatedAt: now - 31 * 60_000,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+      [childKey]: {
+        sessionId: "sess-live-child",
+        updatedAt: now,
+        spawnedBy: parentKey,
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-ended-parent",
+      childSessionKey: parentKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "ended parent task",
+      cleanup: "keep",
+      createdAt: now - 60 * 60_000,
+      startedAt: now - 59 * 60_000,
+      endedAt: now - 31 * 60_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-live-child",
+      childSessionKey: childKey,
+      controllerSessionKey: parentKey,
+      requesterSessionKey: parentKey,
+      requesterDisplayKey: "ended-parent",
+      task: "live child task",
+      cleanup: "keep",
+      createdAt: now - 1_000,
+      startedAt: now - 900,
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+    const main = result.sessions.find((session) => session.key === "agent:main:main");
+    expect(main?.childSessions).toEqual([parentKey]);
   });
 
   test("falls back to persisted subagent timing after run archival", () => {

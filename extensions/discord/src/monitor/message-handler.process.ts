@@ -826,6 +826,8 @@ export async function processDiscordMessage(
               }
               notifyFinalReplyStart();
               await editMessageDiscord(deliverChannelId, previewMessageId, edit, {
+                cfg,
+                accountId,
                 rest: deliveryRest,
               });
             },

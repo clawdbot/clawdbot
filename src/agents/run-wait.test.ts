@@ -7,6 +7,7 @@ vi.mock("../gateway/call.js", () => ({
 
 import {
   __testing,
+  isRecoverableAgentWaitError,
   readLatestAssistantReply,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
@@ -149,6 +150,18 @@ describe("waitForAgentRun", () => {
       status: "timeout",
       error: "gateway timeout while waiting",
     });
+  });
+
+  it("keeps transport-close wait failures as errors for generic callers", async () => {
+    callGatewayMock.mockRejectedValue(new Error("gateway closed (1006): transport close"));
+
+    const result = await waitForAgentRun({ runId: "run-interrupted", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "gateway closed (1006): transport close",
+    });
+    expect(isRecoverableAgentWaitError(result.error)).toBe(true);
   });
 
   it("preserves pending agent.wait status", async () => {

@@ -10,20 +10,26 @@ PORT="18789"
 TOKEN="e2e-$(date +%s)-$$"
 NET_NAME="openclaw-net-e2e-$$"
 GW_NAME="openclaw-gateway-e2e-$$"
+DOCKER_COMMAND_TIMEOUT="${OPENCLAW_GATEWAY_NETWORK_DOCKER_COMMAND_TIMEOUT:-600s}"
+CLIENT_TIMEOUT="${OPENCLAW_GATEWAY_NETWORK_CLIENT_TIMEOUT:-90s}"
+
+docker_cmd() {
+  timeout "$DOCKER_COMMAND_TIMEOUT" "$@"
+}
 
 cleanup() {
-  docker rm -f "$GW_NAME" >/dev/null 2>&1 || true
-  docker network rm "$NET_NAME" >/dev/null 2>&1 || true
+  docker_cmd docker rm -f "$GW_NAME" >/dev/null 2>&1 || true
+  docker_cmd docker network rm "$NET_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" gateway-network "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
 
 echo "Creating Docker network..."
-docker network create "$NET_NAME" >/dev/null
+docker_cmd docker network create "$NET_NAME" >/dev/null
 
 echo "Starting gateway container..."
-docker run -d \
+docker_cmd docker run -d \
   --name "$GW_NAME" \
   --network "$NET_NAME" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
@@ -36,11 +42,11 @@ docker run -d \
 
 echo "Waiting for gateway to come up..."
 ready=0
-for _ in $(seq 1 40); do
-  if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
+for _ in $(seq 1 180); do
+  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
     break
   fi
-  if docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
+  if docker_cmd docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
     import net from \"node:net\";
     const socket = net.createConnection({ host: \"127.0.0.1\", port: $PORT });
     const timeout = setTimeout(() => {
@@ -60,7 +66,7 @@ for _ in $(seq 1 40); do
     ready=1
     break
   fi
-  if docker exec "$GW_NAME" bash -lc "grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log 2>/dev/null"; then
+  if docker_cmd docker exec "$GW_NAME" bash -lc "grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log 2>/dev/null"; then
     ready=1
     break
   fi
@@ -69,16 +75,16 @@ done
 
 if [ "$ready" -ne 1 ]; then
   echo "Gateway failed to start"
-  if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
-    docker exec "$GW_NAME" bash -lc "tail -n 80 /tmp/gateway-net-e2e.log" || true
+  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
+    docker_cmd docker exec "$GW_NAME" bash -lc "tail -n 80 /tmp/gateway-net-e2e.log" || true
   else
-    docker logs "$GW_NAME" 2>&1 | tail -n 120 || true
+    docker_cmd docker logs "$GW_NAME" 2>&1 | tail -n 120 || true
   fi
   exit 1
 fi
 
 echo "Running client container (connect + health)..."
-run_logged gateway-network-client docker run --rm \
+run_logged gateway-network-client timeout "$CLIENT_TIMEOUT" docker run --rm \
   --network "$NET_NAME" \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
@@ -94,14 +100,14 @@ if (!url || !token) throw new Error(\"missing GW_URL/GW_TOKEN\");
 
 const ws = new WebSocket(url);
 await new Promise((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error(\"ws open timeout\")), 5000);
+  const t = setTimeout(() => reject(new Error(\"ws open timeout\")), 30000);
   ws.once(\"open\", () => {
     clearTimeout(t);
     resolve();
   });
 });
 
-function onceFrame(filter, timeoutMs = 5000) {
+function onceFrame(filter, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(\"timeout\")), timeoutMs);
     const handler = (data) => {

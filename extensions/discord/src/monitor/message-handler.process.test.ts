@@ -683,6 +683,7 @@ describe("processDiscordMessage session routing", () => {
 
   it("prefers bound session keys and sets MessageThreadId for bound thread messages", async () => {
     const threadBindings = createThreadBindingManager({
+      cfg: {} as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
       accountId: "default",
       persist: false,
       enableSweeper: false,

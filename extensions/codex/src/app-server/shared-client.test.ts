@@ -5,10 +5,12 @@ import { createClientHarness } from "./test-support.js";
 
 const mocks = vi.hoisted(() => ({
   bridgeCodexAppServerStartOptions: vi.fn(async ({ startOptions }) => startOptions),
+  applyCodexAppServerAuthProfile: vi.fn(async () => undefined),
   resolveOpenClawAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
 }));
 
 vi.mock("./auth-bridge.js", () => ({
+  applyCodexAppServerAuthProfile: mocks.applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.bridgeCodexAppServerStartOptions,
 }));
 
@@ -51,6 +53,7 @@ describe("shared Codex app-server client", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     mocks.bridgeCodexAppServerStartOptions.mockClear();
+    mocks.applyCodexAppServerAuthProfile.mockClear();
     mocks.resolveOpenClawAgentDir.mockClear();
   });
 
@@ -114,6 +117,11 @@ describe("shared Codex app-server client", () => {
 
     await expect(listPromise).resolves.toEqual({ models: [] });
     expect(mocks.bridgeCodexAppServerStartOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: "openai-codex:work",
+      }),
+    );
+    expect(mocks.applyCodexAppServerAuthProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         authProfileId: "openai-codex:work",
       }),

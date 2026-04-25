@@ -3,6 +3,16 @@
 
 export {
   assertOkOrThrowHttpError,
+  assertOkOrThrowProviderError,
+  createProviderHttpError,
+  extractProviderErrorDetail,
+  extractProviderRequestId,
+  formatProviderErrorPayload,
+  formatProviderHttpErrorMessage,
+  readResponseTextLimited,
+  truncateErrorDetail,
+} from "../agents/provider-http-errors.js";
+export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
   fetchWithTimeout,

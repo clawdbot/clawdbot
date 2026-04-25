@@ -9,6 +9,7 @@ import {
   buildEmbeddedAttemptToolRunContext,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
+  emitAgentEvent as emitGlobalAgentEvent,
   finalizeHarnessContextEngineTurn,
   formatErrorMessage,
   isActiveHarnessContextEngine,
@@ -25,12 +26,16 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
+  registerNativeHookRelay,
   setActiveEmbeddedRun,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
+  type NativeHookRelayEvent,
+  type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import {
   createCodexAppServerClientFactoryTestHooks,
   defaultCodexAppServerClientFactory,
@@ -41,6 +46,11 @@ import { projectContextEngineAssemblyForCodex } from "./context-engine-projectio
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import {
+  buildCodexNativeHookRelayDisabledConfig,
+  buildCodexNativeHookRelayConfig,
+  CODEX_NATIVE_HOOK_RELAY_EVENTS,
+} from "./native-hook-relay.js";
 import {
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
@@ -81,16 +91,44 @@ function emitCodexAppServerEvent(
   event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
 ): void {
   try {
-    params.onAgentEvent?.(event);
-  } catch {
+    emitGlobalAgentEvent({
+      runId: params.runId,
+      stream: event.stream,
+      data: event.data,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+  }
+  try {
+    const maybePromise = params.onAgentEvent?.(event);
+    void Promise.resolve(maybePromise).catch((error: unknown) => {
+      embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
+    });
+  } catch (error) {
     // Event consumers are observational; they must not abort or strand the
     // canonical app-server turn lifecycle.
+    embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
   }
+}
+
+function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
+  return result.assistantTexts.join("\n\n").trim();
 }
 
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
-  options: { pluginConfig?: unknown; startupTimeoutFloorMs?: number } = {},
+  options: {
+    pluginConfig?: unknown;
+    startupTimeoutFloorMs?: number;
+    nativeHookRelay?: {
+      enabled?: boolean;
+      events?: readonly NativeHookRelayEvent[];
+      ttlMs?: number;
+      gatewayTimeoutMs?: number;
+      hookTimeoutSec?: number;
+    };
+  } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
@@ -131,7 +169,10 @@ export async function runCodexAppServerAttempt(
     : undefined;
   let yieldDetected = false;
   const startupBinding = await readCodexAppServerBinding(params.sessionFile);
-  const startupAuthProfileId = params.authProfileId ?? startupBinding?.authProfileId;
+  const startupAuthProfileId =
+    params.runtimePlan?.auth.forwardedAuthProfileId ??
+    params.authProfileId ??
+    startupBinding?.authProfileId;
   const tools = await buildDynamicTools({
     params,
     resolvedWorkspace,
@@ -241,11 +282,29 @@ export async function runCodexAppServerAttempt(
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadBinding;
   let trajectoryEndRecorded = false;
+  let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
   try {
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "startup" },
     });
+    nativeHookRelay = createCodexNativeHookRelay({
+      options: options.nativeHookRelay,
+      agentId: sessionAgentId,
+      sessionId: params.sessionId,
+      sessionKey: sandboxSessionKey,
+      runId: params.runId,
+      signal: runAbortController.signal,
+    });
+    const nativeHookRelayConfig = nativeHookRelay
+      ? buildCodexNativeHookRelayConfig({
+          relay: nativeHookRelay,
+          events: options.nativeHookRelay?.events,
+          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+        })
+      : options.nativeHookRelay?.enabled === false
+        ? buildCodexNativeHookRelayDisabledConfig()
+        : undefined;
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -259,6 +318,7 @@ export async function runCodexAppServerAttempt(
           dynamicTools: toolBridge.specs,
           appServer,
           developerInstructions: promptBuild.developerInstructions,
+          config: nativeHookRelayConfig,
         });
         return { client: startupClient, thread: startupThread };
       },
@@ -268,6 +328,7 @@ export async function runCodexAppServerAttempt(
       data: { phase: "thread_ready", threadId: thread.threadId },
     });
   } catch (error) {
+    nativeHookRelay?.unregister();
     clearSharedCodexAppServerClient();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
@@ -293,11 +354,36 @@ export async function runCodexAppServerAttempt(
   let userInputBridge: ReturnType<typeof createCodexUserInputBridge> | undefined;
   let completed = false;
   let timedOut = false;
+  let lifecycleStarted = false;
+  let lifecycleTerminalEmitted = false;
   let resolveCompletion: (() => void) | undefined;
   const completion = new Promise<void>((resolve) => {
     resolveCompletion = resolve;
   });
   let notificationQueue: Promise<void> = Promise.resolve();
+
+  const emitLifecycleStart = () => {
+    emitCodexAppServerEvent(params, {
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: attemptStartedAt },
+    });
+    lifecycleStarted = true;
+  };
+
+  const emitLifecycleTerminal = (data: Record<string, unknown> & { phase: "end" | "error" }) => {
+    if (!lifecycleStarted || lifecycleTerminalEmitted) {
+      return;
+    }
+    emitCodexAppServerEvent(params, {
+      stream: "lifecycle",
+      data: {
+        startedAt: attemptStartedAt,
+        endedAt: Date.now(),
+        ...data,
+      },
+    });
+    lifecycleTerminalEmitted = true;
+  };
 
   const handleNotification = async (notification: CodexServerNotification) => {
     userInputBridge?.handleNotification(notification);
@@ -335,6 +421,12 @@ export async function runCodexAppServerAttempt(
 
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
+    if (request.method === "account/chatgptAuthTokens/refresh") {
+      return refreshCodexAppServerAuthTokens({
+        agentDir,
+        authProfileId: startupAuthProfileId,
+      });
+    }
     if (!turnId) {
       return undefined;
     }
@@ -448,7 +540,11 @@ export async function runCodexAppServerAttempt(
         sessionId: params.sessionId,
         provider: params.provider,
         model: params.modelId,
-        resolvedRef: `${params.provider}/${params.modelId}`,
+        resolvedRef:
+          params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
+        ...(params.runtimePlan?.observability.harnessId
+          ? { harnessId: params.runtimePlan.observability.harnessId }
+          : {}),
         assistantTexts: [],
       },
       ctx: hookContext,
@@ -464,6 +560,7 @@ export async function runCodexAppServerAttempt(
     });
     notificationCleanup();
     requestCleanup();
+    nativeHookRelay?.unregister();
     await trajectoryRecorder?.flush();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
@@ -483,6 +580,7 @@ export async function runCodexAppServerAttempt(
     imagesCount: params.images?.length ?? 0,
   });
   projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId);
+  emitLifecycleStart();
   const activeProjector = projector;
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
@@ -569,6 +667,24 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
+    const terminalAssistantText = collectTerminalAssistantText(result);
+    if (terminalAssistantText && !finalAborted && !finalPromptError) {
+      emitCodexAppServerEvent(params, {
+        stream: "assistant",
+        data: { text: terminalAssistantText },
+      });
+    }
+    if (finalPromptError) {
+      emitLifecycleTerminal({
+        phase: "error",
+        error: formatErrorMessage(finalPromptError),
+      });
+    } else {
+      emitLifecycleTerminal({
+        phase: "end",
+        ...(finalAborted ? { aborted: true } : {}),
+      });
+    }
     if (activeContextEngine) {
       const finalMessages =
         readMirroredSessionHistoryMessages(params.sessionFile) ??
@@ -603,7 +719,11 @@ export async function runCodexAppServerAttempt(
         sessionId: params.sessionId,
         provider: params.provider,
         model: params.modelId,
-        resolvedRef: `${params.provider}/${params.modelId}`,
+        resolvedRef:
+          params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
+        ...(params.runtimePlan?.observability.harnessId
+          ? { harnessId: params.runtimePlan.observability.harnessId }
+          : {}),
         assistantTexts: result.assistantTexts,
         ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
         ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
@@ -627,6 +747,10 @@ export async function runCodexAppServerAttempt(
       promptErrorSource: finalPromptErrorSource,
     };
   } finally {
+    emitLifecycleTerminal({
+      phase: "error",
+      error: "codex app-server run completed without lifecycle terminal event",
+    });
     if (trajectoryRecorder && !trajectoryEndRecorded) {
       trajectoryRecorder.recordEvent("session.ended", {
         status: timedOut || runAbortController.signal.aborted ? "interrupted" : "cleanup",
@@ -641,10 +765,44 @@ export async function runCodexAppServerAttempt(
     clearTimeout(timeout);
     notificationCleanup();
     requestCleanup();
+    nativeHookRelay?.unregister();
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
+}
+
+function createCodexNativeHookRelay(params: {
+  options:
+    | {
+        enabled?: boolean;
+        events?: readonly NativeHookRelayEvent[];
+        ttlMs?: number;
+        gatewayTimeoutMs?: number;
+      }
+    | undefined;
+  agentId: string | undefined;
+  sessionId: string;
+  sessionKey: string | undefined;
+  runId: string;
+  signal: AbortSignal;
+}): NativeHookRelayRegistrationHandle | undefined {
+  if (params.options?.enabled === false) {
+    return undefined;
+  }
+  return registerNativeHookRelay({
+    provider: "codex",
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionId: params.sessionId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    runId: params.runId,
+    allowedEvents: params.options?.events ?? CODEX_NATIVE_HOOK_RELAY_EVENTS,
+    ttlMs: params.options?.ttlMs,
+    signal: params.signal,
+    command: {
+      timeoutMs: params.options?.gatewayTimeoutMs,
+    },
+  });
 }
 
 function interruptCodexTurnBestEffort(
@@ -748,16 +906,23 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     params.toolsAllow && params.toolsAllow.length > 0
       ? visionFilteredTools.filter((tool) => params.toolsAllow?.includes(tool.name))
       : visionFilteredTools;
-  return normalizeProviderToolSchemas({
-    tools: filteredTools,
-    provider: params.provider,
-    config: params.config,
-    workspaceDir: input.effectiveWorkspace,
-    env: process.env,
-    modelId: params.modelId,
-    modelApi: params.model.api,
-    model: params.model,
-  });
+  return (
+    params.runtimePlan?.tools.normalize(filteredTools, {
+      workspaceDir: input.effectiveWorkspace,
+      modelApi: params.model.api,
+      model: params.model,
+    }) ??
+    normalizeProviderToolSchemas({
+      tools: filteredTools,
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: input.effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
+    })
+  );
 }
 
 async function withCodexStartupTimeout<T>(params: {

@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -34,6 +36,7 @@ import {
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
   type PluginManifestMediaUnderstandingProviderMetadata,
+  type PluginManifestModelCatalog,
   type PluginManifestModelSupport,
   type PluginManifestProviderEndpoint,
   type PluginManifestQaRunner,
@@ -67,12 +70,14 @@ type PluginManifestContractListKey =
   | "speechProviders"
   | "externalAuthProviders"
   | "mediaUnderstandingProviders"
+  | "documentExtractors"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders"
   | "memoryEmbeddingProviders"
+  | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders";
 
@@ -106,6 +111,7 @@ export type PluginManifestRecord = {
   providers: string[];
   providerDiscoverySource?: string;
   modelSupport?: PluginManifestModelSupport;
+  modelCatalog?: PluginManifestModelCatalog;
   providerEndpoints?: PluginManifestProviderEndpoint[];
   cliBackends: string[];
   syntheticAuthRefs?: string[];
@@ -304,26 +310,38 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   packageChannel?: OpenClawPackageManifest["channel"];
 }): Record<string, PluginManifestChannelConfig> | undefined {
   const channelId = params.packageChannel?.id?.trim();
-  if (!channelId || !params.channelConfigs?.[channelId]) {
+  if (
+    !channelId ||
+    isBlockedObjectKey(channelId) ||
+    !params.channelConfigs ||
+    !Object.prototype.hasOwnProperty.call(params.channelConfigs, channelId)
+  ) {
     return params.channelConfigs;
   }
 
   const existing = params.channelConfigs[channelId];
+  if (!existing) {
+    return params.channelConfigs;
+  }
   const label = existing.label ?? normalizeOptionalString(params.packageChannel?.label) ?? "";
   const description =
     existing.description ?? normalizeOptionalString(params.packageChannel?.blurb) ?? "";
   const preferOver =
     existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
 
-  return {
-    ...params.channelConfigs,
-    [channelId]: {
-      ...existing,
-      ...(label ? { label } : {}),
-      ...(description ? { description } : {}),
-      ...(preferOver?.length ? { preferOver } : {}),
-    },
+  const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
+  for (const [key, value] of Object.entries(params.channelConfigs)) {
+    if (!isBlockedObjectKey(key)) {
+      merged[key] = value;
+    }
+  }
+  merged[channelId] = {
+    ...existing,
+    ...(label ? { label } : {}),
+    ...(description ? { description } : {}),
+    ...(preferOver?.length ? { preferOver } : {}),
   };
+  return merged;
 }
 
 function buildRecord(params: {
@@ -357,6 +375,7 @@ function buildRecord(params: {
         )
       : undefined,
     modelSupport: params.manifest.modelSupport,
+    modelCatalog: params.manifest.modelCatalog,
     providerEndpoints: params.manifest.providerEndpoints,
     cliBackends: params.manifest.cliBackends ?? [],
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
@@ -448,6 +467,65 @@ function buildBundleRecord(params: {
     configContracts: undefined,
     channelConfigs: undefined,
   };
+}
+
+function pushProviderAuthEnvVarsCompatDiagnostic(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): void {
+  if (params.record.origin === "bundled" || !params.record.providerAuthEnvVars) {
+    return;
+  }
+  const providerIds = Object.entries(params.record.providerAuthEnvVars)
+    .filter(([providerId, envVars]) => providerId.trim() && envVars.length > 0)
+    .map(([providerId]) => providerId)
+    .toSorted((left, right) => left.localeCompare(right));
+  if (providerIds.length === 0) {
+    return;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: sanitizeForLog(params.record.id),
+    source: sanitizeForLog(params.record.manifestPath),
+    message: `providerAuthEnvVars is deprecated compatibility metadata for provider env-var lookup; mirror ${providerIds.map(sanitizeForLog).join(", ")} env vars to setup.providers[].envVars before the deprecation window closes`,
+  });
+}
+
+function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): void {
+  if (params.record.origin === "bundled" || params.record.format === "bundle") {
+    return;
+  }
+  const declaredChannels = params.record.channels
+    .map((channelId) => channelId.trim())
+    .filter((channelId) => channelId.length > 0);
+  if (declaredChannels.length === 0) {
+    return;
+  }
+  const channelConfigs = params.record.channelConfigs ?? {};
+  const missingChannels = declaredChannels.filter(
+    (channelId) => !Object.prototype.hasOwnProperty.call(channelConfigs, channelId),
+  );
+  if (missingChannels.length === 0) {
+    return;
+  }
+  const safeMissingChannels = missingChannels.map(sanitizeForLog);
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: sanitizeForLog(params.record.id),
+    source: sanitizeForLog(params.record.manifestPath),
+    message: `channel plugin manifest declares ${safeMissingChannels.join(", ")} without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads`,
+  });
+}
+
+function pushManifestCompatibilityDiagnostics(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): void {
+  pushProviderAuthEnvVarsCompatDiagnostic(params);
+  pushNonBundledChannelConfigDescriptorDiagnostic(params);
 }
 
 function matchesInstalledPluginRecord(params: {
@@ -642,6 +720,7 @@ export function loadPluginManifestRegistry(
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = record;
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+          pushManifestCompatibilityDiagnostics({ record, diagnostics });
         }
         continue;
       }
@@ -664,6 +743,7 @@ export function loadPluginManifestRegistry(
       if (candidateWins) {
         records[existing.recordIndex] = record;
         seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        pushManifestCompatibilityDiagnostics({ record, diagnostics });
       }
       diagnostics.push({
         level: "warn",
@@ -676,6 +756,7 @@ export function loadPluginManifestRegistry(
 
     seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     records.push(record);
+    pushManifestCompatibilityDiagnostics({ record, diagnostics });
   }
 
   const registry = { plugins: records, diagnostics };

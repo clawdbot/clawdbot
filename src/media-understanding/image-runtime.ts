@@ -7,3 +7,9 @@ export const describeImageWithModel = bindImageRuntime((runtime) => runtime.desc
 export const describeImagesWithModel = bindImageRuntime(
   (runtime) => runtime.describeImagesWithModel,
 );
+export const describeImageWithModelPayloadTransform = bindImageRuntime(
+  (runtime) => runtime.describeImageWithModelPayloadTransform,
+);
+export const describeImagesWithModelPayloadTransform = bindImageRuntime(
+  (runtime) => runtime.describeImagesWithModelPayloadTransform,
+);

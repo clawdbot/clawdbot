@@ -1,6 +1,7 @@
 {
   "id": "browser",
   "enabledByDefault": true,
+  "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

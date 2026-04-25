@@ -1,4 +1,9 @@
+import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { toBrowserErrorResponse } from "../errors.js";
+import {
+  assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy,
+} from "../navigation-guard.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
@@ -90,6 +95,7 @@ type RouteTabContext = {
   profileCtx: ProfileContext;
   tab: Awaited<ReturnType<ProfileContext["ensureTabAvailable"]>>;
   cdpUrl: string;
+  resolveTabUrl: (fallbackUrl?: string) => Promise<string | undefined>;
 };
 
 type RouteTabPwContext = RouteTabContext & {
@@ -117,9 +123,44 @@ export async function withRouteTabContext<T>(
       profileCtx,
       tab,
       cdpUrl: profileCtx.profile.cdpUrl,
+      resolveTabUrl: (fallbackUrl?: string) =>
+        resolveSafeRouteTabUrl({
+          ctx: params.ctx,
+          profileCtx,
+          targetId: tab.targetId,
+          fallbackUrl,
+        }),
     });
   } catch (err) {
     handleRouteError(params.ctx, params.res, err);
+    return undefined;
+  }
+}
+
+export async function resolveSafeRouteTabUrl(params: {
+  ctx: BrowserRouteContext;
+  profileCtx: ProfileContext;
+  targetId: string;
+  fallbackUrl?: string;
+}): Promise<string | undefined> {
+  const tabs = await params.profileCtx.listTabs().catch(() => []);
+  const candidateUrl =
+    tabs.find((tab) => tab.targetId === params.targetId)?.url ?? params.fallbackUrl;
+  if (!candidateUrl) {
+    return undefined;
+  }
+  try {
+    await assertBrowserNavigationResultAllowed({
+      url: candidateUrl,
+      ...withBrowserNavigationPolicy(params.ctx.state().resolved.ssrfPolicy, {
+        browserProxyMode: resolveBrowserNavigationProxyMode({
+          resolved: params.ctx.state().resolved,
+          profile: params.profileCtx.profile,
+        }),
+      }),
+    });
+    return candidateUrl;
+  } catch {
     return undefined;
   }
 }
@@ -141,12 +182,12 @@ export async function withPlaywrightRouteContext<T>(
     res: params.res,
     ctx: params.ctx,
     targetId: params.targetId,
-    run: async ({ profileCtx, tab, cdpUrl }) => {
+    run: async ({ profileCtx, tab, cdpUrl, resolveTabUrl }) => {
       const pw = await requirePwAi(params.res, params.feature);
       if (!pw) {
         return undefined as T | undefined;
       }
-      return await params.run({ profileCtx, tab, cdpUrl, pw });
+      return await params.run({ profileCtx, tab, cdpUrl, resolveTabUrl, pw });
     },
   });
 }

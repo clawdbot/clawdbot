@@ -221,9 +221,14 @@ async function runModelSelect(params: {
 function expectDispatchedModelSelection(params: {
   dispatchSpy: ReturnType<typeof createDispatchSpy>;
   model: string;
+  runtime?: string;
 }) {
   const dispatchCall = params.dispatchSpy.mock.calls[0]?.[0];
-  expect(dispatchCall?.prompt).toBe(`/model ${params.model}`);
+  expect(dispatchCall?.prompt).toBe(
+    params.runtime
+      ? `/model ${params.model} --runtime ${params.runtime}`
+      : `/model ${params.model}`,
+  );
   expect(dispatchCall?.commandArgs?.values?.model).toBe(params.model);
 }
 
@@ -398,6 +403,49 @@ describe("Discord model picker interactions", () => {
     expectDispatchedModelSelection({
       dispatchSpy,
       model: "openai/gpt-4o",
+    });
+  });
+
+  it("routes selected runtime through the /model pipeline", async () => {
+    const context = createModelPickerContext();
+    const pickerData = createDefaultModelPickerData();
+    pickerData.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        [
+          {
+            id: "pi",
+            label: "OpenClaw Pi Default",
+            description: "Use the built-in OpenClaw Pi runtime.",
+          },
+          {
+            id: "codex",
+            label: "codex",
+            description: "Run openai models through the codex harness.",
+          },
+        ],
+      ],
+    ]);
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    await runSubmitButton({
+      context,
+      data: {
+        ...createModelsViewSubmitData(),
+        r: "codex",
+      },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "openai/gpt-4o",
+      runtime: "codex",
     });
   });
 

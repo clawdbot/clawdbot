@@ -11,7 +11,7 @@ import type {
 
 export async function createChannelDiscord(
   payload: DiscordChannelCreate,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ): Promise<APIChannel> {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = {
@@ -39,7 +39,7 @@ export async function createChannelDiscord(
 
 export async function editChannelDiscord(
   payload: DiscordChannelEdit,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ): Promise<APIChannel> {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = {};
@@ -84,13 +84,13 @@ export async function editChannelDiscord(
   })) as APIChannel;
 }
 
-export async function deleteChannelDiscord(channelId: string, opts: DiscordReactOpts = {}) {
+export async function deleteChannelDiscord(channelId: string, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
   await rest.delete(Routes.channel(channelId));
   return { ok: true, channelId };
 }
 
-export async function moveChannelDiscord(payload: DiscordChannelMove, opts: DiscordReactOpts = {}) {
+export async function moveChannelDiscord(payload: DiscordChannelMove, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
   const body: Array<Record<string, unknown>> = [
     {
@@ -105,7 +105,7 @@ export async function moveChannelDiscord(payload: DiscordChannelMove, opts: Disc
 
 export async function setChannelPermissionDiscord(
   payload: DiscordChannelPermissionSet,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ) {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = {
@@ -124,7 +124,7 @@ export async function setChannelPermissionDiscord(
 export async function removeChannelPermissionDiscord(
   channelId: string,
   targetId: string,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ) {
   const rest = resolveDiscordRest(opts);
   await rest.delete(`/channels/${channelId}/permissions/${targetId}`);

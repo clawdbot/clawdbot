@@ -7,6 +7,7 @@ import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../conte
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
+import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
@@ -35,6 +36,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelId: string;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
+  /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
+  runtimePlan?: AgentRuntimePlan;
   model: Model<Api>;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;

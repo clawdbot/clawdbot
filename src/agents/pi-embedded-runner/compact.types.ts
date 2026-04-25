@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { SkillSnapshot } from "../skills.js";
 
 export type CompactEmbeddedPiSessionParams = {
@@ -50,6 +51,8 @@ export type CompactEmbeddedPiSessionParams = {
   contextEngineRuntimeContext?: ContextEngineRuntimeContext;
   /** Session-pinned embedded harness id. Prevents compaction hot-switching. */
   agentHarnessId?: string;
+  /** OpenClaw-owned runtime policy prepared for this compaction path. */
+  runtimePlan?: AgentRuntimePlan;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;

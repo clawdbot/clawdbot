@@ -76,6 +76,7 @@ export function registerOnboardCommand(program: Command) {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
+    .option("--modern", "Use the Crestodian conversational onboarding preview", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
@@ -133,6 +134,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
+    .option("--skip-bootstrap", "Skip creating default agent workspace files")
     .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
@@ -141,6 +143,16 @@ export function registerOnboardCommand(program: Command) {
 
   command.action(async (opts, commandRuntime) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
+      if (opts.modern) {
+        const { runCrestodian } = await import("../../crestodian/crestodian.js");
+        await runCrestodian({
+          message: opts.nonInteractive ? "overview" : undefined,
+          yes: false,
+          json: Boolean(opts.json),
+          interactive: !opts.nonInteractive,
+        });
+        return;
+      }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
         installDaemon: Boolean(opts.installDaemon),
       });
@@ -189,6 +201,7 @@ export function registerOnboardCommand(program: Command) {
           daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
           skipChannels: Boolean(opts.skipChannels),
           skipSkills: Boolean(opts.skipSkills),
+          skipBootstrap: Boolean(opts.skipBootstrap),
           skipSearch: Boolean(opts.skipSearch),
           skipHealth: Boolean(opts.skipHealth),
           skipUi: Boolean(opts.skipUi),

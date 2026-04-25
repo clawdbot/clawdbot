@@ -248,6 +248,7 @@ async function prepareAgentCommandExecution(
     throw new Error("Message (--message) is required");
   }
   const body = prependInternalEventContext(message, opts.internalEvents);
+  const transcriptBody = opts.transcriptMessage ?? message;
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
@@ -368,6 +369,7 @@ async function prepareAgentCommandExecution(
 
   return {
     body,
+    transcriptBody,
     cfg,
     normalizedSpawned,
     agentCfg,
@@ -402,6 +404,7 @@ async function agentCommandInternal(
   const prepared = await prepareAgentCommandExecution(opts, runtime);
   const {
     body,
+    transcriptBody,
     cfg,
     normalizedSpawned,
     agentCfg,
@@ -523,6 +526,7 @@ async function agentCommandInternal(
         const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
         sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
           body,
+          transcriptBody,
           finalText: finalTextRaw,
           sessionId,
           sessionKey,
@@ -1068,6 +1072,7 @@ async function agentCommandInternal(
       try {
         sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
+          transcriptBody,
           result,
           sessionId,
           sessionKey: sessionKey ?? sessionId,

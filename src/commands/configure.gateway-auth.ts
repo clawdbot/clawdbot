@@ -152,6 +152,7 @@ export async function promptAuthConfig(
       prompter,
       runtime,
       setDefaultModel: true,
+      preserveExistingDefaultModel: true,
     });
     next = applied.config;
     if (applied.retrySelection) {

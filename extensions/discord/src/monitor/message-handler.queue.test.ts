@@ -21,6 +21,12 @@ function createDeferred<T = void>() {
   return { promise, resolve };
 }
 
+async function flushQueueWork(): Promise<void> {
+  for (let i = 0; i < 40; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 function createMessageData(messageId: string, channelId = "ch-1") {
   return {
     channel_id: channelId,
@@ -148,9 +154,8 @@ async function createLifecycleStopScenario(params: {
   const { handler, stop } = params.createHandler(setStatus);
 
   await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
-  await vi.waitFor(() => {
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-  });
+  await flushQueueWork();
+  expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
 
   const callsBeforeStop = setStatus.mock.calls.length;
   stop();
@@ -200,9 +205,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
 
-    await vi.waitFor(() => {
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    });
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
     expect(setStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         activeRuns: 1,
@@ -212,29 +216,26 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
 
-    await vi.waitFor(() => {
-      expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(2);
-    });
+    await flushQueueWork();
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(2);
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
 
     firstRun.resolve();
     await firstRun.promise;
 
-    await vi.waitFor(() => {
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-    });
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
 
     secondRun.resolve();
     await secondRun.promise;
 
-    await vi.waitFor(() => {
-      expect(setStatus).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          activeRuns: 0,
-          busy: false,
-        }),
-      );
-    });
+    await flushQueueWork();
+    expect(setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        activeRuns: 0,
+        busy: false,
+      }),
+    );
   });
 
   it("drops duplicate inbound message deliveries before they reach preflight", async () => {
@@ -247,9 +248,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
 
-    await vi.waitFor(() => {
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    });
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
     expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 
@@ -266,21 +266,17 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const duplicate = createMessageData("m-retry");
 
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    });
-    await vi.waitFor(() => {
-      expect(params.runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "discord inbound worker failed: DiscordRetryableInboundError: retry me",
-        ),
-      );
-    });
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(params.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "discord inbound worker failed: DiscordRetryableInboundError: retry me",
+      ),
+    );
 
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-    });
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
     expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(2);
   });
 
@@ -299,14 +295,11 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const duplicate = createMessageData("m-fail");
 
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    });
-    await vi.waitFor(() => {
-      expect(params.runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("discord inbound worker failed: Error: post-send failure"),
-      );
-    });
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(params.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("discord inbound worker failed: Error: post-send failure"),
+    );
 
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
     await Promise.resolve();
@@ -322,9 +315,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
       const { handlerParams } = await queueTimedMessages();
 
       await vi.advanceTimersByTimeAsync(60);
-      await vi.waitFor(() => {
-        expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-      });
+      await flushQueueWork();
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
 
       const firstCtx = processDiscordMessageMock.mock.calls[0]?.[0] as
         | { abortSignal?: AbortSignal }
@@ -365,9 +357,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
       });
 
       await vi.advanceTimersByTimeAsync(60);
-      await vi.waitFor(() => {
-        expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
-      });
+      await flushQueueWork();
+      expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
 
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
       expect(handlerParams.runtime.error).toHaveBeenCalledWith(
@@ -377,9 +368,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
       deliverTimeoutReply.resolve();
       await deliverTimeoutReply.promise;
 
-      await vi.waitFor(() => {
-        expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-      });
+      await flushQueueWork();
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -485,9 +475,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
       await expect(
         handler(createMessageData("m-1") as never, {} as never),
       ).resolves.toBeUndefined();
-      await vi.waitFor(() => {
-        expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-      });
+      await flushQueueWork();
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(60);
       await Promise.resolve();
@@ -580,9 +569,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
         handler(createMessageData("m-1") as never, {} as never),
       ).resolves.toBeUndefined();
 
-      await vi.waitFor(() => {
-        expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-      });
+      await flushQueueWork();
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
 
       expect(capturedHeartbeat).toBe(true);
       const busyCallsBefore = setStatus.mock.calls.filter(
@@ -599,9 +587,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
       runInFlight.resolve();
       await runInFlight.promise;
 
-      await vi.waitFor(() => {
-        expect(clearIntervalSpy).toHaveBeenCalled();
-      });
+      await flushQueueWork();
+      expect(clearIntervalSpy).toHaveBeenCalled();
     } finally {
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
@@ -660,9 +647,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     const handler = createDiscordMessageHandler(createDiscordHandlerParams());
     await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    });
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
 
     await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
     handler.deactivate();
@@ -705,18 +691,16 @@ describe("createDiscordMessageHandler queue behavior", () => {
       await handler(createMessageData("m-2") as never, {} as never);
     })();
 
-    await vi.waitFor(() => {
-      expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
-    });
+    await flushQueueWork();
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
     await Promise.resolve();
     expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
 
     firstPreflight.resolve();
     await sequentialDispatch;
 
-    await vi.waitFor(() => {
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-    });
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
     expect(processedMessageIds).toEqual(["m-1", "m-2"]);
   });
 
@@ -745,13 +729,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
     firstRun.resolve();
     await firstRun.promise.catch(() => undefined);
 
-    await vi.waitFor(() => {
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-    });
-    await vi.waitFor(() => {
-      expect(setStatus).toHaveBeenCalledWith(
-        expect.objectContaining({ activeRuns: 0, busy: false }),
-      );
-    });
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    expect(setStatus).toHaveBeenCalledWith(expect.objectContaining({ activeRuns: 0, busy: false }));
   });
 });

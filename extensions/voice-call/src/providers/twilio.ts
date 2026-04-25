@@ -63,7 +63,6 @@ type StreamSendResult = {
 
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;
-  private static readonly TTS_SYNTH_TIMEOUT_MS = 8000;
 
   private readonly accountSid: string;
   private readonly authToken: string;
@@ -672,16 +671,13 @@ export class TwilioProvider implements VoiceCallProvider {
       // Generate audio with core TTS (returns mu-law at 8kHz)
       let muLawAudio: Buffer;
       let synthTimeout: ReturnType<typeof setTimeout> | null = null;
+      const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
       try {
         const synthPromise = ttsProvider.synthesizeForTelephony(text);
         const timeoutPromise = new Promise<Buffer>((_, reject) => {
           synthTimeout = setTimeout(() => {
-            reject(
-              new Error(
-                `Telephony TTS synthesis timed out after ${TwilioProvider.TTS_SYNTH_TIMEOUT_MS}ms`,
-              ),
-            );
-          }, TwilioProvider.TTS_SYNTH_TIMEOUT_MS);
+            reject(new Error(`Telephony TTS synthesis timed out after ${synthTimeoutMs}ms`));
+          }, synthTimeoutMs);
         });
         muLawAudio = await Promise.race([synthPromise, timeoutPromise]);
       } finally {
@@ -689,6 +685,10 @@ export class TwilioProvider implements VoiceCallProvider {
           clearTimeout(synthTimeout);
         }
         clearInterval(keepAlive);
+      }
+
+      if (muLawAudio.length === 0) {
+        throw new Error("Telephony TTS produced no audio");
       }
 
       let chunkAttempts = 0;

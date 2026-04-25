@@ -34,11 +34,19 @@ docker run --rm \
   bash -lc "set -euo pipefail
     entry=dist/index.mjs
     [ -f \"\$entry\" ] || entry=dist/index.js
+    export MOCK_PORT=44081
+    export SUCCESS_MARKER=OPENCLAW_CRON_MCP_CLEANUP_OK
+    export MOCK_REQUEST_LOG=/tmp/openclaw-cron-mock-openai-requests.jsonl
+    export OPENCLAW_DOCKER_OPENAI_BASE_URL=\"http://127.0.0.1:\$MOCK_PORT/v1\"
+    node scripts/e2e/mock-openai-server.mjs >/tmp/cron-mcp-cleanup-mock-openai.log 2>&1 &
+    mock_pid=\$!
     node --import tsx scripts/e2e/cron-mcp-cleanup-seed.ts >/tmp/cron-mcp-cleanup-seed.log
     node \"\$entry\" gateway --port $PORT --bind loopback --allow-unconfigured >/tmp/cron-mcp-cleanup-gateway.log 2>&1 &
     gateway_pid=\$!
     cleanup_inner() {
+      kill \"\$mock_pid\" >/dev/null 2>&1 || true
       kill \"\$gateway_pid\" >/dev/null 2>&1 || true
+      wait \"\$mock_pid\" >/dev/null 2>&1 || true
       wait \"\$gateway_pid\" >/dev/null 2>&1 || true
     }
     dump_gateway_log_on_error() {
@@ -46,14 +54,23 @@ docker run --rm \
       if [ \"\$status\" -ne 0 ]; then
         tail -n 80 /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null || true
         cat /tmp/cron-mcp-cleanup-seed.log 2>/dev/null || true
+        cat /tmp/cron-mcp-cleanup-mock-openai.log 2>/dev/null || true
+        cat \"\$MOCK_REQUEST_LOG\" 2>/dev/null || true
       fi
       cleanup_inner
       exit \"\$status\"
     }
     trap cleanup_inner EXIT
     trap dump_gateway_log_on_error ERR
+    for _ in \$(seq 1 80); do
+      if node -e \"fetch('http://127.0.0.1:' + process.env.MOCK_PORT + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"; then
+        break
+      fi
+      sleep 0.1
+    done
+    node -e \"fetch('http://127.0.0.1:' + process.env.MOCK_PORT + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"
     gateway_ready=0
-    for _ in \$(seq 1 160); do
+    for _ in \$(seq 1 300); do
       if grep -q '\[gateway\] ready' /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null; then
         gateway_ready=1
         break
@@ -62,6 +79,19 @@ docker run --rm \
     done
     if [ \"\$gateway_ready\" -ne 1 ]; then
       echo \"Gateway did not become ready\"
+      tail -n 120 /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null || true
+      exit 1
+    fi
+    acpx_ready=0
+    for _ in \$(seq 1 2400); do
+      if grep -q '\[plugins\] embedded acpx runtime backend ready' /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null; then
+        acpx_ready=1
+        break
+      fi
+      sleep 0.25
+    done
+    if [ \"\$acpx_ready\" -ne 1 ]; then
+      echo \"Embedded ACPX runtime did not become ready\"
       tail -n 120 /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null || true
       exit 1
     fi

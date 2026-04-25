@@ -6,6 +6,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertOkOrThrowProviderError,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -251,12 +252,7 @@ async function fetchImageBuffer(
     auditContext: "fal-image-download",
   });
   try {
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `fal image download failed (${response.status}): ${text || response.statusText}`,
-      );
-    }
+    await assertOkOrThrowProviderError(response, "fal image download failed");
     const mimeType = response.headers.get("content-type")?.trim() || "image/png";
     const arrayBuffer = await response.arrayBuffer();
     return { buffer: Buffer.from(arrayBuffer), mimeType };

@@ -3,6 +3,8 @@ const email = process.env.OPENWEBUI_ADMIN_EMAIL ?? "";
 const password = process.env.OPENWEBUI_ADMIN_PASSWORD ?? "";
 const expectedNonce = process.env.OPENWEBUI_EXPECTED_NONCE ?? "";
 const prompt = process.env.OPENWEBUI_PROMPT ?? "";
+const modelAttempts = Number.parseInt(process.env.OPENWEBUI_MODEL_ATTEMPTS ?? "72", 10);
+const modelRetryMs = Number.parseInt(process.env.OPENWEBUI_MODEL_RETRY_MS ?? "5000", 10);
 
 if (!baseUrl || !email || !password || !expectedNonce || !prompt) {
   throw new Error("Missing required OPENWEBUI_* environment variables");
@@ -72,7 +74,7 @@ const authHeaders = {
 let modelIds = [];
 let targetModel = "";
 let lastModelsError = "";
-for (let attempt = 1; attempt <= 24; attempt += 1) {
+for (let attempt = 1; attempt <= modelAttempts; attempt += 1) {
   const modelsRes = await fetch(`${baseUrl}/api/models`, { headers: authHeaders }).catch(
     (error) => {
       lastModelsError = error instanceof Error ? error.message : String(error);
@@ -91,7 +93,7 @@ for (let attempt = 1; attempt <= 24; attempt += 1) {
   } else if (modelsRes) {
     lastModelsError = `HTTP ${modelsRes.status} ${await modelsRes.text()}`;
   }
-  await sleep(5_000);
+  await sleep(modelRetryMs);
 }
 if (!targetModel) {
   throw new Error(

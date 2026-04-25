@@ -31,7 +31,7 @@ export {
   readResponseTextLimited,
   trimToUndefined,
   truncateErrorDetail,
-} from "../../tts/provider-error-utils.js";
+} from "../../agents/provider-http-errors.js";
 
 export async function summarizeText(): Promise<never> {
   throw new Error("summarizeText is unavailable in the Vitest capability contract shim");

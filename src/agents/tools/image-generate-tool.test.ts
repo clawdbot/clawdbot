@@ -685,6 +685,71 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("accepts managed inbound reference images for edit mode", async () => {
+    stubEditedImageFlow({ width: 1024, height: 1024 });
+    const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
+      workspaceDir: process.cwd(),
+    });
+
+    await tool.execute("call-edit-managed", {
+      prompt: "Use this reference.",
+      image: "media://inbound/reference.png",
+    });
+
+    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+      "media://inbound/reference.png",
+      expect.any(Object),
+    );
+  });
+
+  it("passes web_fetch SSRF policy to remote reference images", async () => {
+    stubImageGenerationProviders();
+    stubEditedImageFlow({ width: 1024, height: 1024 });
+    const defaultTool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: { imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" } },
+          },
+        },
+        workspaceDir: process.cwd(),
+      }),
+    );
+
+    await defaultTool.execute("call-edit-rfc2544-default", {
+      prompt: "Use this reference.",
+      image: "http://198.18.0.153/reference.png",
+    });
+    expect(webMedia.loadWebMedia).toHaveBeenLastCalledWith(
+      "http://198.18.0.153/reference.png",
+      expect.not.objectContaining({ ssrfPolicy: expect.anything() }),
+    );
+
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: { imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" } },
+          },
+          tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
+        },
+        workspaceDir: process.cwd(),
+      }),
+    );
+
+    await tool.execute("call-edit-rfc2544", {
+      prompt: "Use this reference.",
+      image: "http://198.18.0.153/reference.png",
+    });
+
+    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+      "http://198.18.0.153/reference.png",
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    );
+  });
+
   it("ignores non-finite mediaMaxMb when loading reference images", async () => {
     stubImageGenerationProviders();
     stubEditedImageFlow({ width: 3200, height: 1800 });
@@ -1070,7 +1135,9 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("gemini-3.1-flash-image-preview");
     expect(text).toContain("gemini-3-pro-image-preview");
     expect(text).toContain("auth: set GEMINI_API_KEY / GOOGLE_API_KEY to use google/*");
-    expect(text).toContain("auth: set OPENAI_API_KEY to use openai/*");
+    expect(text).toContain(
+      "auth: set OPENAI_API_KEY or configure OpenAI Codex OAuth for openai/gpt-image-2",
+    );
     expect(text).toContain("editing up to 5 refs");
     expect(text).toContain("aspect ratios 1:1, 16:9");
     expect(result).toMatchObject({

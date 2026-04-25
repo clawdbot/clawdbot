@@ -79,6 +79,14 @@ describe("proxy stream wrappers", () => {
     expect(payload.messages[0]?.content).toBe("system prompt");
   });
 
+  it("does not inject Anthropic cache_control markers for automatic OpenRouter DeepSeek cache models", () => {
+    const payload = runSystemCacheWrapper({
+      id: "deepseek/deepseek-v3.2",
+    });
+
+    expect(payload.messages[0]?.content).toBe("system prompt");
+  });
+
   it("injects cache_control markers for native OpenRouter hosts behind custom provider ids", () => {
     const payload = runSystemCacheWrapper({
       provider: "custom-openrouter",

@@ -41,9 +41,10 @@ export type McpClientHandle = {
   rawMessages: unknown[];
 };
 
-const GATEWAY_WS_OPEN_TIMEOUT_MS = 15_000;
-const GATEWAY_RPC_TIMEOUT_MS = 30_000;
-const GATEWAY_CONNECT_RETRY_WINDOW_MS = 240_000;
+const GATEWAY_WS_OPEN_TIMEOUT_MS = 45_000;
+const GATEWAY_RPC_TIMEOUT_MS = 60_000;
+const GATEWAY_REQUEST_TIMEOUT_MS = 45_000;
+const GATEWAY_CONNECT_RETRY_WINDOW_MS = 420_000;
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -285,7 +286,7 @@ async function connectGatewayOnce(params: {
         const timeout = setTimeout(() => {
           pending.delete(id);
           reject(new Error(`gateway request timeout: ${method}`));
-        }, 10_000);
+        }, GATEWAY_REQUEST_TIMEOUT_MS);
         timeout.unref?.();
         pending.set(id, {
           resolve: (value) => {

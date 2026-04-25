@@ -310,16 +310,127 @@ Enable encryption:
 
 Verification commands (all take `--verbose` for diagnostics and `--json` for machine-readable output):
 
-| Command                                                        | Purpose                                                                             |
-| -------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `openclaw matrix verify status`                                | Check cross-signing and device verification state                                   |
-| `openclaw matrix verify status --include-recovery-key --json`  | Include the stored recovery key                                                     |
-| `openclaw matrix verify bootstrap`                             | Bootstrap cross-signing and verification (see below)                                |
-| `openclaw matrix verify bootstrap --force-reset-cross-signing` | Discard the current cross-signing identity and create a new one                     |
-| `openclaw matrix verify device "<recovery-key>"`               | Verify this device with a recovery key                                              |
-| `openclaw matrix verify backup status`                         | Check room-key backup health                                                        |
-| `openclaw matrix verify backup restore`                        | Restore room keys from server backup                                                |
-| `openclaw matrix verify backup reset --yes`                    | Delete the current backup and create a fresh baseline (may recreate secret storage) |
+```bash
+openclaw matrix verify status
+```
+
+Verbose status (full diagnostics):
+
+```bash
+openclaw matrix verify status --verbose
+```
+
+Include the stored recovery key in machine-readable output:
+
+```bash
+openclaw matrix verify status --include-recovery-key --json
+```
+
+Bootstrap cross-signing and verification state:
+
+```bash
+openclaw matrix verify bootstrap
+```
+
+Verbose bootstrap diagnostics:
+
+```bash
+openclaw matrix verify bootstrap --verbose
+```
+
+Force a fresh cross-signing identity reset before bootstrapping:
+
+```bash
+openclaw matrix verify bootstrap --force-reset-cross-signing
+```
+
+Verify this device with a recovery key:
+
+```bash
+openclaw matrix verify device "<your-recovery-key>"
+```
+
+This command reports three separate states:
+
+- `Recovery key accepted`: Matrix accepted the recovery key for secret storage or device trust.
+- `Backup usable`: room-key backup can be loaded with trusted recovery material.
+- `Device verified by owner`: the current OpenClaw device has full Matrix cross-signing identity trust.
+
+`Signed by owner` in verbose or JSON output is diagnostic only. OpenClaw does not
+treat that as sufficient unless `Cross-signing verified` is also `yes`.
+
+The command still exits non-zero when full Matrix identity trust is incomplete,
+even if the recovery key can unlock backup material. In that case, complete
+self-verification from another Matrix client:
+
+```bash
+openclaw matrix verify self
+```
+
+Accept the request in another Matrix client, compare the SAS emoji or decimals,
+and type `yes` only when they match. The command waits for Matrix to report
+`Cross-signing verified: yes` before it exits successfully.
+
+Use `verify bootstrap --force-reset-cross-signing` only when you intentionally
+want to replace the current cross-signing identity.
+
+Verbose device verification details:
+
+```bash
+openclaw matrix verify device "<your-recovery-key>" --verbose
+```
+
+Check room-key backup health:
+
+```bash
+openclaw matrix verify backup status
+```
+
+Verbose backup health diagnostics:
+
+```bash
+openclaw matrix verify backup status --verbose
+```
+
+Restore room keys from server backup:
+
+```bash
+openclaw matrix verify backup restore
+```
+
+Interactive self-verification flow:
+
+```bash
+openclaw matrix verify self
+```
+
+For lower-level or inbound verification requests, use:
+
+```bash
+openclaw matrix verify accept <id>
+openclaw matrix verify start <id>
+openclaw matrix verify sas <id>
+openclaw matrix verify confirm-sas <id>
+```
+
+Use `openclaw matrix verify cancel <id>` to cancel a request.
+
+Verbose restore diagnostics:
+
+```bash
+openclaw matrix verify backup restore --verbose
+```
+
+Delete the current server backup and create a fresh backup baseline. If the stored
+backup key cannot be loaded cleanly, this reset can also recreate secret storage so
+future cold starts can load the new backup key:
+
+```bash
+openclaw matrix verify backup reset --yes
+```
+
+All `verify` commands are concise by default (including quiet internal SDK logging) and show detailed diagnostics only with `--verbose`.
+Use `--json` for full machine-readable output when scripting.
 
 In multi-account setups, Matrix CLI commands use the implicit Matrix default account unless you pass `--account <id>`.
 If you configure multiple named accounts, set `channels.matrix.defaultAccount` first or those implicit CLI operations will stop and ask you to choose an account explicitly.
@@ -341,7 +452,9 @@ When encryption is disabled or unavailable for a named account, Matrix warnings 
     - `Cross-signing verified`: the SDK reports verification via cross-signing
     - `Signed by owner`: signed by your own self-signing key
 
-    `Verified by owner` becomes `yes` only when cross-signing or owner-signing is present. Local trust alone is not enough.
+    `Verified by owner` becomes `yes` only when cross-signing verification is present.
+    Local trust or an owner signature by itself is not enough for OpenClaw to treat
+    the device as fully verified.
 
   </Accordion>
 

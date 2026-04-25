@@ -56,6 +56,7 @@ describe("discord audit", () => {
     });
 
     const audit = await auditDiscordChannelPermissionsWithFetcher({
+      cfg,
       token: "t",
       accountId: "default",
       channelIds: collected.channelIds,

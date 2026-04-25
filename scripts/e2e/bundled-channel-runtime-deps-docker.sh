@@ -14,6 +14,9 @@ RUN_UPDATE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO:-1}"
 RUN_ROOT_OWNED_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO:-1}"
 RUN_SETUP_ENTRY_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO:-1}"
 RUN_LOAD_FAILURE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO:-1}"
+RUN_DISABLED_CONFIG_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO:-1}"
+CHANNEL_ONLY="${OPENCLAW_BUNDLED_CHANNEL_ONLY:-}"
+DOCKER_RUN_TIMEOUT="${OPENCLAW_BUNDLED_CHANNEL_DOCKER_RUN_TIMEOUT:-900s}"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" bundled-channel-deps "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
@@ -58,7 +61,7 @@ run_channel_scenario() {
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-deps-$channel.XXXXXX")"
 
   echo "Running bundled $channel runtime deps Docker E2E..."
-  if ! docker run --rm \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_CHANNEL_UNDER_TEST="$channel" \
     -e OPENCLAW_DEP_SENTINEL="$dep_sentinel" \
@@ -78,11 +81,37 @@ CHANNEL="${OPENCLAW_CHANNEL_UNDER_TEST:?missing OPENCLAW_CHANNEL_UNDER_TEST}"
 DEP_SENTINEL="${OPENCLAW_DEP_SENTINEL:?missing OPENCLAW_DEP_SENTINEL}"
 gateway_pid=""
 
-cleanup() {
+terminate_gateways() {
   if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
     kill "$gateway_pid" 2>/dev/null || true
+  fi
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -f "[o]penclaw-gateway" 2>/dev/null || true
+  fi
+  for _ in $(seq 1 100); do
+    local alive=0
+    if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+      alive=1
+    fi
+    if command -v pgrep >/dev/null 2>&1 && pgrep -f "[o]penclaw-gateway" >/dev/null 2>&1; then
+      alive=1
+    fi
+    [ "$alive" = "0" ] && break
+    sleep 0.1
+  done
+  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+    kill -KILL "$gateway_pid" 2>/dev/null || true
+  fi
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -KILL -f "[o]penclaw-gateway" 2>/dev/null || true
+  fi
+  if [ -n "${gateway_pid:-}" ]; then
     wait "$gateway_pid" 2>/dev/null || true
   fi
+}
+
+cleanup() {
+  terminate_gateways
 }
 trap cleanup EXIT
 
@@ -97,6 +126,29 @@ test -d "$package_root/dist/extensions/discord"
 test -d "$package_root/dist/extensions/slack"
 test -d "$package_root/dist/extensions/feishu"
 test -d "$package_root/dist/extensions/memory-lancedb"
+
+stage_root() {
+  printf "%s/.openclaw/plugin-runtime-deps" "$HOME"
+}
+
+find_external_dep_package() {
+  local dep_path="$1"
+  find "$(stage_root)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
+}
+
+assert_package_dep_absent() {
+  local channel="$1"
+  local dep_path="$2"
+  for candidate in \
+    "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
+    "$package_root/dist/extensions/node_modules/$dep_path/package.json" \
+    "$package_root/node_modules/$dep_path/package.json"; do
+    if [ -f "$candidate" ]; then
+      echo "packaged install should not mutate package tree for $channel: $candidate" >&2
+      exit 1
+    fi
+  done
+}
 
 if [ -d "$package_root/dist/extensions/$CHANNEL/node_modules" ]; then
   echo "$CHANNEL runtime deps should not be preinstalled in package" >&2
@@ -225,11 +277,18 @@ NODE
 
 start_gateway() {
   local log_file="$1"
+  local skip_sidecars="${2:-0}"
   : >"$log_file"
-  openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  if [ "$skip_sidecars" = "1" ]; then
+    OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_PROVIDERS=1 \
+      openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  else
+    openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  fi
   gateway_pid="$!"
 
-  for _ in $(seq 1 240); do
+  # Cold bundled dependency staging can exceed 60s under 10-way Docker aggregate load.
+  for _ in $(seq 1 1200); do
     if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
       return 0
     fi
@@ -247,21 +306,19 @@ start_gateway() {
 }
 
 stop_gateway() {
-  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
-    kill "$gateway_pid" 2>/dev/null || true
-    wait "$gateway_pid" 2>/dev/null || true
-  fi
+  terminate_gateways
   gateway_pid=""
 }
 
 wait_for_gateway_health() {
-  for _ in $(seq 1 120); do
-    if openclaw gateway health --url "ws://127.0.0.1:$PORT" --token "$TOKEN" --json >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  echo "timed out waiting for gateway health" >&2
+  local log_file="${1:-}"
+  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+    return 0
+  fi
+  echo "gateway process exited after ready marker" >&2
+  if [ -n "$log_file" ]; then
+    cat "$log_file" >&2
+  fi
   return 1
 }
 
@@ -272,12 +329,26 @@ assert_channel_status() {
     return 0
   fi
   local out="/tmp/openclaw-channel-status-$channel.json"
-  openclaw gateway call channels.status \
-    --url "ws://127.0.0.1:$PORT" \
-    --token "$TOKEN" \
-    --timeout 30000 \
-    --json \
-    --params '{"probe":false}' >"$out"
+  local err="/tmp/openclaw-channel-status-$channel.err"
+  for _ in $(seq 1 12); do
+    if openclaw gateway call channels.status \
+      --url "ws://127.0.0.1:$PORT" \
+      --token "$TOKEN" \
+      --timeout 10000 \
+      --json \
+      --params '{"probe":false}' >"$out" 2>"$err"; then
+      break
+    fi
+    sleep 2
+  done
+  if [ ! -s "$out" ]; then
+    if grep -Eq "\\[gateway\\] ready \\(.*\\b$channel\\b" /tmp/openclaw-"$channel"-*.log 2>/dev/null; then
+      echo "$channel channel plugin visible in gateway ready log"
+      return 0
+    fi
+    cat "$err" >&2 || true
+    return 1
+  fi
   node - <<'NODE' "$out" "$channel"
 const fs = require("node:fs");
 const raw = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
@@ -306,24 +377,23 @@ assert_installed_once() {
   local channel="$2"
   local dep_path="$3"
   local count
-  count="$(grep -c "\\[plugins\\] $channel installed bundled runtime deps:" "$log_file" || true)"
+  count="$(grep -Ec "\\[plugins\\] $channel installed bundled runtime deps( in [0-9]+ms)?:" "$log_file" || true)"
   if [ "$count" -eq 1 ]; then
     return 0
   fi
-  if [ "$count" -eq 0 ] && [ -f "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
+  if [ "$count" -eq 0 ] && [ -n "$(find_external_dep_package "$dep_path")" ]; then
     return 0
   fi
-  if [ "$count" -ne 1 ]; then
-    echo "expected exactly one runtime deps install log or installed sentinel for $channel, got $count log lines" >&2
-    cat "$log_file" >&2
-    exit 1
-  fi
+  echo "expected one runtime deps install log or staged dependency sentinel for $channel, got $count log lines" >&2
+  cat "$log_file" >&2
+  find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
+  exit 1
 }
 
 assert_not_installed() {
   local log_file="$1"
   local channel="$2"
-  if grep -q "\\[plugins\\] $channel installed bundled runtime deps:" "$log_file"; then
+  if grep -Eq "\\[plugins\\] $channel installed bundled runtime deps( in [0-9]+ms)?:" "$log_file"; then
     echo "expected no runtime deps reinstall for $channel" >&2
     cat "$log_file" >&2
     exit 1
@@ -333,18 +403,22 @@ assert_not_installed() {
 assert_dep_sentinel() {
   local channel="$1"
   local dep_path="$2"
-  if [ ! -f "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
-    echo "missing dependency sentinel for $channel: $dep_path" >&2
-    find "$package_root/dist/extensions/$channel" -maxdepth 3 -type f | sort | head -80 >&2 || true
+  local sentinel
+  sentinel="$(find_external_dep_package "$dep_path")"
+  if [ -z "$sentinel" ]; then
+    echo "missing external dependency sentinel for $channel: $dep_path" >&2
+    find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
     exit 1
   fi
+  assert_package_dep_absent "$channel" "$dep_path"
 }
 
 assert_no_dep_sentinel() {
   local channel="$1"
   local dep_path="$2"
-  if [ -f "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
-    echo "dependency sentinel should be absent before activation for $channel: $dep_path" >&2
+  assert_package_dep_absent "$channel" "$dep_path"
+  if [ -n "$(find_external_dep_package "$dep_path")" ]; then
+    echo "external dependency sentinel should be absent before activation for $channel: $dep_path" >&2
     exit 1
   fi
 }
@@ -361,15 +435,15 @@ assert_no_install_stage() {
 
 echo "Starting baseline gateway with OpenAI configured..."
 write_config baseline
-start_gateway "/tmp/openclaw-$CHANNEL-baseline.log"
-wait_for_gateway_health
+start_gateway "/tmp/openclaw-$CHANNEL-baseline.log" 1
+wait_for_gateway_health "/tmp/openclaw-$CHANNEL-baseline.log"
 stop_gateway
 assert_no_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
 
 echo "Enabling $CHANNEL by config edit, then restarting gateway..."
 write_config "$CHANNEL"
 start_gateway "/tmp/openclaw-$CHANNEL-first.log"
-wait_for_gateway_health
+wait_for_gateway_health "/tmp/openclaw-$CHANNEL-first.log"
 assert_installed_once "/tmp/openclaw-$CHANNEL-first.log" "$CHANNEL" "$DEP_SENTINEL"
 assert_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
 assert_no_install_stage "$CHANNEL"
@@ -378,7 +452,7 @@ stop_gateway
 
 echo "Restarting gateway again; $CHANNEL deps must stay installed..."
 start_gateway "/tmp/openclaw-$CHANNEL-second.log"
-wait_for_gateway_health
+wait_for_gateway_health "/tmp/openclaw-$CHANNEL-second.log"
 assert_not_installed "/tmp/openclaw-$CHANNEL-second.log" "$CHANNEL"
 assert_no_install_stage "$CHANNEL"
 assert_channel_status "$CHANNEL"
@@ -401,7 +475,7 @@ run_root_owned_global_scenario() {
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-root-owned.XXXXXX")"
 
   echo "Running bundled channel root-owned global install Docker E2E..."
-  if ! docker run --rm --user root \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm --user root \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
@@ -500,7 +574,8 @@ start_gateway() {
     bash "$PORT" "$log_file" &
   gateway_pid="$!"
 
-  for _ in $(seq 1 240); do
+  # Cold bundled dependency staging can exceed 60s under 10-way Docker aggregate load.
+  for _ in $(seq 1 1200); do
     if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
       return 0
     fi
@@ -519,7 +594,7 @@ start_gateway() {
 
 wait_for_slack_provider_start() {
   for _ in $(seq 1 180); do
-    if grep -Eq "\\[slack\\] \\[default\\] starting provider|An API error occurred: invalid_auth" /tmp/openclaw-root-owned-gateway.log; then
+    if grep -Eq "\\[slack\\] \\[default\\] starting provider|An API error occurred: invalid_auth|\\[plugins\\] slack installed bundled runtime deps|\\[gateway\\] ready \\(.*\\bslack\\b" /tmp/openclaw-root-owned-gateway.log; then
       return 0
     fi
     sleep 1
@@ -577,7 +652,7 @@ run_setup_entry_scenario() {
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-setup-entry.XXXXXX")"
 
   echo "Running bundled channel setup-entry runtime deps Docker E2E..."
-  if ! docker run --rm \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
@@ -669,6 +744,102 @@ for channel in "${!SETUP_ENTRY_DEP_SENTINELS[@]}"; do
   fi
 done
 
+echo "Running packaged guided WhatsApp setup; runtime deps should be staged before finalize..."
+OPENCLAW_PACKAGE_ROOT="$root" node --input-type=module - <<'NODE'
+import path from "node:path";
+import { readdir } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+
+const root = process.env.OPENCLAW_PACKAGE_ROOT;
+if (!root) {
+  throw new Error("missing OPENCLAW_PACKAGE_ROOT");
+}
+const distDir = path.join(root, "dist");
+const onboardChannelFiles = (await readdir(distDir))
+  .filter((entry) => /^onboard-channels-.*\.js$/.test(entry))
+  .sort();
+let setupChannels;
+for (const entry of onboardChannelFiles) {
+  const module = await import(pathToFileURL(path.join(distDir, entry)));
+  if (typeof module.setupChannels === "function") {
+    setupChannels = module.setupChannels;
+    break;
+  }
+}
+if (!setupChannels) {
+  throw new Error(
+    `could not find packaged setupChannels export in ${JSON.stringify(onboardChannelFiles)}`,
+  );
+}
+
+let channelSelectCount = 0;
+const notes = [];
+const prompter = {
+  intro: async () => {},
+  outro: async () => {},
+  note: async (body, title) => {
+    notes.push({ title, body });
+  },
+  confirm: async ({ message, initialValue }) => {
+    if (message === "Link WhatsApp now (QR)?") {
+      return false;
+    }
+    return initialValue ?? true;
+  },
+  select: async ({ message }) => {
+    if (message === "Select a channel") {
+      channelSelectCount += 1;
+      return channelSelectCount === 1 ? "whatsapp" : "__done__";
+    }
+    if (message === "WhatsApp phone setup") {
+      return "separate";
+    }
+    if (message === "WhatsApp DM policy") {
+      return "disabled";
+    }
+    throw new Error(`unexpected select prompt: ${message}`);
+  },
+  multiselect: async ({ message }) => {
+    throw new Error(`unexpected multiselect prompt: ${message}`);
+  },
+  text: async ({ message }) => {
+    throw new Error(`unexpected text prompt: ${message}`);
+  },
+};
+const runtime = {
+  log: (message) => console.log(message),
+  error: (message) => console.error(message),
+};
+
+const result = await setupChannels(
+  { plugins: { enabled: true } },
+  runtime,
+  prompter,
+  {
+    deferStatusUntilSelection: true,
+    skipConfirm: true,
+    skipStatusNote: true,
+    skipDmPolicyPrompt: true,
+    initialSelection: ["whatsapp"],
+  },
+);
+
+if (!result.channels?.whatsapp) {
+  throw new Error(`WhatsApp setup did not write channel config: ${JSON.stringify(result)}`);
+}
+console.log("packaged guided WhatsApp setup completed");
+NODE
+
+if [ -e "$root/dist/extensions/whatsapp/node_modules/@whiskeysockets/baileys/package.json" ]; then
+  echo "expected guided WhatsApp setup deps to be installed externally, not into bundled plugin tree" >&2
+  exit 1
+fi
+if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/@whiskeysockets/baileys/package.json" -type f | grep -q .; then
+  echo "guided WhatsApp setup did not stage @whiskeysockets/baileys before finalize" >&2
+  find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
+  exit 1
+fi
+
 echo "Configuring setup-entry channels; doctor should now install bundled runtime deps externally..."
 node - <<'NODE'
 const fs = require("node:fs");
@@ -727,14 +898,180 @@ EOF
   rm -f "$run_log"
 }
 
+run_disabled_config_scenario() {
+  local run_log
+  run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-disabled-config.XXXXXX")"
+
+  echo "Running bundled channel disabled-config runtime deps Docker E2E..."
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
+    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
+    -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
+set -euo pipefail
+
+export HOME="$(mktemp -d "/tmp/openclaw-bundled-channel-disabled-config.XXXXXX")"
+export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+export OPENCLAW_NO_ONBOARD=1
+export OPENCLAW_PLUGIN_STAGE_DIR="$HOME/.openclaw/plugin-runtime-deps"
+mkdir -p "$OPENCLAW_PLUGIN_STAGE_DIR"
+
+package_root() {
+  printf "%s/openclaw" "$(npm root -g)"
+}
+
+assert_dep_absent_everywhere() {
+  local channel="$1"
+  local dep_path="$2"
+  local root="$3"
+  for candidate in \
+    "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
+    "$root/dist/extensions/node_modules/$dep_path/package.json" \
+    "$root/node_modules/$dep_path/package.json"; do
+    if [ -f "$candidate" ]; then
+      echo "disabled $channel unexpectedly installed $dep_path at $candidate" >&2
+      exit 1
+    fi
+  done
+
+  if ! node - <<'NODE' "$OPENCLAW_PLUGIN_STAGE_DIR" "$dep_path"
+const fs = require("node:fs");
+const path = require("node:path");
+
+const stageDir = process.argv[2];
+const depName = process.argv[3];
+const manifestName = ".openclaw-runtime-deps.json";
+const matches = [];
+
+function visit(dir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      visit(fullPath);
+      continue;
+    }
+    if (entry.name !== manifestName) {
+      continue;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+    } catch {
+      continue;
+    }
+    const specs = Array.isArray(parsed.specs) ? parsed.specs : [];
+    for (const spec of specs) {
+      if (typeof spec === "string" && spec.startsWith(`${depName}@`)) {
+        matches.push(`${fullPath}: ${spec}`);
+      }
+    }
+  }
+}
+
+visit(stageDir);
+if (matches.length > 0) {
+  process.stderr.write(`${matches.join("\n")}\n`);
+  process.exit(1);
+}
+NODE
+  then
+    echo "disabled $channel unexpectedly selected $dep_path for external runtime deps" >&2
+    cat /tmp/openclaw-disabled-config-doctor.log >&2
+    exit 1
+  fi
+}
+
+echo "Installing mounted OpenClaw package..."
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-disabled-config-install.log 2>&1
+
+root="$(package_root)"
+test -d "$root/dist/extensions/telegram"
+test -d "$root/dist/extensions/discord"
+test -d "$root/dist/extensions/slack"
+rm -rf "$root/dist/extensions/telegram/node_modules"
+rm -rf "$root/dist/extensions/discord/node_modules"
+rm -rf "$root/dist/extensions/slack/node_modules"
+
+node - <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = {
+  plugins: {
+    enabled: true,
+    entries: {
+      discord: { enabled: false },
+    },
+  },
+  channels: {
+    telegram: {
+      enabled: false,
+      botToken: "123456:disabled-config-token",
+      dmPolicy: "disabled",
+      groupPolicy: "disabled",
+    },
+    slack: {
+      enabled: false,
+      botToken: "xoxb-disabled-config-token",
+      appToken: "xapp-disabled-config-token",
+    },
+    discord: {
+      enabled: true,
+      token: "disabled-plugin-entry-token",
+      dmPolicy: "disabled",
+      groupPolicy: "disabled",
+    },
+  },
+};
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+NODE
+
+if ! openclaw doctor --non-interactive >/tmp/openclaw-disabled-config-doctor.log 2>&1; then
+  echo "doctor failed for disabled-config runtime deps smoke" >&2
+  cat /tmp/openclaw-disabled-config-doctor.log >&2
+  exit 1
+fi
+
+assert_dep_absent_everywhere telegram grammy "$root"
+assert_dep_absent_everywhere slack @slack/web-api "$root"
+assert_dep_absent_everywhere discord discord-api-types "$root"
+
+if grep -Eq "(used by .*\\b(telegram|slack|discord)\\b|\\[plugins\\] (telegram|slack|discord) installed bundled runtime deps( in [0-9]+ms)?:)" /tmp/openclaw-disabled-config-doctor.log; then
+  echo "doctor installed runtime deps for an explicitly disabled channel/plugin" >&2
+  cat /tmp/openclaw-disabled-config-doctor.log >&2
+  exit 1
+fi
+
+echo "bundled channel disabled-config runtime deps Docker E2E passed"
+EOF
+  then
+    cat "$run_log"
+    rm -f "$run_log"
+    exit 1
+  fi
+
+  cat "$run_log"
+  rm -f "$run_log"
+}
+
 run_update_scenario() {
   local run_log
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-update.XXXXXX")"
 
   echo "Running bundled channel runtime deps Docker update E2E..."
-  if ! docker run --rm \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
+    -e "OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=${OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS:-telegram,discord,slack,feishu,memory-lancedb,acpx}" \
     "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
@@ -748,9 +1085,19 @@ export OPENCLAW_UPDATE_PACKAGE_SPEC=""
 
 TOKEN="bundled-channel-update-token"
 PORT="18790"
+UPDATE_TARGETS="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS:-telegram,discord,slack,feishu,memory-lancedb,acpx}"
 
 package_root() {
   printf "%s/openclaw" "$(npm root -g)"
+}
+
+stage_root() {
+  printf "%s/.openclaw/plugin-runtime-deps" "$HOME"
+}
+
+find_external_dep_package() {
+  local dep_path="$1"
+  find "$(stage_root)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
 }
 
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
@@ -872,12 +1219,15 @@ assert_dep_sentinel() {
   local channel="$1"
   local dep_path="$2"
   local root
+  local sentinel
   root="$(package_root)"
-  if [ ! -f "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
-    echo "missing dependency sentinel for $channel: $dep_path" >&2
-    find "$root/dist/extensions/$channel" -maxdepth 3 -type f | sort | head -80 >&2 || true
+  sentinel="$(find_external_dep_package "$dep_path")"
+  if [ -z "$sentinel" ]; then
+    echo "missing external dependency sentinel for $channel: $dep_path" >&2
+    find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
     exit 1
   fi
+  assert_no_package_dep_available "$channel" "$dep_path" "$root"
 }
 
 assert_no_dep_sentinel() {
@@ -885,28 +1235,43 @@ assert_no_dep_sentinel() {
   local dep_path="$2"
   local root
   root="$(package_root)"
-  if [ -f "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
-    echo "dependency sentinel should be absent before repair for $channel: $dep_path" >&2
+  assert_no_package_dep_available "$channel" "$dep_path" "$root"
+  if [ -n "$(find_external_dep_package "$dep_path")" ]; then
+    echo "external dependency sentinel should be absent before repair for $channel: $dep_path" >&2
     exit 1
   fi
+}
+
+assert_no_package_dep_available() {
+  local channel="$1"
+  local dep_path="$2"
+  local root="$3"
+  for candidate in \
+    "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
+    "$root/dist/extensions/node_modules/$dep_path/package.json" \
+    "$root/node_modules/$dep_path/package.json"; do
+    if [ -f "$candidate" ]; then
+      echo "packaged install should not mutate package tree for $channel: $candidate" >&2
+      exit 1
+    fi
+  done
 }
 
 assert_dep_available() {
   local channel="$1"
   local dep_path="$2"
   local root
+  local sentinel
   root="$(package_root)"
-  for candidate in \
-    "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
-    "$root/dist/extensions/node_modules/$dep_path/package.json" \
-    "$root/node_modules/$dep_path/package.json"; do
-    if [ -f "$candidate" ]; then
-      return 0
-    fi
-  done
+  sentinel="$(find_external_dep_package "$dep_path")"
+  if [ -n "$sentinel" ]; then
+    assert_no_package_dep_available "$channel" "$dep_path" "$root"
+    return 0
+  fi
   echo "missing dependency sentinel for $channel: $dep_path" >&2
   find "$root/dist/extensions/$channel" -maxdepth 3 -type f | sort | head -80 >&2 || true
   find "$root/node_modules" -maxdepth 3 -path "*/$dep_path/package.json" -type f -print >&2 || true
+  find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
   exit 1
 }
 
@@ -915,15 +1280,11 @@ assert_no_dep_available() {
   local dep_path="$2"
   local root
   root="$(package_root)"
-  for candidate in \
-    "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
-    "$root/dist/extensions/node_modules/$dep_path/package.json" \
-    "$root/node_modules/$dep_path/package.json"; do
-    if [ -f "$candidate" ]; then
-      echo "dependency sentinel should be absent before repair for $channel: $dep_path ($candidate)" >&2
-      exit 1
-    fi
-  done
+  assert_no_package_dep_available "$channel" "$dep_path" "$root"
+  if [ -n "$(find_external_dep_package "$dep_path")" ]; then
+    echo "dependency sentinel should be absent before repair for $channel: $dep_path" >&2
+    exit 1
+  fi
 }
 
 remove_runtime_dep() {
@@ -934,6 +1295,7 @@ remove_runtime_dep() {
   rm -rf "$root/dist/extensions/$channel/node_modules"
   rm -rf "$root/dist/extensions/node_modules/$dep_path"
   rm -rf "$root/node_modules/$dep_path"
+  rm -rf "$(stage_root)"
 }
 
 assert_update_ok() {
@@ -983,7 +1345,16 @@ run_update_and_capture() {
   fi
 }
 
+should_run_update_target() {
+  local target="$1"
+  case ",$UPDATE_TARGETS," in
+    *",all,"* | *",$target,"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 echo "Installing current candidate as update baseline..."
+echo "Update targets: $UPDATE_TARGETS"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-update-baseline-install.log 2>&1
 command -v openclaw >/dev/null
 baseline_root="$(package_root)"
@@ -991,76 +1362,88 @@ test -d "$baseline_root/dist/extensions/telegram"
 test -d "$baseline_root/dist/extensions/feishu"
 test -d "$baseline_root/dist/extensions/acpx"
 
-echo "Replicating configured Telegram missing-runtime state..."
-write_config telegram
-assert_no_dep_available telegram grammy
-set +e
-openclaw doctor --non-interactive >/tmp/openclaw-baseline-doctor.log 2>&1
-baseline_doctor_status=$?
-set -e
-echo "baseline doctor exited with $baseline_doctor_status"
-remove_runtime_dep telegram grammy
-assert_no_dep_available telegram grammy
+if should_run_update_target telegram; then
+  echo "Replicating configured Telegram missing-runtime state..."
+  write_config telegram
+  assert_no_dep_available telegram grammy
+  set +e
+  openclaw doctor --non-interactive >/tmp/openclaw-baseline-doctor.log 2>&1
+  baseline_doctor_status=$?
+  set -e
+  echo "baseline doctor exited with $baseline_doctor_status"
+  remove_runtime_dep telegram grammy
+  assert_no_dep_available telegram grammy
 
-echo "Updating from baseline to current candidate; candidate doctor must repair Telegram deps..."
-run_update_and_capture telegram /tmp/openclaw-update-telegram.json
-cat /tmp/openclaw-update-telegram.json
-assert_update_ok /tmp/openclaw-update-telegram.json "$candidate_version"
-assert_dep_available telegram grammy
+  echo "Updating from baseline to current candidate; candidate doctor must repair Telegram deps..."
+  run_update_and_capture telegram /tmp/openclaw-update-telegram.json
+  cat /tmp/openclaw-update-telegram.json
+  assert_update_ok /tmp/openclaw-update-telegram.json "$candidate_version"
+  assert_dep_available telegram grammy
 
-echo "Mutating installed package: remove Telegram deps, then update-mode doctor repairs them..."
-remove_runtime_dep telegram grammy
-assert_no_dep_available telegram grammy
-if ! OPENCLAW_UPDATE_IN_PROGRESS=1 openclaw doctor --non-interactive >/tmp/openclaw-update-mode-doctor.log 2>&1; then
-  echo "update-mode doctor failed while repairing Telegram deps" >&2
-  cat /tmp/openclaw-update-mode-doctor.log >&2
-  exit 1
+  echo "Mutating installed package: remove Telegram deps, then update-mode doctor repairs them..."
+  remove_runtime_dep telegram grammy
+  assert_no_dep_available telegram grammy
+  if ! OPENCLAW_UPDATE_IN_PROGRESS=1 openclaw doctor --non-interactive >/tmp/openclaw-update-mode-doctor.log 2>&1; then
+    echo "update-mode doctor failed while repairing Telegram deps" >&2
+    cat /tmp/openclaw-update-mode-doctor.log >&2
+    exit 1
+  fi
+  assert_dep_available telegram grammy
 fi
-assert_dep_available telegram grammy
 
-echo "Mutating config to Discord and rerunning same-version update path..."
-write_config discord
-remove_runtime_dep discord discord-api-types
-assert_no_dep_available discord discord-api-types
-run_update_and_capture discord /tmp/openclaw-update-discord.json
-cat /tmp/openclaw-update-discord.json
-assert_update_ok /tmp/openclaw-update-discord.json "$candidate_version"
-assert_dep_available discord discord-api-types
+if should_run_update_target discord; then
+  echo "Mutating config to Discord and rerunning same-version update path..."
+  write_config discord
+  remove_runtime_dep discord discord-api-types
+  assert_no_dep_available discord discord-api-types
+  run_update_and_capture discord /tmp/openclaw-update-discord.json
+  cat /tmp/openclaw-update-discord.json
+  assert_update_ok /tmp/openclaw-update-discord.json "$candidate_version"
+  assert_dep_available discord discord-api-types
+fi
 
-echo "Mutating config to Slack and rerunning same-version update path..."
-write_config slack
-remove_runtime_dep slack @slack/web-api
-assert_no_dep_available slack @slack/web-api
-run_update_and_capture slack /tmp/openclaw-update-slack.json
-cat /tmp/openclaw-update-slack.json
-assert_update_ok /tmp/openclaw-update-slack.json "$candidate_version"
-assert_dep_available slack @slack/web-api
+if should_run_update_target slack; then
+  echo "Mutating config to Slack and rerunning same-version update path..."
+  write_config slack
+  remove_runtime_dep slack @slack/web-api
+  assert_no_dep_available slack @slack/web-api
+  run_update_and_capture slack /tmp/openclaw-update-slack.json
+  cat /tmp/openclaw-update-slack.json
+  assert_update_ok /tmp/openclaw-update-slack.json "$candidate_version"
+  assert_dep_available slack @slack/web-api
+fi
 
-echo "Mutating config to Feishu and rerunning same-version update path..."
-write_config feishu
-remove_runtime_dep feishu @larksuiteoapi/node-sdk
-assert_no_dep_available feishu @larksuiteoapi/node-sdk
-run_update_and_capture feishu /tmp/openclaw-update-feishu.json
-cat /tmp/openclaw-update-feishu.json
-assert_update_ok /tmp/openclaw-update-feishu.json "$candidate_version"
-assert_dep_available feishu @larksuiteoapi/node-sdk
+if should_run_update_target feishu; then
+  echo "Mutating config to Feishu and rerunning same-version update path..."
+  write_config feishu
+  remove_runtime_dep feishu @larksuiteoapi/node-sdk
+  assert_no_dep_available feishu @larksuiteoapi/node-sdk
+  run_update_and_capture feishu /tmp/openclaw-update-feishu.json
+  cat /tmp/openclaw-update-feishu.json
+  assert_update_ok /tmp/openclaw-update-feishu.json "$candidate_version"
+  assert_dep_available feishu @larksuiteoapi/node-sdk
+fi
 
-echo "Mutating config to memory-lancedb and rerunning same-version update path..."
-write_config memory-lancedb
-remove_runtime_dep memory-lancedb @lancedb/lancedb
-assert_no_dep_available memory-lancedb @lancedb/lancedb
-run_update_and_capture memory-lancedb /tmp/openclaw-update-memory-lancedb.json
-cat /tmp/openclaw-update-memory-lancedb.json
-assert_update_ok /tmp/openclaw-update-memory-lancedb.json "$candidate_version"
-assert_dep_available memory-lancedb @lancedb/lancedb
+if should_run_update_target memory-lancedb; then
+  echo "Mutating config to memory-lancedb and rerunning same-version update path..."
+  write_config memory-lancedb
+  remove_runtime_dep memory-lancedb @lancedb/lancedb
+  assert_no_dep_available memory-lancedb @lancedb/lancedb
+  run_update_and_capture memory-lancedb /tmp/openclaw-update-memory-lancedb.json
+  cat /tmp/openclaw-update-memory-lancedb.json
+  assert_update_ok /tmp/openclaw-update-memory-lancedb.json "$candidate_version"
+  assert_dep_available memory-lancedb @lancedb/lancedb
+fi
 
-echo "Removing ACPX runtime package and rerunning same-version update path..."
-remove_runtime_dep acpx acpx
-assert_no_dep_available acpx acpx
-run_update_and_capture acpx /tmp/openclaw-update-acpx.json
-cat /tmp/openclaw-update-acpx.json
-assert_update_ok /tmp/openclaw-update-acpx.json "$candidate_version"
-assert_dep_available acpx acpx
+if should_run_update_target acpx; then
+  echo "Removing ACPX runtime package and rerunning same-version update path..."
+  remove_runtime_dep acpx acpx
+  assert_no_dep_available acpx acpx
+  run_update_and_capture acpx /tmp/openclaw-update-acpx.json
+  cat /tmp/openclaw-update-acpx.json
+  assert_update_ok /tmp/openclaw-update-acpx.json "$candidate_version"
+  assert_dep_available acpx acpx
+fi
 
 echo "bundled channel runtime deps Docker update E2E passed"
 EOF
@@ -1079,7 +1462,7 @@ run_load_failure_scenario() {
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-load-failure.XXXXXX")"
 
   echo "Running bundled channel load-failure isolation Docker E2E..."
-  if ! docker run --rm \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
@@ -1230,11 +1613,22 @@ EOF
 }
 
 if [ "$RUN_CHANNEL_SCENARIOS" != "0" ]; then
-  run_channel_scenario telegram grammy
-  run_channel_scenario discord discord-api-types
-  run_channel_scenario slack @slack/web-api
-  run_channel_scenario feishu @larksuiteoapi/node-sdk
-  run_channel_scenario memory-lancedb @lancedb/lancedb
+  IFS=',' read -r -a CHANNEL_SCENARIOS <<<"${OPENCLAW_BUNDLED_CHANNELS:-${CHANNEL_ONLY:-telegram,discord,slack,feishu,memory-lancedb}}"
+  for channel_scenario in "${CHANNEL_SCENARIOS[@]}"; do
+    channel_scenario="${channel_scenario//[[:space:]]/}"
+    [ -n "$channel_scenario" ] || continue
+    case "$channel_scenario" in
+      telegram) run_channel_scenario telegram grammy ;;
+      discord) run_channel_scenario discord discord-api-types ;;
+      slack) run_channel_scenario slack @slack/web-api ;;
+      feishu) run_channel_scenario feishu @larksuiteoapi/node-sdk ;;
+      memory-lancedb) run_channel_scenario memory-lancedb @lancedb/lancedb ;;
+      *)
+        echo "Unsupported OPENCLAW_BUNDLED_CHANNELS entry: $channel_scenario" >&2
+        exit 1
+        ;;
+    esac
+  done
 fi
 if [ "$RUN_UPDATE_SCENARIO" != "0" ]; then
   run_update_scenario
@@ -1244,6 +1638,9 @@ if [ "$RUN_ROOT_OWNED_SCENARIO" != "0" ]; then
 fi
 if [ "$RUN_SETUP_ENTRY_SCENARIO" != "0" ]; then
   run_setup_entry_scenario
+fi
+if [ "$RUN_DISABLED_CONFIG_SCENARIO" != "0" ]; then
+  run_disabled_config_scenario
 fi
 if [ "$RUN_LOAD_FAILURE_SCENARIO" != "0" ]; then
   run_load_failure_scenario

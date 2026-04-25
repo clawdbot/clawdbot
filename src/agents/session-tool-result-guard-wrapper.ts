@@ -29,6 +29,7 @@ export function guardSessionManager(
     contextWindowTokens?: number;
     inputProvenance?: InputProvenance;
     allowSyntheticToolResults?: boolean;
+    missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
   },
 ): GuardedSessionManager {
@@ -75,6 +76,7 @@ export function guardSessionManager(
       applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
+    missingToolResultText: opts?.missingToolResultText,
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
     maxToolResultChars:

@@ -116,6 +116,12 @@ jobs:
         run: |
           docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
 
+      - name: Run agents delete shared workspace Docker CLI smoke
+        env:
+          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD: "1"
+        run: bash scripts/e2e/agents-delete-shared-workspace-docker.sh
+
       - name: Run Docker gateway network e2e
         env:
           OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: openclaw-dockerfile-smoke:local
@@ -210,6 +216,12 @@ jobs:
       - name: Run root Dockerfile CLI smoke
         run: |
           docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
+
+      - name: Run agents delete shared workspace Docker CLI smoke
+        env:
+          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD: "1"
+        run: bash scripts/e2e/agents-delete-shared-workspace-docker.sh
 
       - name: Run Docker gateway network e2e
         env:
@@ -337,4 +349,5 @@ jobs:
       - name: Run fast bundled plugin Docker E2E
         env:
           OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE: openclaw-bundled-channel-fast:local
-        run: timeout 120s pnpm test:docker:bundled-channel-deps:fast
+          OPENCLAW_BUNDLED_CHANNEL_DOCKER_RUN_TIMEOUT: 90s
+        run: timeout 240s pnpm test:docker:bundled-channel-deps:fast

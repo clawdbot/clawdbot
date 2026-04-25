@@ -50,6 +50,10 @@ Notes:
 - `models list --all` includes bundled provider-owned static catalog rows even
   when you have not authenticated with that provider yet. Those rows still show
   as unavailable until matching auth is configured.
+- `models list` keeps native model metadata and runtime caps distinct. In table
+  output, `Ctx` shows `contextTokens/contextWindow` when an effective runtime
+  cap differs from the native context window; JSON rows include `contextTokens`
+  when a provider exposes that cap.
 - `models list --provider <id>` filters by provider id, such as `moonshot` or
   `openai-codex`. It does not accept display labels from interactive provider
   pickers, such as `Moonshot AI`.

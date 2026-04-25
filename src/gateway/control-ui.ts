@@ -15,6 +15,7 @@ import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { detectMime } from "../media/mime.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
@@ -401,8 +402,9 @@ async function resolveAssistantMediaAvailability(
   localRoots: readonly string[],
 ): Promise<AssistantMediaAvailability> {
   try {
-    await assertLocalMediaAllowed(source, localRoots);
-    const opened = await openLocalFileSafely({ filePath: source });
+    const localPath = await resolveMediaReferenceLocalPath(source);
+    await assertLocalMediaAllowed(localPath, localRoots);
+    const opened = await openLocalFileSafely({ filePath: localPath });
     await opened.handle.close();
     return { available: true };
   } catch (err) {
@@ -460,6 +462,7 @@ export async function handleControlUiAssistantMediaRequest(
   }
 
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | null = null;
+  let localPath = source;
   let handleClosed = false;
   const closeOpenedHandle = async () => {
     if (!opened || handleClosed) {
@@ -469,8 +472,9 @@ export async function handleControlUiAssistantMediaRequest(
     await opened.handle.close().catch(() => {});
   };
   try {
-    await assertLocalMediaAllowed(source, localRoots);
-    opened = await openLocalFileSafely({ filePath: source });
+    localPath = await resolveMediaReferenceLocalPath(source);
+    await assertLocalMediaAllowed(localPath, localRoots);
+    opened = await openLocalFileSafely({ filePath: localPath });
     const sniffLength = Math.min(opened.stat.size, 8192);
     const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
     const bytesRead =
@@ -479,7 +483,7 @@ export async function handleControlUiAssistantMediaRequest(
         : 0;
     const mime = await detectMime({
       buffer: sniffBuffer?.subarray(0, bytesRead),
-      filePath: source,
+      filePath: localPath,
     });
     if (mime) {
       res.setHeader("Content-Type", mime);

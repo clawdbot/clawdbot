@@ -267,6 +267,9 @@ Now create some channels on your Discord server and start chatting. Your agent c
 - Guild channels are isolated session keys (`agent:<agentId>:discord:channel:<channelId>`).
 - Group DMs are ignored by default (`channels.discord.dm.groupEnabled=false`).
 - Native slash commands run in isolated command sessions (`agent:<agentId>:discord:slash:<userId>`), while still carrying `CommandTargetSessionKey` to the routed conversation session.
+- Text-only cron/heartbeat announce delivery to Discord uses the final
+  assistant-visible answer once. Media and structured component payloads remain
+  multi-message when the agent emits multiple deliverable payloads.
 
 ## Forum channels
 
@@ -305,7 +308,7 @@ By default, components are single use. Set `components.reusable=true` to allow b
 
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). When configured, unmatched users receive an ephemeral denial.
 
-The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. Unless `commands.modelsWrite=false`, `/models add` also supports adding a new provider/model entry from chat, and newly added models show up without restarting the gateway. The picker reply is ephemeral and only the invoking user can use it.
+The `/model` and `/models` slash commands open an interactive model picker with provider, model, and compatible runtime dropdowns plus a Submit step. `/models add` is deprecated and now returns a deprecation message instead of registering models from chat. The picker reply is ephemeral and only the invoking user can use it.
 
 File attachments:
 

@@ -38,6 +38,10 @@ vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
+vi.mock("./runtime-api.js", () => ({
+  loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
+}));
+
 vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   requireRuntimeConfig: (cfg: unknown) => {
     if (cfg) {

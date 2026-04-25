@@ -423,14 +423,10 @@ function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: str
   execFileSync(process.execPath, [join(packageRoot, "openclaw.mjs"), "plugins", "doctor"], {
     cwd: packageRoot,
     stdio: "inherit",
-    env: {
-      ...process.env,
+    env: createPackedCliSmokeEnv(process.env, {
       HOME: homeDir,
       OPENAI_API_KEY: "sk-openclaw-release-check",
-      OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
-      OPENCLAW_NO_ONBOARD: "1",
-      OPENCLAW_SUPPRESS_NOTES: "1",
-    },
+    }),
   });
 
   for (const dep of lazyDeps) {
@@ -455,13 +451,17 @@ function runPackedCliSmoke(params: {
 
   for (const args of PACKED_CLI_SMOKE_COMMANDS) {
     if (process.platform === "win32") {
-      execFileSync(trustedCmdPath, ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])], {
-        cwd: params.cwd,
-        stdio: "inherit",
-        env,
-        shell: false,
-        windowsVerbatimArguments: true,
-      });
+      execFileSync(
+        trustedCmdPath,
+        ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])],
+        {
+          cwd: params.cwd,
+          stdio: "inherit",
+          env,
+          shell: false,
+          windowsVerbatimArguments: true,
+        },
+      );
       continue;
     }
     execFileSync(binaryPath, [...args], {

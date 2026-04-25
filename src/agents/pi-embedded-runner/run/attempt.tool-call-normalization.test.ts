@@ -61,6 +61,65 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
     ]);
   });
 
+  it("synthesizes missing tool results after strict id sanitization", () => {
+    const rawId = "call_function_av7cbkigmk7x1";
+    const out = sanitizeReplayToolCallIdsForStream({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolUse", id: rawId, name: "read", input: { path: "." } },
+            { type: "toolUse", id: "call_missing", name: "exec", input: { cmd: "true" } },
+          ],
+        } as never,
+        {
+          role: "toolResult",
+          toolCallId: rawId,
+          toolUseId: rawId,
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        } as never,
+      ],
+      mode: "strict",
+      repairToolUseResultPairing: true,
+    });
+
+    expect(out.map((message) => message.role)).toEqual(["assistant", "toolResult", "toolResult"]);
+    expect((out[0] as Extract<AgentMessage, { role: "assistant" }>).content).toMatchObject([
+      { type: "toolUse", id: "callfunctionav7cbkigmk7x1", name: "read" },
+      { type: "toolUse", id: "callmissing", name: "exec" },
+    ]);
+    expect(out[1]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "callfunctionav7cbkigmk7x1",
+      toolUseId: "callfunctionav7cbkigmk7x1",
+    });
+    expect(out[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "callmissing",
+      isError: true,
+    });
+  });
+
+  it("synthesizes missing tool results when repair is enabled", () => {
+    const out = sanitizeReplayToolCallIdsForStream({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "toolUse", id: "call_missing", name: "exec", input: { cmd: "true" } }],
+        } as never,
+      ],
+      mode: "strict",
+      repairToolUseResultPairing: true,
+    });
+
+    expect(out).toMatchObject([
+      { role: "assistant" },
+      { role: "toolResult", toolCallId: "callmissing", isError: true },
+    ]);
+  });
+
   it("keeps real tool results for aborted assistant spans", () => {
     const rawId = "call_function_av7cbkigmk7x1";
     const out = sanitizeReplayToolCallIdsForStream({

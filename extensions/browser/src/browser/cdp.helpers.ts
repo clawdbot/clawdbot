@@ -142,6 +142,7 @@ type CdpResponse = {
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 export type CdpSendFn = (
@@ -221,9 +222,19 @@ type CdpFetchResult = {
   release: () => Promise<void>;
 };
 
-function createCdpSender(ws: WebSocket) {
+function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
   let nextId = 1;
   const pending = new Map<number, Pending>();
+  const commandTimeoutMs =
+    typeof opts?.commandTimeoutMs === "number" && Number.isFinite(opts.commandTimeoutMs)
+      ? Math.max(1, Math.floor(opts.commandTimeoutMs))
+      : undefined;
+
+  const clearPendingTimer = (p: Pending) => {
+    if (p.timer !== undefined) {
+      clearTimeout(p.timer);
+    }
+  };
 
   const send: CdpSendFn = (
     method: string,
@@ -232,14 +243,31 @@ function createCdpSender(ws: WebSocket) {
   ) => {
     const id = nextId++;
     const msg = { id, method, params, sessionId };
-    ws.send(JSON.stringify(msg));
     return new Promise<unknown>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      if (ws.readyState !== WebSocket.OPEN) {
+        reject(new Error("CDP socket closed"));
+        return;
+      }
+      const entry: Pending = { resolve, reject };
+      if (commandTimeoutMs !== undefined) {
+        entry.timer = setTimeout(() => {
+          closeWithError(new Error(`CDP command ${method} timed out after ${commandTimeoutMs}ms`));
+        }, commandTimeoutMs);
+      }
+      pending.set(id, entry);
+      try {
+        ws.send(JSON.stringify(msg));
+      } catch (err) {
+        pending.delete(id);
+        clearPendingTimer(entry);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   };
 
   const closeWithError = (err: Error) => {
     for (const [, p] of pending) {
+      clearPendingTimer(p);
       p.reject(err);
     }
     pending.clear();
@@ -270,6 +298,7 @@ function createCdpSender(ws: WebSocket) {
         return;
       }
       pending.delete(parsed.id);
+      clearPendingTimer(p);
       if (parsed.error?.message) {
         p.reject(new Error(parsed.error.message));
         return;
@@ -383,10 +412,14 @@ export function openCdpWebSocket(
 export async function withCdpSocket<T>(
   wsUrl: string,
   fn: (send: CdpSendFn) => Promise<T>,
-  opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
+  opts?: {
+    headers?: Record<string, string>;
+    handshakeTimeoutMs?: number;
+    commandTimeoutMs?: number;
+  },
 ): Promise<T> {
   const ws = openCdpWebSocket(wsUrl, opts);
-  const { send, closeWithError } = createCdpSender(ws);
+  const { send, closeWithError } = createCdpSender(ws, opts);
 
   const openPromise = new Promise<void>((resolve, reject) => {
     ws.once("open", () => resolve());

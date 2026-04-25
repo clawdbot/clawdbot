@@ -57,6 +57,7 @@ export async function appendAllModelRowSources(
       appendDiscoveredRows({
         rows: params.rows,
         models: params.modelRegistry.getAll(),
+        modelRegistry: params.modelRegistry,
         context: params.context,
       });
     }
@@ -66,6 +67,7 @@ export async function appendAllModelRowSources(
   const seenKeys = appendDiscoveredRows({
     rows: params.rows,
     models: params.modelRegistry?.getAll() ?? [],
+    modelRegistry: params.modelRegistry,
     context: params.context,
   });
 

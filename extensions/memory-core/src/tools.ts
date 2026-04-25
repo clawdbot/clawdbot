@@ -6,6 +6,7 @@ import {
   readStringParam,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type {
   MemorySearchResult,
   MemorySearchRuntimeDebug,
@@ -14,6 +15,7 @@ import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   clampResultsByInjectedChars,
@@ -181,13 +183,14 @@ async function executeMemoryReadResult<T>(params: {
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 }) {
   return createMemoryTool({
     options,
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
     execute:
       ({ cfg, agentId }) =>
@@ -200,6 +203,7 @@ export function createMemorySearchTool(options: {
           | "memory"
           | "wiki"
           | "all"
+          | "sessions"
           | undefined;
         const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         const shouldQueryMemory = requestedCorpus !== "wiki";
@@ -239,6 +243,12 @@ export function createMemorySearchTool(options: {
               cfg,
               options.agentSessionKey,
             );
+            const searchSources: MemorySource[] | undefined =
+              requestedCorpus === "sessions"
+                ? (["sessions"] as MemorySource[])
+                : requestedCorpus === "memory"
+                  ? (["memory"] as MemorySource[])
+                  : undefined;
             rawResults = await memory.manager.search(query, {
               maxResults,
               minScore,
@@ -247,7 +257,19 @@ export function createMemorySearchTool(options: {
               onDebug: (debug) => {
                 runtimeDebug.push(debug);
               },
+              ...(searchSources ? { sources: searchSources } : {}),
             });
+            rawResults = await filterMemorySearchHitsBySessionVisibility({
+              cfg,
+              requesterSessionKey: options.agentSessionKey,
+              sandboxed: options.sandboxed === true,
+              hits: rawResults,
+            });
+            if (requestedCorpus === "sessions") {
+              rawResults = rawResults.filter((hit) => hit.source === "sessions");
+            } else if (requestedCorpus === "memory") {
+              rawResults = rawResults.filter((hit) => hit.source === "memory");
+            }
             const status = memory.manager.status();
             const decorated = decorateCitations(rawResults, includeCitations);
             const resolved = resolveMemoryBackendConfig({ cfg, agentId });

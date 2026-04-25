@@ -6,6 +6,7 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import {
   renderMessageGroup,
+  resolveAssistantTextAvatar,
   resetAssistantAttachmentAvailabilityCacheForTest,
 } from "./grouped-render.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
@@ -242,147 +243,115 @@ describe("grouped chat rendering", () => {
     expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
   });
 
-  it("falls back to the local logo when the assistant avatar is a remote URL", () => {
-    const container = document.createElement("div");
-
-    renderAssistantMessage(
-      container,
-      {
-        role: "assistant",
-        content: "hello",
-        timestamp: 1000,
-      },
-      { assistantAvatar: "https://example.com/avatar.png" },
-    );
-
-    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.assistant");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
-  });
-
-  it("includes cache tokens when rendering assistant context usage", () => {
-    const container = document.createElement("div");
-
-    renderAssistantMessage(
-      container,
-      {
-        role: "assistant",
-        content: "Done",
-        usage: {
-          input: 1,
-          output: 1200,
-          cacheRead: 438_400,
-          cacheWrite: 307,
+  it("renders assistant avatar variants", () => {
+    const renderAvatar = (assistantAvatar: string) => {
+      const container = document.createElement("div");
+      renderAssistantMessage(
+        container,
+        {
+          role: "assistant",
+          content: "hello",
+          timestamp: 1000,
         },
-        model: "anthropic/claude-opus-4-7",
-        timestamp: 1000,
-      },
-      { contextWindow: 1_000_000 },
-    );
+        { assistantAvatar, assistantName: "Val" },
+      );
+      return container.querySelector<HTMLElement>(".chat-avatar.assistant");
+    };
 
-    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("44% ctx");
-    expect(container.textContent).toContain("R438.4k");
-    expect(container.textContent).toContain("W307");
+    const remoteAvatar = renderAvatar("https://example.com/avatar.png");
+    expect(remoteAvatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
+
+    const blobAvatar = renderAvatar("blob:managed-image");
+    expect(blobAvatar?.tagName).toBe("IMG");
+    expect(blobAvatar?.getAttribute("src")).toBe("blob:managed-image");
+
+    const textAvatar = renderAvatar("VC");
+    expect(textAvatar?.tagName).toBe("DIV");
+    expect(textAvatar?.textContent).toContain("VC");
+    expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
   });
 
-  it("excludes output tokens when rendering assistant context usage", () => {
-    const container = document.createElement("div");
+  it("rejects unsafe invisible controls in assistant text avatars", () => {
+    expect(resolveAssistantTextAvatar("VC")).toBe("VC");
+    expect(resolveAssistantTextAvatar("\u{1F43E}")).toBe("\u{1F43E}");
+    expect(resolveAssistantTextAvatar("V\u202eC")).toBeNull();
+    expect(resolveAssistantTextAvatar("V\u200bC")).toBeNull();
+  });
 
-    renderAssistantMessage(
-      container,
-      {
-        role: "assistant",
-        content: "Long response",
-        usage: {
-          input: 1_000,
-          output: 9_000,
-          cacheRead: 0,
-          cacheWrite: 0,
+  it("renders assistant context usage from input and cache tokens", () => {
+    const renderUsage = (usage: Record<string, number>, contextWindow: number) => {
+      const container = document.createElement("div");
+      renderAssistantMessage(
+        container,
+        {
+          role: "assistant",
+          content: "Done",
+          usage,
+          model: "anthropic/claude-opus-4-7",
+          timestamp: 1000,
         },
-        timestamp: 1000,
-      },
-      { contextWindow: 10_000 },
-    );
+        { contextWindow },
+      );
+      return container;
+    };
 
-    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
+    const cached = renderUsage(
+      {
+        input: 1,
+        output: 1200,
+        cacheRead: 438_400,
+        cacheWrite: 307,
+      },
+      1_000_000,
+    );
+    expect(cached.querySelector(".msg-meta__ctx")?.textContent).toBe("44% ctx");
+    expect(cached.textContent).toContain("R438.4k");
+    expect(cached.textContent).toContain("W307");
+
+    const outputHeavy = renderUsage(
+      {
+        input: 1_000,
+        output: 9_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      10_000,
+    );
+    expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
   });
 
-  it("renders the configured local user name in user message footers", () => {
-    const container = document.createElement("div");
+  it("renders configured local user names and avatar variants", () => {
+    const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
+      const container = document.createElement("div");
+      renderGroupedMessage(
+        container,
+        {
+          role: "user",
+          content: "hello",
+          timestamp: 1000,
+        },
+        "user",
+        opts,
+      );
+      return container;
+    };
 
-    renderGroupedMessage(
-      container,
-      {
-        role: "user",
-        content: "hello",
-        timestamp: 1000,
-      },
-      "user",
-      { userName: "Buns" },
-    );
-
-    const sender = container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name");
+    const named = renderUser({ userName: "Buns" });
+    const sender = named.querySelector<HTMLElement>(".chat-group.user .chat-sender-name");
     expect(sender?.textContent).toBe("Buns");
-  });
 
-  it("renders a local user image avatar when provided", () => {
-    const container = document.createElement("div");
+    for (const src of ["data:image/png;base64,AAA", "/avatar/user"]) {
+      const container = renderUser({ userName: "Buns", userAvatar: src });
+      const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.user");
+      expect(avatar?.getAttribute("src")).toBe(src);
+      expect(avatar?.getAttribute("alt")).toBe("Buns");
+    }
 
-    renderGroupedMessage(
-      container,
-      {
-        role: "user",
-        content: "hello",
-        timestamp: 1000,
-      },
-      "user",
-      { userName: "Buns", userAvatar: "data:image/png;base64,AAA" },
+    const textAvatar = renderUser({ userAvatar: "🦞" }).querySelector<HTMLElement>(
+      ".chat-avatar.user",
     );
-
-    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.user");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("data:image/png;base64,AAA");
-    expect(avatar?.getAttribute("alt")).toBe("Buns");
-  });
-
-  it("renders a local user avatar route when provided", () => {
-    const container = document.createElement("div");
-
-    renderGroupedMessage(
-      container,
-      {
-        role: "user",
-        content: "hello",
-        timestamp: 1000,
-      },
-      "user",
-      { userName: "Buns", userAvatar: "/avatar/user" },
-    );
-
-    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.user");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("/avatar/user");
-    expect(avatar?.getAttribute("alt")).toBe("Buns");
-  });
-
-  it("renders a local user text avatar when provided", () => {
-    const container = document.createElement("div");
-
-    renderGroupedMessage(
-      container,
-      {
-        role: "user",
-        content: "hello",
-        timestamp: 1000,
-      },
-      "user",
-      { userAvatar: "🦞" },
-    );
-
-    const avatar = container.querySelector<HTMLElement>(".chat-avatar.user");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.tagName).toBe("DIV");
-    expect(avatar?.textContent).toContain("🦞");
+    expect(textAvatar?.tagName).toBe("DIV");
+    expect(textAvatar?.textContent).toContain("🦞");
   });
 
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
@@ -444,6 +413,7 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: () => false,
     });
 
+    expect(container.querySelector(".chat-bubble--tool-shell")).not.toBeNull();
     const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
     expect(summary?.textContent).toContain("Tool call");
     expect(container.textContent).not.toContain('"thread": true');

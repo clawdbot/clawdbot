@@ -55,6 +55,7 @@ const hoisted = vi.hoisted(() => {
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
   const resetModelCatalogCache = vi.fn();
+  const disposeAllSessionMcpRuntimes = vi.fn(async () => {});
 
   const providerManager = {
     getRuntimeSnapshot: vi.fn(() => ({
@@ -156,6 +157,7 @@ const hoisted = vi.hoisted(() => {
     startGmailWatcher,
     stopGmailWatcher,
     resetModelCatalogCache,
+    disposeAllSessionMcpRuntimes,
     providerManager,
     createChannelManager,
     startGatewayConfigReloader,
@@ -190,6 +192,16 @@ vi.mock("../agents/model-catalog.js", async () => {
       actual.resetModelCatalogCache();
       hoisted.resetModelCatalogCache();
     }),
+  };
+});
+
+vi.mock("../agents/pi-bundle-mcp-tools.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-bundle-mcp-tools.js")>(
+    "../agents/pi-bundle-mcp-tools.js",
+  );
+  return {
+    ...actual,
+    disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
   };
 });
 
@@ -242,9 +254,13 @@ vi.mock("./server-channels.js", () => ({
   createChannelManager: hoisted.createChannelManager,
 }));
 
-vi.mock("./config-reload.js", () => ({
-  startGatewayConfigReloader: hoisted.startGatewayConfigReloader,
-}));
+vi.mock("./config-reload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./config-reload.js")>();
+  return {
+    ...actual,
+    startGatewayConfigReloader: hoisted.startGatewayConfigReloader,
+  };
+});
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -278,6 +294,8 @@ describe("gateway hot reload", () => {
     hoisted.totalQueueSize.value = 0;
     hoisted.activeTaskCount.value = 0;
     hoisted.resetModelCatalogCache.mockReset();
+    hoisted.disposeAllSessionMcpRuntimes.mockReset();
+    hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -585,6 +603,37 @@ describe("gateway hot reload", () => {
     });
   });
 
+  it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
+    await withGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+
+      await onHotReload?.(
+        {
+          changedPaths: ["mcp.servers.context7.command"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["mcp.servers.context7.command"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: true,
+          noopPaths: [],
+        },
+        {
+          mcp: {
+            servers: {},
+          },
+        },
+      );
+
+      expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("makes newly available catalog models visible in-process after hot reload", async () => {
     type TestRegistryEntry = { provider: string; id: string; name: string };
     let registryEntries: TestRegistryEntry[] = [
@@ -718,7 +767,7 @@ describe("gateway hot reload", () => {
       const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
       expect(reload.ok).toBe(false);
       expect(reload.error?.code).toBe("UNAVAILABLE");
-      expect(reload.error?.message ?? "").toContain(refId);
+      expect(reload.error?.message).toBe("secrets.reload failed");
 
       const postResolve = await rpcReq<{
         assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
@@ -820,7 +869,7 @@ process.stdin.on("end", () => {
       const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
       expect(reload.ok).toBe(false);
       expect(reload.error?.code).toBe("UNAVAILABLE");
-      expect(reload.error?.message ?? "").toContain("forced failure");
+      expect(reload.error?.message).toBe("secrets.reload failed");
 
       const postResolve = await rpcReq<{
         assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;

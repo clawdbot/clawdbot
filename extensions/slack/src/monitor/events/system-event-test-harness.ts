@@ -23,6 +23,8 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
   const ctx = {
     app,
     runtime: { error: () => {} },
+    botUserId: "U_BOT",
+    botId: "B_BOT",
     dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
     defaultRequireMention: true,

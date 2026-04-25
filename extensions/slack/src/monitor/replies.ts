@@ -21,6 +21,17 @@ export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
 }
 
+export function resolveDeliveredSlackReplyThreadTs(params: {
+  replyToMode: "off" | "first" | "all" | "batched";
+  payloadReplyToId?: string;
+  replyThreadTs?: string;
+}): string | undefined {
+  // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
+  // must not force threading.
+  const inlineReplyToId = params.replyToMode === "off" ? undefined : params.payloadReplyToId;
+  return inlineReplyToId ?? params.replyThreadTs;
+}
+
 export async function deliverReplies(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
@@ -34,10 +45,11 @@ export async function deliverReplies(params: {
   identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
-    // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
-    // must not force threading.
-    const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
-    const threadTs = inlineReplyToId ?? params.replyThreadTs;
+    const threadTs = resolveDeliveredSlackReplyThreadTs({
+      replyToMode: params.replyToMode,
+      payloadReplyToId: payload.replyToId,
+      replyThreadTs: params.replyThreadTs,
+    });
     const reply = resolveSendableOutboundReplyParts(payload);
     const slackBlocks = readSlackReplyBlocks(payload);
     if (!reply.hasContent && !slackBlocks?.length) {

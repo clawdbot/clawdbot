@@ -150,6 +150,9 @@ Notes:
 - `main` cannot be deleted.
 - Without `--force`, interactive confirmation is required.
 - Workspace, agent state, and session transcript directories are moved to Trash, not hard-deleted.
+- If another agent's workspace is the same path, inside this workspace, or contains this workspace,
+  the workspace is retained and `--json` reports `workspaceRetained`,
+  `workspaceRetainedReason`, and `workspaceSharedWith`.
 
 ## Identity files
 

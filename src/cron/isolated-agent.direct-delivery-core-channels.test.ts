@@ -157,10 +157,14 @@ function resolveCoreChannelSender(
 function createCliDelegatingOutbound(params: {
   channel: CoreChannel;
   deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
+  preferFinalAssistantVisibleText?: boolean;
   resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
 }): ChannelOutboundAdapter {
   return {
     deliveryMode: params.deliveryMode ?? "direct",
+    ...(params.preferFinalAssistantVisibleText !== undefined
+      ? { preferFinalAssistantVisibleText: params.preferFinalAssistantVisibleText }
+      : {}),
     ...(params.resolveTarget ? { resolveTarget: params.resolveTarget } : {}),
     sendText: async ({ cfg, to, text, accountId, deps }) =>
       withRequiredMessageId(
@@ -239,7 +243,10 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
           pluginId: "discord",
           plugin: createOutboundTestPlugin({
             id: "discord",
-            outbound: createCliDelegatingOutbound({ channel: "discord" }),
+            outbound: createCliDelegatingOutbound({
+              channel: "discord",
+              preferFinalAssistantVisibleText: true,
+            }),
           }),
           source: "test",
         },
@@ -282,6 +289,31 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
         },
       });
     });
+
+    if (testCase.channel === "discord") {
+      it("collapses Discord text-only announce delivery to the final assistant text", async () => {
+        await expectCoreChannelAnnounceDelivery({
+          testCase,
+          payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
+          meta: {
+            meta: {
+              durationMs: 5,
+              agentMeta: { sessionId: "s", provider: "p", model: "m" },
+              finalAssistantVisibleText: "Final weather summary",
+            },
+          },
+          assertSend: (sendFn) => {
+            expect(sendFn).toHaveBeenCalledTimes(1);
+            expect(sendFn).toHaveBeenCalledWith(
+              testCase.expectedTo,
+              "Final weather summary",
+              expect.any(Object),
+            );
+          },
+        });
+      });
+      continue;
+    }
 
     it(`preserves multi-payload text-only announce delivery for ${testCase.name} even when final assistant text exists`, async () => {
       await expectCoreChannelAnnounceDelivery({

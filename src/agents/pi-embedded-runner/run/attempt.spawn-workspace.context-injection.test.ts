@@ -12,7 +12,7 @@ import {
 import { resetEmbeddedAttemptHarness } from "./attempt.spawn-workspace.test-support.js";
 
 async function resolveBootstrapContext(params: {
-  contextInjectionMode?: "always" | "continuation-skip";
+  contextInjectionMode?: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
   bootstrapMode?: "full" | "limited" | "none";
@@ -75,6 +75,22 @@ describe("embedded attempt context injection", () => {
     expect(result.bootstrapFiles).toEqual([{ name: "AGENTS.md" }]);
     expect(result.contextFiles).toEqual([{ path: "AGENTS.md" }]);
     expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables bootstrap injection without marking the turn as a continuation", async () => {
+    const { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun } =
+      await resolveBootstrapContext({
+        contextInjectionMode: "never",
+        bootstrapMode: "full",
+        completed: true,
+      });
+
+    expect(result.isContinuationTurn).toBe(false);
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+    expect(result.bootstrapFiles).toEqual([]);
+    expect(result.contextFiles).toEqual([]);
+    expect(hasCompletedBootstrapTurn).not.toHaveBeenCalled();
+    expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
 
   it("does not let a stale completed marker suppress pending workspace bootstrap", async () => {

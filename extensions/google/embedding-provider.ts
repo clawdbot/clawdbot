@@ -15,6 +15,7 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
@@ -189,8 +190,7 @@ async function fetchGeminiEmbeddingPayload(params: {
         },
         onResponse: async (res) => {
           if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`gemini embeddings failed: ${res.status} ${text}`);
+            throw await createProviderHttpError(res, "gemini embeddings failed");
           }
           return (await res.json()) as {
             embedding?: { values?: number[] };

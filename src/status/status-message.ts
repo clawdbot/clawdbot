@@ -153,7 +153,7 @@ function resolveConfiguredTextVerbosity(params: {
   );
 }
 
-function resolveRuntimeLabel(
+function resolveExecutionLabel(
   args: Pick<StatusArgs, "config" | "agent" | "sessionKey" | "sessionScope">,
 ): string {
   const sessionKey = args.sessionKey?.trim();
@@ -197,8 +197,18 @@ function resolveRuntimeLabel(
   return `${runtime}/${sandboxMode}`;
 }
 
-function resolveRunnerLabel(
-  args: Pick<StatusArgs, "config" | "sessionEntry"> & { fallbackProvider?: string },
+const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
+  pi: "OpenClaw Pi Default",
+  codex: "OpenAI Codex",
+  "codex-cli": "OpenAI Codex",
+  "claude-cli": "Claude CLI",
+  "google-gemini-cli": "Gemini CLI",
+};
+
+function resolveAgentRuntimeLabel(
+  args: Pick<StatusArgs, "config" | "sessionEntry" | "resolvedHarness"> & {
+    fallbackProvider?: string;
+  },
 ): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
@@ -208,16 +218,28 @@ function resolveRunnerLabel(
     return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
   }
 
+  const runtimeRaw =
+    normalizeOptionalString(args.resolvedHarness) ??
+    normalizeOptionalString(args.sessionEntry?.agentRuntimeOverride) ??
+    normalizeOptionalString(args.sessionEntry?.agentHarnessId);
+  const runtime = normalizeOptionalLowercaseString(runtimeRaw);
+  if (runtime && runtime !== "auto" && runtime !== "default") {
+    return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
+  }
+
   const providerRaw =
     normalizeOptionalString(args.sessionEntry?.modelProvider) ??
     normalizeOptionalString(args.sessionEntry?.providerOverride) ??
     normalizeOptionalString(args.fallbackProvider);
   const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
   if (provider && isCliProvider(provider, args.config)) {
-    return `${provider} (cli)`;
+    return (
+      AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
+      `${provider} (cli)`
+    );
   }
 
-  return "pi (embedded)";
+  return AGENT_RUNTIME_LABELS.pi;
 }
 
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
@@ -262,14 +284,6 @@ const formatQueueDetails = (queue?: QueueStatus) => {
     detailParts.push(`drop ${queue.dropPolicy}`);
   }
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
-};
-
-const formatHarnessLabel = (harnessId: string | undefined) => {
-  const normalized = normalizeOptionalLowercaseString(harnessId);
-  if (!normalized || normalized === "pi" || normalized === "auto") {
-    return null;
-  }
-  return normalized;
 };
 
 const readUsageFromSessionLog = (
@@ -685,10 +699,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.agent?.elevatedDefault ??
     "on";
 
-  const runtime = { label: resolveRuntimeLabel(args) };
-  const runnerLabel = resolveRunnerLabel({
+  const execution = { label: resolveExecutionLabel(args) };
+  const agentRuntimeLabel = resolveAgentRuntimeLabel({
     config: args.config,
     sessionEntry: args.sessionEntry,
+    resolvedHarness: args.resolvedHarness,
     fallbackProvider: activeProvider,
   });
 
@@ -743,11 +758,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     model: activeModel,
   });
   const optionParts = [
-    `Runtime: ${runtime.label}`,
-    `Runner: ${runnerLabel}`,
+    `Execution: ${execution.label}`,
+    `Runtime: ${agentRuntimeLabel}`,
     `Think: ${thinkLevel}`,
     formatFastModeLabel(fastMode),
-    formatHarnessLabel(args.resolvedHarness),
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,

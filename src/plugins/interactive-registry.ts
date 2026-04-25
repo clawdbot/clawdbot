@@ -6,6 +6,7 @@ import {
   validatePluginInteractiveNamespace,
 } from "./interactive-shared.js";
 import {
+  clearPluginInteractiveHandlerRegistrationsState,
   clearPluginInteractiveHandlersState,
   getPluginInteractiveHandlersState,
   type RegisteredInteractiveHandler,
@@ -62,11 +63,37 @@ export function clearPluginInteractiveHandlers(): void {
   clearPluginInteractiveHandlersState();
 }
 
+export function clearPluginInteractiveHandlerRegistrations(): void {
+  clearPluginInteractiveHandlerRegistrationsState();
+}
+
 export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
   const interactiveHandlers = getPluginInteractiveHandlersState();
   for (const [key, value] of interactiveHandlers.entries()) {
     if (value.pluginId === pluginId) {
       interactiveHandlers.delete(key);
     }
+  }
+}
+
+export function listPluginInteractiveHandlers(): RegisteredInteractiveHandler[] {
+  return Array.from(getPluginInteractiveHandlersState().values());
+}
+
+export function restorePluginInteractiveHandlers(
+  registrations: readonly RegisteredInteractiveHandler[],
+): void {
+  clearPluginInteractiveHandlerRegistrations();
+  const interactiveHandlers = getPluginInteractiveHandlersState();
+  for (const registration of registrations) {
+    const namespace = normalizePluginInteractiveNamespace(registration.namespace);
+    if (!namespace) {
+      continue;
+    }
+    interactiveHandlers.set(toPluginInteractiveRegistryKey(registration.channel, namespace), {
+      ...registration,
+      namespace,
+      channel: normalizeOptionalLowercaseString(registration.channel) ?? "",
+    });
   }
 }

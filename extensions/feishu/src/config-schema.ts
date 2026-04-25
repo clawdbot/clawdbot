@@ -122,8 +122,9 @@ const GroupSessionScopeSchema = z
  * - "disabled" (default): All messages in a group share one session
  * - "enabled": Messages in different topics get separate sessions
  *
- * Topic routing uses `root_id` when present to keep session continuity and
- * falls back to `thread_id` when `root_id` is unavailable.
+ * Topic routing uses Feishu topic-group `thread_id` when the event identifies a
+ * native topic group, and keeps `root_id` precedence for normal groups so
+ * reply-created threads stay on the initiating message session.
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
 const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();

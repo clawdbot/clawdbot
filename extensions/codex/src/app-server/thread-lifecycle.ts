@@ -33,6 +33,7 @@ export async function startOrResumeThread(params: {
   dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  config?: JsonObject;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
   const binding = await readCodexAppServerBinding(params.params.sessionFile);
@@ -59,6 +60,7 @@ export async function startOrResumeThread(params: {
               threadId: binding.threadId,
               appServer: params.appServer,
               developerInstructions: params.developerInstructions,
+              config: params.config,
             }),
           ),
         );
@@ -102,6 +104,7 @@ export async function startOrResumeThread(params: {
       sandbox: params.appServer.sandbox,
       ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
       serviceName: "OpenClaw",
+      ...(params.config ? { config: params.config } : {}),
       developerInstructions:
         params.developerInstructions ?? buildDeveloperInstructions(params.params),
       dynamicTools: params.dynamicTools,
@@ -139,6 +142,7 @@ export function buildThreadResumeParams(
     threadId: string;
     appServer: CodexAppServerRuntimeOptions;
     developerInstructions?: string;
+    config?: JsonObject;
   },
 ): CodexThreadResumeParams {
   const modelProvider = resolveCodexAppServerModelProvider(params.provider);
@@ -150,6 +154,7 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.config ? { config: options.config } : {}),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
@@ -214,14 +219,43 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
 }
 
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
+  const promptOverlay = renderCodexRuntimePromptOverlay(params);
   const sections = [
     "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
     "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
-    renderCodexPromptOverlay({ modelId: params.modelId }),
+    promptOverlay,
     params.extraSystemPrompt,
     params.skillsSnapshot?.prompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+}
+
+function renderCodexRuntimePromptOverlay(params: EmbeddedRunAttemptParams): string | undefined {
+  const contribution = params.runtimePlan?.prompt.resolveSystemPromptContribution({
+    config: params.config,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    provider: params.provider,
+    modelId: params.modelId,
+    promptMode: "full",
+    agentId: params.agentId,
+  });
+  if (!contribution) {
+    return renderCodexPromptOverlay({
+      config: params.config,
+      providerId: params.provider,
+      modelId: params.modelId,
+    });
+  }
+  return [
+    contribution.stablePrefix,
+    ...Object.values(contribution.sectionOverrides ?? {}),
+    contribution.dynamicSuffix,
+  ]
+    .filter(
+      (section): section is string => typeof section === "string" && section.trim().length > 0,
+    )
+    .join("\n\n");
 }
 
 function buildUserInput(

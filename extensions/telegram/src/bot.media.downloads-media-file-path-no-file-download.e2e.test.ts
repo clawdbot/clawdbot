@@ -207,7 +207,7 @@ describe("telegram inbound media", () => {
           },
         },
         assert: (payload: Record<string, unknown>) => {
-          expect(payload.Body).toContain("Eiffel Tower");
+          expect(payload.Body).toContain("48.858844");
           expect(payload.LocationName).toBe("Eiffel Tower");
           expect(payload.LocationAddress).toBe("Champ de Mars, Paris");
           expect(payload.LocationSource).toBe("place");

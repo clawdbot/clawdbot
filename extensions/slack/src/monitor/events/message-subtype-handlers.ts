@@ -1,11 +1,7 @@
 import type { SlackMessageEvent } from "../../types.js";
-import type {
-  SlackMessageChangedEvent,
-  SlackMessageDeletedEvent,
-  SlackThreadBroadcastEvent,
-} from "../types.js";
+import type { SlackMessageChangedEvent, SlackMessageDeletedEvent } from "../types.js";
 
-type SupportedSubtype = "message_changed" | "message_deleted" | "thread_broadcast";
+type SupportedSubtype = "message_changed" | "message_deleted";
 
 export type SlackMessageSubtypeHandler = {
   subtype: SupportedSubtype;
@@ -59,39 +55,16 @@ const deletedHandler: SlackMessageSubtypeHandler = {
   resolveChannelType: () => undefined,
 };
 
-const threadBroadcastHandler: SlackMessageSubtypeHandler = {
-  subtype: "thread_broadcast",
-  eventKind: "thread_broadcast",
-  describe: (channelLabel) => `Slack thread reply broadcast in ${channelLabel}.`,
-  contextKey: (event) => {
-    const thread = event as SlackThreadBroadcastEvent;
-    const channelId = thread.channel ?? "unknown";
-    const messageId = thread.message?.ts ?? thread.event_ts ?? "unknown";
-    return `slack:thread:broadcast:${channelId}:${messageId}`;
-  },
-  resolveSenderId: (event) => {
-    const thread = event as SlackThreadBroadcastEvent;
-    return thread.user ?? thread.message?.user ?? thread.message?.bot_id;
-  },
-  resolveChannelId: (event) => (event as SlackThreadBroadcastEvent).channel,
-  resolveChannelType: () => undefined,
-};
-
 const SUBTYPE_HANDLER_REGISTRY: Record<SupportedSubtype, SlackMessageSubtypeHandler> = {
   message_changed: changedHandler,
   message_deleted: deletedHandler,
-  thread_broadcast: threadBroadcastHandler,
 };
 
 export function resolveSlackMessageSubtypeHandler(
   event: SlackMessageEvent,
 ): SlackMessageSubtypeHandler | undefined {
   const subtype = event.subtype;
-  if (
-    subtype !== "message_changed" &&
-    subtype !== "message_deleted" &&
-    subtype !== "thread_broadcast"
-  ) {
+  if (subtype !== "message_changed" && subtype !== "message_deleted") {
     return undefined;
   }
   return SUBTYPE_HANDLER_REGISTRY[subtype];

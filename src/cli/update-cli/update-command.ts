@@ -1112,19 +1112,19 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } else if (updateInstallKind === "git") {
       actions.push(`Run git update flow on channel ${channel} (fetch/rebase/build/doctor)`);
     } else if (packageAlreadyCurrent) {
-      actions.push(`Skip package update; current version already matches ${targetVersion}`);
+      actions.push(
+        `Refresh package install with spec ${packageInstallSpec ?? tag}; current version already matches ${targetVersion}`,
+      );
     } else {
       actions.push(`Run global package manager update with spec ${packageInstallSpec ?? tag}`);
     }
-    if (!packageAlreadyCurrent) {
-      actions.push("Run plugin update sync after core update");
-      actions.push("Refresh shell completion cache (if needed)");
-      actions.push(
-        shouldRestart
-          ? "Restart gateway service and run doctor checks"
-          : "Skip restart (because --no-restart is set)",
-      );
-    }
+    actions.push("Run plugin update sync after core update");
+    actions.push("Refresh shell completion cache (if needed)");
+    actions.push(
+      shouldRestart
+        ? "Restart gateway service and run doctor checks"
+        : "Skip restart (because --no-restart is set)",
+    );
 
     const notes: string[] = [];
     if (opts.tag && updateInstallKind === "git") {
@@ -1193,25 +1193,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     defaultRuntime.log(
       theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
     );
-  }
-
-  if (packageAlreadyCurrent) {
-    const mode = isPackageManagerUpdateMode(updateStatus.packageManager)
-      ? updateStatus.packageManager
-      : "unknown";
-    const result: UpdateRunResult = {
-      status: "skipped",
-      mode,
-      root,
-      reason: "already-current",
-      before: { version: currentVersion },
-      after: { version: currentVersion },
-      steps: [],
-      durationMs: 0,
-    };
-    printResult(result, opts);
-    defaultRuntime.exit(0);
-    return;
   }
 
   if (updateInstallKind === "package") {

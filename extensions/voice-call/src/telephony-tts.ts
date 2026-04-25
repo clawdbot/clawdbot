@@ -20,8 +20,11 @@ export type TelephonyTtsRuntime = {
 };
 
 export type TelephonyTtsProvider = {
+  synthesisTimeoutMs: number;
   synthesizeForTelephony: (text: string) => Promise<Buffer>;
 };
+
+const TELEPHONY_DEFAULT_TTS_TIMEOUT_MS = 8000;
 
 export function createTelephonyTtsProvider(params: {
   coreConfig: CoreConfig;
@@ -33,8 +36,11 @@ export function createTelephonyTtsProvider(params: {
 }): TelephonyTtsProvider {
   const { coreConfig, ttsOverride, runtime, logger } = params;
   const mergedConfig = applyTtsOverride(coreConfig, ttsOverride);
+  const synthesisTimeoutMs =
+    mergedConfig.messages?.tts?.timeoutMs ?? TELEPHONY_DEFAULT_TTS_TIMEOUT_MS;
 
   return {
+    synthesisTimeoutMs,
     synthesizeForTelephony: async (text: string) => {
       const result = await runtime.textToSpeechTelephony({
         text,

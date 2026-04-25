@@ -58,6 +58,8 @@ export type MatrixQaScenarioId =
   | "matrix-e2ee-thread-follow-up"
   | "matrix-e2ee-bootstrap-success"
   | "matrix-e2ee-recovery-key-lifecycle"
+  | "matrix-e2ee-recovery-owner-verification-required"
+  | "matrix-e2ee-cli-self-verification"
   | "matrix-e2ee-device-sas-verification"
   | "matrix-e2ee-qr-verification"
   | "matrix-e2ee-stale-device-hygiene"
@@ -564,6 +566,26 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-recovery-key-lifecycle",
       name: "Matrix QA E2EE Recovery Key Lifecycle Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-recovery-owner-verification-required",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE recovery key backup access still requires Matrix identity trust",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-recovery-owner-verification-required",
+      name: "Matrix QA E2EE Recovery Owner Verification Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-self-verification",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE CLI interactive self-verification establishes identity trust",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-self-verification",
+      name: "Matrix QA E2EE CLI Self Verification Room",
     }),
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },

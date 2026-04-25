@@ -34,6 +34,7 @@ describe("generateSlugViaLLM", () => {
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         timeoutMs: 15_000,
+        cleanupBundleMcpOnRunEnd: true,
       }),
     );
   });

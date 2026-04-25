@@ -55,6 +55,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     waitForAgentRun: fn,
     listCronJobs: fn,
     waitForCronRunCompletion: fn,
+    findManagedDreamingCronJob: fn,
     readDoctorMemoryStatus: fn,
     forceMemoryIndex: fn,
     findSkill: fn,

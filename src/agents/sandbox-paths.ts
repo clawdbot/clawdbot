@@ -11,10 +11,12 @@ import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-ali
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { isPassThroughRemoteMediaSource } from "../media/media-source-url.js";
+import { resolveConfigDir } from "../utils.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
+const MANAGED_MEDIA_SUBDIRS = new Set(["outbound"]);
 
 function normalizeUnicodeSpaces(str: string): string {
   return str.replace(UNICODE_SPACES, " ");
@@ -100,6 +102,36 @@ export function assertMediaNotDataUrl(media: string): void {
   }
 }
 
+function isManagedMediaPathUnderRoot(candidate: string): boolean {
+  const expanded = expandPath(candidate);
+  if (!hostPathLooksAbsolute(expanded)) {
+    return false;
+  }
+  const mediaRoot = path.join(resolveConfigDir(), "media");
+  const relative = path.relative(path.resolve(mediaRoot), path.resolve(expanded));
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const firstSegment = relative.split(path.sep)[0] ?? "";
+  return MANAGED_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-");
+}
+
+export async function resolveAllowedManagedMediaPath(
+  candidate: string,
+): Promise<string | undefined> {
+  const expanded = expandPath(candidate);
+  if (!isManagedMediaPathUnderRoot(expanded)) {
+    return undefined;
+  }
+  const resolved = path.resolve(expanded);
+  const managedMediaRoot = path.resolve(resolveConfigDir(), "media");
+  await assertNoManagedMediaAliasEscape({
+    filePath: resolved,
+    managedMediaRoot,
+  });
+  return resolved;
+}
+
 export async function resolveSandboxedMediaSource(params: {
   media: string;
   sandboxRoot: string;
@@ -144,12 +176,27 @@ export async function resolveSandboxedMediaSource(params: {
   if (tmpMediaPath) {
     return tmpMediaPath;
   }
+  const managedMediaPath = await resolveAllowedManagedMediaPath(candidate);
+  if (managedMediaPath) {
+    return managedMediaPath;
+  }
   const sandboxResult = await assertSandboxPath({
     filePath: candidate,
     cwd: params.sandboxRoot,
     root: params.sandboxRoot,
   });
   return sandboxResult.resolved;
+}
+
+async function assertNoManagedMediaAliasEscape(params: {
+  filePath: string;
+  managedMediaRoot: string;
+}): Promise<void> {
+  await assertNoPathAliasEscape({
+    absolutePath: params.filePath,
+    rootPath: params.managedMediaRoot,
+    boundaryLabel: "managed media root",
+  });
 }
 
 function mapContainerWorkspaceFileUrl(params: {

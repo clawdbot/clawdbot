@@ -116,9 +116,9 @@ describe("pw-tools-core browser SSRF guards", () => {
   });
 
   it("re-checks current page URL before snapshotting AI content", async () => {
-    const snapshotForAI = vi.fn(async () => ({ full: 'button "Save"' }));
+    const ariaSnapshot = vi.fn(async () => 'button "Save"');
     pageState.page = {
-      _snapshotForAI: snapshotForAI,
+      ariaSnapshot,
       url: vi.fn(() => "https://example.com"),
     };
 
@@ -137,7 +137,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
     expect(
       sessionMocks.assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
-    ).toBeLessThan(snapshotForAI.mock.invocationCallOrder[0]);
+    ).toBeLessThan(ariaSnapshot.mock.invocationCallOrder[0]);
   });
 
   it("re-checks current page URL before role snapshots", async () => {

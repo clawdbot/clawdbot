@@ -15,7 +15,8 @@ binary, and can index content beyond your workspace memory files.
 - **Reranking and query expansion** for better recall.
 - **Index extra directories** -- project docs, team notes, anything on disk.
 - **Index session transcripts** -- recall earlier conversations.
-- **Fully local** -- runs via Bun + node-llama-cpp, auto-downloads GGUF models.
+- **Fully local** -- runs with the optional node-llama-cpp runtime package and
+  auto-downloads GGUF models.
 - **Automatic fallback** -- if QMD is unavailable, OpenClaw falls back to the
   builtin engine seamlessly.
 

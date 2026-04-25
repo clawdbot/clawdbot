@@ -75,6 +75,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       model,
       timeoutMs,
       runId: `slug-gen-${Date.now()}`,
+      cleanupBundleMcpOnRunEnd: true,
     });
 
     // Extract text from payloads

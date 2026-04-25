@@ -11,7 +11,11 @@ import type {
   ConfigWriteNotification,
   OpenClawConfig,
 } from "../config/config.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
@@ -171,6 +175,7 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   afterEach(() => {
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(emptyRegistry);
   });
 
@@ -209,6 +214,23 @@ describe("buildGatewayReloadPlan", () => {
     );
     expect(expected.size).toBeGreaterThan(0);
     expect(plan.restartChannels).toEqual(expected);
+  });
+
+  it("refreshes channel reload rules when only the tracked channel registry changes", () => {
+    const activeOnlyRegistry = createTestRegistry([]);
+    const channelOnlyRegistry = createTestRegistry([
+      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+    ]);
+
+    setActivePluginRegistry(activeOnlyRegistry);
+    const beforePinPlan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
+    expect(beforePinPlan.restartGateway).toBe(true);
+    expect(beforePinPlan.restartChannels).toEqual(new Set());
+
+    pinActivePluginChannelRegistry(channelOnlyRegistry);
+    const afterPinPlan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
+    expect(afterPinPlan.restartGateway).toBe(false);
+    expect(afterPinPlan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
   it("restarts heartbeat when model-related config changes", () => {
@@ -300,6 +322,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.hotReasons).toContain("gateway.channelHealthCheckMinutes");
   });
 
+  it("hot-reloads MCP config changes by disposing cached runtimes", () => {
+    const plan = buildGatewayReloadPlan(["mcp.servers.context7.command"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+    expect(plan.hotReasons).toContain("mcp.servers.context7.command");
+  });
+
   it("treats gateway.remote as no-op", () => {
     const plan = buildGatewayReloadPlan(["gateway.remote.url"]);
     expect(plan.restartGateway).toBe(false);
@@ -361,6 +390,12 @@ describe("buildGatewayReloadPlan", () => {
       expectRestartHeartbeat: true,
     },
     {
+      path: "mcp.servers.context7",
+      expectRestartGateway: false,
+      expectHotPath: "mcp.servers.context7",
+      expectDisposeMcpRuntimes: true,
+    },
+    {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
@@ -398,6 +433,9 @@ describe("buildGatewayReloadPlan", () => {
     }
     if (testCase.expectRestartHeartbeat) {
       expect(plan.restartHeartbeat).toBe(true);
+    }
+    if (testCase.expectDisposeMcpRuntimes) {
+      expect(plan.disposeMcpRuntimes).toBe(true);
     }
   });
 });
@@ -700,6 +738,62 @@ describe("startGatewayConfigReloader", () => {
     );
     expect(log.warn).toHaveBeenCalledWith(
       "config reload restored last-known-good config after invalid-config",
+    );
+
+    await reloader.stop();
+  });
+
+  it("skips last-known-good recovery for plugin-local invalid reloads", async () => {
+    const activeConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      agents: { defaults: { model: "gpt-5.4" } },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { compactionMode: "adaptive", cacheAwareCompaction: true },
+          },
+        },
+      },
+    };
+    const invalidSnapshot = makeSnapshot({
+      valid: false,
+      raw: `${JSON.stringify(activeConfig, null, 2)}\n`,
+      parsed: activeConfig,
+      sourceConfig: activeConfig,
+      runtimeConfig: activeConfig,
+      config: activeConfig,
+      issues: [
+        {
+          path: "plugins.entries.lossless-claw.config.cacheAwareCompaction",
+          message: "invalid config: must NOT have additional properties",
+        },
+      ],
+      hash: "plugin-skew-1",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(invalidSnapshot);
+    const recoverSnapshot = vi.fn(async () => true);
+    const promoteSnapshot = vi.fn(async () => true);
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
+      recoverSnapshot,
+      promoteSnapshot,
+    });
+
+    watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(recoverSnapshot).not.toHaveBeenCalled();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(onHotReload).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(promoteSnapshot).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      "config reload recovery skipped after invalid-config: invalidity is scoped to plugin entries",
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("config reload skipped (invalid config):"),
     );
 
     await reloader.stop();

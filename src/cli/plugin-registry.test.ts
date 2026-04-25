@@ -29,6 +29,8 @@ function withActivatedPluginIdsForTest<T extends Record<string, unknown>>(
 
 const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../plugins/loader.js").loadOpenClawPlugins>(),
+  resolveRuntimePluginRegistry:
+    vi.fn<typeof import("../plugins/loader.js").resolveRuntimePluginRegistry>(),
   getActivePluginRegistry: vi.fn<typeof import("../plugins/runtime.js").getActivePluginRegistry>(),
   resolveConfiguredChannelPluginIds:
     vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
@@ -44,6 +46,8 @@ let resetPluginRegistryLoadedForTests: typeof import("./plugin-registry.js").__t
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: (...args: Parameters<typeof mocks.loadOpenClawPlugins>) =>
     mocks.loadOpenClawPlugins(...args),
+  resolveRuntimePluginRegistry: (...args: Parameters<typeof mocks.resolveRuntimePluginRegistry>) =>
+    mocks.resolveRuntimePluginRegistry(...args),
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
@@ -112,6 +116,7 @@ describe("ensurePluginRegistryLoaded", () => {
 
   beforeEach(() => {
     mocks.loadOpenClawPlugins.mockReset();
+    mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.getActivePluginRegistry.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();
     mocks.resolveChannelPluginIds.mockReset();
@@ -119,6 +124,7 @@ describe("ensurePluginRegistryLoaded", () => {
     resetPluginRegistryLoadedForTests();
 
     mocks.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.resolvePluginRuntimeLoadContext.mockImplementation((options) => {
       const rawConfig = (options?.config ?? {}) as Record<string, unknown>;
       return {

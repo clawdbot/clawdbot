@@ -9,8 +9,8 @@ import "./server-context.chrome-test-harness.js";
 import * as cdpHelpersModule from "./cdp.helpers.js";
 import * as cdpModule from "./cdp.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
-import { createBrowserRouteContext } from "./server-context.js";
 import {
+  createTestBrowserRouteContext,
   makeManagedTabsWithNew,
   makeState,
   originalFetch,
@@ -85,7 +85,7 @@ async function openManagedTabWithRunningProfile(params: {
   global.fetch = withBrowserFetchPreconnect(params.fetchMock);
   const state = makeState("openclaw");
   seedRunningProfileState(state);
-  const ctx = createBrowserRouteContext({ getState: () => state });
+  const ctx = createTestBrowserRouteContext({ getState: () => state });
   const openclaw = ctx.forProfile("openclaw");
   return await openclaw.openTab(params.url ?? "http://127.0.0.1:3009");
 }
@@ -117,7 +117,7 @@ describe("browser server-context tab selection state", () => {
 
     global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const opened = await openclaw.openTab("http://127.0.0.1:8080");
@@ -162,7 +162,7 @@ describe("browser server-context tab selection state", () => {
     global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
     state.resolved.ssrfPolicy = {};
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const selected = await openclaw.ensureTabAvailable();
@@ -228,7 +228,7 @@ describe("browser server-context tab selection state", () => {
     global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
     seedRunningProfileState(state);
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
@@ -248,7 +248,7 @@ describe("browser server-context tab selection state", () => {
     global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
     state.resolved.attachOnly = true;
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
@@ -289,7 +289,7 @@ describe("browser server-context tab selection state", () => {
 
     global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     await expect(openclaw.openTab("file:///etc/passwd")).rejects.toBeInstanceOf(
@@ -311,7 +311,7 @@ describe("browser server-context tab selection state", () => {
 
     const state = makeState("openclaw");
     state.resolved.ssrfPolicy = {};
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const opened = await openclaw.openTab("https://example.com");

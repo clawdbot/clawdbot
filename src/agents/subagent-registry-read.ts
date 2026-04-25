@@ -1,3 +1,4 @@
+import { getAgentRunContext } from "../infra/agent-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   countActiveDescendantRunsFromRuns,
@@ -45,6 +46,15 @@ export function getSubagentRunByChildSessionKey(childSessionKey: string): Subage
     getSubagentRunsSnapshotForRead(subagentRuns),
     childSessionKey,
   );
+}
+
+export function isSubagentRunLive(
+  entry: Pick<SubagentRunRecord, "runId" | "endedAt"> | null | undefined,
+): boolean {
+  if (!entry || typeof entry.endedAt === "number") {
+    return false;
+  }
+  return Boolean(getAgentRunContext(entry.runId));
 }
 
 export function getSessionDisplaySubagentRunByChildSessionKey(

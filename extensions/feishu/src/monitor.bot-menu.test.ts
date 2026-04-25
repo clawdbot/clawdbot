@@ -1,48 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { expectFirstSentCardUsesFillWidthOnly } from "./card-test-helpers.js";
-import { monitorSingleAccount } from "./monitor.account.js";
-import { setFeishuRuntime } from "./runtime.js";
-import type { ResolvedFeishuAccount } from "./types.js";
+import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 
-const createEventDispatcherMock = vi.hoisted(() => vi.fn());
-const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
-const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const handleFeishuMessageMock = vi.hoisted(() => vi.fn(async () => {}));
 const parseFeishuMessageEventMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "m1", chatId: "c1" })));
 const getMessageFeishuMock = vi.hoisted(() => vi.fn());
-const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-
-const hasControlCommand = () => false;
-const resolveInboundDebounceMs = () => 0;
-const createInboundDebouncer = () => ({
-  run: async <T>(fn: () => Promise<T>) => await fn(),
-});
-const createMonitorRuntime = () =>
-  ({
-    channel: {
-      debounce: {
-        createInboundDebouncer,
-        resolveInboundDebounceMs,
-      },
-      text: {
-        hasControlCommand,
-      },
-    },
-  }) as never;
-
-vi.mock("./client.js", () => ({
-  createEventDispatcher: createEventDispatcherMock,
-}));
-
-vi.mock("./monitor.transport.js", () => ({
-  monitorWebSocket: monitorWebSocketMock,
-  monitorWebhook: monitorWebhookMock,
-}));
 
 vi.mock("./bot.js", () => {
   return {
@@ -57,25 +23,6 @@ vi.mock("./send.js", () => {
     getMessageFeishu: getMessageFeishuMock,
   };
 });
-
-vi.mock("./thread-bindings.js", () => ({
-  createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
-}));
-
-function buildAccount(): ResolvedFeishuAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    configured: true,
-    appId: "cli_test",
-    appSecret: "secret_test", // pragma: allowlist secret
-    domain: "feishu",
-    config: {
-      enabled: true,
-      connectionMode: "websocket",
-    },
-  } as ResolvedFeishuAccount;
-}
 
 function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
   return {
@@ -92,37 +39,23 @@ function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
 }
 
 async function registerHandlers() {
-  setFeishuRuntime(createMonitorRuntime());
-  const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
-    handlers = registered;
-  });
-  createEventDispatcherMock.mockReturnValue({ register });
-
-  await monitorSingleAccount({
+  return createFeishuBotMenuHandler({
     cfg: {} as ClawdbotConfig,
-    account: buildAccount(),
+    accountId: "default",
     runtime: {
       log: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(),
-    } as RuntimeEnv,
-    botOpenIdSource: {
-      kind: "prefetched",
-      botOpenId: "ou_bot",
-      botName: "Bot",
     },
+    chatHistories: new Map(),
+    fireAndForget: true,
+    getBotOpenId: () => "ou_bot",
+    getBotName: () => "Bot",
   });
-
-  const onBotMenu = handlers["application.bot.menu_v6"];
-  if (!onBotMenu) {
-    throw new Error("missing application.bot.menu_v6 handler");
-  }
-  return onBotMenu;
 }
 
 describe("Feishu bot menu handler", () => {
   beforeEach(() => {
-    handlers = {};
     vi.clearAllMocks();
     process.env.OPENCLAW_STATE_DIR = `/tmp/openclaw-feishu-bot-menu-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   });

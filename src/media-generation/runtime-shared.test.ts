@@ -119,6 +119,33 @@ describe("media-generation runtime shared candidates", () => {
 
     expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image-preview" }]);
   });
+
+  it("treats an explicit model override as exact-only", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {
+        agents: {
+          defaults: {
+            mediaGenerationAutoProviderFallback: false,
+          },
+        },
+      } as OpenClawConfig,
+      modelConfig: {
+        primary: "google/gemini-3.1-flash-image-preview",
+        fallbacks: ["fal/fal-ai/flux/dev"],
+      },
+      modelOverride: "openai/gpt-image-2",
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "google",
+          defaultModel: "gemini-3.1-flash-image-preview",
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([{ provider: "openai", model: "gpt-image-2" }]);
+  });
 });
 
 describe("media-generation runtime shared normalization", () => {

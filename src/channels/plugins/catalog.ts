@@ -269,7 +269,9 @@ function buildCatalogEntryFromManifest(params: {
     ...(params.origin ? { origin: params.origin } : {}),
     meta,
     install,
-    installSource: describePluginInstallSource(install),
+    installSource: describePluginInstallSource(install, {
+      expectedPackageName: params.packageName,
+    }),
   };
 }
 

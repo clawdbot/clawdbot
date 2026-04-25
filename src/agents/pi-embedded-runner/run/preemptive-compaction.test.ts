@@ -93,6 +93,21 @@ describe("preemptive-compaction", () => {
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
   });
 
+  it("uses the larger unwindowed message estimate when context engine assembly windows history", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("small assembled window")],
+      unwindowedMessages: [makeAssistantHistory(verboseHistory.repeat(4))],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 500,
+      reserveTokens: 50,
+    });
+
+    expect(result.shouldCompact).toBe(true);
+    expect(result.route).toBe("compact_only");
+    expect(result.estimatedPromptTokens).toBeGreaterThan(result.promptBudgetBeforeReserve);
+  });
+
   it("caps reserve tokens so small context models keep usable prompt budget", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory("short history")],

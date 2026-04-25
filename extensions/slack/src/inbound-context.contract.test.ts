@@ -1,9 +1,7 @@
-import {
-  createTempHomeEnv,
-  expectChannelInboundContextContract,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/testing";
+import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
+import { createTempHomeEnv } from "../../../test/helpers/plugins/temp-home.js";
 import {
   createInboundSlackTestContext,
   prepareSlackMessage,

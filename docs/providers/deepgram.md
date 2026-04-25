@@ -7,8 +7,6 @@ read_when:
 title: "Deepgram"
 ---
 
-# Deepgram (Audio Transcription)
-
 Deepgram is a speech-to-text API. In OpenClaw it is used for inbound
 audio/voice-note transcription through `tools.media.audio` and for Voice Call
 streaming STT through `plugins.entries.voice-call.config.streaming`.

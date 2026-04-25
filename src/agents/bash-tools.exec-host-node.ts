@@ -53,6 +53,7 @@ export type ExecuteNodeHostCommandParams = {
   approvalRunningNoticeMs: number;
   warnings: string[];
   notifySessionKey?: string;
+  notifyOnExit?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
@@ -228,7 +229,8 @@ export async function executeNodeHostCommand(
             ? "allow-once"
             : (approvalDecision ?? undefined),
         runId: runId ?? undefined,
-        suppressNotifyOnExit: suppressNotifyOnExit === true ? true : undefined,
+        suppressNotifyOnExit:
+          suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,
       },
       idempotencyKey: crypto.randomUUID(),
     }) satisfies Record<string, unknown>;

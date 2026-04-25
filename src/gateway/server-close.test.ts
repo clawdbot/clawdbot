@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = {
   logWarn: vi.fn(),
   disposeAgentHarnesses: vi.fn(async () => undefined),
+  disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
 };
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -22,6 +23,13 @@ vi.mock("../hooks/gmail-watcher.js", () => ({
 
 vi.mock("../agents/harness/registry.js", () => ({
   disposeRegisteredAgentHarnesses: mocks.disposeAgentHarnesses,
+}));
+
+vi.mock("../agents/pi-bundle-mcp-tools.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/pi-bundle-mcp-tools.js")>(
+    "../agents/pi-bundle-mcp-tools.js",
+  )),
+  disposeAllSessionMcpRuntimes: mocks.disposeAllSessionMcpRuntimes,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -78,6 +86,8 @@ describe("createGatewayCloseHandler", () => {
     vi.useRealTimers();
     mocks.logWarn.mockClear();
     mocks.disposeAgentHarnesses.mockClear();
+    mocks.disposeAllSessionMcpRuntimes.mockClear();
+    mocks.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
   });
 
   it("unsubscribes lifecycle listeners during shutdown", async () => {
@@ -95,6 +105,23 @@ describe("createGatewayCloseHandler", () => {
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
     expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAgentHarnesses).toHaveBeenCalledTimes(1);
+    expect(mocks.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues shutdown when bundle MCP runtime disposal hangs", async () => {
+    vi.useFakeTimers();
+    mocks.disposeAllSessionMcpRuntimes.mockReturnValue(new Promise(() => undefined));
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+
+    const closePromise = close({ reason: "test shutdown" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await closePromise;
+
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("bundle-mcp runtime disposal exceeded 5000ms"),
+      ),
+    ).toBe(true);
   });
 
   it("terminates lingering websocket clients when websocket close exceeds the grace window", async () => {

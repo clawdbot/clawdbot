@@ -95,5 +95,6 @@ export type PluginRuntime = PluginRuntimeCore & {
 
 export type CreatePluginRuntimeOptions = {
   subagent?: PluginRuntime["subagent"];
+  nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;
 };

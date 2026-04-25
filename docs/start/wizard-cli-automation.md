@@ -25,10 +25,13 @@ openclaw onboard --non-interactive \
   --gateway-bind loopback \
   --install-daemon \
   --daemon-runtime node \
+  --skip-bootstrap \
   --skip-skills
 ```
 
 Add `--json` for a machine-readable summary.
+
+Use `--skip-bootstrap` when your automation pre-seeds workspace files and does not want onboarding to create the default bootstrap files.
 
 Use `--secret-input-mode ref` to store env-backed refs in auth profiles instead of plaintext values.
 Interactive selection between env refs and configured provider refs (`file` or `exec`) is available in the onboarding flow.

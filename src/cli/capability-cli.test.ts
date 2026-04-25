@@ -360,6 +360,37 @@ describe("capability cli", () => {
     );
   });
 
+  it("cleans up bundled MCP runtimes for local model runs", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+    });
+
+    expect(mocks.agentCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cleanupBundleMcpOnRunEnd: true,
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("requests bundled MCP runtime cleanup for gateway model runs", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          cleanupBundleMcpOnRunEnd: true,
+        }),
+      }),
+    );
+  });
+
   it("defaults tts status to gateway transport", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,

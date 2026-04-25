@@ -49,6 +49,28 @@ function normalizeAgentWaitResult(
   };
 }
 
+const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
+  /gateway closed \(1006/i,
+  /transport close/i,
+  /connection loss/i,
+  /connection closed/i,
+  /gateway not connected/i,
+  /no active .* listener/i,
+  /socket hang up/i,
+  /\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/i,
+];
+
+export function isRecoverableAgentWaitError(error: string | undefined): boolean {
+  const message = error?.trim();
+  if (!message) {
+    return false;
+  }
+  if (message.includes("gateway timeout")) {
+    return false;
+  }
+  return RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 function normalizePendingRunIds(runIds: Iterable<string>): string[] {
   const seen = new Set<string>();
   for (const runId of runIds) {

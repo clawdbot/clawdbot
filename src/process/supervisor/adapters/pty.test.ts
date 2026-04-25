@@ -20,18 +20,22 @@ vi.mock("../../kill-tree.js", () => ({
 
 function createStubPty(pid = 1234) {
   let exitListener: ((event: { exitCode: number; signal?: number }) => void) | null = null;
+  const disposeData = vi.fn();
+  const disposeExit = vi.fn();
   return {
     pid,
     write: vi.fn(),
-    onData: vi.fn(() => ({ dispose: vi.fn() })),
+    onData: vi.fn(() => ({ dispose: disposeData })),
     onExit: vi.fn((listener: (event: { exitCode: number; signal?: number }) => void) => {
       exitListener = listener;
-      return { dispose: vi.fn() };
+      return { dispose: disposeExit };
     }),
     kill: (signal?: string) => ptyKillMock(signal),
     emitExit: (event: { exitCode: number; signal?: number }) => {
       exitListener?.(event);
     },
+    disposeData,
+    disposeExit,
   };
 }
 
@@ -149,6 +153,22 @@ describe("createPtyAdapter", () => {
     expect(stub.onExit).toHaveBeenCalledTimes(1);
     stub.emitExit({ exitCode: 3, signal: 0 });
     await expect(adapter.wait()).resolves.toEqual({ code: 3, signal: null });
+  });
+
+  it("disposes PTY listeners", async () => {
+    const stub = createStubPty();
+    spawnMock.mockReturnValue(stub);
+
+    const adapter = await createPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "echo ok"],
+    });
+    adapter.onStdout(() => undefined);
+
+    adapter.dispose();
+
+    expect(stub.disposeData).toHaveBeenCalledTimes(1);
+    expect(stub.disposeExit).toHaveBeenCalledTimes(1);
   });
 
   it("keeps inherited env when no override env is provided on non-Linux", async () => {

@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
@@ -165,6 +166,40 @@ export type ExecProcessHandle = {
   disableUpdates: () => void;
 };
 
+function normalizeExecExitSignal(signal: NodeJS.Signals | number | null): string | undefined {
+  if (signal === null) {
+    return undefined;
+  }
+  return String(signal);
+}
+
+function emitExecProcessCompleted(params: {
+  command: string;
+  mode: "child" | "pty";
+  outcome: ExecProcessOutcome;
+  sessionKey?: string;
+  target: "host" | "sandbox";
+}): void {
+  const exitSignal = normalizeExecExitSignal(params.outcome.exitSignal);
+  emitDiagnosticEvent({
+    type: "exec.process.completed",
+    target: params.target,
+    mode: params.mode,
+    outcome: params.outcome.status,
+    durationMs: params.outcome.durationMs,
+    commandLength: params.command.length,
+    ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
+    ...(typeof params.outcome.exitCode === "number" ? { exitCode: params.outcome.exitCode } : {}),
+    ...(exitSignal ? { exitSignal } : {}),
+    ...(params.outcome.status === "failed"
+      ? {
+          timedOut: params.outcome.timedOut,
+          failureKind: params.outcome.failureKind,
+        }
+      : {}),
+  });
+}
+
 export function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
 }
@@ -291,6 +326,9 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
+  if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
+    return;
+  }
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
     return;
   }
@@ -520,6 +558,7 @@ export async function runExecProcess(opts: {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
+  const diagnosticTarget = opts.sandbox ? "sandbox" : "host";
   const supervisor = getProcessSupervisor();
   const shellRuntimeEnv: Record<string, string> = {
     ...opts.env,
@@ -756,11 +795,33 @@ export async function runExecProcess(opts: {
       } catch (retryErr) {
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
+        emitExecProcessCompleted({
+          command: opts.command,
+          mode: "child",
+          outcome: buildExecRuntimeErrorOutcome({
+            error: retryErr,
+            aggregated: session.aggregated.trim(),
+            durationMs: Date.now() - startedAt,
+          }),
+          sessionKey: opts.sessionKey,
+          target: diagnosticTarget,
+        });
         throw retryErr;
       }
     } else {
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
+      emitExecProcessCompleted({
+        command: opts.command,
+        mode: spawnSpec.mode,
+        outcome: buildExecRuntimeErrorOutcome({
+          error: err,
+          aggregated: session.aggregated.trim(),
+          durationMs: Date.now() - startedAt,
+        }),
+        sessionKey: opts.sessionKey,
+        target: diagnosticTarget,
+      });
       throw err;
     }
   }
@@ -783,7 +844,7 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      markExited(session, exit.exitCode, exit.exitSignal, outcome.status);
+      markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);
       maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
@@ -796,17 +857,32 @@ export async function runExecProcess(opts: {
           token: sandboxFinalizeToken,
         });
       }
+      emitExecProcessCompleted({
+        command: opts.command,
+        mode: usingPty ? "pty" : "child",
+        outcome,
+        sessionKey: opts.sessionKey,
+        target: diagnosticTarget,
+      });
       return outcome;
     })
     .catch((err): ExecProcessOutcome => {
       updatesDisabled = true;
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
-      return buildExecRuntimeErrorOutcome({
+      const outcome = buildExecRuntimeErrorOutcome({
         error: err,
         aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
       });
+      emitExecProcessCompleted({
+        command: opts.command,
+        mode: usingPty ? "pty" : "child",
+        outcome,
+        sessionKey: opts.sessionKey,
+        target: diagnosticTarget,
+      });
+      return outcome;
     });
 
   return {

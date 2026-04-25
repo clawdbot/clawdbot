@@ -2,6 +2,16 @@ import { statSync } from "node:fs";
 import { EdgeTTS } from "node-edge-tts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
+type EdgeTTSDeps = {
+  EdgeTTS: new (config: ConstructorParameters<typeof EdgeTTS>[0]) => {
+    ttsPromise: (text: string, outputPath: string) => Promise<unknown>;
+  };
+};
+
+const defaultEdgeTTSDeps: EdgeTTSDeps = {
+  EdgeTTS,
+};
+
 export function inferEdgeExtension(outputFormat: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(outputFormat);
   if (normalized.includes("webm")) {
@@ -19,24 +29,27 @@ export function inferEdgeExtension(outputFormat: string): string {
   return ".mp3";
 }
 
-export async function edgeTTS(params: {
-  text: string;
-  outputPath: string;
-  config: {
-    voice: string;
-    lang: string;
-    outputFormat: string;
-    saveSubtitles: boolean;
-    proxy?: string;
-    rate?: string;
-    pitch?: string;
-    volume?: string;
-    timeoutMs?: number;
-  };
-  timeoutMs: number;
-}): Promise<void> {
+export async function edgeTTS(
+  params: {
+    text: string;
+    outputPath: string;
+    config: {
+      voice: string;
+      lang: string;
+      outputFormat: string;
+      saveSubtitles: boolean;
+      proxy?: string;
+      rate?: string;
+      pitch?: string;
+      volume?: string;
+      timeoutMs?: number;
+    };
+    timeoutMs: number;
+  },
+  deps: EdgeTTSDeps = defaultEdgeTTSDeps,
+): Promise<void> {
   const { text, outputPath, config, timeoutMs } = params;
-  const tts = new EdgeTTS({
+  const tts = new deps.EdgeTTS({
     voice: config.voice,
     lang: config.lang,
     outputFormat: config.outputFormat,

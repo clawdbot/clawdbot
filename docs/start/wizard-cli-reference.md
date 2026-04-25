@@ -260,6 +260,7 @@ is only a legacy import source.
 Typical fields in `~/.openclaw/openclaw.json`:
 
 - `agents.defaults.workspace`
+- `agents.defaults.skipBootstrap` when `--skip-bootstrap` is passed
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)

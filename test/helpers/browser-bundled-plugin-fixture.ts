@@ -43,7 +43,7 @@ const BROWSER_FIXTURE_ENTRY = `module.exports = {
       program.command("browser");
     }, { commands: ["browser"] });
     api.registerGatewayMethod("browser.request", async () => ({ ok: true }), {
-      scope: "operator.write",
+      scope: "operator.admin",
     });
     api.registerService({
       id: "browser-control",

@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -17,6 +18,7 @@ import {
 } from "../../plugins/bundled-runtime-root.js";
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
 import { normalizeChannelMeta } from "./meta-normalization.js";
 import { isJavaScriptModulePath, loadChannelPluginModule } from "./module-loader.js";
@@ -44,8 +46,12 @@ type BundledChannelSetupEntryRuntimeContract = {
   loadSetupSecrets?: (
     options?: BundledEntryModuleLoadOptions,
   ) => ChannelPlugin["secrets"] | undefined;
-  loadLegacyStateMigrationDetector?: () => BundledChannelLegacyStateMigrationDetector;
-  loadLegacySessionSurface?: () => BundledChannelLegacySessionSurface;
+  loadLegacyStateMigrationDetector?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => BundledChannelLegacyStateMigrationDetector;
+  loadLegacySessionSurface?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => BundledChannelLegacySessionSurface;
   features?: {
     legacyStateMigrations?: boolean;
     legacySessionSurfaces?: boolean;
@@ -347,15 +353,74 @@ function listBundledChannelPluginIdsForRoot(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function shouldIncludeBundledChannelSetupFeatureForConfig(params: {
+  metadata: BundledChannelPluginMetadata;
+  config?: OpenClawConfig;
+}): boolean {
+  if (!params.config) {
+    return true;
+  }
+  const plugins = params.config.plugins;
+  if (plugins?.enabled === false) {
+    return false;
+  }
+  const pluginId = params.metadata.manifest.id;
+  if (plugins?.deny?.includes(pluginId)) {
+    return false;
+  }
+  if (plugins?.entries?.[pluginId]?.enabled === false) {
+    return false;
+  }
+
+  let hasExplicitChannelDisable = false;
+  for (const channelId of params.metadata.manifest.channels ?? [pluginId]) {
+    const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
+    if (!normalizedChannelId) {
+      continue;
+    }
+    const channelConfig = (params.config.channels as Record<string, unknown> | undefined)?.[
+      normalizedChannelId
+    ];
+    if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
+      continue;
+    }
+    if ((channelConfig as { enabled?: unknown }).enabled === false) {
+      hasExplicitChannelDisable = true;
+      continue;
+    }
+    return true;
+  }
+
+  return !hasExplicitChannelDisable;
+}
+
 function listBundledChannelPluginIdsForSetupFeature(
   rootScope: BundledChannelRootScope,
   feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
+  options: { config?: OpenClawConfig } = {},
 ): readonly ChannelId[] {
   const hinted = listBundledChannelMetadata(rootScope)
-    .filter((metadata) => metadata.packageManifest?.setupFeatures?.[feature] === true)
+    .filter(
+      (metadata) =>
+        metadata.packageManifest?.setupFeatures?.[feature] === true &&
+        shouldIncludeBundledChannelSetupFeatureForConfig({
+          metadata,
+          config: options.config,
+        }),
+    )
     .map((metadata) => metadata.manifest.id)
     .toSorted((left, right) => left.localeCompare(right));
-  return hinted.length > 0 ? hinted : listBundledChannelPluginIdsForRoot(rootScope);
+  return hinted.length > 0
+    ? hinted
+    : listBundledChannelMetadata(rootScope)
+        .filter((metadata) =>
+          shouldIncludeBundledChannelSetupFeatureForConfig({
+            metadata,
+            config: options.config,
+          }),
+        )
+        .map((metadata) => metadata.manifest.id)
+        .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
@@ -626,9 +691,12 @@ export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
 
 export function listBundledChannelSetupPluginsByFeature(
   feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
+  options: { config?: OpenClawConfig } = {},
 ): readonly ChannelPlugin[] {
   const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, feature).flatMap((id) => {
+  return listBundledChannelPluginIdsForSetupFeature(rootScope, feature, {
+    config: options.config,
+  }).flatMap((id) => {
     const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, cacheContext);
     if (!hasSetupEntryFeature(setupEntry, feature)) {
       return [];
@@ -638,50 +706,50 @@ export function listBundledChannelSetupPluginsByFeature(
   });
 }
 
-export function listBundledChannelLegacySessionSurfaces(): readonly BundledChannelLegacySessionSurface[] {
+export function listBundledChannelLegacySessionSurfaces(
+  options: {
+    config?: OpenClawConfig;
+  } = {},
+): readonly BundledChannelLegacySessionSurface[] {
   const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacySessionSurfaces").flatMap(
-    (id) => {
-      const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(
-        id,
-        rootScope,
-        cacheContext,
-      );
-      const surface = setupEntry?.loadLegacySessionSurface?.();
-      if (surface) {
-        return [surface];
-      }
-      if (!hasSetupEntryFeature(setupEntry, "legacySessionSurfaces")) {
-        return [];
-      }
-      const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext);
-      return plugin?.messaging ? [plugin.messaging] : [];
-    },
-  );
+  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacySessionSurfaces", {
+    config: options.config,
+  }).flatMap((id) => {
+    const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, cacheContext);
+    const surface = setupEntry?.loadLegacySessionSurface?.({ installRuntimeDeps: false });
+    if (surface) {
+      return [surface];
+    }
+    if (!hasSetupEntryFeature(setupEntry, "legacySessionSurfaces")) {
+      return [];
+    }
+    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext);
+    return plugin?.messaging ? [plugin.messaging] : [];
+  });
 }
 
-export function listBundledChannelLegacyStateMigrationDetectors(): readonly BundledChannelLegacyStateMigrationDetector[] {
+export function listBundledChannelLegacyStateMigrationDetectors(
+  options: {
+    config?: OpenClawConfig;
+  } = {},
+): readonly BundledChannelLegacyStateMigrationDetector[] {
   const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacyStateMigrations").flatMap(
-    (id) => {
-      const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(
-        id,
-        rootScope,
-        cacheContext,
-      );
-      const detector = setupEntry?.loadLegacyStateMigrationDetector?.();
-      if (detector) {
-        return [detector];
-      }
-      if (!hasSetupEntryFeature(setupEntry, "legacyStateMigrations")) {
-        return [];
-      }
-      const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext);
-      return plugin?.lifecycle?.detectLegacyStateMigrations
-        ? [plugin.lifecycle.detectLegacyStateMigrations]
-        : [];
-    },
-  );
+  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacyStateMigrations", {
+    config: options.config,
+  }).flatMap((id) => {
+    const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, cacheContext);
+    const detector = setupEntry?.loadLegacyStateMigrationDetector?.({ installRuntimeDeps: false });
+    if (detector) {
+      return [detector];
+    }
+    if (!hasSetupEntryFeature(setupEntry, "legacyStateMigrations")) {
+      return [];
+    }
+    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext);
+    return plugin?.lifecycle?.detectLegacyStateMigrations
+      ? [plugin.lifecycle.detectLegacyStateMigrations]
+      : [];
+  });
 }
 
 export function hasBundledChannelEntryFeature(

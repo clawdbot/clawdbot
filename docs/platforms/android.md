@@ -117,6 +117,25 @@ openclaw devices reject <requestId>
 
 Pairing details: [Pairing](/channels/pairing).
 
+Optional: if the Android node always connects from a tightly controlled subnet,
+you can opt in to first-time node auto-approval with explicit CIDRs or exact IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+    },
+  },
+}
+```
+
+This is disabled by default. It applies only to fresh `role: node` pairing with
+no requested scopes. Operator/browser pairing and any role, scope, metadata, or
+public-key change still require manual approval.
+
 ### 5) Verify the node is connected
 
 - Via nodes status:

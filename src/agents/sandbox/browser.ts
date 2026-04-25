@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
+import { isSameSsrFPolicy, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import {
   startBrowserBridgeServer,
   stopBrowserBridgeServer,
 } from "../../plugin-sdk/browser-bridge.js";
 import {
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -80,6 +82,7 @@ function buildSandboxBrowserResolvedConfig(params: {
   cdpPort: number;
   headless: boolean;
   evaluateEnabled: boolean;
+  ssrfPolicy?: SsrFPolicy;
 }): ResolvedBrowserConfig {
   const cdpHost = "127.0.0.1";
   const cdpPortRange = deriveDefaultBrowserCdpPortRange(params.controlPort);
@@ -94,6 +97,7 @@ function buildSandboxBrowserResolvedConfig(params: {
     cdpPortRangeEnd: cdpPortRange.end,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
+    actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath: undefined,
     headless: params.headless,
@@ -101,12 +105,19 @@ function buildSandboxBrowserResolvedConfig(params: {
     attachOnly: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     extraArgs: [],
+    tabCleanup: {
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    },
     profiles: {
       [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
         cdpPort: params.cdpPort,
         color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       },
     },
+    ssrfPolicy: params.ssrfPolicy,
   };
 }
 
@@ -147,6 +158,7 @@ export async function ensureSandboxBrowser(params: {
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) {
     return null;
@@ -348,6 +360,8 @@ export async function ensureSandboxBrowser(params: {
 
   const shouldReuse =
     existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
+  const policyMatches =
+    !existing || isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy);
   const authMatches =
     !existing ||
     (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
@@ -355,13 +369,13 @@ export async function ensureSandboxBrowser(params: {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
-  if (existing && shouldReuse && !authMatches) {
+  if (existing && shouldReuse && (!policyMatches || !authMatches)) {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
 
   const bridge = (() => {
-    if (shouldReuse && authMatches && existing) {
+    if (shouldReuse && policyMatches && authMatches && existing) {
       return existing.bridge;
     }
     return null;
@@ -397,6 +411,7 @@ export async function ensureSandboxBrowser(params: {
         cdpPort: mappedCdp,
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
+        ssrfPolicy: params.ssrfPolicy,
       }),
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
@@ -406,7 +421,7 @@ export async function ensureSandboxBrowser(params: {
   };
 
   const resolvedBridge = await ensureBridge();
-  if (!shouldReuse || !authMatches) {
+  if (!shouldReuse || !policyMatches || !authMatches) {
     BROWSER_BRIDGES.set(params.scopeKey, {
       bridge: resolvedBridge,
       containerName,

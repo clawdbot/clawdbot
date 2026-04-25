@@ -386,6 +386,41 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("persists the transcript body instead of runtime-only CLI prompt context", async () => {
+    const sessionKey = "agent:main:subagent:cli-transcript-clean";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-transcript-clean",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const updatedEntry = await persistCliTurnTranscript({
+      body: [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "secret runtime context",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "",
+        "visible ask",
+      ].join("\n"),
+      transcriptBody: "visible ask",
+      result: makeCliResult("hello from cli"),
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+    });
+
+    const messages = await readSessionMessages(updatedEntry?.sessionFile ?? "");
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      content: "visible ask",
+    });
+  });
+
   it("forwards user trigger and channel context to CLI runs", async () => {
     const sessionKey = "agent:main:direct:claude-channel-context";
     const sessionEntry: SessionEntry = {
@@ -540,7 +575,7 @@ describe("embedded attempt harness pinning", () => {
     );
   });
 
-  it("leaves a fresh unpinned session on config-selected harness resolution", async () => {
+  it("pins a fresh unpinned session to the default PI harness", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "fresh-session",
       updatedAt: Date.now(),
@@ -578,7 +613,7 @@ describe("embedded attempt harness pinning", () => {
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentHarnessId: undefined,
+        agentHarnessId: "pi",
       }),
     );
   });

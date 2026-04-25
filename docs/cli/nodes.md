@@ -42,6 +42,9 @@ filter to nodes that connected within a duration (e.g. `24h`, `7d`).
 Approval note:
 
 - `openclaw nodes pending` only needs pairing scope.
+- `gateway.nodes.pairing.autoApproveCidrs` can skip the pending step only for
+  explicitly trusted, first-time `role: node` device pairing. It is off by
+  default and does not approve upgrades.
 - `openclaw nodes approve <requestId>` inherits extra scope requirements from the
   pending request:
   - commandless request: pairing only

@@ -45,12 +45,30 @@ function expectSafeguardRuntime(
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
-  it("does not opt safeguard mode into quality-guard retries", () => {
+  it("enables quality-guard retries by default in safeguard mode", () => {
     const cfg = {
       agents: {
         defaults: {
           compaction: {
             mode: "safeguard",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expectSafeguardRuntime(cfg, {
+      qualityGuardEnabled: true,
+    });
+  });
+
+  it("honors explicit safeguard quality-guard disablement", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            qualityGuard: {
+              enabled: false,
+            },
           },
         },
       },

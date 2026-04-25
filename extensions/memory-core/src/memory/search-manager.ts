@@ -14,6 +14,7 @@ import {
   type MemoryEmbeddingProbeResult,
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
+  type MemorySource,
   type MemorySyncProgressUpdate,
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -258,6 +259,7 @@ class BorrowedMemoryManager implements MemorySearchManager {
       sessionKey?: string;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      sources?: MemorySource[];
     },
   ) {
     return await this.inner.search(query, opts);
@@ -334,6 +336,7 @@ class FallbackMemoryManager implements MemorySearchManager {
       sessionKey?: string;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      sources?: MemorySource[];
     },
   ) {
     this.ensureOpen();

@@ -9,18 +9,19 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "../../agents/pi-embedded-runner/result-fallback-classifier.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import {
+  buildAgentRuntimeDeliveryPlan,
+  buildAgentRuntimeOutcomePlan,
+} from "../../agents/runtime-plan/build.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveProviderFollowupFallbackRoute } from "../../plugins/provider-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
@@ -84,6 +85,22 @@ export function createFollowupRunner(params: {
     const { originatingChannel, originatingTo } = queued;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
+    const deliveryPlan = buildAgentRuntimeDeliveryPlan({
+      provider: resolvedRun.provider,
+      modelId: resolvedRun.modelId,
+      config: runtimeConfig,
+      workspaceDir: queued.run.workspaceDir,
+      agentDir: queued.run.agentDir,
+    });
+
+    const sendablePayloads = payloads.filter(
+      (payload): payload is ReplyPayload =>
+        hasOutboundReplyContent(payload) && !deliveryPlan.isSilentPayload(payload),
+    );
+
+    if (sendablePayloads.length === 0) {
+      return;
+    }
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       defaultRuntime.error?.(
@@ -94,32 +111,13 @@ export function createFollowupRunner(params: {
 
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
-    for (const payload of payloads) {
-      if (!payload || !hasOutboundReplyContent(payload)) {
-        continue;
-      }
-      if (
-        isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) &&
-        !resolveSendableOutboundReplyParts(payload).hasMedia
-      ) {
-        continue;
-      }
-      const providerRoute = resolveProviderFollowupFallbackRoute({
-        provider: resolvedRun.provider,
-        config: runtimeConfig,
-        workspaceDir: queued.run.workspaceDir,
-        context: {
-          config: runtimeConfig,
-          agentDir: queued.run.agentDir,
-          workspaceDir: queued.run.workspaceDir,
-          provider: resolvedRun.provider,
-          modelId: resolvedRun.modelId,
-          payload,
-          originatingChannel,
-          originatingTo,
-          originRoutable: Boolean(shouldRouteToOriginating),
-          dispatcherAvailable: Boolean(opts?.onBlockReply),
-        },
+    for (const payload of sendablePayloads) {
+      const providerRoute = deliveryPlan.resolveFollowupRoute({
+        payload,
+        originatingChannel,
+        originatingTo,
+        originRoutable: Boolean(shouldRouteToOriginating),
+        dispatcherAvailable: Boolean(opts?.onBlockReply),
       });
       if (providerRoute?.route === "drop") {
         logVerbose(
@@ -263,6 +261,7 @@ export function createFollowupRunner(params: {
       );
       replyOperation.setPhase("running");
       try {
+        const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
           cfg: runtimeConfig,
           provider: run.provider,
@@ -275,7 +274,7 @@ export function createFollowupRunner(params: {
             sessionKey: run.sessionKey,
           }),
           classifyResult: ({ result, provider, model }) =>
-            classifyEmbeddedPiRunResultForModelFallback({ result, provider, model }),
+            outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
             const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
             let attemptCompactionCount = 0;
@@ -311,6 +310,7 @@ export function createFollowupRunner(params: {
                 config: runtimeConfig,
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
+                transcriptPrompt: queued.transcriptPrompt,
                 extraSystemPrompt: run.extraSystemPrompt,
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,

@@ -1,7 +1,36 @@
 export type BrowserTransport = "cdp" | "chrome-mcp";
 
+export type BrowserStatus = {
+  enabled: boolean;
+  profile?: string;
+  driver?: "openclaw" | "existing-session";
+  transport?: BrowserTransport;
+  running: boolean;
+  cdpReady?: boolean;
+  cdpHttp?: boolean;
+  pid: number | null;
+  cdpPort: number | null;
+  cdpUrl?: string | null;
+  chosenBrowser: string | null;
+  detectedBrowser?: string | null;
+  detectedExecutablePath?: string | null;
+  detectError?: string | null;
+  userDataDir: string | null;
+  color: string;
+  headless: boolean;
+  noSandbox?: boolean;
+  executablePath?: string | null;
+  attachOnly: boolean;
+};
+
 export type BrowserTab = {
+  /** Best handle for agents to pass back as targetId: label, then tabId, then raw targetId. */
+  suggestedTargetId?: string;
   targetId: string;
+  /** Stable, human-friendly tab handle for this profile runtime (for example t1). */
+  tabId?: string;
+  /** Optional user-assigned tab label. */
+  label?: string;
   title: string;
   url: string;
   wsUrl?: string;

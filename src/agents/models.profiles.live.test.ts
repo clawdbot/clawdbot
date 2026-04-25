@@ -58,8 +58,12 @@ const LIVE_TEST_TIMEOUT_MS = Math.max(
   toInt(process.env.OPENCLAW_LIVE_TEST_TIMEOUT_MS, 60 * 60 * 1000),
 );
 const DEFAULT_LIVE_MODEL_CONCURRENCY = 20;
-const LIVE_MODEL_CONCURRENCY = resolveLiveModelConcurrency();
-const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs();
+const LIVE_MODEL_CONCURRENCY = resolveLiveModelConcurrency(
+  process.env.OPENCLAW_LIVE_MODEL_CONCURRENCY,
+);
+const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs(
+  process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
+);
 const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
 const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_IMAGE_PROBE_ENV);
 
@@ -318,13 +322,13 @@ function toInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function resolveLiveModelConcurrency(raw = process.env.OPENCLAW_LIVE_MODEL_CONCURRENCY): number {
+function resolveLiveModelConcurrency(raw?: string): number {
   return Math.max(1, toInt(raw, DEFAULT_LIVE_MODEL_CONCURRENCY));
 }
 
 describe("resolveLiveModelConcurrency", () => {
   it("defaults direct-model probes to 20-way concurrency", () => {
-    expect(resolveLiveModelConcurrency(undefined)).toBe(20);
+    expect(resolveLiveModelConcurrency()).toBe(20);
   });
 
   it("accepts explicit concurrency overrides", () => {
@@ -334,7 +338,7 @@ describe("resolveLiveModelConcurrency", () => {
 });
 
 function resolveLiveModelsJsonTimeoutMs(
-  modelsJsonTimeoutRaw = process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
+  modelsJsonTimeoutRaw?: string,
   setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
 ): number {
   return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
@@ -489,6 +493,102 @@ async function completeOkWithRetry(params: {
   // Some providers (for example Moonshot Kimi and MiniMax M2.5) may emit
   // reasoning blocks first and only return text once token budget is higher.
   return await runOnce(256);
+}
+
+function isDeepSeekV4Model(model: Pick<Model<Api>, "id" | "provider">): boolean {
+  return (
+    model.provider === "deepseek" &&
+    (model.id === "deepseek-v4-flash" || model.id === "deepseek-v4-pro")
+  );
+}
+
+async function runDeepSeekV4ReplayRegression(params: {
+  model: Model<Api>;
+  apiKey: string;
+  timeoutMs: number;
+  progressLabel: string;
+}) {
+  const noopTool = {
+    name: "noop",
+    description: "Return ok.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+  };
+  let firstUser = {
+    role: "user" as const,
+    content: "Call the tool `noop` with {}. Do not write any other text.",
+    timestamp: Date.now(),
+  };
+  let first = await completeSimpleWithTimeout(
+    params.model,
+    { messages: [firstUser], tools: [noopTool] },
+    {
+      apiKey: params.apiKey,
+      reasoning: resolveTestReasoning(params.model),
+      maxTokens: 256,
+    },
+    params.timeoutMs,
+    `${params.progressLabel}: DeepSeek V4 replay first call`,
+  );
+  let toolCall = first.content.find((block) => block.type === "toolCall");
+
+  for (let i = 0; i < 2 && !toolCall; i += 1) {
+    firstUser = {
+      role: "user" as const,
+      content: "Call the tool `noop` with {}. IMPORTANT: respond with the tool call.",
+      timestamp: Date.now(),
+    };
+    first = await completeSimpleWithTimeout(
+      params.model,
+      { messages: [firstUser], tools: [noopTool] },
+      {
+        apiKey: params.apiKey,
+        reasoning: resolveTestReasoning(params.model),
+        maxTokens: 256,
+      },
+      params.timeoutMs,
+      `${params.progressLabel}: DeepSeek V4 replay retry ${i + 1}`,
+    );
+    toolCall = first.content.find((block) => block.type === "toolCall");
+  }
+
+  expect(toolCall).toBeTruthy();
+  if (!toolCall || toolCall.type !== "toolCall") {
+    throw new Error("expected DeepSeek V4 tool call");
+  }
+
+  const second = await completeSimpleWithTimeout(
+    params.model,
+    {
+      messages: [
+        firstUser,
+        first,
+        {
+          role: "toolResult",
+          toolCallId: toolCall.id,
+          toolName: "noop",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+        {
+          role: "user",
+          content: "Reply with the word ok.",
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    {
+      apiKey: params.apiKey,
+      reasoning: resolveTestReasoning(params.model),
+      maxTokens: 256,
+    },
+    params.timeoutMs,
+    `${params.progressLabel}: DeepSeek V4 replay followup`,
+  );
+  if (second.stopReason === "error") {
+    throw new Error(second.errorMessage || "DeepSeek V4 replay followup returned error");
+  }
+  expect(extractAssistantText(second).length).toBeGreaterThan(0);
 }
 
 async function runExtraTurnProbes(params: {
@@ -839,6 +939,24 @@ describeLive("live models (profile keys)", () => {
                 .map((b) => b.text.trim())
                 .join(" ");
               expect(secondText.length).toBeGreaterThan(0);
+              await runExtraTurnProbes({
+                model,
+                apiKey,
+                timeoutMs: perModelTimeoutMs,
+                progressLabel,
+              });
+              logProgress(`${progressLabel}: done`);
+              break;
+            }
+
+            if (isDeepSeekV4Model(model)) {
+              logProgress(`${progressLabel}: DeepSeek V4 replay regression`);
+              await runDeepSeekV4ReplayRegression({
+                model,
+                apiKey,
+                timeoutMs: perModelTimeoutMs,
+                progressLabel,
+              });
               await runExtraTurnProbes({
                 model,
                 apiKey,

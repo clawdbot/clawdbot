@@ -99,6 +99,7 @@ const browserSessionTabMocks = vi.hoisted(() => ({
 }));
 const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   disposeSessionMcpRuntime: vi.fn(async (_sessionId: string) => {}),
+  disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
 }));
 
 vi.mock("../auto-reply/reply/queue.js", async () => {
@@ -207,6 +208,7 @@ vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
 
 vi.mock("../agents/pi-bundle-mcp-tools.js", () => ({
   disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
+  disposeAllSessionMcpRuntimes: bundleMcpRuntimeMocks.disposeAllSessionMcpRuntimes,
   retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
     sessionId
       ? bundleMcpRuntimeMocks.disposeSessionMcpRuntime(sessionId).then(() => true)

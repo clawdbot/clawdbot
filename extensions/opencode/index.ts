@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { applyOpencodeZenConfig, OPENCODE_ZEN_DEFAULT_MODEL } from "./api.js";
+import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
@@ -49,5 +50,6 @@ export default definePluginEntry({
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
     });
+    api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);
   },
 });

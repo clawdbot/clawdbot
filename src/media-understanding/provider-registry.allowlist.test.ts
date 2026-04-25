@@ -27,6 +27,7 @@ describe("media-understanding provider registry allowlist fallback", () => {
     expect(getMediaUnderstandingProvider("openai", registry)).toBeUndefined();
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: compatConfig,
+      activate: false,
     });
   });
 });

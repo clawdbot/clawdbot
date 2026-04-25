@@ -277,6 +277,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
         activeRuntimeLine,
         "",
         "Switch: /model <provider/model>",
+        "Runtime: /model <provider/model> --runtime <runtime>",
         "Browse: /models (providers) or /models <provider> (models)",
         "More: /model status",
       ]

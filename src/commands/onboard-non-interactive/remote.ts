@@ -4,6 +4,7 @@ import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { applySkipBootstrapConfig } from "../onboard-config.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
 
@@ -34,6 +35,9 @@ export async function runNonInteractiveRemoteSetup(params: {
       },
     },
   };
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await replaceConfigFile({
     nextConfig,

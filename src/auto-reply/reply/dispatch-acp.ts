@@ -213,6 +213,7 @@ async function finalizeAcpTurnOutput(params: {
         const delivered = await params.delivery.deliver("final", {
           mediaUrl: ttsSyntheticReply.mediaUrl,
           audioAsVoice: ttsSyntheticReply.audioAsVoice,
+          spokenText: accumulatedBlockText,
         });
         queuedFinal = queuedFinal || delivered;
         finalMediaDelivered = delivered;

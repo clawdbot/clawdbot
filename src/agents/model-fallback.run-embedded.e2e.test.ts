@@ -448,6 +448,27 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
     });
   });
 
+  it("falls back on timeout errors using defaults-only model fallbacks", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess("LLM request timed out.");
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:timeout-defaults-fallback",
+        runId: "run:timeout-defaults-fallback",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("timeout");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      expectOpenAiThenGroqAttemptOrder();
+    });
+  });
+
   it("falls back across providers after overloaded primary failure and persists transient cooldown", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

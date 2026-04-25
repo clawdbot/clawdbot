@@ -20,18 +20,8 @@ function visitAccordionIndentation(raw, onMisindentedClose) {
     if (openAccordion) {
       accordionStack.push({
         indent: openAccordion[1].length,
-        hasOutdentedListItem: false,
       });
       continue;
-    }
-
-    const listItem = line.match(/^(\s*)[-*+]\s+/u);
-    if (listItem) {
-      for (const accordion of accordionStack) {
-        if (listItem[1].length < accordion.indent) {
-          accordion.hasOutdentedListItem = true;
-        }
-      }
     }
 
     const closeAccordion = line.match(/^(\s*)<\/Accordion>/u);
@@ -40,7 +30,7 @@ function visitAccordionIndentation(raw, onMisindentedClose) {
     }
 
     const opening = accordionStack.pop();
-    if (opening && opening.hasOutdentedListItem && closeAccordion[1].length > opening.indent) {
+    if (opening && closeAccordion[1].length > opening.indent) {
       onMisindentedClose({ closeAccordion, index, line, lines, opening });
     }
   }

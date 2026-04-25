@@ -40,7 +40,7 @@ flowchart TD
 | Audit what ran and when                 | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit` |
 | Multi-step research then summarize      | Task Flow              | Durable orchestration with revision tracking     |
 | Run a script on session reset           | Hooks                  | Event-driven, fires on lifecycle events          |
-| Execute code on every tool call         | Hooks                  | Hooks can filter by event type                   |
+| Execute code on every tool call         | Plugin hooks           | In-process hooks can intercept tool calls        |
 | Always check compliance before replying | Standing Orders        | Injected into every session automatically        |
 
 ### Scheduled Tasks (Cron) vs Heartbeat
@@ -83,7 +83,11 @@ See [Standing Orders](/automation/standing-orders).
 
 ### Hooks
 
-Hooks are event-driven scripts triggered by agent lifecycle events (`/new`, `/reset`, `/stop`), session compaction, gateway startup, message flow, and tool calls. Hooks are automatically discovered from directories and can be managed with `openclaw hooks`.
+Internal hooks are event-driven scripts triggered by agent lifecycle events
+(`/new`, `/reset`, `/stop`), session compaction, gateway startup, and message
+flow. They are automatically discovered from directories and can be managed
+with `openclaw hooks`. For in-process tool-call interception, use
+[Plugin hooks](/plugins/hooks).
 
 See [Hooks](/automation/hooks).
 
@@ -97,7 +101,7 @@ See [Heartbeat](/gateway/heartbeat).
 
 - **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders. All cron executions create task records.
 - **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
-- **Hooks** react to specific events (tool calls, session resets, compaction) with custom scripts.
+- **Hooks** react to specific events (session resets, compaction, message flow) with custom scripts. Plugin hooks cover tool calls.
 - **Standing orders** give the agent persistent context and authority boundaries.
 - **Task Flow** coordinates multi-step flows above individual tasks.
 - **Tasks** automatically track all detached work so you can inspect and audit it.
@@ -108,6 +112,7 @@ See [Heartbeat](/gateway/heartbeat).
 - [Background Tasks](/automation/tasks) — task ledger for all detached work
 - [Task Flow](/automation/taskflow) — durable multi-step flow orchestration
 - [Hooks](/automation/hooks) — event-driven lifecycle scripts
+- [Plugin hooks](/plugins/hooks) — in-process tool, prompt, message, and lifecycle hooks
 - [Standing Orders](/automation/standing-orders) — persistent agent instructions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Configuration Reference](/gateway/configuration-reference) — all config keys

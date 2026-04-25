@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -58,6 +60,13 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
+    expect(resolved.actionTimeoutMs).toBe(60_000);
+    expect(resolved.tabCleanup).toEqual({
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    });
   });
 
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {
@@ -111,9 +120,101 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       remoteCdpTimeoutMs: 2200,
       remoteCdpHandshakeTimeoutMs: 5000,
+      actionTimeoutMs: 45_000,
     });
     expect(resolved.remoteCdpTimeoutMs).toBe(2200);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(5000);
+    expect(resolved.actionTimeoutMs).toBe(45_000);
+  });
+
+  it("supports custom browser tab cleanup policy", () => {
+    const resolved = resolveBrowserConfig({
+      tabCleanup: {
+        enabled: false,
+        idleMinutes: 0,
+        maxTabsPerSession: 0,
+        sweepMinutes: 15,
+      },
+    });
+    expect(resolved.tabCleanup).toEqual({
+      enabled: false,
+      idleMinutes: 0,
+      maxTabsPerSession: 0,
+      sweepMinutes: 15,
+    });
+  });
+
+  it("expands tilde-prefixed executablePath with the OS home directory", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: " ~/.local/bin/chromium ",
+    });
+
+    expect(resolved.executablePath).toBe(path.resolve(os.homedir(), ".local/bin/chromium"));
+  });
+
+  it("keeps non-tilde executablePath values unchanged after trimming", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: " ./local-chromium ",
+    });
+
+    expect(resolved.executablePath).toBe("./local-chromium");
+  });
+
+  it("normalizes blank executablePath to undefined", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "   ",
+    });
+
+    expect(resolved.executablePath).toBeUndefined();
+  });
+
+  it("expands a bare ~ executablePath to the OS home directory", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "~",
+    });
+
+    expect(resolved.executablePath).toBe(path.resolve(os.homedir()));
+  });
+
+  // Windows-only: on POSIX path.resolve treats `\` as a literal character,
+  // so "~\foo" cannot resolve to "$HOME/foo". The helper's regex still matches
+  // a leading `~\` on every platform; we only assert the resolved form where
+  // the OS path module agrees.
+  (process.platform === "win32" ? it : it.skip)(
+    "expands a Windows-style ~\\ executablePath to the OS home directory",
+    () => {
+      const resolved = resolveBrowserConfig({
+        executablePath: "~\\AppData\\Local\\Chromium\\chrome.exe",
+      });
+
+      expect(resolved.executablePath).toBe(
+        path.resolve(os.homedir(), "AppData/Local/Chromium/chrome.exe"),
+      );
+    },
+  );
+
+  it("does not expand executablePath values where ~ is not the home prefix", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "/opt/~chromium/chrome",
+    });
+
+    expect(resolved.executablePath).toBe("/opt/~chromium/chrome");
+  });
+
+  it("normalizes invalid browser tab cleanup numbers to defaults", () => {
+    const resolved = resolveBrowserConfig({
+      tabCleanup: {
+        idleMinutes: -1,
+        maxTabsPerSession: -2,
+        sweepMinutes: 0,
+      },
+    });
+    expect(resolved.tabCleanup).toEqual({
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    });
   });
 
   it("falls back to default color for invalid hex", () => {
@@ -176,6 +277,86 @@ describe("browser config", () => {
 
     const remote = resolveProfile(resolved, "remote");
     expect(remote?.attachOnly).toBe(true);
+  });
+
+  it("inherits headless from global browser config when profile override is not set", () => {
+    const resolved = resolveBrowserConfig({
+      headless: true,
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.headless).toBe(true);
+  });
+
+  it("allows profile headless to override global browser headless", () => {
+    const resolved = resolveBrowserConfig({
+      headless: false,
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", headless: true, color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.headless).toBe(true);
+  });
+
+  it("allows profile headless=false to override global browser headless=true", () => {
+    const resolved = resolveBrowserConfig({
+      headless: true,
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", headless: false, color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.headless).toBe(false);
+  });
+
+  it("inherits executablePath from global browser config when profile override is not set", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "~/bin/chrome-global",
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.executablePath).toBe(path.resolve(os.homedir(), "bin/chrome-global"));
+  });
+
+  it("allows profile executablePath to override global browser executablePath", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "/usr/bin/chrome-global",
+      profiles: {
+        remote: {
+          cdpUrl: "http://127.0.0.1:9222",
+          executablePath: " ~/bin/chrome-profile ",
+          color: "#0066CC",
+        },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.executablePath).toBe(path.resolve(os.homedir(), "bin/chrome-profile"));
+  });
+
+  it("falls back to global executablePath when profile executablePath is blank", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "/usr/bin/chrome-global",
+      profiles: {
+        remote: {
+          cdpUrl: "http://127.0.0.1:9222",
+          executablePath: "   ",
+          color: "#0066CC",
+        },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.executablePath).toBe("/usr/bin/chrome-global");
   });
 
   it("uses base protocol for profiles with only cdpPort", () => {

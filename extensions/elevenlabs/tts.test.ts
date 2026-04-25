@@ -24,6 +24,11 @@ describe("elevenlabs tts diagnostics", () => {
     };
   }
 
+  function getHeadersFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): Headers {
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    return new Headers(init?.headers);
+  }
+
   async function expectDefaultTtsRequestToThrow(message: string | RegExp) {
     await expect(elevenLabsTTS(createDefaultTtsRequest())).rejects.toThrow(message);
   }
@@ -79,5 +84,26 @@ describe("elevenlabs tts diagnostics", () => {
     await expectDefaultTtsRequestToThrow("ElevenLabs API error (503)");
 
     expect(streamed.getReadCount()).toBeLessThan(200);
+  });
+
+  it("keeps the MPEG Accept header for MP3 output", async () => {
+    const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await elevenLabsTTS(createDefaultTtsRequest());
+
+    expect(getHeadersFromFirstFetchCall(fetchMock).get("accept")).toBe("audio/mpeg");
+  });
+
+  it("omits the MPEG Accept header for PCM telephony output", async () => {
+    const fetchMock = vi.fn(async () => new Response(Buffer.from("pcm")));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await elevenLabsTTS({
+      ...createDefaultTtsRequest(),
+      outputFormat: "pcm_22050",
+    });
+
+    expect(getHeadersFromFirstFetchCall(fetchMock).has("accept")).toBe(false);
   });
 });

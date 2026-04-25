@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "dependencies": {
+    "@agentclientprotocol/sdk": {
+      "owner": "core:mcp-acp",
+      "class": "core-runtime",
+      "risk": ["protocol-client"]
+    },
+    "@clack/prompts": {
+      "owner": "core:cli",
+      "class": "core-runtime",
+      "risk": ["interactive-cli"]
+    },
+    "@lydell/node-pty": {
+      "owner": "core:tui-terminal",
+      "class": "core-runtime",
+      "risk": ["native", "terminal"]
+    },
+    "@mariozechner/pi-agent-core": {
+      "owner": "capability:agent-runtime-pi",
+      "class": "default-runtime-initially",
+      "risk": ["large-transitive-cone", "agent-runtime"]
+    },
+    "@mariozechner/pi-ai": {
+      "owner": "capability:agent-runtime-pi",
+      "class": "default-runtime-initially",
+      "risk": ["large-transitive-cone", "provider-sdk-fanout"]
+    },
+    "@mariozechner/pi-coding-agent": {
+      "owner": "capability:agent-runtime-pi",
+      "class": "default-runtime-initially",
+      "risk": ["large-transitive-cone", "agent-runtime"]
+    },
+    "@mariozechner/pi-tui": {
+      "owner": "capability:tui-pi",
+      "class": "default-runtime-initially",
+      "risk": ["tui-runtime"]
+    },
+    "@modelcontextprotocol/sdk": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["protocol-client", "network"]
+    },
+    "@mozilla/readability": {
+      "owner": "plugin:web-readability",
+      "class": "plugin-runtime",
+      "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
+      "risk": ["parser", "untrusted-html"]
+    },
+    "@napi-rs/canvas": {
+      "owner": "plugin:document-extract",
+      "class": "optional-peer-runtime",
+      "activation": [
+        "input_file.application_pdf.image_fallback",
+        "plugins.entries.document-extract.enabled"
+      ],
+      "risk": ["native", "parser", "untrusted-files"]
+    },
+    "@vincentkoc/qrcode-tui": {
+      "owner": "core:qr-setup",
+      "class": "default-runtime-initially",
+      "risk": ["terminal-rendering"]
+    },
+    "ajv": {
+      "owner": "core:json-schema-validation",
+      "class": "core-runtime",
+      "risk": ["schema-validation"]
+    },
+    "chalk": {
+      "owner": "core:cli",
+      "class": "core-runtime",
+      "risk": ["formatting"]
+    },
+    "chokidar": {
+      "owner": "core:watch-mode",
+      "class": "core-runtime",
+      "risk": ["filesystem-watch"]
+    },
+    "commander": {
+      "owner": "core:cli",
+      "class": "core-runtime",
+      "risk": ["cli-parser"]
+    },
+    "croner": {
+      "owner": "core:scheduler",
+      "class": "core-runtime",
+      "risk": ["scheduler"]
+    },
+    "dotenv": {
+      "owner": "core:config",
+      "class": "core-runtime",
+      "risk": ["env-loading"]
+    },
+    "express": {
+      "owner": "capability:http-route-host",
+      "class": "default-runtime-initially",
+      "risk": ["http-server", "large-transitive-cone"]
+    },
+    "file-type": {
+      "owner": "core:media-admission",
+      "class": "core-runtime",
+      "risk": ["file-sniffing", "untrusted-files"]
+    },
+    "https-proxy-agent": {
+      "owner": "core:proxy",
+      "class": "core-runtime",
+      "risk": ["network", "proxy"]
+    },
+    "ipaddr.js": {
+      "owner": "core:ssrf-guard",
+      "class": "core-runtime",
+      "risk": ["network-policy"]
+    },
+    "jiti": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["dynamic-code-loading"]
+    },
+    "json5": {
+      "owner": "core:config",
+      "class": "core-runtime",
+      "risk": ["config-parser"]
+    },
+    "jszip": {
+      "owner": "core:archive-handling",
+      "class": "core-runtime",
+      "risk": ["archive-parser", "untrusted-files"]
+    },
+    "linkedom": {
+      "owner": "plugin:web-readability",
+      "class": "plugin-runtime",
+      "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
+      "risk": ["parser", "untrusted-html"]
+    },
+    "markdown-it": {
+      "owner": "core:markdown-rendering",
+      "class": "core-runtime",
+      "risk": ["parser", "markdown"]
+    },
+    "openai": {
+      "owner": "provider:openai",
+      "class": "default-runtime-initially",
+      "risk": ["provider-sdk", "network"]
+    },
+    "osc-progress": {
+      "owner": "core:terminal-progress",
+      "class": "core-runtime",
+      "risk": ["terminal-rendering"]
+    },
+    "pdfjs-dist": {
+      "owner": "plugin:document-extract",
+      "class": "plugin-runtime",
+      "activation": ["input_file.application_pdf", "plugins.entries.document-extract.enabled"],
+      "risk": ["parser", "untrusted-files"]
+    },
+    "proxy-agent": {
+      "owner": "core:proxy",
+      "class": "core-runtime",
+      "risk": ["network", "proxy"]
+    },
+    "semver": {
+      "owner": "core:package-versioning",
+      "class": "core-runtime",
+      "risk": ["version-parser"]
+    },
+    "sharp": {
+      "owner": "capability:image-ops",
+      "class": "default-runtime-initially",
+      "risk": ["native", "parser", "untrusted-files"]
+    },
+    "sqlite-vec": {
+      "owner": "capability:memory-sqlite-vec",
+      "class": "default-runtime-initially",
+      "risk": ["native", "database-extension"]
+    },
+    "tar": {
+      "owner": "core:archive-handling",
+      "class": "core-runtime",
+      "risk": ["archive-parser", "untrusted-files"]
+    },
+    "tslog": {
+      "owner": "core:logging",
+      "class": "core-runtime",
+      "risk": ["logging"]
+    },
+    "typebox": {
+      "owner": "core:json-schema-contracts",
+      "class": "core-runtime",
+      "risk": ["schema-generation"]
+    },
+    "undici": {
+      "owner": "core:http-client",
+      "class": "core-runtime",
+      "risk": ["network"]
+    },
+    "ws": {
+      "owner": "core:gateway-websocket",
+      "class": "core-runtime",
+      "risk": ["network", "websocket"]
+    },
+    "yaml": {
+      "owner": "core:config-and-tooling",
+      "class": "core-runtime",
+      "risk": ["parser"]
+    },
+    "zod": {
+      "owner": "core:config-and-plugin-sdk-validation",
+      "class": "core-runtime",
+      "risk": ["schema-validation"]
+    }
+  }
+}

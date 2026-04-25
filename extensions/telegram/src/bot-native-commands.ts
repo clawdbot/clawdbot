@@ -940,6 +940,7 @@ export const registerTelegramNativeCommands = ({
           cfg: executionCfg,
           dispatcherOptions: {
             ...replyPipeline,
+            beforeDeliver: async (payload) => payload,
             deliver: async (payload, _info) => {
               if (
                 shouldSuppressLocalTelegramExecApprovalPrompt({

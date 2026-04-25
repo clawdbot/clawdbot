@@ -549,6 +549,167 @@ module.exports = {
     );
   });
 
+  it("collects channel CLI metadata during discovery plugin loads", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const modeMarker = path.join(pluginDir, "registration-mode.txt");
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+    const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discovery-cli-metadata-channel",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "discovery-cli-metadata-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["discovery-cli-metadata-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `${inlineChannelPluginEntryFactorySource()}
+module.exports = {
+  ...defineChannelPluginEntry({
+    id: "discovery-cli-metadata-channel",
+    name: "Discovery CLI Metadata Channel",
+    description: "discovery cli metadata channel",
+    setRuntime() {
+      require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf-8");
+    },
+    plugin: {
+      id: "discovery-cli-metadata-channel",
+      meta: {
+        id: "discovery-cli-metadata-channel",
+        label: "Discovery CLI Metadata Channel",
+        selectionLabel: "Discovery CLI Metadata Channel",
+        docsPath: "/channels/discovery-cli-metadata-channel",
+        blurb: "discovery cli metadata channel",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    },
+    registerCliMetadata(api) {
+      require("node:fs").writeFileSync(
+        ${JSON.stringify(modeMarker)},
+        String(api.registrationMode),
+        "utf-8",
+      );
+      api.registerCli(() => {}, {
+        descriptors: [
+          {
+            name: "discovery-cli-metadata-channel",
+            description: "Discovery-load channel CLI metadata",
+            hasSubcommands: true,
+          },
+        ],
+      });
+    },
+    registerFull() {
+      require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+    },
+  }),
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["discovery-cli-metadata-channel"],
+          entries: {
+            "discovery-cli-metadata-channel": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(fs.readFileSync(modeMarker, "utf-8")).toBe("discovery");
+    expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(fs.existsSync(runtimeMarker)).toBe(false);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
+      "discovery-cli-metadata-channel",
+    );
+  });
+
+  it("sanitizes plugin CLI descriptor descriptions and rejects unsafe command names", async () => {
+    useNoBundledPlugins();
+    const unsafeDescription =
+      "Open \u001B]8;;https://example.test\u0007link\u001B]8;;\u0007 now\u001B[2J";
+    const plugin = writePlugin({
+      id: "unsafe-cli-descriptors",
+      filename: "unsafe-cli-descriptors.cjs",
+      body: `module.exports = {
+  id: "unsafe-cli-descriptors",
+  register(api) {
+    api.registerCli(() => {}, {
+      commands: ["bad\\ncommand"],
+      descriptors: [
+        {
+          name: "safe-command",
+          description: ${JSON.stringify(unsafeDescription)},
+          hasSubcommands: false,
+        },
+        {
+          name: "bad\\nname",
+          description: "Bad descriptor",
+          hasSubcommands: false,
+        },
+      ],
+    });
+  },
+};`,
+    });
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.dir] },
+          allow: ["unsafe-cli-descriptors"],
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars).toHaveLength(1);
+    expect(registry.cliRegistrars[0]?.commands).toEqual(["safe-command"]);
+    expect(registry.cliRegistrars[0]?.descriptors).toEqual([
+      {
+        name: "safe-command",
+        description: "Open link now",
+        hasSubcommands: false,
+      },
+    ]);
+    expect(registry.diagnostics.map((diag) => diag.message)).toEqual([
+      'invalid cli descriptor name: "bad\\nname"',
+      'invalid cli command name: "bad\\ncommand"',
+    ]);
+  });
+
   it("rejects async plugin registration when collecting CLI metadata", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

@@ -6,8 +6,6 @@ read_when:
 title: "Health checks"
 ---
 
-# Health Checks (CLI)
-
 Short guide to verify channel connectivity without guessing.
 
 ## Quick checks

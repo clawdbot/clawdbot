@@ -46,7 +46,10 @@ export async function dashboardCommand(
     ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
     : links.httpUrl;
 
-  runtime.log(`Dashboard URL: ${dashboardUrl}`);
+  runtime.log(`Dashboard URL: ${links.httpUrl}`);
+  if (includeTokenInUrl) {
+    runtime.log("Token auto-auth included in browser/clipboard URL.");
+  }
   if (resolvedToken.secretRefConfigured && token) {
     runtime.log(
       "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
@@ -73,11 +76,13 @@ export async function dashboardCommand(
       hint = formatControlUiSshHint({
         port,
         basePath,
-        token: includeTokenInUrl ? token || undefined : undefined,
       });
     }
   } else {
-    hint = "Browser launch disabled (--no-open). Use the URL above.";
+    hint =
+      copied && includeTokenInUrl
+        ? "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard."
+        : "Browser launch disabled (--no-open). Use the URL above.";
   }
 
   if (opened) {

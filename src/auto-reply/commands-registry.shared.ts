@@ -191,6 +191,15 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       tier: "essential",
     }),
     defineChatCommand({
+      key: "crestodian",
+      description: "Run the Crestodian setup and repair helper.",
+      textAlias: "/crestodian",
+      acceptsArgs: true,
+      scope: "text",
+      category: "management",
+      tier: "essential",
+    }),
+    defineChatCommand({
       key: "tasks",
       nativeName: "tasks",
       description: "List background tasks for this session.",
@@ -848,7 +857,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "models",
       nativeName: "models",
-      description: "List model providers/models or add a model.",
+      description: "List model providers/models.",
       textAlias: "/models",
       tier: "standard",
       argsParsing: "none",

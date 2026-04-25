@@ -10,10 +10,7 @@ import {
 export { buildCommandsPaginationKeyboard };
 
 export function buildTelegramModelsMenuButtons(params: { providers: ProviderInfo[] }) {
-  return [
-    [{ text: "Add model", callback_data: "/models add" }],
-    ...buildProviderKeyboard(params.providers),
-  ];
+  return buildProviderKeyboard(params.providers);
 }
 
 export function buildTelegramModelsMenuChannelData(params: {

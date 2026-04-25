@@ -61,6 +61,7 @@ import {
   slackConfigAdapter,
 } from "./shared.js";
 import { parseSlackTarget } from "./target-parsing.js";
+import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 // Lazy SDK loaders. The dynamic import is hidden behind a string-literal
@@ -218,7 +219,7 @@ async function resolveSlackSendContext(params: {
   const token = getTokenForOperation(account, "write");
   const botToken = account.botToken?.trim();
   const tokenOverride = token && token !== botToken ? token : undefined;
-  const threadTsValue = params.replyToId ?? params.threadId;
+  const threadTsValue = resolveSlackThreadTsValue(params);
   return { send, threadTsValue, tokenOverride };
 }
 
@@ -608,14 +609,16 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     allowExplicitReplyTagsWhenOff: false,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext, replyToId }) =>
-      replyToId
+      normalizeSlackThreadTsCandidate(replyToId)
         ? undefined
-        : resolveSlackAutoThreadId({
-            to,
-            toolContext,
-          }),
+        : normalizeSlackThreadTsCandidate(
+            resolveSlackAutoThreadId({
+              to,
+              toolContext,
+            }),
+          ),
     resolveReplyTransport: ({ threadId, replyToId }) => ({
-      replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
+      replyToId: resolveSlackThreadTsValue({ replyToId, threadId }),
       threadId: null,
     }),
   },
@@ -632,7 +635,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           payload,
         }),
       sendPayload: async (ctx) => {
-        const { send, tokenOverride } = await resolveSlackSendContext({
+        const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
           cfg: ctx.cfg,
           accountId: ctx.accountId ?? undefined,
           deps: ctx.deps,
@@ -642,6 +645,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const { slackOutbound } = await loadSlackOutboundAdapterModule();
         return await slackOutbound.sendPayload!({
           ...ctx,
+          replyToId: threadTsValue,
+          threadId: null,
           deps: {
             ...ctx.deps,
             slack: async (
@@ -669,7 +674,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         });
         return await send(to, text, {
           cfg,
-          threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
+          threadTs: threadTsValue,
           accountId: accountId ?? undefined,
           ...(tokenOverride ? { token: tokenOverride } : {}),
         });
@@ -696,7 +701,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           cfg,
           mediaUrl,
           mediaLocalRoots,
-          threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
+          threadTs: threadTsValue,
           accountId: accountId ?? undefined,
           ...(tokenOverride ? { token: tokenOverride } : {}),
         });

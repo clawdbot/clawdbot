@@ -265,7 +265,13 @@ export function parseRoleRef(raw: string): string | null {
     : trimmed.startsWith("ref=")
       ? trimmed.slice(4)
       : trimmed;
-  return /^e\d+$/.test(normalized) ? normalized : null;
+  if (/^e\d+$/i.test(normalized)) {
+    return normalized;
+  }
+  if (/^\d{1,9}$/.test(normalized)) {
+    return normalized;
+  }
+  return null;
 }
 
 export function buildRoleSnapshotFromAriaSnapshot(
@@ -328,8 +334,12 @@ export function buildRoleSnapshotFromAriaSnapshot(
 }
 
 function parseAiSnapshotRef(suffix: string): string | null {
-  const match = suffix.match(/\[ref=(e\d+)\]/i);
-  return match ? match[1] : null;
+  const eMatch = suffix.match(/\[ref=(e\d+)\]/i);
+  if (eMatch) {
+    return eMatch[1];
+  }
+  const numMatch = suffix.match(/\[ref=(\d{1,9})\]/);
+  return numMatch ? numMatch[1] : null;
 }
 
 /**

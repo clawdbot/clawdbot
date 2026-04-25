@@ -80,6 +80,7 @@ import {
   notifyRuntimeConfigWriteListeners,
   registerRuntimeConfigWriteListener,
   resetConfigRuntimeState as resetConfigRuntimeStateState,
+  selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
   getRuntimeConfigSnapshotRefreshHandler as getRuntimeConfigSnapshotRefreshHandlerState,
   setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
@@ -98,6 +99,7 @@ export {
   getRuntimeConfigSnapshotState as getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshotState as getRuntimeConfigSourceSnapshot,
   resetConfigRuntimeStateState as resetConfigRuntimeState,
+  selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshotState as setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandlerState as setRuntimeConfigSnapshotRefreshHandler,
 };
@@ -168,6 +170,11 @@ export type ConfigWriteOptions = {
    * Normal writers must keep this false so clobbers are rejected before disk commit.
    */
   allowDestructiveWrite?: boolean;
+  /**
+   * Suppress human-readable output logs (overwrite/anomaly messages).
+   * Useful when the caller wants machine-readable output only (--json mode).
+   */
+  skipOutputLogs?: boolean;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -1137,7 +1144,9 @@ async function finalizeReadConfigSnapshotInternalResult(
   return result;
 }
 
-export function createConfigIO(overrides: ConfigIoDeps = {}) {
+export function createConfigIO(
+  overrides: ConfigIoDeps & { pluginValidation?: "full" | "skip" } = {},
+) {
   const deps = normalizeDeps(overrides);
   const configPath = resolveConfigPathForDeps(deps);
 
@@ -1253,7 +1262,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
+      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, {
+        env: deps.env,
+        pluginValidation: overrides.pluginValidation,
+      });
       if (!validated.ok) {
         observeLoadConfigSnapshot({
           ...createConfigFileSnapshot({
@@ -1429,7 +1441,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
       fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
-      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
+      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, {
+        env: deps.env,
+        pluginValidation: overrides.pluginValidation,
+      });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
@@ -1741,6 +1756,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (!snapshot.exists) {
         return;
       }
+      if (options.skipOutputLogs) {
+        return;
+      }
       const isVitest = deps.env.VITEST === "true";
       const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
       if (isVitest && !shouldLogInVitest) {
@@ -1757,6 +1775,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     };
     const logConfigWriteAnomalies = () => {
       if (suspiciousReasons.length === 0) {
+        return;
+      }
+      if (options.skipOutputLogs) {
         return;
       }
       // Tests often write minimal configs (missing meta, etc); keep output quiet unless requested.
@@ -2042,6 +2063,7 @@ export async function writeConfigFile(
     unsetPaths: options.unsetPaths,
     allowDestructiveWrite: options.allowDestructiveWrite,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
+    skipOutputLogs: options.skipOutputLogs,
   });
   if (
     options.skipRuntimeSnapshotRefresh &&
@@ -2050,7 +2072,6 @@ export async function writeConfigFile(
   ) {
     return;
   }
-  const committedSourceConfig = writeResult.persistedConfig ?? nextCfg;
   const notifyCommittedWrite = () => {
     const currentRuntimeConfig = getRuntimeConfigSnapshotState();
     if (!currentRuntimeConfig) {
@@ -2058,7 +2079,7 @@ export async function writeConfigFile(
     }
     notifyRuntimeConfigWriteListeners({
       configPath: io.configPath,
-      sourceConfig: committedSourceConfig,
+      sourceConfig: nextCfg,
       runtimeConfig: currentRuntimeConfig,
       persistedHash: writeResult.persistedHash,
       writtenAtMs: Date.now(),
@@ -2067,7 +2088,7 @@ export async function writeConfigFile(
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
   await finalizeRuntimeSnapshotWrite({
-    nextSourceConfig: committedSourceConfig,
+    nextSourceConfig: nextCfg,
     hadRuntimeSnapshot,
     hadBothSnapshots,
     loadFreshConfig: () => io.loadConfig(),

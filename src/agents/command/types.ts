@@ -27,6 +27,8 @@ export type AgentRunContext = {
 
 export type AgentCommandOpts = {
   message: string;
+  /** User-visible transcript body; defaults to message and excludes runtime-only context. */
+  transcriptMessage?: string;
   /** Optional image attachments for multimodal messages. */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */

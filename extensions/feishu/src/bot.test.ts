@@ -2031,6 +2031,65 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("uses thread_id as the canonical topic key in Feishu topic groups", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const topicStarter: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "om_topic_starter_message",
+        chat_id: "oc-group",
+        chat_type: "topic_group",
+        root_id: "omt_topic_1",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic starter" }),
+      },
+    };
+    const topicReply: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "om_topic_reply_message",
+        chat_id: "oc-group",
+        chat_type: "topic_group",
+        root_id: "om_topic_starter_message",
+        thread_id: "omt_topic_1",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic reply" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: topicStarter });
+    await dispatchMessage({ cfg, event: topicReply });
+
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:omt_topic_1" },
+        parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:omt_topic_1" },
+        parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
   it("uses thread_id as topic key when root_id is missing", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

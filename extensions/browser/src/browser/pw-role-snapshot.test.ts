@@ -64,7 +64,7 @@ describe("pw-role-snapshot", () => {
     expect(parseRoleRef("e12")).toBe("e12");
     expect(parseRoleRef("@e12")).toBe("e12");
     expect(parseRoleRef("ref=e12")).toBe("e12");
-    expect(parseRoleRef("12")).toBeNull();
+    expect(parseRoleRef("12")).toBe("12");
     expect(parseRoleRef("")).toBeNull();
   });
 
@@ -86,5 +86,19 @@ describe("pw-role-snapshot", () => {
     expect(Object.keys(res.refs).toSorted()).toEqual(["e5", "e7"]);
     expect(res.refs.e5).toMatchObject({ role: "link", name: "Home" });
     expect(res.refs.e7).toMatchObject({ role: "button", name: "Save" });
+  });
+
+  it("preserves numeric Playwright AI snapshot refs", () => {
+    const ai = [
+      "- navigation [ref=1]:",
+      '  - link "Home" [ref=5]',
+      '  - button "Save" [ref=7] [cursor=pointer]:',
+    ].join("\n");
+
+    const res = buildRoleSnapshotFromAiSnapshot(ai, { interactive: true });
+    expect(res.snapshot).toContain("[ref=5]");
+    expect(Object.keys(res.refs).toSorted()).toEqual(["5", "7"]);
+    expect(res.refs["5"]).toMatchObject({ role: "link", name: "Home" });
+    expect(res.refs["7"]).toMatchObject({ role: "button", name: "Save" });
   });
 });

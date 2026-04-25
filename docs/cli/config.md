@@ -36,6 +36,7 @@ openclaw config --section gateway --section daemon
 openclaw config schema
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
+openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
 openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
@@ -185,7 +186,7 @@ openclaw config set secrets.providers.vaultfile \
   --strict-json
 ```
 
-## Provider Builder Flags
+## Provider builder flags
 
 Provider builder targets must use `secrets.providers.<alias>` as the path.
 
@@ -278,7 +279,7 @@ Dry-run behavior:
 - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
 - `errors`: structured schema/resolvability failures when `ok=false`
 
-### JSON Output Shape
+### JSON output shape
 
 ```json5
 {
@@ -384,6 +385,15 @@ Direct editor writes are still allowed, but the running Gateway treats them as
 untrusted until they validate. Invalid direct edits can be restored from the
 last-known-good backup during startup or hot reload. See
 [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config).
+
+Whole-file recovery is reserved for globally broken config, such as parse
+errors, root-level schema failures, legacy migration failures, or mixed plugin
+and root failures. If validation fails only under `plugins.entries.<id>...`,
+OpenClaw keeps the active `openclaw.json` in place and reports the plugin-local
+issue instead of restoring `.last-good`. This prevents plugin schema changes or
+`minHostVersion` skew from rolling back unrelated user settings such as models,
+providers, auth profiles, channels, gateway exposure, tools, memory, browser, or
+cron config.
 
 ## Subcommands
 

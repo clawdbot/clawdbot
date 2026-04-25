@@ -65,7 +65,7 @@ steps:
           expr: "buildAgentSessionKey({ agentId: env.cfg.agents?.list?.find((agent) => agent.default)?.id ?? env.cfg.agents?.list?.[0]?.id ?? 'main', channel: 'qa-channel', accountId: 'default', peer: { kind: 'direct', id: config.conversationId }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
       - set: controlUiChatUrl
         value:
-          expr: "(() => { const url = new URL(String(bootstrap.controlUiEmbeddedUrl)); url.pathname = `${url.pathname.replace(/\\/$/, '')}/chat`; url.searchParams.set('session', uiSessionKey); return url.toString(); })()"
+          expr: "(() => { const url = new URL(`${env.gateway.baseUrl}/`); url.searchParams.set('session', uiSessionKey); url.hash = `token=${encodeURIComponent(env.gateway.token ?? '')}`; return url.toString(); })()"
       - call: webOpenPage
         saveAs: uiTab
         args:
@@ -80,17 +80,38 @@ steps:
         args:
           - pageId:
               ref: uiPageId
-            selector: textarea
+            selector: openclaw-app
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 45000)
-      - call: waitForCondition
-        saveAs: uiReadySnapshot
-        args:
-          - lambda:
-              async: true
-              expr: "await (async () => { const snapshot = await webSnapshot({ pageId: uiPageId, maxChars: 12000, timeoutMs: liveTurnTimeoutMs(env, 30000) }); const text = normalizeLowercaseStringOrEmpty(snapshot.text); return text.includes('ready to chat') ? snapshot : undefined; })()"
-          - expr: liveTurnTimeoutMs(env, 45000)
-          - 500
+      - try:
+          actions:
+            - call: waitForCondition
+              saveAs: uiReadySnapshot
+              args:
+                - lambda:
+                    async: true
+                    expr: "await (async () => { const snapshot = await webSnapshot({ pageId: uiPageId, maxChars: 12000, timeoutMs: liveTurnTimeoutMs(env, 30000) }); const text = normalizeLowercaseStringOrEmpty(snapshot.text); return text.includes('ready to chat') ? snapshot : undefined; })()"
+                - expr: liveTurnTimeoutMs(env, 45000)
+                - 500
+          catch:
+            - call: webSnapshot
+              saveAs: uiReadyFailureSnapshot
+              args:
+                - pageId:
+                    ref: uiPageId
+                  maxChars: 12000
+                  timeoutMs:
+                    expr: liveTurnTimeoutMs(env, 15000)
+            - call: webEvaluate
+              saveAs: uiReadyFailureState
+              args:
+                - pageId:
+                    ref: uiPageId
+                  expression: "(() => { const app = document.querySelector('openclaw-app'); const resources = performance.getEntriesByType('resource').map((entry) => ({ name: entry.name, type: entry.initiatorType, duration: Math.round(entry.duration), transferSize: entry.transferSize, decodedBodySize: entry.decodedBodySize })); return { url: location.href, readyState: document.readyState, appDefined: Boolean(customElements.get('openclaw-app')), appState: app ? { sessionKey: app.sessionKey, settingsSessionKey: app.settings?.sessionKey, lastActiveSessionKey: app.settings?.lastActiveSessionKey, chatMessages: Array.isArray(app.chatMessages) ? app.chatMessages.length : null, chatLoading: app.chatLoading, lastError: app.lastError, connected: app.connected, tab: app.tab } : null, scripts: Array.from(document.scripts).map((script) => script.src || script.textContent?.slice(0, 80)), links: Array.from(document.querySelectorAll('link')).map((link) => link.href), resources, bodyHtml: document.body.innerHTML.slice(0, 400) }; })()"
+                  timeoutMs:
+                    expr: liveTurnTimeoutMs(env, 15000)
+            - throw:
+                expr: "`control ui did not become ready. state=${JSON.stringify(uiReadyFailureState)} diagnostics=${JSON.stringify(uiReadyFailureSnapshot.diagnostics ?? [])} snapshot: ${uiReadyFailureSnapshot.text}`"
       - assert:
           expr: "Boolean(uiPageId)"
           message: control ui page was not available
@@ -149,7 +170,7 @@ steps:
         args:
           - pageId:
               ref: uiAckPageId
-            selector: textarea
+            selector: openclaw-app
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 45000)
       - try:
@@ -240,7 +261,7 @@ steps:
         args:
           - pageId:
               ref: uiImagePageId
-            selector: textarea
+            selector: openclaw-app
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 45000)
       - try:

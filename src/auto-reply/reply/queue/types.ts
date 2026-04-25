@@ -22,6 +22,8 @@ export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
 export type FollowupRun = {
   prompt: string;
+  /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
+  transcriptPrompt?: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;

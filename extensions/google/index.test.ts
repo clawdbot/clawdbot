@@ -180,6 +180,40 @@ describe("google provider plugin hooks", () => {
     runCase(cliProvider, "google-gemini-cli");
   });
 
+  it("advertises adaptive thinking for Gemini dynamic thinking", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google");
+    expect(provider.resolveThinkingProfile).toBeDefined();
+    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    const gemini3Profile = resolveThinkingProfile({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+    } as never);
+    const gemini25Profile = resolveThinkingProfile({
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+    } as never);
+
+    expect(gemini3Profile?.levels).toEqual([
+      { id: "off" },
+      { id: "low" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
+    expect(gemini25Profile?.levels).toEqual([
+      { id: "off" },
+      { id: "minimal" },
+      { id: "low" },
+      { id: "medium" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
+  });
+
   it("shares Gemini replay and stream hooks across Google provider variants", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,

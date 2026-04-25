@@ -8,6 +8,7 @@ import { VERSION } from "../../version.js";
 import {
   clearGatewaySubagentRuntime,
   createPluginRuntime,
+  setGatewayNodesRuntime,
   setGatewaySubagentRuntime,
 } from "./index.js";
 
@@ -266,5 +267,34 @@ describe("plugin runtime command execution", () => {
       runId: "run-1",
     });
     expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
+  });
+
+  it("uses explicit nodes runtime when provided", async () => {
+    const nodes = {
+      list: vi.fn().mockResolvedValue({ nodes: [] }),
+      invoke: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const runtime = createPluginRuntime({ nodes });
+
+    await expect(runtime.nodes.list({ connected: true })).resolves.toEqual({ nodes: [] });
+    await expect(
+      runtime.nodes.invoke({ nodeId: "node-1", command: "browser.proxy" }),
+    ).resolves.toEqual({ ok: true });
+    expect(nodes.list).toHaveBeenCalledWith({ connected: true });
+    expect(nodes.invoke).toHaveBeenCalledWith({ nodeId: "node-1", command: "browser.proxy" });
+  });
+
+  it("late-binds to gateway nodes when explicitly enabled", async () => {
+    const nodes = {
+      list: vi.fn().mockResolvedValue({ nodes: [{ nodeId: "node-1" }] }),
+      invoke: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const runtime = createPluginRuntime({ allowGatewaySubagentBinding: true });
+    setGatewayNodesRuntime(nodes);
+
+    await expect(runtime.nodes.list({ connected: true })).resolves.toEqual({
+      nodes: [{ nodeId: "node-1" }],
+    });
+    expect(nodes.list).toHaveBeenCalledWith({ connected: true });
   });
 });

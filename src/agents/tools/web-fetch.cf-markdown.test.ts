@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../infra/net/ssrf.js";
 import * as logger from "../../logger.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { createWebFetchTool } from "./web-fetch.js";
 import "./web-fetch.test-mocks.js";
+import { createWebFetchTool } from "./web-fetch.js";
 import { createBaseWebFetchToolConfig, makeFetchHeaders } from "./web-fetch.test-harness.js";
 
 const lookupMock = vi.fn();

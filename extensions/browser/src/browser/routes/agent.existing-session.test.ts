@@ -8,6 +8,7 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 const routeState = existingSessionRouteState;
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
@@ -30,6 +31,7 @@ const navigationGuardMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
+  clickChromeMcpCoords: chromeMcpMocks.clickChromeMcpCoords,
   clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
@@ -108,6 +110,7 @@ describe("existing-session browser routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
     routeState.profileCtx.listTabs.mockClear();
+    chromeMcpMocks.clickChromeMcpCoords.mockClear();
     chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.fillChromeMcpElement.mockClear();
@@ -150,7 +153,7 @@ describe("existing-session browser routes", () => {
       {
         params: {},
         query: {},
-        body: { ref: "btn-1", type: "jpeg" },
+        body: { ref: "btn-1", type: "jpeg", timeoutMs: 4321 },
       },
       response.res,
     );
@@ -167,6 +170,7 @@ describe("existing-session browser routes", () => {
       uid: "btn-1",
       fullPage: false,
       format: "jpeg",
+      timeoutMs: 4321,
     });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
@@ -310,6 +314,33 @@ describe("existing-session browser routes", () => {
       doubleClick: false,
       timeoutMs: 1234,
       signal: ctrl.signal,
+    });
+  });
+
+  it("supports coordinate clicks for existing-session profiles", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "clickCoords", x: 25, y: "32", doubleClick: true, delayMs: 5 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7", url: "https://example.com" });
+    expect(chromeMcpMocks.clickChromeMcpCoords).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      userDataDir: undefined,
+      targetId: "7",
+      x: 25,
+      y: 32,
+      doubleClick: true,
+      button: undefined,
+      delayMs: 5,
     });
   });
 });

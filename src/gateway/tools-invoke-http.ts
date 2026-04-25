@@ -226,19 +226,25 @@ export async function handleToolsInvokeHttpRequest(
   // with the correct owner context and channel-action gates (e.g. Matrix set-profile)
   // work correctly for both owner and non-owner callers.
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
-  const { agentId, tools } = resolveGatewayScopedTools({
-    cfg,
-    sessionKey,
-    messageProvider: messageChannel ?? undefined,
-    accountId,
-    agentTo,
-    agentThreadId,
-    allowGatewaySubagentBinding: true,
-    allowMediaInvokeCommands: true,
-    surface: "http",
-    disablePluginTools: isKnownCoreToolId(toolName),
-    senderIsOwner,
-  });
+  const resolveTools = (disablePluginTools: boolean) =>
+    resolveGatewayScopedTools({
+      cfg,
+      sessionKey,
+      messageProvider: messageChannel ?? undefined,
+      accountId,
+      agentTo,
+      agentThreadId,
+      allowGatewaySubagentBinding: true,
+      allowMediaInvokeCommands: true,
+      surface: "http",
+      disablePluginTools,
+      senderIsOwner,
+    });
+  const knownCoreTool = isKnownCoreToolId(toolName);
+  let { agentId, tools } = resolveTools(knownCoreTool);
+  if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
+    ({ agentId, tools } = resolveTools(false));
+  }
   const gatewayFiltered = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);

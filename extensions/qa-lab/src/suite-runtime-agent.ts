@@ -6,6 +6,7 @@ export {
 } from "./suite-runtime-agent-session.js";
 export {
   forceMemoryIndex,
+  findManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,

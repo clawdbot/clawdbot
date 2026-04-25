@@ -15,6 +15,7 @@ const VALID_MODES = new Set(["all", "package-boundary"]);
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  "src/auto-reply",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
   "src/types",

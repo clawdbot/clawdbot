@@ -1,6 +1,8 @@
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
+const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
+
 // Build a dynamic prompt for cron events by embedding the actual event content.
 // This ensures the model sees the reminder text directly instead of relying on
 // "shown in the system messages above" which may not be visible in context.
@@ -38,16 +40,32 @@ export function buildCronEventPrompt(
   );
 }
 
-export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string {
+export function buildExecEventPrompt(
+  pendingEvents: string[],
+  opts?: { deliverToUser?: boolean },
+): string {
   const deliverToUser = opts?.deliverToUser ?? true;
+  const rawEventText = pendingEvents.join("\n").trim();
+  const eventText =
+    rawEventText.length > MAX_EXEC_EVENT_PROMPT_CHARS
+      ? `${rawEventText.slice(0, MAX_EXEC_EVENT_PROMPT_CHARS)}\n\n[truncated]`
+      : rawEventText;
+  if (!eventText) {
+    return (
+      "An async command completion event was triggered, but no command output was found. " +
+      "Reply HEARTBEAT_OK only. Do not mention, summarize, or reuse output from any earlier run."
+    );
+  }
   if (!deliverToUser) {
     return (
-      "An async command you ran earlier has completed. The result is shown in the system messages above. " +
-      "Handle the result internally. Do not relay it to the user unless explicitly requested."
+      "An async command completion event was triggered, but user delivery is disabled for this run. " +
+      "Handle the result internally and reply HEARTBEAT_OK only. Do not mention, summarize, or reuse command output."
     );
   }
   return (
-    "An async command you ran earlier has completed. The result is shown in the system messages above. " +
+    "An async command you ran earlier has completed. The command completion details are:\n\n" +
+    eventText +
+    "\n\n" +
     "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
     "If it failed, explain what went wrong."
   );

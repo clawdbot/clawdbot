@@ -167,7 +167,10 @@ export function resolveCodexAppServerRuntimeOptions(
   };
 }
 
-export function codexAppServerStartOptionsKey(options: CodexAppServerStartOptions): string {
+export function codexAppServerStartOptionsKey(
+  options: CodexAppServerStartOptions,
+  params: { authProfileId?: string } = {},
+): string {
   return JSON.stringify({
     transport: options.transport,
     command: options.command,
@@ -179,6 +182,7 @@ export function codexAppServerStartOptionsKey(options: CodexAppServerStartOption
     ),
     env: Object.entries(options.env ?? {}).toSorted(([left], [right]) => left.localeCompare(right)),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
+    authProfileId: params.authProfileId ?? null,
   });
 }
 

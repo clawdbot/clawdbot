@@ -11,9 +11,11 @@ import {
   resolveGoogleChromeExecutableForPlatform,
 } from "./chrome.executables.js";
 import {
+  clearStaleChromeSingletonLocks,
   decorateOpenClawProfile,
   diagnoseChromeCdp,
   ensureProfileCleanExit,
+  findChromeExecutableLinux,
   findChromeExecutableMac,
   findChromeExecutableWindows,
   formatChromeCdpDiagnostic,
@@ -212,6 +214,55 @@ describe("browser chrome profile decoration", () => {
     const profile = prefs.profile as Record<string, unknown>;
     expect(profile.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
   });
+
+  it("clears stale singleton artifacts when the lock points at another host", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie");
+    await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket");
+    await fsp.symlink("remote-host-535", path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, "local-host")).toBe(true);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(false);
+  });
+
+  it("clears stale singleton artifacts when the lock PID is dead on the current host", async () => {
+    const userDataDir = await createUserDataDir();
+    const deadPid = 2147483646;
+    await fsp.symlink(`${os.hostname()}-${deadPid}`, path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(true);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+  });
+
+  it("keeps singleton artifacts when the lock points at a current-host live process", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.symlink(`${os.hostname()}-${process.pid}`, path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(false);
+    expect(fs.lstatSync(path.join(userDataDir, "SingletonLock")).isSymbolicLink()).toBe(true);
+  });
+
+  it("keeps singleton artifacts when the lock PID exists but cannot be signaled", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.symlink(`${os.hostname()}-12345`, path.join(userDataDir, "SingletonLock"));
+    const err = new Error("operation not permitted") as NodeJS.ErrnoException;
+    err.code = "EPERM";
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
+      if (pid === 12345 && signal === 0) {
+        throw err;
+      }
+      return true;
+    }) as typeof process.kill);
+
+    try {
+      expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(false);
+      expect(fs.lstatSync(path.join(userDataDir, "SingletonLock")).isSymbolicLink()).toBe(true);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
 });
 
 describe("browser chrome helpers", () => {
@@ -242,6 +293,38 @@ describe("browser chrome helpers", () => {
   it("returns null when no Chrome candidate exists", () => {
     const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     expect(findChromeExecutableMac()).toBeNull();
+    exists.mockRestore();
+  });
+
+  it("finds common Linux Chromium package paths", () => {
+    for (const target of [
+      "/usr/lib/chromium/chromium",
+      "/usr/lib/chromium-browser/chromium-browser",
+    ]) {
+      const exists = mockExistsSync((pathValue) => pathValue === target);
+      const exe = findChromeExecutableLinux();
+      expect(exe).toEqual({ kind: "chromium", path: target });
+      exists.mockRestore();
+    }
+  });
+
+  it("finds common Linux /opt Chrome and Brave paths", () => {
+    const cases = [
+      { kind: "chrome", path: "/opt/google/chrome/chrome" },
+      { kind: "brave", path: "/opt/brave.com/brave/brave-browser" },
+    ] as const;
+
+    for (const candidate of cases) {
+      const exists = mockExistsSync((pathValue) => pathValue === candidate.path);
+      const exe = findChromeExecutableLinux();
+      expect(exe).toEqual(candidate);
+      exists.mockRestore();
+    }
+  });
+
+  it("returns null when no Chrome candidate exists on Linux", () => {
+    const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    expect(findChromeExecutableLinux()).toBeNull();
     exists.mockRestore();
   });
 
@@ -615,6 +698,17 @@ describe("chrome executables", () => {
       path: "/usr/bin/google-chrome-unstable",
     });
   });
+
+  it("finds Linux Google Chrome under /opt", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return String(candidate) === "/opt/google/chrome/chrome";
+    });
+
+    expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
+      kind: "chrome",
+      path: "/opt/google/chrome/chrome",
+    });
+  });
 });
 
 describe("browser chrome launch args", () => {
@@ -631,12 +725,19 @@ describe("browser chrome launch args", () => {
         evaluateEnabled: false,
         remoteCdpTimeoutMs: 1500,
         remoteCdpHandshakeTimeoutMs: 3000,
+        actionTimeoutMs: 60_000,
         extraArgs: [],
         color: "#FF4500",
         headless: false,
         noSandbox: false,
         attachOnly: false,
         ssrfPolicy: { allowPrivateNetwork: true },
+        tabCleanup: {
+          enabled: true,
+          idleMinutes: 120,
+          maxTabsPerSession: 8,
+          sweepMinutes: 5,
+        },
         defaultProfile: "openclaw",
         profiles: {
           openclaw: { cdpPort: 18800, color: "#FF4500" },
@@ -650,6 +751,7 @@ describe("browser chrome launch args", () => {
         cdpIsLoopback: true,
         color: "#FF4500",
         driver: "openclaw",
+        headless: false,
         attachOnly: false,
       },
       userDataDir: "/tmp/openclaw-test-user-data",

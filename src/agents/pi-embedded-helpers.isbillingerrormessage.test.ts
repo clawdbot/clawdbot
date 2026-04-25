@@ -575,8 +575,21 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth");
   });
 
-  it("treats HTTP 422 as format error", () => {
-    expect(classifyFailoverReasonFromHttpStatus(422)).toBe("format");
+  it("treats body-less HTTP 422 as unknown instead of format", () => {
+    expect(classifyFailoverReasonFromHttpStatus(422)).toBeNull();
+  });
+
+  it("treats no-body HTTP 400/422 wrappers as unknown instead of format", () => {
+    expect(classifyFailoverReasonFromHttpStatus(400, "No body response")).toBeNull();
+    expect(classifyFailoverReasonFromHttpStatus(400, "400 status code (no body)")).toBeNull();
+    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No body")).toBeNull();
+    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No response body")).toBeNull();
+    expect(
+      classifyFailoverReasonFromHttpStatus(422, "Error: HTTP 422: No response body"),
+    ).toBeNull();
+  });
+
+  it("treats HTTP 422 with an unclassifiable body as format error", () => {
     expect(classifyFailoverReasonFromHttpStatus(422, "check open ai req parameter error")).toBe(
       "format",
     );
@@ -684,6 +697,15 @@ describe("classifyFailoverReason", () => {
   it("classifies HTTP 404 assistant errors as model_not_found so model fallback can continue", () => {
     expect(classifyFailoverReason("404 status code (no body)")).toBe("model_not_found");
     expect(classifyFailoverReason("HTTP 404: No body")).toBe("model_not_found");
+  });
+
+  it("keeps HTTP 400/422 no-body wrappers out of the format bucket", () => {
+    expect(classifyFailoverReason("400 status code (no body)")).toBeNull();
+    expect(classifyFailoverReason("HTTP 400: No body")).toBeNull();
+    expect(classifyFailoverReason("422 status code (no body)")).toBeNull();
+    expect(classifyFailoverReason("HTTP 422: No body")).toBeNull();
+    expect(classifyFailoverReason("HTTP 422: No response body")).toBeNull();
+    expect(classifyFailoverReason("Error: HTTP 422: No response body")).toBeNull();
   });
 
   it("preserves session and auth billing signals on HTTP 404 text", () => {

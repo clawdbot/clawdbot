@@ -42,7 +42,14 @@ export class BrowserTargetAmbiguousError extends BrowserError {
 }
 
 export class BrowserTabNotFoundError extends BrowserError {
-  constructor(message = "tab not found", options?: ErrorOptions) {
+  constructor(inputOrMessage?: string | { input?: string }, options?: ErrorOptions) {
+    const input =
+      typeof inputOrMessage === "object" ? inputOrMessage.input?.trim() : inputOrMessage?.trim();
+    const message = input
+      ? /^\d+$/.test(input)
+        ? `tab not found: browser tab "${input}" not found. Numeric values are not tab targets; use a stable tab id like "t1", a label, or a raw targetId. For positional selection, use "openclaw browser tab select ${input}".`
+        : `tab not found: browser tab "${input}" not found. Use action=tabs and pass suggestedTargetId, tabId, label, or raw targetId.`
+      : "tab not found";
     super(message, 404, options);
   }
 }

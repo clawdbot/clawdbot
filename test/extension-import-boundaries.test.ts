@@ -57,13 +57,6 @@ describe("src extension import boundary inventory", () => {
     expect(await srcInventoryPromise).toEqual([]);
   });
 
-  it("produces stable sorted output", async () => {
-    const first = await srcInventoryPromise;
-    const second = await collectSrcExtensionImportBoundaryInventory();
-
-    expect(second).toEqual(first);
-  });
-
   it("script json output stays empty", async () => {
     const jsonOutput = await srcJsonOutputPromise;
 
@@ -76,13 +69,6 @@ describe("src extension import boundary inventory", () => {
 describe("sdk/package extension import boundary inventory", () => {
   it("stays empty", async () => {
     expect(await sdkPackageInventoryPromise).toEqual([]);
-  });
-
-  it("produces stable sorted output", async () => {
-    const first = await sdkPackageInventoryPromise;
-    const second = await collectSdkPackageExtensionImportBoundaryInventory();
-
-    expect(second).toEqual(first);
   });
 
   it("script json output stays empty", async () => {

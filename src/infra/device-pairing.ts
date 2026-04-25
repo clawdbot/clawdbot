@@ -154,8 +154,22 @@ async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
   return state;
 }
 
-async function persistState(state: DevicePairingStateFile, baseDir?: string) {
+type DevicePairingPersistTarget = "pending" | "paired" | "both";
+
+async function persistState(
+  state: DevicePairingStateFile,
+  baseDir: string | undefined,
+  target: DevicePairingPersistTarget,
+) {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
+  if (target === "pending") {
+    await writeJsonAtomic(pendingPath, state.pendingById);
+    return;
+  }
+  if (target === "paired") {
+    await writeJsonAtomic(pairedPath, state.pairedByDeviceId);
+    return;
+  }
   await Promise.all([
     writeJsonAtomic(pendingPath, state.pendingById),
     writeJsonAtomic(pairedPath, state.pairedByDeviceId),
@@ -526,7 +540,7 @@ export async function requestDevicePairing(
           },
         });
       },
-      persist: async () => await persistState(state, baseDir),
+      persist: async () => await persistState(state, baseDir, "pending"),
     });
   });
 }
@@ -636,7 +650,7 @@ export async function approveDevicePairing(
     };
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, baseDir);
+    await persistState(state, baseDir, "both");
     return { status: "approved", requestId, device };
   });
 }
@@ -723,7 +737,7 @@ export async function approveBootstrapDevicePairing(
     };
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, baseDir);
+    await persistState(state, baseDir, "both");
     return { status: "approved", requestId, device };
   });
 }
@@ -741,7 +755,7 @@ export async function rejectDevicePairing(
       requestId,
       idKey: "deviceId",
       loadState: () => loadState(baseDir),
-      persistState: (state) => persistState(state, baseDir),
+      persistState: (state) => persistState(state, baseDir, "pending"),
       getId: (pending: DevicePairingPendingRequest) => pending.deviceId,
     });
   });
@@ -763,7 +777,7 @@ export async function removePairedDevice(
         delete state.pendingById[requestId];
       }
     }
-    await persistState(state, baseDir);
+    await persistState(state, baseDir, "both");
     return { deviceId: normalized };
   });
 }
@@ -794,7 +808,7 @@ export async function updatePairedDeviceMetadata(
       next.remoteIp = patch.remoteIp;
     }
     state.pairedByDeviceId[normalizedDeviceId] = next;
-    await persistState(state, baseDir);
+    await persistState(state, baseDir, "paired");
   });
 }
 
@@ -862,7 +876,7 @@ export async function verifyDeviceToken(params: {
     device.tokens ??= {};
     device.tokens[role] = entry;
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir);
+    await persistState(state, params.baseDir, "paired");
     return { ok: true };
   });
 }
@@ -919,7 +933,7 @@ export async function ensureDeviceToken(params: {
     tokens[role] = next;
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir);
+    await persistState(state, params.baseDir, "paired");
     return next;
   });
 }
@@ -996,7 +1010,7 @@ export async function rotateDeviceToken(params: {
     tokens[role] = next;
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir);
+    await persistState(state, params.baseDir, "paired");
     return { ok: true, entry: next };
   });
 }
@@ -1024,7 +1038,7 @@ export async function revokeDeviceToken(params: {
     tokens[role] = entry;
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir);
+    await persistState(state, params.baseDir, "paired");
     return entry;
   });
 }
@@ -1037,7 +1051,7 @@ export async function clearDevicePairing(deviceId: string, baseDir?: string): Pr
       return false;
     }
     delete state.pairedByDeviceId[normalizedId];
-    await persistState(state, baseDir);
+    await persistState(state, baseDir, "paired");
     return true;
   });
 }

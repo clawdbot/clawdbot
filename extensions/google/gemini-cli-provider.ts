@@ -13,7 +13,7 @@ import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./pr
 
 const PROVIDER_ID = "google-gemini-cli";
 const PROVIDER_LABEL = "Gemini CLI OAuth";
-const DEFAULT_MODEL = "google-gemini-cli/gemini-3.1-pro-preview";
+const DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const ENV_VARS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
@@ -82,6 +82,16 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
               refresh: result.refresh,
               expires: result.expires,
               email: result.email,
+              configPatch: {
+                agents: {
+                  defaults: {
+                    embeddedHarness: { runtime: PROVIDER_ID },
+                    models: {
+                      [DEFAULT_MODEL]: {},
+                    },
+                  },
+                },
+              },
               ...(result.projectId ? { credentialExtra: { projectId: result.projectId } } : {}),
               ...(result.projectId
                 ? {

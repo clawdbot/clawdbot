@@ -38,6 +38,7 @@ import {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
@@ -440,9 +441,54 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         startedAt: startedAt.toISOString(),
         scenarios: [...liveScenarioOutcomes],
       });
+    const completedScenarioResults: Array<QaSuiteScenarioResult | undefined> = Array.from({
+      length: selectedCatalogScenarios.length,
+    });
+    let artifactWriteQueue = Promise.resolve();
+    const writePartialArtifacts = () => {
+      const partialScenarios = completedScenarioResults.filter(
+        (scenario): scenario is QaSuiteScenarioResult => scenario !== undefined,
+      );
+      if (partialScenarios.length === 0) {
+        return;
+      }
+      artifactWriteQueue = artifactWriteQueue
+        .then(async () => {
+          const partialFinishedAt = new Date();
+          const { report, reportPath } = await writeQaSuiteArtifacts({
+            outputDir,
+            startedAt,
+            finishedAt: partialFinishedAt,
+            scenarios: partialScenarios,
+            transport,
+            providerMode,
+            primaryModel,
+            alternateModel,
+            fastMode,
+            concurrency,
+            scenarioIds:
+              params?.scenarioIds && params.scenarioIds.length > 0
+                ? selectedCatalogScenarios.map((scenario) => scenario.id)
+                : undefined,
+          });
+          lab.setLatestReport({
+            outputPath: reportPath,
+            markdown: report,
+            generatedAt: partialFinishedAt.toISOString(),
+          } satisfies QaLabLatestReport);
+        })
+        .catch((error) => {
+          writeQaSuiteProgress(
+            progressEnabled,
+            `partial artifact write failed: ${sanitizeQaSuiteProgressValue(formatErrorMessage(error))}`,
+          );
+        });
+    };
 
     try {
       updateScenarioRun();
+      const workerStartStaggerMs = resolveQaSuiteWorkerStartStaggerMs(concurrency);
+      writeQaSuiteProgress(progressEnabled, `scenario start stagger=${workerStartStaggerMs}ms`);
       const scenarios: QaSuiteScenarioResult[] = await mapQaSuiteWithConcurrency(
         selectedCatalogScenarios,
         concurrency,
@@ -507,6 +553,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               progressEnabled,
               `scenario ${scenarioResult.status} (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
             );
+            completedScenarioResults[index] = scenarioResult;
+            writePartialArtifacts();
             return scenarioResult;
           } catch (error) {
             const details = formatErrorMessage(error);
@@ -536,10 +584,14 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               progressEnabled,
               `scenario fail (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
             );
+            completedScenarioResults[index] = scenarioResult;
+            writePartialArtifacts();
             return scenarioResult;
           }
         },
+        { startStaggerMs: workerStartStaggerMs },
       );
+      await artifactWriteQueue;
       const finishedAt = new Date();
       const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
       lab.setScenarioRun({

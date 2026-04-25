@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import { applyLocalSetupWorkspaceConfig } from "../onboard-config.js";
+import { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } from "../onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -136,6 +136,9 @@ export async function runNonInteractiveLocalSetup(params: {
   });
 
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
 
   const inferredAuthChoice = opts.authChoice
     ? undefined

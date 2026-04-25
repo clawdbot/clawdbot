@@ -16,6 +16,7 @@ import {
   resolveGoogleMeetRealtimeTools,
 } from "./agent-consult.js";
 import type { GoogleMeetConfig } from "./config.js";
+import type { GoogleMeetChromeHealth } from "./transports/types.js";
 
 type BridgeProcess = {
   pid?: number;
@@ -42,6 +43,7 @@ export type ChromeRealtimeAudioBridgeHandle = {
   inputCommand: string[];
   outputCommand: string[];
   speak: (instructions?: string) => void;
+  getHealth: () => GoogleMeetChromeHealth;
   stop: () => Promise<void>;
 };
 
@@ -97,6 +99,11 @@ export async function startCommandRealtimeAudioBridge(params: {
   });
   let stopped = false;
   let bridge: RealtimeVoiceBridgeSession | null = null;
+  let realtimeReady = false;
+  let lastInputAt: string | undefined;
+  let lastOutputAt: string | undefined;
+  let lastInputBytes = 0;
+  let lastOutputBytes = 0;
 
   const stop = async () => {
     if (stopped) {
@@ -150,12 +157,14 @@ export async function startCommandRealtimeAudioBridge(params: {
     providerConfig: resolved.providerConfig,
     instructions: params.config.realtime.instructions,
     initialGreetingInstructions: params.config.realtime.introMessage,
-    triggerGreetingOnReady: Boolean(params.config.realtime.introMessage),
+    triggerGreetingOnReady: false,
     markStrategy: "ack-immediately",
     tools: resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy),
     audioSink: {
       isOpen: () => !stopped,
       sendAudio: (muLaw) => {
+        lastOutputAt = new Date().toISOString();
+        lastOutputBytes += muLaw.byteLength;
         outputProcess.stdin?.write(muLaw);
       },
     },
@@ -195,15 +204,21 @@ export async function startCommandRealtimeAudioBridge(params: {
     },
     onError: fail("realtime voice bridge"),
     onClose: (reason) => {
+      realtimeReady = false;
       if (reason === "error") {
         void stop();
       }
+    },
+    onReady: () => {
+      realtimeReady = true;
     },
   });
 
   inputProcess.stdout?.on("data", (chunk) => {
     const audio = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     if (!stopped && audio.byteLength > 0) {
+      lastInputAt = new Date().toISOString();
+      lastInputBytes += audio.byteLength;
       bridge?.sendAudio(Buffer.from(audio));
     }
   });
@@ -216,6 +231,17 @@ export async function startCommandRealtimeAudioBridge(params: {
     speak: (instructions) => {
       bridge?.triggerGreeting(instructions);
     },
+    getHealth: () => ({
+      providerConnected: bridge?.bridge.isConnected() ?? false,
+      realtimeReady,
+      audioInputActive: lastInputBytes > 0,
+      audioOutputActive: lastOutputBytes > 0,
+      lastInputAt,
+      lastOutputAt,
+      lastInputBytes,
+      lastOutputBytes,
+      bridgeClosed: stopped,
+    }),
     stop,
   };
 }

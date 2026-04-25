@@ -13,13 +13,21 @@ import {
 } from "../shared/subagents-format.js";
 import { resolveModelDisplayName, resolveModelDisplayRef } from "./model-selection-display.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { countPendingDescendantRunsFromRuns } from "./subagent-registry-queries.js";
+import {
+  countActiveDescendantRunsFromRuns,
+  countPendingDescendantRunsFromRuns,
+} from "./subagent-registry-queries.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
 } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  hasSubagentRunEnded,
+  isLiveUnendedSubagentRun,
+  shouldKeepSubagentRunChildLink,
+} from "./subagent-run-liveness.js";
 
 export type SubagentListItem = {
   index: number;
@@ -79,7 +87,11 @@ export function resolveSessionEntryForKey(params: {
   };
 }
 
-export function buildLatestSubagentRunIndex(runs: Map<string, SubagentRunRecord>) {
+export function buildLatestSubagentRunIndex(
+  runs: Map<string, SubagentRunRecord>,
+  options?: { now?: number },
+) {
+  const now = options?.now ?? Date.now();
   const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
   for (const entry of runs.values()) {
     const childSessionKey = entry.childSessionKey?.trim();
@@ -97,6 +109,14 @@ export function buildLatestSubagentRunIndex(runs: Map<string, SubagentRunRecord>
     const controllerSessionKey =
       entry.controllerSessionKey?.trim() || entry.requesterSessionKey?.trim();
     if (!controllerSessionKey) {
+      continue;
+    }
+    if (
+      !shouldKeepSubagentRunChildLink(entry, {
+        activeDescendants: countActiveDescendantRunsFromRuns(runs, childSessionKey),
+        now,
+      })
+    ) {
       continue;
     }
     const existing = childSessionsByController.get(controllerSessionKey);
@@ -133,7 +153,7 @@ export function isActiveSubagentRun(
   entry: SubagentRunRecord,
   pendingDescendantCount: (sessionKey: string) => number,
 ) {
-  return !entry.endedAt || pendingDescendantCount(entry.childSessionKey) > 0;
+  return isLiveUnendedSubagentRun(entry) || pendingDescendantCount(entry.childSessionKey) > 0;
 }
 
 function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
@@ -142,7 +162,7 @@ function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendan
     const childLabel = pendingDescendants === 1 ? "child" : "children";
     return `active (waiting on ${pendingDescendants} ${childLabel})`;
   }
-  if (!entry.endedAt) {
+  if (!hasSubagentRunEnded(entry)) {
     return "running";
   }
   const status = entry.outcome?.status ?? "done";

@@ -157,12 +157,20 @@ export async function startGatewaySidecars(params: {
       const stateDir = resolveStateDir(process.env);
       const sessionDirs = await resolveAgentSessionDirs(stateDir);
       for (const sessionsDir of sessionDirs) {
-        await cleanStaleLockFiles({
+        const result = await cleanStaleLockFiles({
           sessionsDir,
           staleMs: SESSION_LOCK_STALE_MS,
           removeStale: true,
           log: { warn: (message) => params.log.warn(message) },
         });
+        if (result.cleaned.length > 0) {
+          const { markRestartAbortedMainSessionsFromLocks } =
+            await import("../agents/main-session-restart-recovery.js");
+          await markRestartAbortedMainSessionsFromLocks({
+            sessionsDir,
+            cleanedLocks: result.cleaned,
+          });
+        }
       }
     } catch (err) {
       params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
@@ -354,6 +362,12 @@ export async function startGatewaySidecars(params: {
     scheduleSubagentOrphanRecovery();
   });
 
+  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
+    const { scheduleRestartAbortedMainSessionRecovery } =
+      await import("../agents/main-session-restart-recovery.js");
+    scheduleRestartAbortedMainSessionRecovery();
+  });
+
   return { pluginServices };
 }
 
@@ -420,7 +434,7 @@ export async function startGatewayPostAttachRuntime(
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
     startupTrace?: GatewayStartupTrace;
-    awaitSidecars?: boolean;
+    deferSidecars?: boolean;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -520,7 +534,7 @@ export async function startGatewayPostAttachRuntime(
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
 
-  if (params.awaitSidecars === true) {
+  if (params.deferSidecars !== true) {
     const [stopGatewayUpdateCheck, tailscaleCleanup, sidecarsResult] = await Promise.all([
       stopGatewayUpdateCheckPromise,
       tailscaleCleanupPromise,

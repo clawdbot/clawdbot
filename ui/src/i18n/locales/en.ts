@@ -535,7 +535,8 @@ export const en: TranslationMap = {
       errorHint: "Error rate = errors / total messages. Lower is better.",
       avgSession: "avg session",
       cacheHitRate: "Cache Hit Rate",
-      cacheHint: "Cache hit rate = cache read / (input + cache read). Higher is better.",
+      cacheHint:
+        "Cache hit rate = cache read / (input + cache read + cache write). Higher is better.",
       cached: "cached",
       prompt: "prompt",
       calls: "calls",

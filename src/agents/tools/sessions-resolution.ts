@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  listSpawnedSessionKeys,
+  sessionVisibilityGatewayTesting,
+} from "../../plugin-sdk/session-visibility.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -47,31 +51,7 @@ export function resolveInternalSessionKey(params: {
   return params.key;
 }
 
-export async function listSpawnedSessionKeys(params: {
-  requesterSessionKey: string;
-  limit?: number;
-}): Promise<Set<string>> {
-  const limit =
-    typeof params.limit === "number" && Number.isFinite(params.limit)
-      ? Math.max(1, Math.floor(params.limit))
-      : undefined;
-  try {
-    const list = await sessionsResolutionDeps.callGateway<{ sessions: Array<{ key?: unknown }> }>({
-      method: "sessions.list",
-      params: {
-        includeGlobal: false,
-        includeUnknown: false,
-        ...(limit !== undefined ? { limit } : {}),
-        spawnedBy: params.requesterSessionKey,
-      },
-    });
-    const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-    const keys = sessions.map((entry) => normalizeOptionalString(entry?.key) ?? "").filter(Boolean);
-    return new Set(keys);
-  } catch {
-    return new Set();
-  }
-}
+export { listSpawnedSessionKeys };
 
 export async function isRequesterSpawnedSessionVisible(params: {
   requesterSessionKey: string;
@@ -462,5 +442,8 @@ export const __testing = {
           ...overrides,
         }
       : defaultSessionsResolutionDeps;
+    sessionVisibilityGatewayTesting.setCallGatewayForListSpawned(
+      overrides?.callGateway ?? defaultSessionsResolutionDeps.callGateway,
+    );
   },
 };

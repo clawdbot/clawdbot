@@ -230,6 +230,177 @@ describe("provider auth choice manifest helpers", () => {
     ]);
   });
 
+  it("derives generic auth choices from descriptor-safe setup provider auth methods", () => {
+    setManifestPlugins([
+      {
+        id: "demo-provider",
+        name: "Demo Provider",
+        origin: "global",
+        setup: {
+          providers: [
+            {
+              id: "demo-provider",
+              authMethods: ["api-key", "oauth"],
+            },
+          ],
+          requiresRuntime: false,
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      {
+        pluginId: "demo-provider",
+        providerId: "demo-provider",
+        methodId: "api-key",
+        choiceId: "demo-provider-api-key",
+        choiceLabel: "Demo Provider API key",
+        groupId: "demo-provider",
+        groupLabel: "Demo Provider",
+      },
+      {
+        pluginId: "demo-provider",
+        providerId: "demo-provider",
+        methodId: "oauth",
+        choiceId: "demo-provider-oauth",
+        choiceLabel: "Demo Provider OAuth",
+        groupId: "demo-provider",
+        groupLabel: "Demo Provider",
+      },
+    ]);
+  });
+
+  it("sanitizes setup provider auth descriptors before deriving prompt labels", () => {
+    setManifestPlugins([
+      {
+        id: "evil-provider",
+        origin: "workspace",
+        setup: {
+          providers: [
+            {
+              id: "evil\u001b[31m-provider",
+              authMethods: ["jwt\u001b[2K", "oidc"],
+            },
+          ],
+          requiresRuntime: false,
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      {
+        pluginId: "evil-provider",
+        providerId: "evil-provider",
+        methodId: "jwt",
+        choiceId: "evil-provider-jwt",
+        choiceLabel: "Evil Provider JWT",
+        groupId: "evil-provider",
+        groupLabel: "Evil Provider",
+      },
+      {
+        pluginId: "evil-provider",
+        providerId: "evil-provider",
+        methodId: "oidc",
+        choiceId: "evil-provider-oidc",
+        choiceLabel: "Evil Provider OIDC",
+        groupId: "evil-provider",
+        groupLabel: "Evil Provider",
+      },
+    ]);
+  });
+
+  it("uses setup provider auth methods when no setup entry exists", () => {
+    setManifestPlugins([
+      {
+        id: "no-runtime-provider",
+        origin: "global",
+        setup: {
+          providers: [
+            {
+              id: "no-runtime-provider",
+              authMethods: ["api-key"],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoice("no-runtime-provider-api-key")).toEqual({
+      pluginId: "no-runtime-provider",
+      providerId: "no-runtime-provider",
+      methodId: "api-key",
+      choiceId: "no-runtime-provider-api-key",
+      choiceLabel: "No Runtime Provider API key",
+      groupId: "no-runtime-provider",
+      groupLabel: "No Runtime Provider",
+    });
+  });
+
+  it("keeps setup-entry providers on explicit manifest or runtime auth choices", () => {
+    setManifestPlugins([
+      {
+        id: "runtime-provider",
+        origin: "global",
+        setupSource: "/plugins/runtime-provider/setup-entry.cjs",
+        setup: {
+          providers: [
+            {
+              id: "runtime-provider",
+              authMethods: ["api-key"],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([]);
+  });
+
+  it("does not duplicate explicit provider auth choices with setup auth methods", () => {
+    setManifestPlugins([
+      {
+        id: "explicit-provider",
+        origin: "global",
+        providerAuthChoices: [
+          {
+            provider: "explicit-provider",
+            method: "api-key",
+            choiceId: "explicit-api-key",
+            choiceLabel: "Explicit API key",
+          },
+        ],
+        setup: {
+          providers: [
+            {
+              id: "explicit-provider",
+              authMethods: ["api-key", "oauth"],
+            },
+          ],
+          requiresRuntime: false,
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      {
+        pluginId: "explicit-provider",
+        providerId: "explicit-provider",
+        methodId: "api-key",
+        choiceId: "explicit-api-key",
+        choiceLabel: "Explicit API key",
+      },
+      {
+        pluginId: "explicit-provider",
+        providerId: "explicit-provider",
+        methodId: "oauth",
+        choiceId: "explicit-provider-oauth",
+        choiceLabel: "Explicit Provider OAuth",
+        groupId: "explicit-provider",
+        groupLabel: "Explicit Provider",
+      },
+    ]);
+  });
+
   it("prefers bundled auth-choice handlers when choice IDs collide across origins", () => {
     setManifestPlugins([
       {

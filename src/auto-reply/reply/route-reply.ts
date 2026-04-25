@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -48,6 +49,8 @@ export type RouteReplyParams = {
   sessionKey?: string;
   /** Session key for policy resolution when native-command delivery targets a different session. */
   policySessionKey?: string;
+  /** Explicit conversation type for policy resolution when the policy key is generic. */
+  policyConversationType?: SilentReplyConversationType;
   /** Provider account id (multi-account). */
   accountId?: string;
   /** Originating sender id for sender-scoped outbound media policy. */
@@ -125,6 +128,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       cfg,
       sessionKey: policySessionKey,
       surface: channelId ?? String(channel),
+      conversationType: params.policyConversationType,
     }) !== "allow";
   const normalized = shouldPreserveSilentPayload
     ? {
@@ -213,6 +217,9 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       agentId: resolvedAgentId,
       sessionKey: params.sessionKey,
       policySessionKey: params.policySessionKey,
+      conversationType: params.policyConversationType,
+      isGroup:
+        params.policySessionKey || params.policyConversationType ? undefined : params.isGroup,
       requesterSenderId: params.requesterSenderId,
       requesterSenderName: params.requesterSenderName,
       requesterSenderUsername: params.requesterSenderUsername,

@@ -133,7 +133,7 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENCLAW_TEST_PERF_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/test-performance-agent.md
-          model: gpt-5.4
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
           effort: high
           sandbox: workspace-write
           safety-strategy: drop-sudo

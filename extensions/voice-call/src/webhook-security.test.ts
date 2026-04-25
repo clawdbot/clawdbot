@@ -618,6 +618,37 @@ describe("verifyTwilioWebhook", () => {
     expect(result.verificationUrl).toBe(webhookUrl);
   });
 
+  it("verifies Twilio signatures for Cloudflare Tunnel publicUrl requests", () => {
+    const authToken = "test-auth-token";
+    const postBody = "CallSid=CA123&CallStatus=ringing&Direction=inbound&From=%2B15550000000";
+    const webhookUrl = "https://oc1.example.com/voice/webhook";
+    const signature = twilioSignature({ authToken, url: webhookUrl, postBody });
+
+    const result = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "localhost:8765",
+          "cf-connecting-ip": "203.0.113.42",
+          "x-forwarded-proto": "https",
+          "x-twilio-signature": signature,
+        },
+        rawBody: postBody,
+        url: "http://localhost:8765/voice/webhook",
+        method: "POST",
+        remoteAddress: "127.0.0.1",
+      },
+      authToken,
+      {
+        publicUrl: webhookUrl,
+        allowedHosts: ["oc1.example.com"],
+        trustForwardingHeaders: true,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.verificationUrl).toBe(webhookUrl);
+  });
+
   it("rejects X-Forwarded-Host not in allowedHosts whitelist", () => {
     const authToken = "test-auth-token";
     const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";

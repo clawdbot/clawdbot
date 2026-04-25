@@ -231,7 +231,7 @@ function resolveRuntimeProviderPluginLoadState(
     {
       onlyPluginIds: providerPluginIds,
       pluginSdkResolution: params.pluginSdkResolution,
-      cache: params.cache ?? false,
+      cache: params.cache ?? true,
       activate: params.activate ?? false,
     },
   );

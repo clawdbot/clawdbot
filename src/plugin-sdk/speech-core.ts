@@ -40,7 +40,13 @@ export {
   asBoolean,
   asFiniteNumber,
   asObject,
+  assertOkOrThrowProviderError,
+  createProviderHttpError,
+  extractProviderErrorDetail,
+  extractProviderRequestId,
+  formatProviderErrorPayload,
+  formatProviderHttpErrorMessage,
   readResponseTextLimited,
   trimToUndefined,
   truncateErrorDetail,
-} from "../tts/provider-error-utils.js";
+} from "../agents/provider-http-errors.js";

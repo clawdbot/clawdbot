@@ -44,6 +44,35 @@ export type SsrFPolicy = {
   hostnameAllowlist?: string[];
 };
 
+function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
+  if (!values || values.length === 0) {
+    return [];
+  }
+  return Array.from(
+    new Set(values.map((value) => normalizeHostname(value)).filter(Boolean)),
+  ).toSorted();
+}
+
+function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
+  if (!policy) {
+    return null;
+  }
+  return {
+    allowPrivateNetwork: policy.allowPrivateNetwork === true,
+    dangerouslyAllowPrivateNetwork: policy.dangerouslyAllowPrivateNetwork === true,
+    allowRfc2544BenchmarkRange: policy.allowRfc2544BenchmarkRange === true,
+    allowedHostnames: normalizeSsrFPolicyHostnames(policy.allowedHostnames),
+    hostnameAllowlist: [...normalizeHostnameAllowlist(policy.hostnameAllowlist)].toSorted(),
+  };
+}
+
+export function isSameSsrFPolicy(a?: SsrFPolicy, b?: SsrFPolicy): boolean {
+  return (
+    JSON.stringify(normalizeSsrFPolicyForComparison(a)) ===
+    JSON.stringify(normalizeSsrFPolicyForComparison(b))
+  );
+}
+
 export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFPolicy | undefined {
   const trimmed = baseUrl.trim();
   if (!trimmed) {

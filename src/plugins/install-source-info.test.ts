@@ -131,4 +131,99 @@ describe("describePluginInstallSource", () => {
       warnings: ["invalid-npm-spec"],
     });
   });
+
+  it("warns when defaultChoice is not a supported install source", () => {
+    expect(
+      describePluginInstallSource({
+        npmSpec: "@vendor/demo@1.2.3",
+        defaultChoice: "registry",
+      } as never),
+    ).toEqual({
+      npm: {
+        spec: "@vendor/demo@1.2.3",
+        packageName: "@vendor/demo",
+        selector: "1.2.3",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        pinState: "exact-without-integrity",
+      },
+      warnings: ["invalid-default-choice", "npm-spec-missing-integrity"],
+    });
+  });
+
+  it("warns when defaultChoice points at a missing source", () => {
+    expect(
+      describePluginInstallSource({
+        localPath: "extensions/demo",
+        defaultChoice: "npm",
+      }),
+    ).toEqual({
+      defaultChoice: "npm",
+      local: {
+        path: "extensions/demo",
+      },
+      warnings: ["default-choice-missing-source"],
+    });
+  });
+
+  it("warns when defaultChoice points at an invalid npm source", () => {
+    expect(
+      describePluginInstallSource({
+        npmSpec: "github:vendor/demo",
+        defaultChoice: "npm",
+      }),
+    ).toEqual({
+      defaultChoice: "npm",
+      warnings: ["invalid-npm-spec", "default-choice-missing-source"],
+    });
+  });
+
+  it("warns when integrity metadata has no npm source", () => {
+    expect(
+      describePluginInstallSource({
+        localPath: "extensions/demo",
+        expectedIntegrity: "sha512-demo",
+      }),
+    ).toEqual({
+      local: {
+        path: "extensions/demo",
+      },
+      warnings: ["npm-integrity-without-source"],
+    });
+  });
+
+  it("warns when integrity metadata is attached to an invalid npm source", () => {
+    expect(
+      describePluginInstallSource({
+        npmSpec: "github:vendor/demo",
+        expectedIntegrity: "sha512-demo",
+      }),
+    ).toEqual({
+      warnings: ["invalid-npm-spec", "npm-integrity-without-source"],
+    });
+  });
+
+  it("warns when the npm spec package name drifts from catalog package identity", () => {
+    expect(
+      describePluginInstallSource(
+        {
+          npmSpec: "@vendor/other@1.2.3",
+          expectedIntegrity: "sha512-demo",
+        },
+        { expectedPackageName: "@vendor/demo" },
+      ),
+    ).toEqual({
+      npm: {
+        spec: "@vendor/other@1.2.3",
+        packageName: "@vendor/other",
+        expectedPackageName: "@vendor/demo",
+        selector: "1.2.3",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        expectedIntegrity: "sha512-demo",
+        pinState: "exact-with-integrity",
+      },
+      warnings: ["npm-spec-package-name-mismatch"],
+    });
+  });
 });

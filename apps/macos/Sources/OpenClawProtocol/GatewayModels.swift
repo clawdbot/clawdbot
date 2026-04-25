@@ -2610,18 +2610,22 @@ public struct WebLoginStartParams: Codable, Sendable {
 public struct WebLoginWaitParams: Codable, Sendable {
     public let timeoutms: Int?
     public let accountid: String?
+    public let currentqrdataurl: String?
 
     public init(
         timeoutms: Int?,
-        accountid: String?)
+        accountid: String?,
+        currentqrdataurl: String?)
     {
         self.timeoutms = timeoutms
         self.accountid = accountid
+        self.currentqrdataurl = currentqrdataurl
     }
 
     private enum CodingKeys: String, CodingKey {
         case timeoutms = "timeoutMs"
         case accountid = "accountId"
+        case currentqrdataurl = "currentQrDataUrl"
     }
 }
 

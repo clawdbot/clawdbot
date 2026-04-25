@@ -205,9 +205,12 @@ Runs `BOOT.md` from the active workspace when the gateway starts.
 
 ## Plugin hooks
 
-Plugins can register hooks through the Plugin SDK for deeper integration: intercepting tool calls, modifying prompts, controlling message flow, and more. The Plugin SDK exposes 28 hooks covering model resolution, agent lifecycle, message flow, tool execution, subagent coordination, and gateway lifecycle.
+Plugins can register typed hooks through the Plugin SDK for deeper integration:
+intercepting tool calls, modifying prompts, controlling message flow, and more.
+Use plugin hooks when you need `before_tool_call`, `before_agent_reply`,
+`before_install`, or other in-process lifecycle hooks.
 
-For the complete plugin hook reference including `before_tool_call`, `before_agent_reply`, `before_install`, and all other plugin hooks, see [Plugin Architecture](/plugins/architecture-internals#provider-runtime-hooks).
+For the complete plugin hook reference, see [Plugin hooks](/plugins/hooks).
 
 ## Configuration
 
@@ -315,5 +318,5 @@ Check for missing binaries (PATH), environment variables, config values, or OS c
 
 - [CLI Reference: hooks](/cli/hooks)
 - [Webhooks](/automation/cron-jobs#webhooks)
-- [Plugin Architecture](/plugins/architecture-internals#provider-runtime-hooks) — full plugin hook reference
+- [Plugin hooks](/plugins/hooks) — in-process plugin lifecycle hooks
 - [Configuration](/gateway/configuration-reference#hooks)

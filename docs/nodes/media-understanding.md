@@ -137,8 +137,8 @@ Rules:
   skips the `[Image]` summary block and passes the original image into the
   model instead.
 - If a Gateway/WebChat primary model is text-only, image attachments are
-  preserved as offloaded `media://inbound/*` refs so the image tool or configured
-  image model can still inspect them instead of losing the attachment.
+  preserved as offloaded `media://inbound/*` refs so the image/PDF tools or
+  configured image model can still inspect them instead of losing the attachment.
 - Explicit `openclaw infer image describe --model <provider/model>` requests
   are different: they run that image-capable provider/model directly, including
   Ollama refs such as `ollama/qwen2.5vl:7b`.

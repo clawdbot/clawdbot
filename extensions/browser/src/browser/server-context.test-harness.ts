@@ -15,6 +15,7 @@ export function makeBrowserProfile(
     cdpPort: 18800,
     color: "#FF4500",
     driver: "openclaw",
+    headless: false,
     attachOnly: false,
     ...overrides,
   };
@@ -25,31 +26,42 @@ export function makeBrowserServerState(params?: {
   resolvedOverrides?: Partial<BrowserServerState["resolved"]>;
 }): BrowserServerState {
   const profile = params?.profile ?? makeBrowserProfile();
+  const resolvedBase: BrowserServerState["resolved"] = {
+    enabled: true,
+    controlPort: 18791,
+    cdpProtocol: "http",
+    cdpHost: profile.cdpHost,
+    cdpIsLoopback: profile.cdpIsLoopback,
+    cdpPortRangeStart: 18800,
+    cdpPortRangeEnd: 18810,
+    evaluateEnabled: false,
+    remoteCdpTimeoutMs: 1500,
+    remoteCdpHandshakeTimeoutMs: 3000,
+    actionTimeoutMs: 60_000,
+    extraArgs: [],
+    color: profile.color,
+    headless: true,
+    noSandbox: false,
+    attachOnly: false,
+    ssrfPolicy: { allowPrivateNetwork: true },
+    tabCleanup: {
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    },
+    defaultProfile: profile.name,
+    profiles: {
+      [profile.name]: profile,
+    },
+  };
   return {
     server: null as any,
     port: 0,
     resolved: {
-      enabled: true,
-      controlPort: 18791,
-      cdpProtocol: "http",
-      cdpHost: profile.cdpHost,
-      cdpIsLoopback: profile.cdpIsLoopback,
-      cdpPortRangeStart: 18800,
-      cdpPortRangeEnd: 18810,
-      evaluateEnabled: false,
-      remoteCdpTimeoutMs: 1500,
-      remoteCdpHandshakeTimeoutMs: 3000,
-      extraArgs: [],
-      color: profile.color,
-      headless: true,
-      noSandbox: false,
-      attachOnly: false,
-      ssrfPolicy: { allowPrivateNetwork: true },
-      defaultProfile: profile.name,
-      profiles: {
-        [profile.name]: profile,
-      },
+      ...resolvedBase,
       ...params?.resolvedOverrides,
+      tabCleanup: params?.resolvedOverrides?.tabCleanup ?? resolvedBase.tabCleanup,
     },
     profiles: new Map(),
   };

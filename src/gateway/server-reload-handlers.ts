@@ -1,4 +1,5 @@
 import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -56,6 +57,31 @@ type GatewayReloadLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
 };
+
+const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
+
+async function disposeMcpRuntimesWithTimeout(params: {
+  dispose: () => Promise<void>;
+  timeoutMs: number;
+  onWarn: (message: string) => void;
+  label: string;
+}) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const disposePromise = params.dispose().catch((error: unknown) => {
+    params.onWarn(`${params.label} failed: ${String(error)}`);
+  });
+  const timeoutPromise = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), params.timeoutMs);
+    timer.unref?.();
+  });
+  const result = await Promise.race([disposePromise.then(() => "done" as const), timeoutPromise]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  if (result === "timeout") {
+    params.onWarn(`${params.label} exceeded ${params.timeoutMs}ms; continuing`);
+  }
+}
 
 type GatewayReloadHandlerParams = {
   deps: CliDeps;
@@ -149,6 +175,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     if (plan.restartHealthMonitor) {
       state.channelHealthMonitor?.stop();
       nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
+    }
+
+    if (plan.disposeMcpRuntimes) {
+      await disposeMcpRuntimesWithTimeout({
+        dispose: disposeAllSessionMcpRuntimes,
+        timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
+        onWarn: params.logReload.warn,
+        label: "bundle-mcp runtime disposal during config reload",
+      });
     }
 
     if (plan.restartGmailWatcher) {

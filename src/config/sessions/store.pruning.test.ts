@@ -7,6 +7,7 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
+  loadSessionStore,
   pruneStaleEntries,
   rotateSessionFile,
 } from "./store.js";
@@ -135,19 +136,62 @@ describe("rotateSessionFile", () => {
     storePath = path.join(testDir, "sessions.json");
   });
 
-  it("file over maxBytes: renamed to .bak.{timestamp}, returns true", async () => {
+  it("file over maxBytes: copies to .bak.{timestamp}, returns true", async () => {
     const bigContent = "x".repeat(200);
     await fs.writeFile(storePath, bigContent, "utf-8");
 
     const rotated = await rotateSessionFile(storePath, 100);
 
     expect(rotated).toBe(true);
-    await expect(fs.stat(storePath)).rejects.toThrow();
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toBe(bigContent);
     const files = await fs.readdir(testDir);
     const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
     expect(bakFiles).toHaveLength(1);
     const bakContent = await fs.readFile(path.join(testDir, bakFiles[0]), "utf-8");
     expect(bakContent).toBe(bigContent);
+  });
+
+  it("keeps live sessions readable if rotation is interrupted before the final save", async () => {
+    const store = makeStore([["group:telegram:1", makeEntry(Date.now())]]);
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+    const rotated = await rotateSessionFile(storePath, 10);
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: DAY_MS,
+        maxEntries: 100,
+        rotateBytes: 1024 * 1024,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+    });
+
+    expect(rotated).toBe(true);
+    expect(loaded["group:telegram:1"]?.sessionId).toBe(store["group:telegram:1"].sessionId);
+  });
+
+  it("keeps an empty live store authoritative when stale backups exist", async () => {
+    const staleStore = makeStore([["stale", makeEntry(Date.now())]]);
+    await fs.writeFile(`${storePath}.bak.${Date.now()}`, JSON.stringify(staleStore), "utf-8");
+    await fs.writeFile(storePath, "{}", "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: DAY_MS,
+        maxEntries: 100,
+        rotateBytes: 1024 * 1024,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+    });
+
+    expect(loaded).toEqual({});
   });
 
   it("multiple rotations: only keeps 3 most recent .bak files", async () => {

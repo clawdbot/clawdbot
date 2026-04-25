@@ -118,6 +118,36 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("marks Feishu voice-note TTS for channel-side transcoding when provider returns mp3", async () => {
+    synthesizeMock.mockResolvedValueOnce({
+      audioBuffer: Buffer.from("mp3"),
+      outputFormat: "mp3",
+      fileExtension: ".mp3",
+      voiceCompatible: false,
+    });
+    const cfg = createTtsConfig("openclaw-speech-core-tts-feishu-mp3-test");
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: "This Feishu reply should be transcoded by the channel." },
+        cfg,
+        channel: "feishu",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalledWith(
+        expect.objectContaining({ target: "voice-note" }),
+      );
+      expect(result.audioAsVoice).toBe(true);
+      expect(result.mediaUrl).toMatch(/voice-\d+\.mp3$/);
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("keeps non-native voice-note channels as regular audio files", async () => {
     await expectTtsPayloadResult({
       channel: "slack",

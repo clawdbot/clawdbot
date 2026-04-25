@@ -20,6 +20,7 @@ const DEFAULT_DEFERRAL_POLL_MS = 500;
 // Configurable via gateway.reload.deferralTimeoutMs.
 const DEFAULT_DEFERRAL_MAX_WAIT_MS = 300_000;
 const RESTART_COOLDOWN_MS = 30_000;
+const LAUNCHCTL_ALREADY_LOADED_EXIT_CODE = 37;
 
 const restartLog = createSubsystemLogger("restart");
 
@@ -427,7 +428,12 @@ export function triggerOpenClawRestart(): RestartAttempt {
     encoding: "utf8",
     timeout: SPAWN_TIMEOUT_MS,
   });
-  if (boot.error || (boot.status !== 0 && boot.status !== null)) {
+  if (
+    boot.error ||
+    (boot.status !== 0 &&
+      boot.status !== LAUNCHCTL_ALREADY_LOADED_EXIT_CODE &&
+      boot.status !== null)
+  ) {
     return {
       ok: false,
       method: "launchctl",
@@ -435,7 +441,7 @@ export function triggerOpenClawRestart(): RestartAttempt {
       tried,
     };
   }
-  const retryArgs = ["kickstart", "-k", target];
+  const retryArgs = ["kickstart", target];
   tried.push(`launchctl ${retryArgs.join(" ")}`);
   const retry = spawnSync("launchctl", retryArgs, {
     encoding: "utf8",

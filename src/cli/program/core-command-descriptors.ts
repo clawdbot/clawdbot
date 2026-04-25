@@ -5,6 +5,11 @@ export type CoreCliCommandDescriptor = NamedCommandDescriptor;
 
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
+    name: "crestodian",
+    description: "Open the ring-zero setup and repair helper",
+    hasSubcommands: false,
+  },
+  {
     name: "setup",
     description: "Initialize local config and agent workspace",
     hasSubcommands: false,

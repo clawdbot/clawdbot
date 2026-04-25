@@ -8,7 +8,7 @@
     "@slack/bolt": "^4.7.0",
     "@slack/web-api": "^7.15.1",
     "https-proxy-agent": "^9.0.0",
-    "typebox": "1.1.28"
+    "typebox": "1.1.31"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

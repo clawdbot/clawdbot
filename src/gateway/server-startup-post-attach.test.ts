@@ -183,6 +183,34 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
+  it("waits for sidecars by default before returning", async () => {
+    let resumeSidecars!: () => void;
+    const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
+      resumeSidecars = () => resolve({ pluginServices: null });
+    });
+    const startGatewaySidecars = vi.fn(async () => {
+      return await sidecarsReady;
+    });
+    let returned = false;
+
+    const runtimePromise = startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+    ).then(() => {
+      returned = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(returned).toBe(false);
+
+    resumeSidecars();
+    await runtimePromise;
+    expect(returned).toBe(true);
+  });
+
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
     let resumeSidecars!: () => void;
     const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
@@ -197,6 +225,7 @@ describe("startGatewayPostAttachRuntime", () => {
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
+        deferSidecars: true,
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars }),
     );

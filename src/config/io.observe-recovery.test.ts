@@ -347,6 +347,121 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("does not restore stale last-known-good for plugin schema evolution issues", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      const staleSnapshot = await makeSnapshot(configPath, {
+        gateway: { mode: "local" },
+        agents: { defaults: { model: "sonnet-4.6" } },
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              enabled: true,
+              config: { compactionMode: "legacy" },
+            },
+          },
+        },
+      });
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({
+          deps,
+          snapshot: staleSnapshot,
+          logger: deps.logger,
+        }),
+      ).resolves.toBe(true);
+
+      const activeConfig = {
+        gateway: { mode: "local" },
+        agents: { defaults: { model: "gpt-5.4" } },
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              enabled: true,
+              config: { compactionMode: "adaptive", cacheAwareCompaction: true },
+            },
+          },
+        },
+      };
+      const active = await writeConfigRaw(configPath, activeConfig);
+      const restored = await recoverConfigFromLastKnownGood({
+        deps,
+        snapshot: {
+          ...staleSnapshot,
+          raw: active.raw,
+          parsed: active.parsed,
+          valid: false,
+          issues: [
+            {
+              path: "plugins.entries.lossless-claw.config.cacheAwareCompaction",
+              message: "invalid config: must NOT have additional properties",
+            },
+          ],
+        },
+        reason: "reload-invalid-config",
+      });
+
+      expect(restored).toBe(false);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(active.raw);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Config last-known-good recovery skipped"),
+      );
+    });
+  });
+
+  it("does not restore stale last-known-good for plugin minHostVersion skew issues", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      const staleSnapshot = await makeSnapshot(configPath, {
+        gateway: { mode: "local" },
+        plugins: {
+          entries: {
+            feishu: { enabled: false },
+          },
+        },
+      });
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({
+          deps,
+          snapshot: staleSnapshot,
+          logger: deps.logger,
+        }),
+      ).resolves.toBe(true);
+
+      const activeConfig = {
+        gateway: { mode: "local" },
+        agents: { defaults: { model: "gpt-5.4" } },
+        plugins: {
+          entries: {
+            feishu: { enabled: true, config: { appId: "feishu-app" } },
+            whatsapp: { enabled: true, config: { account: "primary" } },
+          },
+        },
+      };
+      const active = await writeConfigRaw(configPath, activeConfig);
+      const restored = await recoverConfigFromLastKnownGood({
+        deps,
+        snapshot: {
+          ...staleSnapshot,
+          raw: active.raw,
+          parsed: active.parsed,
+          valid: false,
+          issues: [
+            {
+              path: "plugins.entries.feishu",
+              message:
+                "plugin feishu: plugin requires OpenClaw >=2026.4.23, but this host is 2026.4.22; skipping load",
+            },
+          ],
+        },
+        reason: "reload-invalid-config",
+      });
+
+      expect(restored).toBe(false);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(active.raw);
+      expect(JSON5.parse(active.raw)).toEqual(activeConfig);
+    });
+  });
+
   it("refuses to promote redacted secret placeholders", async () => {
     await withSuiteHome(async (home) => {
       const warn = vi.fn();

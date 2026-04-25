@@ -24,7 +24,8 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 - The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
-- `chat.history` is also display-normalized: inline delivery directive tags
+- `chat.history` is also display-normalized: runtime-only OpenClaw context,
+  inbound envelope wrappers, inline delivery directive tags
   such as `[[reply_to_*]]` and `[[audio_as_voice]]`, plain-text tool-call XML
   payloads (including `<tool_call>...</tool_call>`,
   `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`,

@@ -122,6 +122,14 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
+export function hasPromptSubmissionContent(params: {
+  prompt: string;
+  messages: readonly unknown[];
+  imageCount: number;
+}): boolean {
+  return params.prompt.trim().length > 0 || params.messages.length > 0 || params.imageCount > 0;
+}
+
 const QUEUED_USER_MESSAGE_MARKER =
   "[Queued user message that arrived while the previous turn was still active]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;

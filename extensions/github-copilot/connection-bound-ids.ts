@@ -35,6 +35,9 @@ export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolea
     if (typeof id !== "string" || id.length === 0) {
       continue;
     }
+    if (item.type === "reasoning" && typeof item.encrypted_content === "string") {
+      continue;
+    }
     if (looksLikeConnectionBoundId(id)) {
       item.id = deriveReplacementId(typeof item.type === "string" ? item.type : undefined, id);
       rewrote = true;

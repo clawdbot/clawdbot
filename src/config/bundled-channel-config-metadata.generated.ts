@@ -893,6 +893,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                   additionalProperties: false,
                 },
+                toolProgress: {
+                  type: "boolean",
+                },
               },
               additionalProperties: false,
             },
@@ -2066,6 +2069,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         },
                         additionalProperties: false,
                       },
+                      toolProgress: {
+                        type: "boolean",
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -3080,6 +3086,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       "streaming.preview.chunk.breakPreference": {
         label: "Discord Draft Chunk Break Preference",
         help: "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
+      },
+      "streaming.preview.toolProgress": {
+        label: "Discord Draft Tool Progress",
+        help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
       },
       "retry.attempts": {
         label: "Discord Retry Attempts",
@@ -9417,6 +9427,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             ],
           },
         },
+        groupAllowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
+        dmPolicy: {
+          type: "string",
+          enum: ["open", "allowlist", "disabled"],
+        },
+        groupPolicy: {
+          type: "string",
+          enum: ["open", "allowlist", "disabled"],
+        },
         systemPrompt: {
           type: "string",
         },
@@ -9479,42 +9510,41 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
-        tts: {
+        execApprovals: {
           type: "object",
           properties: {
             enabled: {
-              type: "boolean",
+              anyOf: [
+                {
+                  type: "boolean",
+                },
+                {
+                  type: "string",
+                  const: "auto",
+                },
+              ],
             },
-            provider: {
-              type: "string",
-            },
-            baseUrl: {
-              type: "string",
-            },
-            apiKey: {
-              type: "string",
-            },
-            model: {
-              type: "string",
-            },
-            voice: {
-              type: "string",
-            },
-            authStyle: {
-              type: "string",
-              enum: ["bearer", "api-key"],
-            },
-            queryParams: {
-              type: "object",
-              propertyNames: {
-                type: "string",
-              },
-              additionalProperties: {
+            approvers: {
+              type: "array",
+              items: {
                 type: "string",
               },
             },
-            speed: {
-              type: "number",
+            agentFilter: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            sessionFilter: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            target: {
+              type: "string",
+              enum: ["dm", "channel", "both"],
             },
           },
           additionalProperties: false,
@@ -9637,6 +9667,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   ],
                 },
               },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              dmPolicy: {
+                type: "string",
+                enum: ["open", "allowlist", "disabled"],
+              },
+              groupPolicy: {
+                type: "string",
+                enum: ["open", "allowlist", "disabled"],
+              },
               systemPrompt: {
                 type: "string",
               },
@@ -9698,6 +9749,45 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     additionalProperties: {},
                   },
                 ],
+              },
+              execApprovals: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                  approvers: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  agentFilter: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  sessionFilter: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  target: {
+                    type: "string",
+                    enum: ["dm", "channel", "both"],
+                  },
+                },
+                additionalProperties: false,
               },
             },
             additionalProperties: {},
@@ -10866,6 +10956,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                   additionalProperties: false,
                 },
+                toolProgress: {
+                  type: "boolean",
+                },
               },
               additionalProperties: false,
             },
@@ -11775,6 +11868,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         },
                         additionalProperties: false,
                       },
+                      toolProgress: {
+                        type: "boolean",
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -12310,6 +12406,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       "streaming.nativeTransport": {
         label: "Slack Native Streaming",
         help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Requires a reply thread target; top-level DMs stay on the non-thread fallback path.",
+      },
+      "streaming.preview.toolProgress": {
+        label: "Slack Draft Tool Progress",
+        help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
       },
       "thread.historyScope": {
         label: "Slack Thread History Scope",
@@ -13057,6 +13157,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     },
                   },
                   additionalProperties: false,
+                },
+                toolProgress: {
+                  type: "boolean",
                 },
               },
               additionalProperties: false,
@@ -14096,6 +14199,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         },
                         additionalProperties: false,
                       },
+                      toolProgress: {
+                        type: "boolean",
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -14497,6 +14603,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       "streaming.preview.chunk.breakPreference": {
         label: "Telegram Draft Chunk Break Preference",
         help: "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence).",
+      },
+      "streaming.preview.toolProgress": {
+        label: "Telegram Draft Tool Progress",
+        help: "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
       },
       "retry.attempts": {
         label: "Telegram Retry Attempts",

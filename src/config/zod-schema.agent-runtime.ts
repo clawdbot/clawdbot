@@ -829,6 +829,7 @@ export const AgentEntrySchema = z
     humanDelay: HumanDelaySchema.optional(),
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
+    contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,

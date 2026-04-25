@@ -7,6 +7,7 @@ import {
   notifyRuntimeConfigWriteListeners,
   registerRuntimeConfigWriteListener,
   resetConfigRuntimeState,
+  selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
@@ -68,6 +69,54 @@ describe("runtime snapshot state", () => {
 
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
+  });
+
+  it("selects runtime config only when input still matches the runtime source", () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-runtime-resolved",
+            models: [],
+          },
+        },
+      },
+    };
+    const scopedResolvedConfig: OpenClawConfig = {
+      ...runtimeConfig,
+      tools: {
+        experimental: {
+          planTool: true,
+        },
+      },
+    };
+
+    expect(
+      selectApplicableRuntimeConfig({
+        inputConfig: structuredClone(sourceConfig),
+        runtimeConfig,
+        runtimeSourceConfig: sourceConfig,
+      }),
+    ).toBe(runtimeConfig);
+    expect(
+      selectApplicableRuntimeConfig({
+        inputConfig: scopedResolvedConfig,
+        runtimeConfig,
+        runtimeSourceConfig: sourceConfig,
+      }),
+    ).toBe(scopedResolvedConfig);
   });
 
   it("clears runtime source snapshot when runtime snapshot is cleared", () => {

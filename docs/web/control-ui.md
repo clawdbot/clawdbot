@@ -154,8 +154,16 @@ Cron jobs panel notes:
 - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
 - Assistant/generated images are persisted as managed media references and served back through authenticated Gateway media URLs, so reloads do not depend on raw base64 image payloads staying in the chat history response.
 - `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply`.
+- During an active send and the final history refresh, the chat view keeps local
+  optimistic user/assistant messages visible if `chat.history` briefly returns
+  an older snapshot; the canonical transcript replaces those local messages once
+  the Gateway history catches up.
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
+- When fresh Gateway session usage reports show high context pressure, the chat
+  composer area shows a context notice and, at recommended compaction levels, a
+  compact button that runs the normal session compaction path. Stale token
+  snapshots are hidden until the Gateway reports fresh usage again.
 - Talk mode uses a registered realtime voice provider that supports browser
   WebRTC sessions. Configure OpenAI with `talk.provider: "openai"` plus
   `talk.providers.openai.apiKey`, or reuse the Voice Call realtime provider
@@ -310,7 +318,7 @@ Trusted-proxy note:
   device identity
 - this does **not** extend to node-role Control UI sessions
 - same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see
-  [Trusted Proxy Auth](/gateway/trusted-proxy-auth)
+  [Trusted proxy auth](/gateway/trusted-proxy-auth)
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 

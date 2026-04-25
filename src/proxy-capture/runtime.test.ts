@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { finalizeDebugProxyCapture, initializeDebugProxyCapture } from "./runtime.js";
+import {
+  captureHttpExchange,
+  finalizeDebugProxyCapture,
+  initializeDebugProxyCapture,
+} from "./runtime.js";
 
 const storeState = vi.hoisted(() => {
   const events: Record<string, unknown>[] = [];
@@ -81,5 +85,43 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.host === "api.minimax.io")).toBe(true);
     expect(events.some((event) => event.kind === "request")).toBe(true);
     expect(events.some((event) => event.kind === "response")).toBe(true);
+  });
+
+  it("redacts sensitive request and response headers before persistence", async () => {
+    initializeDebugProxyCapture("test");
+    captureHttpExchange({
+      url: "https://discord.com/api/v10/gateway/bot",
+      method: "GET",
+      requestHeaders: {
+        Authorization: "Bot discord-token",
+        Cookie: "sid=session-token",
+        "x-api-key": "provider-key",
+        "content-type": "application/json",
+        "x-safe": "visible",
+      },
+      response: new Response("{}", {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "set-cookie": "sid=response-token",
+        },
+      }),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    finalizeDebugProxyCapture();
+
+    const request = storeState.events.find((event) => event.kind === "request");
+    expect(JSON.parse(String(request?.headersJson))).toMatchObject({
+      Authorization: "[REDACTED]",
+      Cookie: "[REDACTED]",
+      "x-api-key": "[REDACTED]",
+      "content-type": "application/json",
+      "x-safe": "visible",
+    });
+    const response = storeState.events.find((event) => event.kind === "response");
+    expect(JSON.parse(String(response?.headersJson))).toMatchObject({
+      "content-type": "application/json",
+      "set-cookie": "[REDACTED]",
+    });
   });
 });

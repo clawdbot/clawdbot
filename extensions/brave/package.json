@@ -5,7 +5,7 @@
   "description": "OpenClaw Brave plugin",
   "type": "module",
   "dependencies": {
-    "typebox": "1.1.28"
+    "typebox": "1.1.31"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

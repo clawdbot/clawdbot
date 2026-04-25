@@ -1,14 +1,69 @@
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
-import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
+import {
+  closePlaywrightBrowserConnection,
+  getPageForTargetId,
+  listPagesViaPlaywright,
+} from "./pw-session.js";
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
 
+type MockPageSpec = {
+  targetId?: string;
+  url?: string;
+  title?: string;
+};
+
+type BrowserMockBundle = {
+  browser: import("playwright-core").Browser;
+  browserClose: ReturnType<typeof vi.fn>;
+  pages: import("playwright-core").Page[];
+};
+
+function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
+  let context: import("playwright-core").BrowserContext;
+  const browserClose = vi.fn(async () => {});
+  const targetIdByPage = new Map<import("playwright-core").Page, string | undefined>();
+
+  const pageObjects = pages.map((spec, index) => {
+    const page = {
+      on: vi.fn(),
+      context: () => context,
+      title: vi.fn(async () => spec.title ?? spec.targetId ?? `page-${index + 1}`),
+      url: vi.fn(() => spec.url ?? `https://page-${index + 1}.example`),
+    } as unknown as import("playwright-core").Page;
+    targetIdByPage.set(page, spec.targetId);
+    return page;
+  });
+
+  context = {
+    pages: () => pageObjects,
+    on: vi.fn(),
+    newCDPSession: vi.fn(async (page: import("playwright-core").Page) => ({
+      send: vi.fn(async (method: string) =>
+        method === "Target.getTargetInfo"
+          ? { targetInfo: { targetId: targetIdByPage.get(page) } }
+          : {},
+      ),
+      detach: vi.fn(async () => {}),
+    })),
+  } as unknown as import("playwright-core").BrowserContext;
+
+  const browser = {
+    contexts: () => [context],
+    on: vi.fn(),
+    off: vi.fn(),
+    close: browserClose,
+  } as unknown as import("playwright-core").Browser;
+
+  return { browser, browserClose, pages: pageObjects };
+}
+
 afterEach(async () => {
-  connectOverCdpSpy.mockClear();
-  getChromeWebSocketUrlSpy.mockClear();
+  connectOverCdpSpy.mockReset();
+  getChromeWebSocketUrlSpy.mockReset();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
@@ -118,5 +173,74 @@ describe("pw-session getPageForTargetId", () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+
+  it("evicts a stale cached page-less browser once and succeeds on a fresh reconnect", async () => {
+    const stale = makeBrowser([]);
+    const fresh = makeBrowser([{ targetId: "TARGET_OK", url: "https://fresh.example" }]);
+
+    connectOverCdpSpy.mockResolvedValueOnce(stale.browser).mockResolvedValueOnce(fresh.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
+
+    const resolved = await getPageForTargetId({ cdpUrl: "http://127.0.0.1:9222" });
+
+    expect(resolved).toBe(fresh.pages[0]);
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+    expect(stale.browserClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts a stale cached tab-selection miss once and succeeds on a fresh reconnect", async () => {
+    const stale = makeBrowser([
+      { targetId: "TARGET_A", url: "https://alpha.example" },
+      { targetId: "TARGET_C", url: "https://charlie.example" },
+    ]);
+    const fresh = makeBrowser([
+      { targetId: "TARGET_A", url: "https://alpha.example" },
+      { targetId: "TARGET_B", url: "https://beta.example" },
+    ]);
+
+    connectOverCdpSpy.mockResolvedValueOnce(stale.browser).mockResolvedValueOnce(fresh.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await getPageForTargetId({ cdpUrl: "http://127.0.0.1:9333" });
+
+    const resolved = await getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9333",
+      targetId: "TARGET_B",
+    });
+
+    expect(resolved).toBe(fresh.pages[1]);
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+    expect(stale.browserClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails after a single reconnect when the refreshed browser is still page-less", async () => {
+    const stale = makeBrowser([]);
+    const stillBroken = makeBrowser([]);
+
+    connectOverCdpSpy
+      .mockResolvedValueOnce(stale.browser)
+      .mockResolvedValueOnce(stillBroken.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9444" });
+
+    await expect(getPageForTargetId({ cdpUrl: "http://127.0.0.1:9444" })).rejects.toThrow(
+      "No pages available in the connected browser.",
+    );
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+    expect(stale.browserClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not add an extra top-level retry for non-recoverable connect failures", async () => {
+    connectOverCdpSpy.mockRejectedValue(new Error("connectOverCDP exploded"));
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(getPageForTargetId({ cdpUrl: "http://127.0.0.1:9555" })).rejects.toThrow(
+      "connectOverCDP exploded",
+    );
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
   });
 });

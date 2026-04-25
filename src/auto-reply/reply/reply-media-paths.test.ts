@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -298,6 +300,64 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
     });
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("keeps managed outbound media under the shared media root with sandbox mapping", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/Users/peter/.openclaw/media/outbound/generated.png",
+      mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
+    });
+    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("drops managed outbound media symlinks escaping the shared media root without sandbox mapping", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-media-state-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-media-outside-"));
+    const outsideFile = path.join(outsideDir, "secret.png");
+    const symlinkPath = path.join(stateDir, "media", "outbound", "linked-secret.png");
+    try {
+      await fs.mkdir(path.dirname(symlinkPath), { recursive: true });
+      await fs.writeFile(outsideFile, "secret", "utf8");
+      await fs.symlink(outsideFile, symlinkPath);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const normalize = createReplyMediaPathNormalizer({
+        cfg: {},
+        sessionKey: "session-key",
+        workspaceDir: "/tmp/agent-workspace",
+      });
+
+      const result = await normalize({
+        mediaUrls: [symlinkPath],
+      });
+
+      expect(result).toMatchObject({
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      });
+      expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(symlinkPath, { force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("drops host-local media when shared outbound attachment policy rejects it", async () => {

@@ -98,7 +98,7 @@ export async function handleDiscordGuildAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
-  cfg?: OpenClawConfig,
+  cfg: OpenClawConfig,
   options?: { mediaLocalRoots?: readonly string[] },
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");

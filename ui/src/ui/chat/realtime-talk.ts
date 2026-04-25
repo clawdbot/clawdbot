@@ -1,4 +1,7 @@
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../src/realtime-voice/agent-consult-tool.js";
+import {
+  buildRealtimeVoiceAgentConsultChatMessage,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+} from "../../../../src/realtime-voice/agent-consult-tool.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../gateway.ts";
 import { generateUUID } from "../uuid.ts";
 
@@ -239,23 +242,9 @@ export class RealtimeTalkSession {
     this.callbacks.onStatus?.("thinking");
     let question = "";
     try {
-      const args = JSON.parse(buffered?.args || event.arguments || "{}") as {
-        question?: unknown;
-        context?: unknown;
-        responseStyle?: unknown;
-      };
-      question = typeof args.question === "string" ? args.question.trim() : "";
-      const context = typeof args.context === "string" ? args.context.trim() : "";
-      const responseStyle = typeof args.responseStyle === "string" ? args.responseStyle.trim() : "";
-      if (context || responseStyle) {
-        question = [
-          question,
-          context ? `Context:\n${context}` : undefined,
-          responseStyle ? `Spoken style:\n${responseStyle}` : undefined,
-        ]
-          .filter(Boolean)
-          .join("\n\n");
-      }
+      question = buildRealtimeVoiceAgentConsultChatMessage(
+        JSON.parse(buffered?.args || event.arguments || "{}"),
+      );
     } catch {}
     if (!question) {
       this.submitToolResult(callId, {

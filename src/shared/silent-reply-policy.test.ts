@@ -37,6 +37,37 @@ describe("classifySilentReplyConversationType", () => {
   });
 });
 
+describe("resolveSilentReplyRewriteFromPolicies", () => {
+  it("uses defaults when no overrides exist", () => {
+    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "direct" })).toBe(
+      DEFAULT_SILENT_REPLY_REWRITE.direct,
+    );
+    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "group" })).toBe(
+      DEFAULT_SILENT_REPLY_REWRITE.group,
+    );
+  });
+
+  it("prefers surface rewrite settings over defaults", () => {
+    expect(
+      resolveSilentReplyRewriteFromPolicies({
+        conversationType: "direct",
+        defaultRewrite: { direct: true },
+        surfaceRewrite: { direct: false },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveSilentReplyRewriteText", () => {
+  it("picks a deterministic rewrite for a given seed", () => {
+    const first = resolveSilentReplyRewriteText({ seed: "main:NO_REPLY" });
+    const second = resolveSilentReplyRewriteText({ seed: "main:NO_REPLY" });
+    expect(first).toBe(second);
+    expect(first).not.toBe("NO_REPLY");
+    expect(first.length).toBeGreaterThan(0);
+  });
+});
+
 describe("resolveSilentReplyPolicyFromPolicies", () => {
   it("uses defaults when no overrides exist", () => {
     expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "direct" })).toBe(
@@ -55,36 +86,5 @@ describe("resolveSilentReplyPolicyFromPolicies", () => {
         surfacePolicy: { direct: "allow" },
       }),
     ).toBe("allow");
-  });
-});
-
-describe("resolveSilentReplyRewriteFromPolicies", () => {
-  it("uses default rewrite flags when no overrides exist", () => {
-    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "direct" })).toBe(
-      DEFAULT_SILENT_REPLY_REWRITE.direct,
-    );
-    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "group" })).toBe(
-      DEFAULT_SILENT_REPLY_REWRITE.group,
-    );
-  });
-
-  it("prefers surface rewrite flags over defaults", () => {
-    expect(
-      resolveSilentReplyRewriteFromPolicies({
-        conversationType: "direct",
-        defaultRewrite: { direct: true },
-        surfaceRewrite: { direct: false },
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("resolveSilentReplyRewriteText", () => {
-  it("picks a deterministic rewrite for a given seed", () => {
-    const first = resolveSilentReplyRewriteText({ seed: "main:NO_REPLY" });
-    const second = resolveSilentReplyRewriteText({ seed: "main:NO_REPLY" });
-    expect(first).toBe(second);
-    expect(first).not.toBe("NO_REPLY");
-    expect(first.length).toBeGreaterThan(0);
   });
 });

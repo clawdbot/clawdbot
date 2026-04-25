@@ -86,13 +86,15 @@ function resolveManifestProviderAuthEnvVarCandidates(
     if (!shouldUsePluginProviderEnvVars(plugin, params)) {
       continue;
     }
-    if (!plugin.providerAuthEnvVars) {
-      continue;
+    if (plugin.providerAuthEnvVars) {
+      for (const [providerId, keys] of Object.entries(plugin.providerAuthEnvVars).toSorted(
+        ([left], [right]) => left.localeCompare(right),
+      )) {
+        appendUniqueEnvVarCandidates(candidates, providerId, keys);
+      }
     }
-    for (const [providerId, keys] of Object.entries(plugin.providerAuthEnvVars).toSorted(
-      ([left], [right]) => left.localeCompare(right),
-    )) {
-      appendUniqueEnvVarCandidates(candidates, providerId, keys);
+    for (const provider of plugin.setup?.providers ?? []) {
+      appendUniqueEnvVarCandidates(candidates, provider.id, provider.envVars ?? []);
     }
   }
   const aliases = resolveProviderAuthAliasMap(params);
@@ -204,7 +206,7 @@ export function getProviderEnvVars(
   providerId: string,
   params?: ProviderEnvVarLookupParams,
 ): string[] {
-  const providerEnvVars = resolveProviderEnvVars(params);
+  const providerEnvVars = params ? resolveProviderEnvVars(params) : PROVIDER_ENV_VARS;
   const envVars = Object.hasOwn(providerEnvVars, providerId)
     ? providerEnvVars[providerId]
     : undefined;

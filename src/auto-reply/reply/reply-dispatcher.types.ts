@@ -8,6 +8,7 @@ export type ReplyDispatcher = {
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
+  getCancelledCounts?: () => Record<ReplyDispatchKind, number>;
   getFailedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
 };

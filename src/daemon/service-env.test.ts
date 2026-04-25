@@ -172,6 +172,102 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
   });
 });
 
+describe("getMinimalServicePathParts - Nix Home Manager", () => {
+  it("falls back to default Nix profile when NIX_PROFILES is absent on Linux", () => {
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+    });
+
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
+  });
+
+  it("falls back to default Nix profile when NIX_PROFILES is absent on macOS", () => {
+    const result = getMinimalServicePathParts({
+      platform: "darwin",
+      home: "/Users/testuser",
+    });
+
+    expect(result).toContain("/Users/testuser/.nix-profile/bin");
+  });
+
+  it("places rightmost NIX_PROFILES entry before leftmost on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /home/testuser/.nix-profile",
+      },
+    });
+
+    const userIdx = result.indexOf("/home/testuser/.nix-profile/bin");
+    const defaultIdx = result.indexOf("/nix/var/nix/profiles/default/bin");
+    expect(userIdx).toBeGreaterThan(-1);
+    expect(defaultIdx).toBeGreaterThan(-1);
+    expect(userIdx).toBeLessThan(defaultIdx);
+  });
+
+  it("places rightmost NIX_PROFILES entry before leftmost on macOS", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /Users/testuser/.nix-profile",
+      },
+    });
+
+    const userIdx = result.indexOf("/Users/testuser/.nix-profile/bin");
+    const defaultIdx = result.indexOf("/nix/var/nix/profiles/default/bin");
+    expect(userIdx).toBeGreaterThan(-1);
+    expect(defaultIdx).toBeGreaterThan(-1);
+    expect(userIdx).toBeLessThan(defaultIdx);
+  });
+
+  it("includes single Nix profile from NIX_PROFILES on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
+      },
+    });
+
+    expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
+  });
+
+  it("includes single Nix profile from NIX_PROFILES on macOS", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
+      },
+    });
+
+    expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
+  });
+
+  it("preserves Nix precedence across three profiles", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES:
+          "/nix/var/nix/profiles/default /nix/var/nix/profiles/per-user/testuser/custom /home/testuser/.nix-profile",
+      },
+    });
+
+    const userIdx = result.indexOf("/home/testuser/.nix-profile/bin");
+    const customIdx = result.indexOf("/nix/var/nix/profiles/per-user/testuser/custom/bin");
+    const defaultIdx = result.indexOf("/nix/var/nix/profiles/default/bin");
+    expect(userIdx).toBeGreaterThan(-1);
+    expect(customIdx).toBeGreaterThan(-1);
+    expect(defaultIdx).toBeGreaterThan(-1);
+    expect(userIdx).toBeLessThan(customIdx);
+    expect(customIdx).toBeLessThan(defaultIdx);
+  });
+});
+
 describe("buildMinimalServicePath", () => {
   const splitPath = (value: string, platform: NodeJS.Platform) =>
     value.split(platform === "win32" ? path.win32.delimiter : path.posix.delimiter);

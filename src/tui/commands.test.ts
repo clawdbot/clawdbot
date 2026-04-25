@@ -33,8 +33,10 @@ describe("getSlashCommands", () => {
     const commands = getSlashCommands();
     const status = commands.find((command) => command.name === "status");
     const gatewayStatus = commands.find((command) => command.name === "gateway-status");
+    const crestodian = commands.find((command) => command.name === "crestodian");
     expect(status?.description).toBe("Show current status.");
     expect(gatewayStatus?.description).toBe("Show gateway status summary");
+    expect(crestodian?.description).toBe("Return to Crestodian");
   });
 });
 
@@ -45,5 +47,6 @@ describe("helpText", () => {
     expect(output).toContain("/elev <on|off|ask|full>");
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
+    expect(output).toContain("/crestodian [request]");
   });
 });

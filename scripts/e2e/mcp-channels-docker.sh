@@ -35,12 +35,25 @@ docker run --rm \
   bash -lc "set -euo pipefail
     entry=dist/index.mjs
     [ -f \"\$entry\" ] || entry=dist/index.js
+    mock_port=44081
+    export OPENCLAW_DOCKER_OPENAI_BASE_URL=\"http://127.0.0.1:\$mock_port/v1\"
+    MOCK_PORT=\"\$mock_port\" node scripts/e2e/mock-openai-server.mjs >/tmp/mcp-channels-mock-openai.log 2>&1 &
+    mock_pid=\$!
+    for _ in \$(seq 1 80); do
+      if node -e \"fetch('http://127.0.0.1:' + process.argv[1] + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\" \"\$mock_port\"; then
+        break
+      fi
+      sleep 0.1
+    done
+    node -e \"fetch('http://127.0.0.1:' + process.argv[1] + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\" \"\$mock_port\"
     node --import tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
     node \"\$entry\" gateway --port $PORT --bind loopback --allow-unconfigured >/tmp/mcp-channels-gateway.log 2>&1 &
     gateway_pid=\$!
     cleanup_inner() {
       kill \"\$gateway_pid\" >/dev/null 2>&1 || true
       wait \"\$gateway_pid\" >/dev/null 2>&1 || true
+      kill \"\$mock_pid\" >/dev/null 2>&1 || true
+      wait \"\$mock_pid\" >/dev/null 2>&1 || true
     }
     dump_gateway_log_on_error() {
       status=\$?
@@ -62,6 +75,19 @@ docker run --rm \
     done
     if [ \"\$gateway_ready\" -ne 1 ]; then
       echo \"Gateway did not become ready\"
+      tail -n 120 /tmp/mcp-channels-gateway.log 2>/dev/null || true
+      exit 1
+    fi
+    acpx_ready=0
+    for _ in \$(seq 1 2400); do
+      if grep -q '\[plugins\] embedded acpx runtime backend ready' /tmp/mcp-channels-gateway.log 2>/dev/null; then
+        acpx_ready=1
+        break
+      fi
+      sleep 0.25
+    done
+    if [ \"\$acpx_ready\" -ne 1 ]; then
+      echo \"Embedded ACPX runtime did not become ready\"
       tail -n 120 /tmp/mcp-channels-gateway.log 2>/dev/null || true
       exit 1
     fi

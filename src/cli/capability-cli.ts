@@ -530,6 +530,7 @@ async function runModelRun(params: {
         agentId,
         model: params.model,
         json: false,
+        cleanupBundleMcpOnRunEnd: true,
       },
       {
         ...defaultRuntime,
@@ -565,6 +566,7 @@ async function runModelRun(params: {
       message: params.prompt,
       provider,
       model,
+      cleanupBundleMcpOnRunEnd: true,
       idempotencyKey: randomIdempotencyKey(),
     },
     expectFinal: true,

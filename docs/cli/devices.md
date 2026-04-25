@@ -66,6 +66,12 @@ request. Review the `Requested` vs `Approved` columns in `openclaw devices list`
 or use `openclaw devices approve --latest` to preview the exact upgrade before
 approving it.
 
+If the Gateway is explicitly configured with
+`gateway.nodes.pairing.autoApproveCidrs`, first-time `role: node` requests from
+matching client IPs can be approved before they appear in this list. That policy
+is disabled by default and never applies to operator/browser clients or upgrade
+requests.
+
 ```
 openclaw devices approve
 openclaw devices approve <requestId>
@@ -127,6 +133,8 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 
 - Token rotation returns a new token (sensitive). Treat it like a secret.
 - These commands require `operator.pairing` (or `operator.admin`) scope.
+- `gateway.nodes.pairing.autoApproveCidrs` is an opt-in Gateway policy for
+  fresh node device pairing only; it does not change CLI approval authority.
 - Token rotation stays inside the approved pairing role set and approved scope
   baseline for that device. A stray cached token entry does not grant a new
   rotate target.

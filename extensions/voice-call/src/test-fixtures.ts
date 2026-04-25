@@ -1,4 +1,5 @@
 import type { VoiceCallConfig } from "./config.js";
+import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 export function createVoiceCallBaseConfig(params?: {
   provider?: "telnyx" | "twilio" | "plivo" | "mock";
@@ -46,6 +47,8 @@ export function createVoiceCallBaseConfig(params?: {
     realtime: {
       enabled: false,
       streamPath: "/voice/stream/realtime",
+      instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
+      toolPolicy: "safe-read-only",
       tools: [],
       providers: {},
     },

@@ -142,7 +142,7 @@ function isNotificationForTurn(
     return directTurnId === turnId;
   }
   const turn = isJsonObject(params.turn) ? params.turn : undefined;
-  return !turn || readString(turn, "id") === turnId;
+  return readString(turn, "id") === turnId;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {

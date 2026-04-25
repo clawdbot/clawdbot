@@ -152,6 +152,40 @@ describe("promptDefaultModel", () => {
     );
   });
 
+  it("hides legacy runtime providers from default model choices", async () => {
+    loadModelCatalog.mockResolvedValue([
+      { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "google-gemini-cli", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "google", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
+      { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+
+    await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    const optionValues = (select.mock.calls[0]?.[0]?.options ?? []).map(
+      (option: { value: string }) => option.value,
+    );
+    expect(optionValues).toEqual([
+      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4-6",
+      "google/gemini-3-pro-preview",
+      "openai-codex/gpt-5.5",
+    ]);
+  });
+
   it("treats byteplus plan models as preferred-provider matches", async () => {
     loadModelCatalog.mockResolvedValue([
       {
@@ -402,6 +436,45 @@ describe("promptModelAllowlist", () => {
   });
 });
 
+describe("runtime model picker visibility", () => {
+  it("hides legacy runtime refs from allowlist choices and configured supplements", async () => {
+    loadModelCatalog.mockResolvedValue([
+      { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "google-gemini-cli", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "google", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "codex/gpt-5.5": { alias: "legacy-codex" },
+            "claude-cli/claude-sonnet-4-6": { alias: "CLI Claude" },
+            "google-gemini-cli/gemini-3-pro-preview": { alias: "CLI Gemini" },
+            "openai/gpt-5.5": { alias: "gpt" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await promptModelAllowlist({ config, prompter });
+
+    const call = multiselect.mock.calls[0]?.[0];
+    const optionValues = (call?.options ?? []).map((option: { value: string }) => option.value);
+    expect(optionValues).toEqual([
+      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4-6",
+      "google/gemini-3-pro-preview",
+    ]);
+    expect(call?.initialValues).toEqual(["openai/gpt-5.5"]);
+  });
+});
+
 describe("router model filtering", () => {
   it("filters internal router models in both default and allowlist prompts", async () => {
     loadModelCatalog.mockResolvedValue(OPENROUTER_CATALOG);
@@ -509,6 +582,23 @@ describe("applyModelFallbacksFromSelection", () => {
       primary: "anthropic/claude-opus-4-6",
       fallbacks: ["anthropic/claude-sonnet-4-6"],
     });
+  });
+
+  it("does not inject a phantom primary when none was configured", () => {
+    const config = {
+      agents: {
+        defaults: {},
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, [
+      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4-6",
+    ]);
+    expect(next.agents?.defaults?.model).toEqual({
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(next.agents?.defaults?.model).not.toHaveProperty("primary");
   });
 
   it("keeps existing fallbacks when the primary is not selected", () => {

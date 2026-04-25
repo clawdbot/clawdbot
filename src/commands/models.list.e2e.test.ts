@@ -86,6 +86,7 @@ vi.mock("./models/list.runtime.js", () => {
     resolveEnvApiKey,
     resolveAwsSdkEnvVarName,
     hasUsableCustomProviderApiKey,
+    hasProviderStaticCatalogForFilter,
     loadModelCatalog,
     loadProviderCatalogModelsForList,
     discoverAuthStorage: () => ({}) as unknown,

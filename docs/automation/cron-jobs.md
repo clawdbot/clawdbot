@@ -7,8 +7,6 @@ read_when:
 title: "Scheduled tasks"
 ---
 
-# Scheduled Tasks (Cron)
-
 Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at the right time, and can deliver output back to a chat channel or webhook endpoint.
 
 ## Quick start
@@ -88,6 +86,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
 **Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
+For isolated jobs, “fresh session” means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides, but it does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
+
 For isolated jobs, runtime teardown now includes best-effort browser cleanup for that cron session. Cleanup failures are ignored so the actual cron result still wins.
 
 Isolated cron runs also dispose any bundled MCP runtime instances created for the job through the shared runtime-cleanup path. This matches how main-session and custom-session MCP clients are torn down, so isolated cron jobs do not leak stdio child processes or long-lived MCP connections across runs.
@@ -95,6 +95,11 @@ Isolated cron runs also dispose any bundled MCP runtime instances created for th
 When isolated cron runs orchestrate subagents, delivery also prefers the final
 descendant output over stale parent interim text. If descendants are still
 running, OpenClaw suppresses that partial parent update instead of announcing it.
+
+For text-only Discord announce targets, OpenClaw sends the canonical final
+assistant text once instead of replaying both streamed/intermediate text payloads
+and the final answer. Media and structured Discord payloads are still delivered
+as separate payloads so attachments and components are not dropped.
 
 ### Payload options for isolated jobs
 
@@ -113,7 +118,7 @@ Model-selection precedence for isolated jobs is:
 
 1. Gmail hook model override (when the run came from Gmail and that override is allowed)
 2. Per-job payload `model`
-3. Stored cron session model override
+3. User-selected stored cron session model override
 4. Agent/default model selection
 
 Fast mode follows the resolved live selection too. If the selected model config
@@ -121,10 +126,11 @@ has `params.fastMode`, isolated cron uses that by default. A stored session
 `fastMode` override still wins over config in either direction.
 
 If an isolated run hits a live model-switch handoff, cron retries with the
-switched provider/model and persists that live selection before retrying. When
-the switch also carries a new auth profile, cron persists that auth profile
-override too. Retries are bounded: after the initial attempt plus 2 switch
-retries, cron aborts instead of looping forever.
+switched provider/model and persists that live selection for the active run
+before retrying. When the switch also carries a new auth profile, cron persists
+that auth profile override for the active run too. Retries are bounded: after
+the initial attempt plus 2 switch retries, cron aborts instead of looping
+forever.
 
 ## Delivery and output
 

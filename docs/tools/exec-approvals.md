@@ -248,13 +248,17 @@ This is defense-in-depth for interpreter loaders that do not map cleanly to one 
 ## Allowlist (per agent)
 
 Allowlists are **per agent**. If multiple agents exist, switch which agent you’re
-editing in the macOS app. Patterns are **case-insensitive glob matches**.
-Patterns should resolve to **binary paths** (basename-only entries are ignored).
+editing in the macOS app. Patterns are glob matches.
+Patterns can be resolved binary path globs or bare command-name globs. Bare names
+match only commands invoked through PATH, so `rg` can match `/opt/homebrew/bin/rg`
+when the command is `rg`, but not `./rg` or `/tmp/rg`. Use a path glob when you
+want to trust one specific binary location.
 Legacy `agents.default` entries are migrated to `agents.main` on load.
 Shell chains such as `echo ok && pwd` still need every top-level segment to satisfy allowlist rules.
 
 Examples:
 
+- `rg`
 - `~/Projects/**/bin/peekaboo`
 - `~/.local/bin/*`
 - `/opt/homebrew/bin/rg`

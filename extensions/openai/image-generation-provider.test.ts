@@ -921,6 +921,49 @@ describe("openai image generation provider", () => {
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
   });
 
+  it.each([
+    "https://chatgpt.com/backend-api",
+    "https://chatgpt.com/backend-api/",
+    "https://chatgpt.com/backend-api/v1",
+    "https://chatgpt.com/backend-api/codex/v1",
+  ])("canonicalizes configured Codex OAuth image baseUrl %s", async (configuredBaseUrl) => {
+    mockCodexAuthOnly();
+    mockCodexImageStream({ imageData: "codex-image" });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw through a legacy configured Codex endpoint",
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: configuredBaseUrl,
+              api: "openai-codex-responses",
+              models: [],
+            },
+          },
+        },
+      },
+      authStore: createCodexOAuthAuthStore(),
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        capability: "image",
+      }),
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://chatgpt.com/backend-api/codex/responses",
+      }),
+    );
+  });
+
   it("uses direct OpenAI auth when custom OpenAI image config is explicit", async () => {
     mockGeneratedPngResponse();
     resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {

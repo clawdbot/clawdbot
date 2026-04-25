@@ -110,7 +110,11 @@ export function releasePluginInteractiveCallbackDedupe(dedupeKey: string | undef
 }
 
 export function clearPluginInteractiveHandlersState(): void {
-  getPluginInteractiveHandlersState().clear();
+  clearPluginInteractiveHandlerRegistrationsState();
   getPluginInteractiveCallbackDedupeState().clear();
   getState().inflightCallbackDedupe.clear();
+}
+
+export function clearPluginInteractiveHandlerRegistrationsState(): void {
+  getPluginInteractiveHandlersState().clear();
 }

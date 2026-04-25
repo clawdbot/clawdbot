@@ -273,8 +273,27 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
     - `progress` maps to `partial` on Telegram (compat with cross-channel naming)
-    - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
+    - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are auto-mapped
+
+    Tool-progress preview updates are the short "Working..." lines shown while tools run, for example command execution, file reads, planning updates, or patch summaries. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later. To keep the edited preview for answer text but hide tool-progress lines, set:
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "partial",
+            "preview": {
+              "toolProgress": false
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    Use `streaming.mode: "off"` only when you want to disable Telegram preview edits entirely. Use `streaming.preview.toolProgress: false` when you only want to disable the tool-progress status lines.
 
     For text-only replies:
 
@@ -684,6 +703,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Default is long polling. For webhook mode set `channels.telegram.webhookUrl` and `channels.telegram.webhookSecret`; optional `webhookPath`, `webhookHost`, `webhookPort` (defaults `/telegram-webhook`, `127.0.0.1`, `8787`).
 
     The local listener binds to `127.0.0.1:8787`. For public ingress, either put a reverse proxy in front of the local port or set `webhookHost: "0.0.0.0"` intentionally.
+
+    Webhook mode validates request guards, the Telegram secret token, and the JSON body before returning `200` to Telegram.
+    OpenClaw then processes the update asynchronously through the same per-chat/per-topic bot lanes used by long polling, so slow agent turns do not hold Telegram's delivery ACK.
 
   </Accordion>
 

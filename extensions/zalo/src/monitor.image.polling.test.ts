@@ -1,10 +1,11 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import {
   createImageLifecycleCore,
   createImageUpdate,
   createLifecycleMonitorSetup,
   expectImageLifecycleDelivery,
+  settleAsyncWork,
 } from "../test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
@@ -55,7 +56,8 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1));
+    await settleAsyncWork();
+    expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
     expectImageLifecycleDelivery({
       fetchRemoteMediaMock,
       saveMediaBufferMock,
@@ -95,7 +97,8 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1));
+    await settleAsyncWork();
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
     expect(fetchRemoteMediaMock).not.toHaveBeenCalled();
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
     expect(finalizeInboundContextMock).not.toHaveBeenCalled();

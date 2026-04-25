@@ -26,6 +26,7 @@ export async function writeSubagentSessionEntry(params: {
   sessionKey: string;
   sessionId?: string;
   updatedAt?: number;
+  abortedLastRun?: boolean;
   agentId: string;
   defaultSessionId: string;
 }): Promise<string> {
@@ -35,6 +36,9 @@ export async function writeSubagentSessionEntry(params: {
     ...store[params.sessionKey],
     sessionId: params.sessionId ?? params.defaultSessionId,
     updatedAt: params.updatedAt ?? Date.now(),
+    ...(typeof params.abortedLastRun === "boolean"
+      ? { abortedLastRun: params.abortedLastRun }
+      : {}),
   };
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");

@@ -53,6 +53,7 @@ import {
 
 beforeEach(async () => {
   const page = {
+    on: vi.fn(),
     goto,
     title: pageTitle,
     url: pageUrl,

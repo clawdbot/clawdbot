@@ -7,9 +7,21 @@ import { formatTokenK } from "./shared.js";
 
 const MODEL_PAD = 42;
 const INPUT_PAD = 10;
-const CTX_PAD = 8;
+const CTX_PAD = 11;
 const LOCAL_PAD = 5;
 const AUTH_PAD = 5;
+
+function formatContextLabel(row: ModelRow): string {
+  if (
+    typeof row.contextTokens === "number" &&
+    Number.isFinite(row.contextTokens) &&
+    row.contextTokens > 0 &&
+    row.contextTokens !== row.contextWindow
+  ) {
+    return `${formatTokenK(row.contextTokens)}/${formatTokenK(row.contextWindow)}`;
+  }
+  return formatTokenK(row.contextWindow);
+}
 
 export function printModelTable(
   rows: ModelRow[],
@@ -45,7 +57,7 @@ export function printModelTable(
   for (const row of rows) {
     const keyLabel = pad(truncate(sanitizeTerminalText(row.key), MODEL_PAD), MODEL_PAD);
     const inputLabel = pad(sanitizeTerminalText(row.input) || "-", INPUT_PAD);
-    const ctxLabel = pad(formatTokenK(row.contextWindow), CTX_PAD);
+    const ctxLabel = pad(formatContextLabel(row), CTX_PAD);
     const localText = row.local === null ? "-" : row.local ? "yes" : "no";
     const localLabel = pad(localText, LOCAL_PAD);
     const authText = row.available === null ? "-" : row.available ? "yes" : "no";

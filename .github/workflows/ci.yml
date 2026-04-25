@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
@@ -37,6 +40,7 @@ jobs:
       has_changed_extensions: ${{ steps.manifest.outputs.has_changed_extensions }}
       changed_extensions_matrix: ${{ steps.manifest.outputs.changed_extensions_matrix }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
+      run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       channel_contracts_matrix: ${{ steps.manifest.outputs.channel_contracts_matrix }}
@@ -127,6 +131,9 @@ jobs:
           OPENCLAW_CI_RUN_MACOS: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
           OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
+          OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ steps.changed_scope.outputs.run_node_fast_only || 'false' }}
+          OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}
+          OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: ${{ steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}
           OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
@@ -170,12 +177,23 @@ jobs:
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
+          const runNodeFastOnly =
+            runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
+          const runNodeFull = runNode && !runNodeFastOnly;
+          const runNodeFastPluginContracts =
+            runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
+          const runNodeFastCiRouting =
+            runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
+          const runChecksFastCore = runNodeFull || runNodeFastPluginContracts || runNodeFastCiRouting;
           const runMacos =
             parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository;
           const runAndroid =
             parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly && isCanonicalRepository;
           const runWindows =
-            parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) && !docsOnly && isCanonicalRepository;
+            parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
+            !docsOnly &&
+            !runNodeFastOnly &&
+            isCanonicalRepository;
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
@@ -188,18 +206,49 @@ jobs:
             ? DEFAULT_EXTENSION_TEST_SHARD_COUNT
             : Math.max(DEFAULT_EXTENSION_TEST_SHARD_COUNT, 36);
           const extensionShardMatrix = createMatrix(
-            runNode
+            runNodeFull
               ? createExtensionTestShards({
                   shardCount: extensionTestShardCount,
                 }).map((shard) => ({
                   check_name: shard.checkName,
                   extensions_csv: shard.extensionIds.join(","),
+                  runner: isCanonicalRepository && [0, 3, 4].includes(shard.index)
+                    ? "blacksmith-8vcpu-ubuntu-2404"
+                    : isCanonicalRepository
+                      ? "blacksmith-4vcpu-ubuntu-2404"
+                      : "ubuntu-24.04",
                   shard_index: shard.index + 1,
                   task: "extensions-batch",
                 }))
               : [],
           );
-          const nodeTestShards = runNode
+          const checksFastCoreTasks = [];
+          if (runNodeFull) {
+            checksFastCoreTasks.push(
+              { check_name: "checks-fast-bundled", runtime: "node", task: "bundled" },
+              {
+                check_name: "checks-fast-contracts-plugins",
+                runtime: "node",
+                task: "contracts-plugins",
+              },
+            );
+          } else {
+            if (runNodeFastPluginContracts) {
+              checksFastCoreTasks.push({
+                check_name: "checks-fast-contracts-plugins",
+                runtime: "node",
+                task: runNodeFastCiRouting ? "contracts-plugins-ci-routing" : "contracts-plugins",
+              });
+            } else if (runNodeFastCiRouting) {
+              checksFastCoreTasks.push({
+                check_name: "checks-fast-ci-routing",
+                runtime: "node",
+                task: "ci-routing",
+              });
+            }
+          }
+
+          const nodeTestShards = runNodeFull
             ? createNodeTestShards().map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
@@ -208,6 +257,7 @@ jobs:
                 configs: shard.configs,
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
+                runner: shard.runner,
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -223,25 +273,17 @@ jobs:
             run_windows: runWindows,
             has_changed_extensions: hasChangedExtensions,
             changed_extensions_matrix: changedExtensionsMatrix,
-            run_build_artifacts: runNode,
-            run_checks_fast: runNode,
-            checks_fast_core_matrix: createMatrix(
-              runNode
-                ? [
-                    { check_name: "checks-fast-bundled", runtime: "node", task: "bundled" },
-                    {
-                      check_name: "checks-fast-contracts-plugins",
-                      runtime: "node",
-                      task: "contracts-plugins",
-                    },
-                  ]
-                : [],
+            run_build_artifacts: runNodeFull,
+            run_checks_fast_core: runChecksFastCore,
+            run_checks_fast: runNodeFull,
+            checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
+            channel_contracts_matrix: createMatrix(
+              runNodeFull ? createChannelContractTestShards() : [],
             ),
-            channel_contracts_matrix: createMatrix(runNode ? createChannelContractTestShards() : []),
             checks_node_extensions_matrix: extensionShardMatrix,
-            run_checks: runNode,
+            run_checks: runNodeFull,
             checks_matrix: createMatrix(
-              runNode
+              runNodeFull
                 ? [
                     { check_name: "checks-node-channels", runtime: "node", task: "channels" },
                   ]
@@ -260,9 +302,9 @@ jobs:
                   }))
                 : [],
             ),
-            run_check: runNode,
-            run_check_additional: runNode,
-            run_build_smoke: runNode,
+            run_check: runNodeFull,
+            run_check_additional: runNodeFull,
+            run_build_smoke: runNodeFull,
             run_check_docs: docsChanged,
             run_control_ui_i18n: runControlUiI18n,
             run_skills_python_job: runSkillsPython,
@@ -653,8 +695,8 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ubuntu-24.04
+    if: needs.preflight.outputs.run_checks_fast_core == 'true'
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -729,6 +771,13 @@ jobs:
               ;;
             contracts-plugins)
               pnpm test:contracts:plugins
+              ;;
+            contracts-plugins-ci-routing)
+              pnpm test:contracts:plugins
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/test-projects.test.ts
+              ;;
+            ci-routing)
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/test-projects.test.ts
               ;;
             *)
               echo "Unsupported checks-fast task: $TASK" >&2
@@ -913,7 +962,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -975,7 +1024,7 @@ jobs:
       - name: Run extension shard
         env:
           NODE_OPTIONS: --max-old-space-size=6144
-          OPENCLAW_EXTENSION_BATCH_PARALLEL: 1
+          OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_VITEST_MAX_WORKERS: 1
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
         run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
@@ -1035,8 +1084,8 @@ jobs:
       contents: read
     name: checks-node-compat-node22
     needs: [preflight]
-    if: needs.preflight.outputs.run_node == 'true' && github.event_name == 'push'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'push'
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -1113,10 +1162,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    # Keep core shards on GitHub-hosted runners. The Blacksmith pool is already
-    # occupied by build and extension shards; queueing these shards there hides
-    # actual test-speed improvements behind runner wait time.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && (matrix.runner || 'ubuntu-24.04') || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1372,16 +1418,16 @@ jobs:
             runner: ubuntu-24.04
           - check_name: check-prod-types
             task: prod-types
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
-            runner: ubuntu-24.04
+            runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04
           - check_name: check-test-types
             task: test-types
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-strict-smoke
             task: strict-smoke
             runner: ubuntu-24.04
@@ -1456,7 +1502,7 @@ jobs:
               pnpm tsgo:prod
               ;;
             lint)
-              pnpm lint
+              pnpm lint --threads=8
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read
@@ -1581,7 +1627,7 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/plugin-sdk/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/plugin-sdk/**', 'src/auto-reply/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-extension-package-boundary-v1-
 

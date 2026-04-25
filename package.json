@@ -42,7 +42,8 @@
     "!dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
     "!dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
     "!dist/qa-runtime-*.js",
-    "docs/reference/templates/",
+    "docs/",
+    "!docs/.generated/**",
     "skills/",
     "scripts/npm-runner.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
@@ -737,6 +738,14 @@
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
     },
+    "./plugin-sdk/session-transcript-hit": {
+      "types": "./dist/plugin-sdk/session-transcript-hit.d.ts",
+      "default": "./dist/plugin-sdk/session-transcript-hit.js"
+    },
+    "./plugin-sdk/session-visibility": {
+      "types": "./dist/plugin-sdk/session-visibility.d.ts",
+      "default": "./dist/plugin-sdk/session-visibility.js"
+    },
     "./plugin-sdk/ssrf-dispatcher": {
       "types": "./dist/plugin-sdk/ssrf-dispatcher.d.ts",
       "default": "./dist/plugin-sdk/ssrf-dispatcher.js"
@@ -1121,6 +1130,14 @@
       "types": "./dist/plugin-sdk/provider-usage.d.ts",
       "default": "./dist/plugin-sdk/provider-usage.js"
     },
+    "./plugin-sdk/web-content-extractor": {
+      "types": "./dist/plugin-sdk/web-content-extractor.d.ts",
+      "default": "./dist/plugin-sdk/web-content-extractor.js"
+    },
+    "./plugin-sdk/document-extractor": {
+      "types": "./dist/plugin-sdk/document-extractor.d.ts",
+      "default": "./dist/plugin-sdk/document-extractor.js"
+    },
     "./plugin-sdk/provider-web-fetch-contract": {
       "types": "./dist/plugin-sdk/provider-web-fetch-contract.d.ts",
       "default": "./dist/plugin-sdk/provider-web-fetch-contract.js"
@@ -1326,6 +1343,8 @@
     "deadcode:ts-unused": "pnpm dlx ts-unused-exports tsconfig.json --ignoreTestFiles --exitWithCount",
     "deps:root-ownership": "node scripts/root-dependency-ownership-audit.mjs",
     "deps:root-ownership:check": "node scripts/root-dependency-ownership-audit.mjs --check",
+    "deps:sbom-risk": "node scripts/sbom-risk-report.mjs",
+    "deps:sbom-risk:check": "node scripts/sbom-risk-report.mjs --check",
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
@@ -1453,11 +1472,14 @@
     "test:contracts:plugins": "node scripts/run-vitest.mjs run --config test/vitest/vitest.contracts-plugin.config.ts --maxWorkers=1",
     "test:coverage": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --coverage",
     "test:coverage:changed": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --coverage --changed origin/main",
+    "test:docker:agents-delete-shared-workspace": "bash scripts/e2e/agents-delete-shared-workspace-docker.sh",
     "test:docker:all": "node scripts/test-docker-all.mjs",
     "test:docker:bundled-channel-deps": "bash scripts/e2e/bundled-channel-runtime-deps-docker.sh",
-    "test:docker:bundled-channel-deps:fast": "OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=1 bash scripts/e2e/bundled-channel-runtime-deps-docker.sh",
+    "test:docker:bundled-channel-deps:fast": "OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=1 bash scripts/e2e/bundled-channel-runtime-deps-docker.sh",
     "test:docker:cleanup": "bash scripts/test-cleanup-docker.sh",
     "test:docker:config-reload": "bash scripts/e2e/config-reload-source-docker.sh",
+    "test:docker:crestodian-first-run": "bash scripts/e2e/crestodian-first-run-docker.sh",
+    "test:docker:crestodian-rescue": "bash scripts/e2e/crestodian-rescue-docker.sh",
     "test:docker:cron-mcp-cleanup": "bash scripts/e2e/cron-mcp-cleanup-docker.sh",
     "test:docker:doctor-switch": "bash scripts/e2e/doctor-install-switch-docker.sh",
     "test:docker:e2e-build": "bash scripts/e2e/build-image.sh",
@@ -1578,21 +1600,18 @@
     "ui:install": "node scripts/ui.js install"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.19.0",
-    "@anthropic-ai/vertex-sdk": "^0.16.0",
+    "@agentclientprotocol/sdk": "0.19.1",
     "@clack/prompts": "^1.2.0",
     "@lydell/node-pty": "1.2.0-beta.12",
-    "@mariozechner/pi-agent-core": "0.70.0",
-    "@mariozechner/pi-ai": "0.70.0",
-    "@mariozechner/pi-coding-agent": "0.70.0",
-    "@mariozechner/pi-tui": "0.70.0",
+    "@mariozechner/pi-agent-core": "0.70.2",
+    "@mariozechner/pi-ai": "0.70.2",
+    "@mariozechner/pi-coding-agent": "0.70.2",
+    "@mariozechner/pi-tui": "0.70.2",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@mozilla/readability": "^0.6.0",
     "@vincentkoc/qrcode-tui": "0.2.1",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
-    "cli-highlight": "^2.1.11",
     "commander": "^14.0.3",
     "croner": "^10.0.1",
     "dotenv": "^17.4.2",
@@ -1603,18 +1622,16 @@
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
-    "linkedom": "^0.18.12",
     "markdown-it": "14.1.1",
     "openai": "^6.34.0",
     "osc-progress": "^0.3.0",
-    "pdfjs-dist": "^5.6.205",
     "proxy-agent": "^8.0.1",
     "semver": "7.7.4",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tslog": "^4.10.2",
-    "typebox": "1.1.28",
+    "typebox": "1.1.31",
     "undici": "8.1.0",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
@@ -1631,7 +1648,7 @@
     "@types/node": "25.6.0",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260423.1",
-    "@vitest/coverage-v8": "^4.1.4",
+    "@vitest/coverage-v8": "^4.1.5",
     "jscpd": "4.0.9",
     "jsdom": "^29.0.2",
     "lit": "^3.3.2",
@@ -1642,16 +1659,7 @@
     "tsdown": "0.21.9",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.4"
-  },
-  "peerDependencies": {
-    "@napi-rs/canvas": "^0.1.89",
-    "node-llama-cpp": "3.18.1"
-  },
-  "peerDependenciesMeta": {
-    "node-llama-cpp": {
-      "optional": true
-    }
+    "vitest": "^4.1.5"
   },
   "overrides": {
     "axios": "1.15.0",
@@ -1681,7 +1689,7 @@
       "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-      "typebox": "1.1.28",
+      "typebox": "1.1.31",
       "tar": "7.5.13",
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1",
@@ -1691,7 +1699,6 @@
     "onlyBuiltDependencies": [
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
-      "@napi-rs/canvas",
       "@tloncorp/api",
       "@tloncorp/tlon-skill",
       "@whiskeysockets/baileys",
@@ -1709,6 +1716,11 @@
         "dependencies": {
           "strip-ansi": "^7.2.0"
         }
+      }
+    },
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "prism-media>opusscript": "^0.0.8 || ^0.1.1"
       }
     },
     "patchedDependencies": {

@@ -205,6 +205,7 @@ export async function runPreparedCliAgent(
           ...(output.usage ? { usage: output.usage } : {}),
         },
         ctx: hookContext,
+        hookRunner,
       });
     }
     return { output, assistantText, lastAssistant };
@@ -290,6 +291,7 @@ export async function runPreparedCliAgent(
     runAgentHarnessLlmInputHook({
       event: llmInputEvent,
       ctx: hookContext,
+      hookRunner,
     });
     try {
       const { output, lastAssistant } = await executeCliAttempt(
@@ -303,6 +305,7 @@ export async function runPreparedCliAgent(
           durationMs: Date.now() - context.started,
         },
         ctx: hookContext,
+        hookRunner,
       });
       return buildCliRunResult({ output, effectiveCliSessionId });
     } catch (err) {
@@ -325,6 +328,7 @@ export async function runPreparedCliAgent(
                 durationMs: Date.now() - context.started,
               },
               ctx: hookContext,
+              hookRunner,
             });
             return buildCliRunResult({ output, effectiveCliSessionId });
           } catch (retryErr) {
@@ -332,6 +336,7 @@ export async function runPreparedCliAgent(
             runAgentHarnessAgentEndHook({
               event: buildFailedAgentEndEvent(retryMessage),
               ctx: hookContext,
+              hookRunner,
             });
             return toCliRunFailure(retryErr);
           }
@@ -339,6 +344,7 @@ export async function runPreparedCliAgent(
         runAgentHarnessAgentEndHook({
           event: buildFailedAgentEndEvent(formatErrorMessage(err)),
           ctx: hookContext,
+          hookRunner,
         });
         throw err;
       }
@@ -346,6 +352,7 @@ export async function runPreparedCliAgent(
       runAgentHarnessAgentEndHook({
         event: buildFailedAgentEndEvent(message),
         ctx: hookContext,
+        hookRunner,
       });
       return toCliRunFailure(err);
     }

@@ -54,7 +54,7 @@ export async function handleDiscordModerationAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
-  cfg?: OpenClawConfig,
+  cfg: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   if (!isDiscordModerationAction(action)) {
     throw new Error(`Unknown action: ${action}`);

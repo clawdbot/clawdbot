@@ -9,8 +9,16 @@ export const DEFAULT_BROWSER_EVALUATE_ENABLED = true;
 export const DEFAULT_OPENCLAW_BROWSER_COLOR = "#FF4500";
 export const DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME = "openclaw";
 export const DEFAULT_BROWSER_DEFAULT_PROFILE_NAME = "openclaw";
+export const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 60_000;
 export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
 export const DEFAULT_UPLOAD_DIR = path.join(resolvePreferredOpenClawTmpDir(), "uploads");
+
+export type ResolvedBrowserTabCleanupConfig = {
+  enabled: boolean;
+  idleMinutes: number;
+  maxTabsPerSession: number;
+  sweepMinutes: number;
+};
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
@@ -23,6 +31,7 @@ export type ResolvedBrowserConfig = {
   cdpIsLoopback: boolean;
   remoteCdpTimeoutMs: number;
   remoteCdpHandshakeTimeoutMs: number;
+  actionTimeoutMs: number;
   color: string;
   executablePath?: string;
   headless: boolean;
@@ -30,6 +39,7 @@ export type ResolvedBrowserConfig = {
   attachOnly: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
+  tabCleanup: ResolvedBrowserTabCleanupConfig;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
 };
@@ -43,6 +53,7 @@ export type ResolvedBrowserProfile = {
   userDataDir?: string;
   color: string;
   driver: "openclaw" | "existing-session";
+  headless?: boolean;
   attachOnly: boolean;
 };
 

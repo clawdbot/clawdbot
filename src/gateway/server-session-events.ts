@@ -72,6 +72,8 @@ function buildGatewaySessionSnapshot(params: {
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
     status: sessionRow.status,
+    subagentRunState: sessionRow.subagentRunState,
+    hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,
     startedAt: sessionRow.startedAt,
     endedAt: sessionRow.endedAt,
     runtimeMs: sessionRow.runtimeMs,

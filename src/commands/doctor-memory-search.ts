@@ -14,8 +14,8 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/engine-embeddings.js";
 import { checkQmdBinaryAvailability } from "../memory-host-sdk/engine-qmd.js";
+import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/host/embedding-defaults.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
   auditDreamingArtifacts,

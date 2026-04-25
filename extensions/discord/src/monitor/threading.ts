@@ -450,7 +450,7 @@ type MaybeCreateDiscordAutoThreadParams = {
   channelDescription?: string;
   baseText: string;
   combinedBody: string;
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   agentId?: string;
 };
 
@@ -459,7 +459,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
     replyToMode: ReplyToMode;
     agentId: string;
     channel: string;
-    cfg?: OpenClawConfig;
+    cfg: OpenClawConfig;
     threadParentInheritanceEnabled?: boolean;
   },
 ): Promise<DiscordAutoThreadReplyPlan> {

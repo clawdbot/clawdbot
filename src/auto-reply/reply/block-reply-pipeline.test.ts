@@ -78,6 +78,38 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.hasSentPayload({ text: "response text", replyToId: "other-id" })).toBe(true);
   });
 
+  it("tracks media URLs delivered via block replies", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    expect(pipeline.getSentMediaUrls()).toEqual([]);
+
+    pipeline.enqueue({ text: "caption", mediaUrl: "file:///a.ogg" });
+    pipeline.enqueue({ mediaUrls: ["file:///b.ogg", "file:///c.ogg"] });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.getSentMediaUrls()).toEqual([
+      "file:///a.ogg",
+      "file:///b.ogg",
+      "file:///c.ogg",
+    ]);
+  });
+
+  it("does not track media when text-only blocks are delivered", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "hello" });
+    pipeline.enqueue({ text: "world" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.getSentMediaUrls()).toEqual([]);
+  });
+
   it("does not coalesce logical assistant blocks across assistantMessageIndex boundaries", async () => {
     const sent: string[] = [];
     const pipeline = createBlockReplyPipeline({

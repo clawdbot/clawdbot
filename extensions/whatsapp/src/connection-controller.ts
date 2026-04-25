@@ -160,6 +160,7 @@ export async function waitForWhatsAppLoginResult(params: {
   runtime: RuntimeEnv;
   waitForConnection?: typeof waitForWaConnection;
   createSocket?: typeof createWaSocket;
+  onQr?: (qr: string) => void;
   onSocketReplaced?: (sock: WaSocket) => void;
 }): Promise<WhatsAppLoginWaitResult> {
   const wait = params.waitForConnection ?? waitForWaConnection;
@@ -184,6 +185,7 @@ export async function waitForWhatsAppLoginResult(params: {
         try {
           currentSock = await createSocket(false, params.verbose, {
             authDir: params.authDir,
+            onQr: params.onQr,
           });
           params.onSocketReplaced?.(currentSock);
           continue;

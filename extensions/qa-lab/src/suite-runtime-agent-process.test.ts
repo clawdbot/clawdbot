@@ -20,6 +20,8 @@ vi.mock("./suite-runtime-gateway.js", () => ({
 }));
 
 import {
+  findManagedDreamingCronJob,
+  isManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
@@ -219,6 +221,32 @@ describe("qa suite runtime agent process helpers", () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {
+    const legacy = {
+      id: "legacy",
+      name: "Memory Dreaming Promotion",
+      payload: {
+        kind: "systemEvent",
+        text: "__openclaw_memory_core_short_term_promotion_dream__",
+      },
+    };
+    const current = {
+      id: "current",
+      name: "Memory Dreaming Promotion",
+      payload: {
+        kind: "agentTurn",
+        message: "__openclaw_memory_core_short_term_promotion_dream__",
+        lightContext: true,
+      },
+      sessionTarget: "isolated",
+      delivery: { mode: "none" },
+    };
+
+    expect(isManagedDreamingCronJob(legacy)).toBe(true);
+    expect(isManagedDreamingCronJob(current)).toBe(true);
+    expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, current])).toBe(current);
   });
 
   it("waits for an agent run and fails when the run does not finish ok", async () => {

@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
-import { createServer as createHttpServer } from "node:http";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -51,6 +55,37 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  };
+  const abortIfRequestIncomplete = () => {
+    if (!req.complete) {
+      abort();
+    }
+  };
+  const abortIfResponseStillOpen = () => {
+    if (!res.writableEnded) {
+      abort();
+    }
+  };
+  req.once("close", abortIfRequestIncomplete);
+  res.once("close", abortIfResponseStillOpen);
+  if (req.destroyed && !req.complete) {
+    abort();
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      req.off("close", abortIfRequestIncomplete);
+      res.off("close", abortIfResponseStillOpen);
+    },
+  };
+}
+
 export async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
@@ -65,6 +100,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
       return;
     }
 
+    const requestAbort = createRequestAbortSignal(req, res);
     void (async () => {
       try {
         const body = await readMcpHttpBody(req);
@@ -94,6 +130,11 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             message,
             tools: scopedTools.tools,
             toolSchema: scopedTools.toolSchema,
+            hookContext: {
+              agentId: scopedTools.agentId,
+              sessionKey: requestContext.sessionKey,
+            },
+            signal: requestAbort.signal,
           });
           if (response !== null) {
             const toolName =
@@ -131,6 +172,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
         }
+      } finally {
+        requestAbort.cleanup();
       }
     })();
   });

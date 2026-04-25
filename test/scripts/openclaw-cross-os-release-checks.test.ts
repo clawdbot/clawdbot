@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import {
+  agentOutputHasExpectedOkMarker,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
   buildWindowsPathBootstrapScript,
@@ -37,6 +38,27 @@ import {
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
 describe("scripts/openclaw-cross-os-release-checks", () => {
+  it("accepts OK agent output from the captured log when stdout is empty", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-output-"));
+    try {
+      const logPath = join(dir, "agent.log");
+      writeFileSync(
+        logPath,
+        [
+          "2026-04-24T15:00:00.000Z command stdout",
+          JSON.stringify({
+            finalAssistantVisibleText: "OK",
+            payloads: [{ type: "text", text: "OK" }],
+          }),
+        ].join("\n"),
+      );
+
+      expect(agentOutputHasExpectedOkMarker("", { logPath })).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("treats explicit empty-string args as values instead of boolean flags", () => {
     expect(parseArgs(["--ubuntu-runner", "", "--mode", "both"])).toEqual({
       "ubuntu-runner": "",

@@ -7,7 +7,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../../channels/plugins/types.public.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import {
   listSetupDiscoveryChannelPluginCatalogEntries,
@@ -48,11 +48,11 @@ export function listManifestInstalledChannelIds(params: {
   }).config;
   const workspaceDir = resolveWorkspaceDir(resolvedConfig, params.workspaceDir);
   return new Set(
-    loadPluginManifestRegistry({
+    loadInstalledPluginIndex({
       config: resolvedConfig,
       workspaceDir,
       env: params.env ?? process.env,
-    }).plugins.flatMap((plugin) => plugin.channels as ChannelChoice[]),
+    }).plugins.flatMap((plugin) => plugin.contributions.channels as ChannelChoice[]),
   );
 }
 

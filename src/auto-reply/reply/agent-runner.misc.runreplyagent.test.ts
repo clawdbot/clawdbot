@@ -1539,6 +1539,85 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ text: "ok" });
   });
+
+  it("uses the selected CLI runtime for canonical Anthropic models", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+        },
+      },
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      agentRuntimeOverride: "claude-cli",
+    } as SessionEntry;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "webchat",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: { agents: { defaults: { embeddedHarness: { runtime: "claude-cli" } } } },
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      defaultModel: "anthropic/claude-opus-4-7",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "claude-cli" }),
+    );
+    expect(result).toMatchObject({ text: "ok" });
+  });
 });
 
 describe("runReplyAgent messaging tool suppression", () => {

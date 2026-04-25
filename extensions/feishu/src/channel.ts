@@ -81,6 +81,16 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
   return media.trim() ? media : undefined;
 }
 
+function readBooleanParam(params: Record<string, unknown>, keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = params[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
   return (
     isRecord(actionValue) &&
@@ -695,6 +705,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const presentation = normalizeMessagePresentation(ctx.params.presentation);
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
+            const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
             const card = presentation
               ? buildFeishuPresentationCard({ presentation, fallbackText: text })
               : undefined;
@@ -734,6 +745,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 accountId: ctx.accountId ?? undefined,
                 mediaLocalRoots: ctx.mediaLocalRoots,
                 replyToId: replyToMessageId,
+                ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
               });
             } else {
               result = await runtime.sendMessageFeishu({
@@ -1134,6 +1146,20 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       setupWizard: feishuSetupWizard,
       messaging: {
         normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
+        resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
+          const directId = parseFeishuDirectConversationId(conversationId);
+          if (directId) {
+            return { to: `user:${directId}` };
+          }
+          const parsed = parseFeishuConversationId({ conversationId, parentConversationId });
+          if (parsed?.topicId) {
+            return {
+              to: `chat:${parentConversationId?.trim() || parsed.chatId}`,
+              threadId: parsed.topicId,
+            };
+          }
+          return { to: `chat:${parsed?.chatId ?? conversationId.trim()}` };
+        },
         resolveSessionConversation: ({ kind, rawId }) =>
           resolveFeishuSessionConversation({ kind, rawId }),
         resolveOutboundSessionRoute: (params) => resolveFeishuOutboundSessionRoute(params),

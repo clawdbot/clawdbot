@@ -73,6 +73,17 @@ const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   `If you want a direct API billing path instead, use ${formatCliCommand("openclaw models auth login --provider anthropic --method api-key --set-default")} or ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")}.`,
 ] as const;
 
+const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
+  ref.startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)
+    ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
+    : ref,
+);
+const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = CLAUDE_CLI_DEFAULT_MODEL_REF.startsWith(
+  `${CLAUDE_CLI_BACKEND_ID}/`,
+)
+  ? `anthropic/${CLAUDE_CLI_DEFAULT_MODEL_REF.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
+  : CLAUDE_CLI_DEFAULT_MODEL_REF;
+
 function normalizeAnthropicSetupTokenInput(value: string): string {
   return value.replaceAll(/\s+/g, "").trim();
 }
@@ -492,7 +503,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
       {
         id: "cli",
         label: "Claude CLI",
-        hint: "Reuse a local Claude CLI login and switch model selection to claude-cli/*",
+        hint: "Reuse a local Claude CLI login and run Anthropic models through the Claude CLI runtime",
         kind: "custom",
         wizard: {
           choiceId: "anthropic-cli",
@@ -503,8 +514,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
           groupLabel: "Anthropic",
           groupHint: "Claude CLI + API key",
           modelAllowlist: {
-            allowedKeys: [...CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS],
-            initialSelections: [CLAUDE_CLI_DEFAULT_MODEL_REF],
+            allowedKeys: [...CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS],
+            initialSelections: [CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF],
             message: "Claude CLI models",
           },
         },

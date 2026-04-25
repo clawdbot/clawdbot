@@ -11,7 +11,10 @@ const videoGenerationTaskStatusMocks = vi.hoisted(() => ({
 vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatusMocks);
 vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
 
-import { resolveAttemptPrependSystemContext } from "./attempt.prompt-helpers.js";
+import {
+  hasPromptSubmissionContent,
+  resolveAttemptPrependSystemContext,
+} from "./attempt.prompt-helpers.js";
 
 describe("resolveAttemptPrependSystemContext", () => {
   it("prepends active video task guidance ahead of hook system context", () => {
@@ -60,5 +63,44 @@ describe("resolveAttemptPrependSystemContext", () => {
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
     ).not.toHaveBeenCalled();
     expect(result).toBe("Hook system context");
+  });
+});
+
+describe("hasPromptSubmissionContent", () => {
+  it("rejects empty prompt submissions without history or images", () => {
+    expect(
+      hasPromptSubmissionContent({
+        prompt: "   ",
+        messages: [],
+        imageCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows blank prompt submissions when replay history has content", () => {
+    expect(
+      hasPromptSubmissionContent({
+        prompt: "   ",
+        messages: [{ role: "user", content: "previous turn", timestamp: 1 }],
+        imageCount: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("allows text or image prompt submissions", () => {
+    expect(
+      hasPromptSubmissionContent({
+        prompt: "hello",
+        messages: [],
+        imageCount: 0,
+      }),
+    ).toBe(true);
+    expect(
+      hasPromptSubmissionContent({
+        prompt: "   ",
+        messages: [],
+        imageCount: 1,
+      }),
+    ).toBe(true);
   });
 });

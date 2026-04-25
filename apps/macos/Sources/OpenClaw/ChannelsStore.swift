@@ -290,6 +290,16 @@ final class ChannelsStore {
         return self.snapshot?.channelOrder ?? []
     }
 
+    func applyWhatsAppLoginWaitResult(_ result: WhatsAppLoginWaitResult) {
+        self.whatsappLoginMessage = result.message
+        self.whatsappLoginConnected = result.connected
+        if let qrDataUrl = result.qrDataUrl {
+            self.whatsappLoginQrDataUrl = qrDataUrl
+        } else if result.connected {
+            self.whatsappLoginQrDataUrl = nil
+        }
+    }
+
     init(isPreview: Bool = ProcessInfo.processInfo.isPreview) {
         self.isPreview = isPreview
     }

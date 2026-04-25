@@ -230,9 +230,10 @@ export type GatewayServerOptions = {
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   /**
-   * Test-only: wait for post-listen sidecars such as plugin services before returning.
+   * Let post-listen sidecars (channels, plugin services) finish in the background.
+   * Defaults to false so gateway startup waits until sidecars are ready.
    */
-  awaitStartupSidecars?: boolean;
+  deferStartupSidecars?: boolean;
   /**
    * Optional startup timestamp used for concise readiness logging.
    */
@@ -696,6 +697,9 @@ export async function startGatewayServer(
       sharedGatewaySessionGenerationState,
       resolveSharedGatewaySessionGenerationForConfig,
       clients,
+      startChannel,
+      stopChannel,
+      logChannels,
     });
 
     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
@@ -807,6 +811,7 @@ export async function startGatewayServer(
     });
     await startListening();
     startupTrace.mark("http.bound");
+    const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
     ({
       stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -842,15 +847,16 @@ export async function startGatewayServer(
           startupSidecarsReady = true;
         },
         startupTrace,
-        awaitSidecars: opts.awaitStartupSidecars,
+        deferSidecars: opts.deferStartupSidecars === true,
       }),
     ));
     startupTrace.mark("ready");
 
-    // HTTP is live before sidecars finish; /readyz stays red until the startup sidecars settle.
     const activated = activateGatewayScheduledServices({
       minimalTestGateway,
       cfgAtStart,
+      deps,
+      sessionDeliveryRecoveryMaxEnqueuedAt,
       cron: runtimeState.cronState.cron,
       logCron,
       log,

@@ -1,20 +1,24 @@
+import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  logInboundDrop,
+  resolveInboundSessionEnvelopeContext,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-gating";
+import {
+  filterSupplementalContextItems,
+  resolveChannelContextVisibilityMode,
+  shouldIncludeSupplementalContext,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
+import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
+import { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
-  dispatchReplyFromConfigWithSettledDispatcher,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  logInboundDrop,
-  evaluateSenderGroupAccessForPolicy,
-  filterSupplementalContextItems,
   recordPendingHistoryEntryIfEnabled,
-  resolveChannelContextVisibilityMode,
-  resolveDualTextControlCommandGate,
-  resolveInboundSessionEnvelopeContext,
-  shouldIncludeSupplementalContext,
-  formatAllowlistMatchMeta,
   type HistoryEntry,
-} from "../../runtime-api.js";
+} from "openclaw/plugin-sdk/reply-history";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,

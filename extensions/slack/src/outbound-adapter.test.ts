@@ -115,4 +115,62 @@ describe("slackOutbound", () => {
     );
     expect(result).toEqual({ channel: "slack", messageId: "m-blocks" });
   });
+
+  it("falls back to threadId when payload replyToId is not a Slack thread timestamp", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      replyToId: "msg-internal-1",
+      threadId: "1712345678.123456",
+      payload: {
+        text: "fallback text",
+        channelData: {
+          slack: {
+            blocks: [{ type: "divider" }],
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "fallback text",
+      expect.objectContaining({
+        threadTs: "1712345678.123456",
+      }),
+    );
+  });
+
+  it("does not thread payloads without a valid Slack thread timestamp", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      replyToId: "msg-internal-1",
+      threadId: "thread-root",
+      payload: {
+        text: "fallback text",
+        channelData: {
+          slack: {
+            blocks: [{ type: "divider" }],
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "fallback text",
+      expect.objectContaining({
+        threadTs: undefined,
+      }),
+    );
+  });
 });

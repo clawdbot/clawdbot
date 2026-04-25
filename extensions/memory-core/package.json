@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "chokidar": "^5.0.0",
-    "typebox": "1.1.28"
+    "typebox": "1.1.31"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

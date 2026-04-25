@@ -105,7 +105,7 @@ struct SystemRunSettingsView: View {
                     .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 8) {
-                    TextField("Add allowlist path pattern (case-insensitive globs)", text: self.$newPattern)
+                    TextField("Add command name or path glob", text: self.$newPattern)
                         .textFieldStyle(.roundedBorder)
                     Button("Add") {
                         if self.model.addEntry(self.newPattern) == nil {
@@ -113,10 +113,10 @@ struct SystemRunSettingsView: View {
                         }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(!self.model.isPathPattern(self.newPattern))
+                    .disabled(!self.model.isValidPattern(self.newPattern))
                 }
 
-                Text("Path patterns only. Basename entries like \"echo\" are ignored.")
+                Text("Bare names match PATH-resolved commands. Use a path glob for a specific binary.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if let validationMessage = self.model.allowlistValidationMessage {
@@ -424,8 +424,8 @@ final class ExecApprovalsSettingsModel {
         self.entries.first(where: { $0.id == id })
     }
 
-    func isPathPattern(_ pattern: String) -> Bool {
-        ExecApprovalHelpers.isPathPattern(pattern)
+    func isValidPattern(_ pattern: String) -> Bool {
+        ExecApprovalHelpers.isValidAllowlistPattern(pattern)
     }
 
     func refreshSkillBins(force: Bool = false) async {

@@ -7,6 +7,7 @@ import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -53,6 +54,12 @@ export type AgentCliOpts = {
   local?: boolean;
 };
 
+function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
+  if (opts.json === true) {
+    routeLogsToStderr();
+  }
+}
+
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   const raw =
     opts.timeout !== undefined
@@ -85,6 +92,7 @@ function formatPayloadForLog(payload: {
 }
 
 export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
+  protectJsonStdout(opts);
   const body = (opts.message ?? "").trim();
   if (!body) {
     throw new Error("Message (--message) is required");
@@ -144,6 +152,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           bestEffortDeliver: opts.bestEffortDeliver,
           timeout: timeoutSeconds,
           lane: opts.lane,
+          cleanupBundleMcpOnRunEnd: true,
           extraSystemPrompt: opts.extraSystemPrompt,
           idempotencyKey,
         },
@@ -178,11 +187,12 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 }
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
+  protectJsonStdout(opts);
   const localOpts = {
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
-    cleanupBundleMcpOnRunEnd: opts.local === true,
+    cleanupBundleMcpOnRunEnd: true,
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

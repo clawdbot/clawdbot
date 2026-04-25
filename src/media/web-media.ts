@@ -19,6 +19,7 @@ import {
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
+import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 import {
   detectMime,
   extensionForMime,
@@ -27,7 +28,6 @@ import {
   mimeTypeFromFilePath,
   normalizeMimeType,
 } from "./mime.js";
-import { resolveMediaBufferPath } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -58,42 +58,16 @@ type WebMediaOptions = {
 };
 
 async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | null> {
-  if (!mediaUrl.startsWith("media://")) {
+  if (!/^media:\/\//i.test(mediaUrl)) {
     return null;
   }
-  let parsed: URL;
   try {
-    parsed = new URL(mediaUrl);
+    return (await resolveInboundMediaReference(mediaUrl))?.physicalPath ?? null;
   } catch (err) {
-    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`, {
-      cause: err,
-    });
-  }
-  if (parsed.hostname !== "inbound") {
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
-      `Unsupported media URI location: ${parsed.hostname || "(missing)"}`,
-    );
-  }
-  let id: string;
-  try {
-    id = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-  } catch (err) {
-    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`, {
-      cause: err,
-    });
-  }
-  if (!id || id.includes("/")) {
-    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`);
-  }
-  try {
-    return await resolveMediaBufferPath(id, "inbound");
-  } catch (err) {
-    throw new LocalMediaAccessError(
-      "invalid-path",
-      err instanceof Error ? err.message : `Invalid media URI: ${mediaUrl}`,
-      { cause: err },
-    );
+    if (err instanceof MediaReferenceError) {
+      throw new LocalMediaAccessError(err.code, err.message, { cause: err });
+    }
+    throw err;
   }
 }
 

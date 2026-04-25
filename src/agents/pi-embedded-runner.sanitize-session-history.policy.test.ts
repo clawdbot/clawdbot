@@ -10,6 +10,7 @@ import {
   sanitizeSnapshotChangedOpenAIReasoning,
   sanitizeWithOpenAIResponses,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock(
   "./pi-embedded-helpers.js",
@@ -73,6 +74,12 @@ describe("sanitizeSessionHistory e2e smoke", () => {
       sanitizeSessionHistory,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        usage: makeZeroUsageSnapshot(),
+      },
+    ]);
   });
 });

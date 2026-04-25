@@ -59,6 +59,7 @@ void assertAllPluginPromptMutationResultFieldsListed;
 // before_agent_start hook (legacy compatibility: combines both phases)
 export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
+  runId?: string;
   /** Optional because legacy hook can run in pre-session phase. */
   messages?: unknown[];
 };

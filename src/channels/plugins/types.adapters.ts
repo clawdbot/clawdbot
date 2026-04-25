@@ -18,6 +18,7 @@ import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 export type {
   ChannelOutboundAdapter,
+  ChannelOutboundChunkContext,
   ChannelOutboundContext,
   ChannelOutboundFormattedContext,
   ChannelOutboundPayloadContext,
@@ -324,6 +325,7 @@ export type ChannelLoginWithQrStartResult = {
 export type ChannelLoginWithQrWaitResult = {
   connected: boolean;
   message: string;
+  qrDataUrl?: string;
 };
 
 export type ChannelLogoutContext<ResolvedAccount = unknown> = {
@@ -348,6 +350,7 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   loginWithQrWait?: (params: {
     accountId?: string;
     timeoutMs?: number;
+    currentQrDataUrl?: string;
   }) => Promise<ChannelLoginWithQrWaitResult>;
   logoutAccount?: (ctx: ChannelLogoutContext<ResolvedAccount>) => Promise<ChannelLogoutResult>;
 };

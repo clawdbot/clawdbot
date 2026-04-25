@@ -38,6 +38,11 @@ export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
 const WORKSPACE_STATE_DIRNAME = ".openclaw";
 const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
+const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+] as const;
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
@@ -205,6 +210,111 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+async function fileContentDiffersFromTemplate(
+  filePath: string,
+  template: string,
+): Promise<boolean> {
+  try {
+    return (await fs.readFile(filePath, "utf-8")) !== template;
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "ENOENT") {
+      throw err;
+    }
+    return false;
+  }
+}
+
+async function hasWorkspaceUserContentEvidence(
+  dir: string,
+  opts?: { includeGit?: boolean },
+): Promise<boolean> {
+  const indicators = [path.join(dir, "memory")];
+  if (opts?.includeGit) {
+    indicators.push(path.join(dir, ".git"));
+  }
+  for (const indicator of indicators) {
+    try {
+      await fs.access(indicator);
+      return true;
+    } catch {
+      // continue
+    }
+  }
+  return await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME);
+}
+
+async function workspaceProfileLooksConfigured(params: {
+  dir: string;
+  includeGitEvidence?: boolean;
+}): Promise<boolean> {
+  const profileFileDiffs = await Promise.all(
+    WORKSPACE_ONBOARDING_PROFILE_FILENAMES.map(async (fileName) =>
+      fileContentDiffersFromTemplate(path.join(params.dir, fileName), await loadTemplate(fileName)),
+    ),
+  );
+  return (
+    profileFileDiffs.some(Boolean) ||
+    (await hasWorkspaceUserContentEvidence(params.dir, {
+      includeGit: params.includeGitEvidence,
+    }))
+  );
+}
+
+async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
+  return await workspaceProfileLooksConfigured(params);
+}
+
+type WorkspaceBootstrapCompletionReconcileResult = {
+  repaired: boolean;
+  bootstrapExists: boolean;
+  state: WorkspaceSetupState;
+};
+
+async function reconcileWorkspaceBootstrapCompletionState(params: {
+  dir: string;
+  bootstrapPath: string;
+  statePath: string;
+  state: WorkspaceSetupState;
+  bootstrapExists?: boolean;
+}): Promise<WorkspaceBootstrapCompletionReconcileResult> {
+  const bootstrapExists = params.bootstrapExists ?? (await fileExists(params.bootstrapPath));
+  if (
+    typeof params.state.setupCompletedAt === "string" &&
+    params.state.setupCompletedAt.trim().length > 0
+  ) {
+    return { repaired: false, bootstrapExists, state: params.state };
+  }
+
+  if (params.state.bootstrapSeededAt && !bootstrapExists) {
+    const completedState: WorkspaceSetupState = {
+      ...params.state,
+      setupCompletedAt: new Date().toISOString(),
+    };
+    await writeWorkspaceSetupState(params.statePath, completedState);
+    return { repaired: true, bootstrapExists: false, state: completedState };
+  }
+
+  if (
+    !bootstrapExists ||
+    !(await workspaceHasBootstrapCompletionEvidence({
+      dir: params.dir,
+    }))
+  ) {
+    return { repaired: false, bootstrapExists, state: params.state };
+  }
+
+  const now = new Date().toISOString();
+  const repairedState: WorkspaceSetupState = {
+    ...params.state,
+    bootstrapSeededAt: params.state.bootstrapSeededAt ?? now,
+    setupCompletedAt: now,
+  };
+  await fs.rm(params.bootstrapPath, { force: true });
+  await writeWorkspaceSetupState(params.statePath, repairedState);
+  return { repaired: true, bootstrapExists: false, state: repairedState };
+}
+
 function resolveWorkspaceStatePath(dir: string): string {
   return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
 }
@@ -230,11 +340,15 @@ function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
   }
 }
 
-async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetupState> {
+async function readWorkspaceSetupState(
+  statePath: string,
+  opts?: { persistLegacyMigration?: boolean },
+): Promise<WorkspaceSetupState> {
   try {
     const raw = await fs.readFile(statePath, "utf-8");
     const parsed = parseWorkspaceSetupState(raw);
     if (
+      opts?.persistLegacyMigration &&
       parsed &&
       raw.includes('"onboardingCompletedAt"') &&
       !raw.includes('"setupCompletedAt"') &&
@@ -268,16 +382,38 @@ export async function resolveWorkspaceBootstrapStatus(
   dir: string,
 ): Promise<"pending" | "complete"> {
   const resolvedDir = resolveUserPath(dir);
-  const state = await readWorkspaceSetupStateForDir(resolvedDir);
+  const statePath = resolveWorkspaceStatePath(resolvedDir);
+  const state = await readWorkspaceSetupState(statePath);
   if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
     return "complete";
   }
-  const bootstrapExists = await fileExists(path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME));
-  return bootstrapExists ? "pending" : "complete";
+  const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
+  const bootstrapExists = await fileExists(bootstrapPath);
+  if (!bootstrapExists) {
+    return "complete";
+  }
+  return "pending";
 }
 
 export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
   return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
+}
+
+export async function reconcileWorkspaceBootstrapCompletion(
+  dir: string,
+): Promise<WorkspaceBootstrapCompletionReconcileResult> {
+  const resolvedDir = resolveUserPath(dir);
+  const statePath = resolveWorkspaceStatePath(resolvedDir);
+  const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
+  const state = await readWorkspaceSetupState(statePath, {
+    persistLegacyMigration: true,
+  });
+  return await reconcileWorkspaceBootstrapCompletionState({
+    dir: resolvedDir,
+    bootstrapPath,
+    statePath,
+    state,
+  });
 }
 
 async function writeWorkspaceSetupState(
@@ -401,7 +537,9 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
 
-  let state = await readWorkspaceSetupState(statePath);
+  let state = await readWorkspaceSetupState(statePath, {
+    persistLegacyMigration: true,
+  });
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
     state = { ...state, ...next };
@@ -414,33 +552,31 @@ export async function ensureAgentWorkspace(params?: {
     markState({ bootstrapSeededAt: nowIso() });
   }
 
-  if (!state.setupCompletedAt && state.bootstrapSeededAt && !bootstrapExists) {
-    markState({ setupCompletedAt: nowIso() });
+  if (!state.setupCompletedAt) {
+    const repair = await reconcileWorkspaceBootstrapCompletionState({
+      dir,
+      bootstrapPath,
+      statePath,
+      state,
+      bootstrapExists,
+    });
+    if (repair.repaired) {
+      state = repair.state;
+      stateDirty = false;
+      bootstrapExists = repair.bootstrapExists;
+    }
   }
 
   if (!state.bootstrapSeededAt && !state.setupCompletedAt && !bootstrapExists) {
     // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
     // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
     // already-configured workspaces.
-    const [identityContent, userContent] = await Promise.all([
-      fs.readFile(identityPath, "utf-8"),
-      fs.readFile(userPath, "utf-8"),
-    ]);
-    const hasUserContent = await (async () => {
-      const indicators = [path.join(dir, "memory"), path.join(dir, ".git")];
-      for (const indicator of indicators) {
-        try {
-          await fs.access(indicator);
-          return true;
-        } catch {
-          // continue
-        }
-      }
-      return await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME);
-    })();
-    const legacySetupCompleted =
-      identityContent !== identityTemplate || userContent !== userTemplate || hasUserContent;
-    if (legacySetupCompleted) {
+    if (
+      await workspaceProfileLooksConfigured({
+        dir,
+        includeGitEvidence: true,
+      })
+    ) {
       markState({ setupCompletedAt: nowIso() });
     } else {
       const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);

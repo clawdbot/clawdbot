@@ -108,7 +108,9 @@ describe("docker build cache layout", () => {
     expectPatternBeforeInstall(
       /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
     );
-    expectPatternBeforeInstall(/^COPY(?:\s+--chown=\S+)?\s+extensions \.\/extensions$/m);
+    expectPatternBeforeInstall(
+      /^RUN --mount=type=bind,source=extensions,target=\/tmp\/extensions,readonly\s+\\$/m,
+    );
     expectPatternBeforeInstall(/^COPY(?:\s+--chown=\S+)?\s+patches \.\/patches$/m);
     expectPatternBeforeInstall(
       /^COPY(?:\s+--chown=\S+)?\s+scripts\/postinstall-bundled-plugins\.mjs scripts\/preinstall-package-manager-warning\.mjs scripts\/npm-runner\.mjs scripts\/windows-cmd-helpers\.mjs \.\/scripts\/$/m,
@@ -120,6 +122,9 @@ describe("docker build cache layout", () => {
     expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+test \.\/test$/m);
     expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+scripts \.\/scripts$/m);
     expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+ui \.\/ui$/m);
+    expectPatternAfterInstall(
+      /^COPY(?:\s+--link)?(?:\s+--chown=\S+)?\s+extensions \.\/extensions$/m,
+    );
   });
 
   it("copies manifests before install in the qr-import image", async () => {

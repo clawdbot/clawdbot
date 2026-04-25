@@ -1,6 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient } from "./client.js";
 import {
@@ -53,6 +52,7 @@ type ResolveDriveCommentEventParams = {
   cfg: ClawdbotConfig;
   accountId: string;
   event: FeishuDriveCommentNoticeEvent;
+  account?: ResolvedFeishuAccount;
   botOpenId?: string;
   createClient?: (account: ResolvedFeishuAccount) => FeishuRequestClient;
   verificationTimeoutMs?: number;
@@ -1224,8 +1224,9 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     cfg,
     accountId,
     event,
+    account,
     botOpenId,
-    createClient = (account) => createFeishuClient(account) as FeishuRequestClient,
+    createClient,
     verificationTimeoutMs = FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
     logger,
     waitMs = delayMs,
@@ -1262,8 +1263,11 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     return null;
   }
 
-  const account = resolveFeishuAccount({ cfg, accountId });
-  const client = createClient(account);
+  const client = createClient
+    ? createClient(account ?? ({ accountId } as ResolvedFeishuAccount))
+    : (createFeishuClient(
+        (await import("./accounts.js")).resolveFeishuAccount({ cfg, accountId }),
+      ) as FeishuRequestClient);
   const context = await fetchDriveCommentContext({
     client,
     fileToken,

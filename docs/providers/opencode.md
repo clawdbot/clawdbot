@@ -66,7 +66,7 @@ as one OpenCode setup.
       </Step>
       <Step title="Set a Go model as the default">
         ```bash
-        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.5"
+        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.6"
         ```
       </Step>
       <Step title="Verify models are available">
@@ -102,7 +102,7 @@ as one OpenCode setup.
 | Property         | Value                                                                    |
 | ---------------- | ------------------------------------------------------------------------ |
 | Runtime provider | `opencode-go`                                                            |
-| Example models   | `opencode-go/kimi-k2.5`, `opencode-go/glm-5`, `opencode-go/minimax-m2.5` |
+| Example models   | `opencode-go/kimi-k2.6`, `opencode-go/glm-5`, `opencode-go/minimax-m2.5` |
 
 ## Advanced configuration
 

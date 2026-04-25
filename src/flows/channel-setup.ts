@@ -163,9 +163,14 @@ export async function setupChannels(
   const loadScopedChannelPlugin = async (
     channel: ChannelChoice,
     pluginId?: string,
+    setup?: {
+      installRuntimeDeps?: boolean;
+      forceReload?: boolean;
+      forceSetupOnlyChannelPlugins?: boolean;
+    },
   ): Promise<ChannelSetupPlugin | undefined> => {
     const existing = getVisibleChannelPlugin(channel);
-    if (existing) {
+    if (existing && setup?.forceReload !== true) {
       return existing;
     }
     const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
@@ -174,7 +179,8 @@ export async function setupChannels(
       channel,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
-      installRuntimeDeps: false,
+      installRuntimeDeps: setup?.installRuntimeDeps ?? false,
+      forceSetupOnlyChannelPlugins: setup?.forceSetupOnlyChannelPlugins,
     });
     const plugin =
       snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin ??
@@ -401,6 +407,13 @@ export async function setupChannels(
   };
 
   const configureChannel = async (channel: ChannelChoice) => {
+    if (scopedPluginsById.has(channel)) {
+      await loadScopedChannelPlugin(channel, undefined, {
+        forceReload: true,
+        forceSetupOnlyChannelPlugins: true,
+        installRuntimeDeps: true,
+      });
+    }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
       await prompter.note(`${channel} does not support guided setup yet.`, "Channel setup");

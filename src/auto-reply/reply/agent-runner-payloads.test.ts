@@ -201,6 +201,77 @@ describe("buildReplyPayloads media filter integration", () => {
     await expectSameTargetRepliesSuppressed({ provider: "lark", to: "ou_abc123" });
   });
 
+  it("strips media already sent by the block pipeline after normalizing both paths", async () => {
+    const normalizeMediaPaths = async (payload: { mediaUrl?: string; mediaUrls?: string[] }) => {
+      const rewrite = (value?: string) =>
+        value === "file:///tmp/voice.ogg" ? "file:///tmp/outbound/voice.ogg" : value;
+      return {
+        ...payload,
+        mediaUrl: rewrite(payload.mediaUrl),
+        mediaUrls: payload.mediaUrls?.map((value) => rewrite(value) ?? value),
+      };
+    };
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => false,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => ["file:///tmp/voice.ogg"],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      normalizeMediaPaths,
+      payloads: [{ text: "caption", mediaUrl: "file:///tmp/voice.ogg" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "caption",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+  });
+
+  it("suppresses already-sent text plus media before stripping block-sent media", async () => {
+    const sentKey = JSON.stringify({
+      text: "caption",
+      mediaList: ["file:///tmp/outbound/voice.ogg"],
+    });
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => false,
+      isAborted: () => false,
+      hasSentPayload: (payload) =>
+        JSON.stringify({
+          text: (payload.text ?? "").trim(),
+          mediaList: [
+            ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+            ...(payload.mediaUrls ?? []),
+          ],
+        }) === sentKey,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => ["file:///tmp/outbound/voice.ogg"],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      normalizeMediaPaths: async (payload) => payload,
+      payloads: [{ text: "caption", mediaUrl: "file:///tmp/outbound/voice.ogg" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("drops all final payloads when block pipeline streamed successfully", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
@@ -210,6 +281,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      getSentMediaUrls: () => [],
     };
     // shouldDropFinalPayloads short-circuits to [] when the pipeline streamed
     // without aborting, so hasSentPayload is never reached.
@@ -233,6 +305,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      getSentMediaUrls: () => [],
     };
 
     const { replyPayloads } = await buildReplyPayloads({

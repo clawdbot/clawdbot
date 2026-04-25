@@ -82,6 +82,11 @@ const voiceCallConfigSchema = {
     },
     "realtime.streamPath": { label: "Realtime Stream Path", advanced: true },
     "realtime.instructions": { label: "Realtime Instructions", advanced: true },
+    "realtime.toolPolicy": {
+      label: "Realtime Tool Policy",
+      help: "Controls the shared openclaw_agent_consult tool.",
+      advanced: true,
+    },
     "realtime.providers": { label: "Realtime Provider Config", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",
@@ -95,6 +100,11 @@ const voiceCallConfigSchema = {
       advanced: true,
     },
     store: { label: "Call Log Store Path", advanced: true },
+    agentId: {
+      label: "Response Agent ID",
+      help: 'Agent workspace used for voice response generation. Defaults to "main".',
+      advanced: true,
+    },
     responseModel: {
       label: "Response Model",
       help: "Optional override. Falls back to the runtime default model when unset.",
@@ -149,6 +159,24 @@ function asParamRecord(params: unknown): Record<string, unknown> {
     : {};
 }
 
+const VOICE_CALL_RUNTIME_KEY = Symbol.for("openclaw.voice-call.runtime");
+const VOICE_CALL_RUNTIME_PROMISE_KEY = Symbol.for("openclaw.voice-call.runtimePromise");
+const VOICE_CALL_RUNTIME_STOP_PROMISE_KEY = Symbol.for("openclaw.voice-call.runtimeStopPromise");
+
+type VoiceCallRuntimeGlobalState = typeof globalThis & {
+  [VOICE_CALL_RUNTIME_KEY]?: VoiceCallRuntime | null;
+  [VOICE_CALL_RUNTIME_PROMISE_KEY]?: Promise<VoiceCallRuntime> | null;
+  [VOICE_CALL_RUNTIME_STOP_PROMISE_KEY]?: Promise<void> | null;
+};
+
+function getVoiceCallRuntimeGlobalState(): VoiceCallRuntimeGlobalState {
+  const state = globalThis as VoiceCallRuntimeGlobalState;
+  state[VOICE_CALL_RUNTIME_KEY] ??= null;
+  state[VOICE_CALL_RUNTIME_PROMISE_KEY] ??= null;
+  state[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY] ??= null;
+  return state;
+}
+
 export default definePluginEntry({
   id: "voice-call",
   name: "Voice Call",
@@ -168,39 +196,60 @@ export default definePluginEntry({
       }
     }
 
-    let runtimePromise: Promise<VoiceCallRuntime> | null = null;
-    let runtime: VoiceCallRuntime | null = null;
+    const runtimeState = getVoiceCallRuntimeGlobalState();
 
-    const ensureRuntime = async () => {
+    const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
       if (!config.enabled) {
         throw new Error("Voice call disabled in plugin config");
       }
       if (!validation.valid) {
         throw new Error(validation.errors.join("; "));
       }
-      if (runtime) {
-        return runtime;
+
+      while (true) {
+        if (runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY]) {
+          await runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY];
+          continue;
+        }
+
+        const runtime = runtimeState[VOICE_CALL_RUNTIME_KEY];
+        if (runtime) {
+          return runtime;
+        }
+
+        let runtimePromise = runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY];
+        if (!runtimePromise) {
+          runtimePromise = createVoiceCallRuntime({
+            config,
+            coreConfig: api.config as CoreConfig,
+            fullConfig: api.config,
+            agentRuntime: api.runtime.agent,
+            ttsRuntime: api.runtime.tts,
+            logger: api.logger,
+          });
+          runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] = runtimePromise;
+        }
+
+        try {
+          const createdRuntime = await runtimePromise;
+          if (runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY]) {
+            continue;
+          }
+          if (runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] !== runtimePromise) {
+            continue;
+          }
+          runtimeState[VOICE_CALL_RUNTIME_KEY] = createdRuntime;
+          return createdRuntime;
+        } catch (err) {
+          if (runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] === runtimePromise) {
+            // Reset shared state so the next call can retry instead of caching
+            // a rejected promise across plugin contexts. See: #32387, #58115.
+            runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] = null;
+            runtimeState[VOICE_CALL_RUNTIME_KEY] = null;
+          }
+          throw err;
+        }
       }
-      if (!runtimePromise) {
-        runtimePromise = createVoiceCallRuntime({
-          config,
-          coreConfig: api.config as CoreConfig,
-          fullConfig: api.config,
-          agentRuntime: api.runtime.agent,
-          ttsRuntime: api.runtime.tts,
-          logger: api.logger,
-        });
-      }
-      try {
-        runtime = await runtimePromise;
-      } catch (err) {
-        // Reset so the next call can retry instead of caching the
-        // rejected promise forever (which also leaves the port orphaned
-        // if the server started before the failure).  See: #32387
-        runtimePromise = null;
-        throw err;
-      }
-      return runtime;
     };
 
     const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
@@ -569,15 +618,28 @@ export default definePluginEntry({
         }
       },
       stop: async () => {
-        if (!runtimePromise) {
+        if (runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY]) {
+          await runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY];
           return;
         }
-        try {
-          const rt = await runtimePromise;
+        const runtime = runtimeState[VOICE_CALL_RUNTIME_KEY];
+        const runtimePromise = runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY];
+        if (!runtime && !runtimePromise) {
+          return;
+        }
+        runtimeState[VOICE_CALL_RUNTIME_KEY] = null;
+        runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] = null;
+        const stopPromise = (async () => {
+          const rt = runtime ?? (await runtimePromise!);
           await rt.stop();
+        })();
+        runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY] = stopPromise;
+        try {
+          await stopPromise;
         } finally {
-          runtimePromise = null;
-          runtime = null;
+          if (runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY] === stopPromise) {
+            runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY] = null;
+          }
         }
       },
     });

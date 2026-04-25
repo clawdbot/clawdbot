@@ -110,6 +110,49 @@ async function withExecDryRunConfigHarness(
 }
 
 describe("config cli integration", () => {
+  it("accepts plugin hook conversation-access policy via config set", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-plugin-hooks-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
+    try {
+      fs.writeFileSync(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { port: 18789 },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      process.env.OPENCLAW_TEST_FAST = "1";
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+
+      const runtime = createTestRuntime();
+      await runConfigSet({
+        path: "plugins.entries.openclaw-mem0.hooks.allowConversationAccess",
+        value: "true",
+        cliOptions: {},
+        runtime: runtime.runtime,
+      });
+
+      expect(runtime.errors).toEqual([]);
+      const afterWrite = JSON5.parse(fs.readFileSync(configPath, "utf8"));
+      expect(afterWrite.plugins?.entries?.["openclaw-mem0"]?.hooks).toEqual({
+        allowConversationAccess: true,
+      });
+    } finally {
+      envSnapshot.restore();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("supports batch-file dry-run and then writes real config changes", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-int-"));
     const configPath = path.join(tempDir, "openclaw.json");

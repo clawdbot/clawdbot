@@ -168,6 +168,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
         mediaUrl: result.audioPath,
         audioAsVoice: result.voiceCompatible === true,
         trustedLocalMedia: true,
+        spokenText: args,
       };
       return { shouldContinue: false, reply: payload };
     }

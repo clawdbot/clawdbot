@@ -49,6 +49,7 @@ function createFacadeHarness(params?: {
     client: {
       getRoom: params?.client?.getRoom ?? (() => null),
       getCrypto: params?.client?.getCrypto ?? (() => undefined),
+      getUserId: params?.client?.getUserId ?? (() => "@bot:example.org"),
     },
     verificationManager: createVerificationManagerMock(params?.verificationManager),
     recoveryKeyStore: createRecoveryKeyStoreMock(params?.recoveryKeySummary ?? null),
@@ -193,5 +194,67 @@ describe("createMatrixCryptoFacade", () => {
     );
     expect(trackVerificationRequest).toHaveBeenCalledWith(request);
     expect(summary?.transactionId).toBe("txn-dm-in-progress");
+  });
+
+  it("rehydrates in-progress to-device verification requests before listing", async () => {
+    const request = {
+      transactionId: "txn-self-in-progress",
+      otherUserId: "@bot:example.org",
+      initiatedByMe: true,
+      isSelfVerification: true,
+      phase: 2,
+      pending: true,
+      accepting: false,
+      declining: false,
+      methods: ["m.sas.v1"],
+      accept: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      startVerification: vi.fn(),
+      scanQRCode: vi.fn(),
+      generateQRCode: vi.fn(),
+      on: vi.fn(),
+      verifier: undefined,
+    };
+    const tracked = {
+      id: "verification-1",
+      transactionId: "txn-self-in-progress",
+      otherUserId: "@bot:example.org",
+      isSelfVerification: true,
+      initiatedByMe: true,
+      phase: 2,
+      phaseName: "ready",
+      pending: true,
+      methods: ["m.sas.v1"],
+      canAccept: false,
+      hasSas: false,
+      hasReciprocateQr: false,
+      completed: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const trackVerificationRequest = vi.fn(() => tracked);
+    const listVerifications = vi.fn(() => [tracked]);
+    const crypto = {
+      getVerificationRequestsToDeviceInProgress: vi.fn(() => [request]),
+      requestOwnUserVerification: vi.fn(async () => null),
+    };
+    const { facade } = createFacadeHarness({
+      client: {
+        getCrypto: () => crypto,
+        getUserId: () => "@bot:example.org",
+      },
+      verificationManager: {
+        listVerifications,
+        trackVerificationRequest,
+      },
+    });
+
+    const summaries = await facade.listVerifications();
+
+    expect(crypto.getVerificationRequestsToDeviceInProgress).toHaveBeenCalledWith(
+      "@bot:example.org",
+    );
+    expect(trackVerificationRequest).toHaveBeenCalledWith(request);
+    expect(summaries).toEqual([tracked]);
   });
 });

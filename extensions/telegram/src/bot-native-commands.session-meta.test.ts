@@ -449,6 +449,9 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await runPromise;
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].dispatcherOptions,
+    ).toEqual(expect.objectContaining({ beforeDeliver: expect.any(Function) }));
   });
 
   it("does not inject approval buttons for native command replies once the monitor owns approvals", async () => {

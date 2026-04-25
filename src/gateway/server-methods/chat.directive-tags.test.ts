@@ -307,6 +307,7 @@ function createChatContext(): Pick<
   | "chatDeltaSentAt"
   | "chatDeltaLastBroadcastLen"
   | "chatAbortedRuns"
+  | "addChatRun"
   | "removeChatRun"
   | "dedupe"
   | "loadGatewayModelCatalog"
@@ -322,6 +323,7 @@ function createChatContext(): Pick<
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
     chatAbortedRuns: new Map(),
+    addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),
     loadGatewayModelCatalog: async () =>
@@ -1674,6 +1676,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         timestamp: expect.any(Number),
       },
     });
+    const finalBroadcast = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.find((call) => call[0] === "chat" && call[1]?.state === "final")?.[1];
+    expect(finalBroadcast).toBeUndefined();
   });
 
   it("adds persisted media paths to the user transcript update", async () => {

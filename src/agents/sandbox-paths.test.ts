@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { resolveSandboxedMediaSource } from "./sandbox-paths.js";
+import { resolveAllowedManagedMediaPath, resolveSandboxedMediaSource } from "./sandbox-paths.js";
 
 async function withSandboxRoot<T>(run: (sandboxDir: string) => Promise<T>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-media-"));
@@ -26,6 +26,19 @@ function isPathInside(root: string, target: string): boolean {
 
 function makeTmpProbePath(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
+}
+
+async function withManagedMediaRoot<T>(run: (ctx: { stateDir: string }) => Promise<T>) {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-media-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  try {
+    await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
+    await fs.mkdir(path.join(stateDir, "media", "tool-image-generation"), { recursive: true });
+    return await run({ stateDir });
+  } finally {
+    vi.unstubAllEnvs();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
 }
 
 async function withOutsideHardlinkInOpenClawTmp<T>(
@@ -96,6 +109,50 @@ describe("resolveSandboxedMediaSource", () => {
         sandboxRoot: sandboxDir,
       });
       expect(result).toBe(path.resolve(expected));
+    });
+  });
+
+  it.each([
+    {
+      name: "managed outbound media",
+      relative: path.join("media", "outbound", "reply.png"),
+    },
+    {
+      name: "managed tool media",
+      relative: path.join("media", "tool-image-generation", "generated.png"),
+    },
+  ])("allows $name outside the sandbox root", async ({ relative }) => {
+    await withManagedMediaRoot(async ({ stateDir }) => {
+      await withSandboxRoot(async (sandboxDir) => {
+        const media = path.join(stateDir, relative);
+        await fs.writeFile(media, "image", "utf8");
+
+        const result = await resolveSandboxedMediaSource({
+          media,
+          sandboxRoot: sandboxDir,
+        });
+
+        expect(result).toBe(media);
+      });
+    });
+  });
+
+  it("resolves checked managed media paths for non-sandbox callers", async () => {
+    await withManagedMediaRoot(async ({ stateDir }) => {
+      const media = path.join(stateDir, "media", "outbound", "reply.png");
+      await fs.writeFile(media, "image", "utf8");
+
+      await expect(resolveAllowedManagedMediaPath(media)).resolves.toBe(media);
+    });
+  });
+
+  it("does not allow unrelated state media directories as managed media", async () => {
+    await withManagedMediaRoot(async ({ stateDir }) => {
+      const media = path.join(stateDir, "media", "inbound", "reply.png");
+      await fs.mkdir(path.dirname(media), { recursive: true });
+      await fs.writeFile(media, "image", "utf8");
+
+      await expect(resolveAllowedManagedMediaPath(media)).resolves.toBeUndefined();
     });
   });
 
@@ -281,6 +338,50 @@ describe("resolveSandboxedMediaSource", () => {
         });
       },
     );
+  });
+
+  it("rejects symlinked managed media paths escaping the managed media root", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withManagedMediaRoot(async ({ stateDir }) => {
+      await withSandboxRoot(async (sandboxDir) => {
+        const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-media-outside-"));
+        const outsideFile = path.join(outsideDir, "secret.png");
+        const symlinkPath = path.join(stateDir, "media", "outbound", "linked-secret.png");
+        try {
+          await fs.writeFile(outsideFile, "secret", "utf8");
+          await fs.symlink(outsideFile, symlinkPath);
+
+          await expectSandboxRejection(symlinkPath, sandboxDir, /managed media root|symlink/i);
+        } finally {
+          await fs.rm(symlinkPath, { force: true });
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      });
+    });
+  });
+
+  it("rejects checked managed media symlinks escaping the managed media root", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withManagedMediaRoot(async ({ stateDir }) => {
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-media-outside-"));
+      const outsideFile = path.join(outsideDir, "secret.png");
+      const symlinkPath = path.join(stateDir, "media", "outbound", "linked-secret.png");
+      try {
+        await fs.writeFile(outsideFile, "secret", "utf8");
+        await fs.symlink(outsideFile, symlinkPath);
+
+        await expect(resolveAllowedManagedMediaPath(symlinkPath)).rejects.toThrow(
+          /managed media root|symlink/i,
+        );
+      } finally {
+        await fs.rm(symlinkPath, { force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
   });
 
   // Group 4: Passthrough

@@ -7,6 +7,14 @@ export type QaRuntimeGatewayClient = {
   tempRoot: string;
   workspaceDir: string;
   runtimeEnv: NodeJS.ProcessEnv;
+  restartAfterStateMutation?: (
+    mutateState: (context: {
+      configPath: string;
+      runtimeEnv: NodeJS.ProcessEnv;
+      stateDir: string;
+      tempRoot: string;
+    }) => Promise<void>,
+  ) => Promise<void>;
   call: (
     method: string,
     params?: unknown,

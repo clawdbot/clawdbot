@@ -33,7 +33,7 @@ falls back to npm automatically.
   <Card title="Provider plugin" icon="cpu" href="/plugins/sdk-provider-plugins">
     Add a model provider (LLM, proxy, or custom endpoint)
   </Card>
-  <Card title="Tool / hook plugin" icon="wrench">
+  <Card title="Tool / hook plugin" icon="wrench" href="/plugins/hooks">
     Register agent tools, event hooks, or services — continue below
   </Card>
 </CardGroup>
@@ -160,19 +160,22 @@ A single plugin can register any number of capabilities via the `api` object:
 | Video generation       | `api.registerVideoGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web fetch              | `api.registerWebFetchProvider(...)`              | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web search             | `api.registerWebSearchProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Embedded Pi extension  | `api.registerEmbeddedExtensionFactory(...)`      | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
+| Tool-result middleware | `api.registerAgentToolResultMiddleware(...)`     | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
 | Agent tools            | `api.registerTool(...)`                          | Below                                                                           |
 | Custom commands        | `api.registerCommand(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| Event hooks            | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| Plugin hooks           | `api.on(...)`                                    | [Plugin hooks](/plugins/hooks)                                                  |
+| Internal event hooks   | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
 | HTTP routes            | `api.registerHttpRoute(...)`                     | [Internals](/plugins/architecture-internals#gateway-http-routes)                |
 | CLI subcommands        | `api.registerCli(...)`                           | [Entry Points](/plugins/sdk-entrypoints)                                        |
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
 
-Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
-embedded-runner hooks such as async `tool_result` rewriting before the final
-tool result message is emitted. Prefer regular OpenClaw plugin hooks when the
-work does not need Pi extension timing.
+Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when they
+need async tool-result rewriting before the model sees the output. Declare the
+targeted runtimes in `contracts.agentToolResultMiddleware`, for example
+`["pi", "codex"]`. This is a trusted bundled-plugin seam; external
+plugins should prefer regular OpenClaw plugin hooks unless OpenClaw grows an
+explicit trust policy for this capability.
 
 If your plugin registers custom gateway RPC methods, keep them on a
 plugin-specific prefix. Core admin namespaces (`config.*`,
@@ -197,7 +200,7 @@ If custom approval plumbing needs to detect that same bounded fallback case,
 prefer `isApprovalNotFoundError` from `openclaw/plugin-sdk/error-runtime`
 instead of matching approval-expiry strings manually.
 
-See [SDK Overview hook decision semantics](/plugins/sdk-overview#hook-decision-semantics) for details.
+See [Plugin hooks](/plugins/hooks) for examples and the hook reference.
 
 ## Registering agent tools
 

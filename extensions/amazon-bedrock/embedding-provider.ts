@@ -122,6 +122,8 @@ interface AwsCredentialProviderSdk {
   }>;
 }
 
+type AwsCredentialProviderLoader = () => Promise<AwsCredentialProviderSdk | null>;
+
 let sdkCache: AwsSdk | null = null;
 let credentialProviderSdkCache: AwsCredentialProviderSdk | null | undefined;
 
@@ -368,24 +370,17 @@ export function resolveBedrockEmbeddingClient(
 // Credential detection
 // ---------------------------------------------------------------------------
 
-const CREDENTIAL_ENV_VARS = [
-  "AWS_PROFILE",
-  "AWS_BEARER_TOKEN_BEDROCK",
-  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
-  "AWS_EC2_METADATA_SERVICE_ENDPOINT",
-  "AWS_WEB_IDENTITY_TOKEN_FILE",
-  "AWS_ROLE_ARN",
-] as const;
-
-export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+export async function hasAwsCredentials(
+  env: NodeJS.ProcessEnv = process.env,
+  loadCredentialProvider: AwsCredentialProviderLoader = loadCredentialProviderSdk,
+): Promise<boolean> {
   if (env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim()) {
     return true;
   }
-  if (CREDENTIAL_ENV_VARS.some((k) => env[k]?.trim())) {
+  if (env.AWS_BEARER_TOKEN_BEDROCK?.trim()) {
     return true;
   }
-  const credentialProviderSdk = await loadCredentialProviderSdk();
+  const credentialProviderSdk = await loadCredentialProvider();
   if (!credentialProviderSdk) {
     return false;
   }

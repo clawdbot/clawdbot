@@ -14,7 +14,12 @@ import {
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
-import { getDiagnosticStabilitySnapshot } from "./diagnostic-stability.js";
+import {
+  getDiagnosticStabilitySnapshot,
+  resetDiagnosticStabilityRecorderForTest,
+  startDiagnosticStabilityRecorder,
+  stopDiagnosticStabilityRecorder,
+} from "./diagnostic-stability.js";
 import {
   logSessionStateChange,
   resetDiagnosticStateForTest,
@@ -30,6 +35,10 @@ function createEmitMemorySampleMock() {
     externalBytes: 10,
     arrayBuffersBytes: 5,
   }));
+}
+
+function flushDiagnosticEvents() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 describe("diagnostic session state pruning", () => {
@@ -230,5 +239,46 @@ describe("stuck session diagnostics threshold", () => {
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: -1 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: 0 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs()).toBe(120_000);
+  });
+});
+
+describe("diagnostic stability snapshots", () => {
+  beforeEach(() => {
+    resetDiagnosticEventsForTest();
+    resetDiagnosticStabilityRecorderForTest();
+  });
+
+  afterEach(() => {
+    stopDiagnosticStabilityRecorder();
+    resetDiagnosticStabilityRecorderForTest();
+    resetDiagnosticEventsForTest();
+  });
+
+  it("records bounded outbound delivery diagnostics without session identifiers", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "message.delivery.error",
+      channel: "matrix",
+      deliveryKind: "text",
+      durationMs: 12,
+      errorCategory: "TypeError",
+      sessionKey: "session-secret",
+    });
+    await flushDiagnosticEvents();
+
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
+      expect.objectContaining({
+        type: "message.delivery.error",
+        channel: "matrix",
+        deliveryKind: "text",
+        durationMs: 12,
+        outcome: "error",
+        reason: "TypeError",
+      }),
+    );
+    const [event] = getDiagnosticStabilitySnapshot({ limit: 10 }).events;
+    expect(event).not.toHaveProperty("sessionKey");
+    expect(event).not.toHaveProperty("sessionId");
   });
 });

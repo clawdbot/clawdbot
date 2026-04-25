@@ -23,7 +23,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveSlackAccount } from "../accounts.js";
-import { resolveSlackWebClientOptions } from "../client.js";
+import { resolveSlackWebClientOptions } from "../client-options.js";
 import { isSlackExecApprovalClientEnabled } from "../exec-approvals.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";

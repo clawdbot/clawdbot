@@ -62,6 +62,18 @@ export type ConfigProps = {
   themeMode: ThemeMode;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  hasCustomTheme: boolean;
+  customThemeLabel: string | null;
+  customThemeSourceUrl: string | null;
+  customThemeImportUrl: string;
+  customThemeImportBusy: boolean;
+  customThemeImportMessage: { kind: "success" | "error"; text: string } | null;
+  customThemeImportExpanded?: boolean;
+  customThemeImportFocusToken?: number;
+  onCustomThemeImportUrlChange: (next: string) => void;
+  onImportCustomTheme: () => void;
+  onClearCustomTheme: () => void;
+  onOpenCustomThemeImport?: () => void;
   borderRadius: number;
   setBorderRadius: (value: number) => void;
   gatewayUrl: string;
@@ -568,21 +580,66 @@ function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints):
   return truncateValue(value);
 }
 
-type ThemeOption = { id: ThemeName; label: string; description: string; icon: TemplateResult };
-const THEME_OPTIONS: ThemeOption[] = [
+type ThemeOption = {
+  id: ThemeName;
+  label: string;
+  description: string;
+  icon: TemplateResult;
+};
+const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
   { id: "knot", label: "Knot", description: "Black & red", icon: icons.link },
   { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
 ];
 
+function focusCustomThemeImportInput() {
+  const schedule =
+    typeof requestAnimationFrame === "function"
+      ? requestAnimationFrame
+      : (cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0);
+  schedule(() => {
+    const input = globalThis.document?.querySelector<HTMLInputElement>(
+      "[data-custom-theme-import-input]",
+    );
+    if (!input) {
+      return;
+    }
+    if (typeof input.scrollIntoView === "function") {
+      input.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+    input.focus();
+    input.select();
+  });
+}
+
 function renderAppearanceSection(props: ConfigProps) {
+  const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
+  if (
+    showCustomThemeImport &&
+    props.customThemeImportFocusToken != null &&
+    props.customThemeImportFocusToken !== cvs.lastCustomThemeImportFocusToken
+  ) {
+    cvs.lastCustomThemeImportFocusToken = props.customThemeImportFocusToken;
+    focusCustomThemeImportInput();
+  }
+  const themeOptions: ThemeOption[] = [
+    ...BUILTIN_THEME_OPTIONS,
+    {
+      id: "custom",
+      label: "Custom",
+      description: props.hasCustomTheme
+        ? `Imported from tweakcn${props.customThemeLabel ? `: ${props.customThemeLabel}` : ""}`
+        : "Open the tweakcn importer for this browser-local slot",
+      icon: icons.spark,
+    },
+  ];
   return html`
     <div class="settings-appearance">
       <div class="settings-appearance__section">
         <h3 class="settings-appearance__heading">Theme</h3>
         <p class="settings-appearance__hint">Choose a theme family.</p>
         <div class="settings-theme-grid">
-          ${THEME_OPTIONS.map(
+          ${themeOptions.map(
             (opt) => html`
               <button
                 class="settings-theme-card ${opt.id === props.theme
@@ -590,6 +647,10 @@ function renderAppearanceSection(props: ConfigProps) {
                   : ""}"
                 title=${opt.description}
                 @click=${(e: Event) => {
+                  if (opt.id === "custom" && !props.hasCustomTheme) {
+                    props.onOpenCustomThemeImport?.();
+                    return;
+                  }
                   if (opt.id !== props.theme) {
                     const context: ThemeTransitionContext = {
                       element: (e.currentTarget as HTMLElement) ?? undefined,
@@ -609,6 +670,80 @@ function renderAppearanceSection(props: ConfigProps) {
             `,
           )}
         </div>
+        ${showCustomThemeImport
+          ? html`
+              <div class="settings-theme-import">
+                <div class="settings-theme-import__copy">
+                  <div class="settings-theme-import__title">Import from tweakcn</div>
+                  <p class="settings-theme-import__hint">
+                    Paste a tweakcn share link. The import stays in this browser only and replaces
+                    the current custom slot.
+                  </p>
+                </div>
+                <label class="settings-theme-import__field">
+                  <span class="settings-theme-import__label">tweakcn link</span>
+                  <input
+                    class="settings-theme-import__input"
+                    data-custom-theme-import-input
+                    type="url"
+                    placeholder="https://tweakcn.com/themes/..."
+                    .value=${props.customThemeImportUrl}
+                    @input=${(e: Event) =>
+                      props.onCustomThemeImportUrlChange(
+                        (e.currentTarget as HTMLInputElement).value,
+                      )}
+                  />
+                </label>
+                <div class="settings-theme-import__actions">
+                  <button
+                    class="btn btn--sm primary"
+                    ?disabled=${props.customThemeImportBusy ||
+                    props.customThemeImportUrl.trim().length === 0}
+                    @click=${props.onImportCustomTheme}
+                  >
+                    ${props.customThemeImportBusy
+                      ? "Importing…"
+                      : props.hasCustomTheme
+                        ? "Replace custom theme"
+                        : "Import custom theme"}
+                  </button>
+                  ${props.hasCustomTheme
+                    ? html`
+                        <button class="btn btn--sm danger" @click=${props.onClearCustomTheme}>
+                          Clear custom theme
+                        </button>
+                      `
+                    : nothing}
+                </div>
+                ${props.hasCustomTheme
+                  ? html`
+                      <div class="settings-theme-import__meta">
+                        <span class="settings-theme-import__meta-label">Loaded</span>
+                        <span class="settings-theme-import__meta-value"
+                          >${props.customThemeLabel ?? "Custom"} ·
+                          ${props.customThemeSourceUrl ?? "tweakcn"}</span
+                        >
+                      </div>
+                    `
+                  : nothing}
+                ${props.customThemeImportMessage
+                  ? html`
+                      <div
+                        class="settings-theme-import__message settings-theme-import__message--${props
+                          .customThemeImportMessage.kind}"
+                      >
+                        ${props.customThemeImportMessage.text}
+                      </div>
+                    `
+                  : nothing}
+              </div>
+            `
+          : html`
+              <p class="settings-theme-import__inline-hint">
+                Click <strong>Custom</strong> to import a tweakcn theme into this browser-local
+                slot.
+              </p>
+            `}
       </div>
 
       <div class="settings-appearance__section">
@@ -670,6 +805,7 @@ interface ConfigEphemeralState {
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
+  lastCustomThemeImportFocusToken: number | null;
 }
 
 function createConfigEphemeralState(): ConfigEphemeralState {
@@ -678,6 +814,7 @@ function createConfigEphemeralState(): ConfigEphemeralState {
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
+    lastCustomThemeImportFocusToken: null,
   };
 }
 
@@ -941,37 +1078,39 @@ export function renderConfig(props: ConfigProps) {
           <div class="config-actions__right">
             ${!rawAvailable
               ? html`
-                  <span class="config-status muted"
+                  <span class="config-status muted config-actions__notice"
                     >Raw mode disabled (snapshot cannot safely round-trip raw text).</span
                   >
                 `
               : nothing}
-            ${props.onOpenFile
-              ? html`
-                  <button
-                    class="btn btn--sm"
-                    title=${props.configPath ? `Open ${props.configPath}` : "Open config file"}
-                    @click=${props.onOpenFile}
-                  >
-                    ${icons.fileText} Open
-                  </button>
-                `
-              : nothing}
-            <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
-              ${props.loading ? t("common.loading") : t("common.reload")}
-            </button>
-            <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
-              Clear
-            </button>
-            <button class="btn btn--sm primary" ?disabled=${!canSave} @click=${props.onSave}>
-              ${props.saving ? "Saving…" : "Save"}
-            </button>
-            <button class="btn btn--sm" ?disabled=${!canApply} @click=${props.onApply}>
-              ${props.applying ? "Applying…" : "Apply"}
-            </button>
-            <button class="btn btn--sm" ?disabled=${!canUpdate} @click=${props.onUpdate}>
-              ${props.updating ? "Updating…" : "Update"}
-            </button>
+            <div class="config-actions__buttons">
+              ${props.onOpenFile
+                ? html`
+                    <button
+                      class="btn btn--sm"
+                      title=${props.configPath ? `Open ${props.configPath}` : "Open config file"}
+                      @click=${props.onOpenFile}
+                    >
+                      ${icons.fileText} Open
+                    </button>
+                  `
+                : nothing}
+              <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
+                ${props.loading ? t("common.loading") : t("common.reload")}
+              </button>
+              <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
+                Clear
+              </button>
+              <button class="btn btn--sm primary" ?disabled=${!canSave} @click=${props.onSave}>
+                ${props.saving ? "Saving…" : "Save"}
+              </button>
+              <button class="btn btn--sm" ?disabled=${!canApply} @click=${props.onApply}>
+                ${props.applying ? "Applying…" : "Apply"}
+              </button>
+              <button class="btn btn--sm" ?disabled=${!canUpdate} @click=${props.onUpdate}>
+                ${props.updating ? "Updating…" : "Update"}
+              </button>
+            </div>
           </div>
         </div>
 

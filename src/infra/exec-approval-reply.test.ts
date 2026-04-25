@@ -289,6 +289,19 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("Full id: `req-1`");
   });
 
+  it("compacts structured cwd paths in pending reply payloads", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-home",
+      approvalSlug: "slug-home",
+      command: "pwd",
+      cwd: "C:\\Users\\alice\\project",
+      host: "gateway",
+    });
+
+    expect(payload.text).toContain("CWD: ~/project");
+    expect(payload.text).not.toContain("C:\\Users\\alice");
+  });
+
   it("omits allow-always actions when the effective policy requires approval every time", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-ask-always",

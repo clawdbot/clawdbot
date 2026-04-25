@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { LogService } from "./logger.js";
@@ -36,6 +37,8 @@ export type MatrixCryptoBootstrapResult = {
   crossSigningPublished: boolean;
   ownDeviceVerified: boolean | null;
 };
+
+const CROSS_SIGNING_PUBLICATION_WAIT_MS = 5_000;
 
 export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
   private verificationHandlerRegistered = false;
@@ -83,7 +86,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         strict,
       });
     }
-    const ownDeviceVerified = await this.ensureOwnDeviceTrust(crypto, strict);
+    const ownDeviceVerified = await this.ensureOwnDeviceTrust(crypto, {
+      strict,
+    });
     return {
       crossSigningReady: crossSigning.ready,
       crossSigningPublished: crossSigning.published,
@@ -165,7 +170,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
 
     const finalize = async (): Promise<{ ready: boolean; published: boolean }> => {
       const ready = await isCrossSigningReady();
-      const published = await hasPublishedCrossSigningKeys();
+      const published = ready
+        ? await waitForPublishedCrossSigningKeys()
+        : await hasPublishedCrossSigningKeys();
       if (ready && published) {
         LogService.info("MatrixClientLite", "Cross-signing bootstrap complete");
         return { ready, published };
@@ -178,6 +185,17 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
       return { ready, published };
     };
 
+    const waitForPublishedCrossSigningKeys = async (): Promise<boolean> => {
+      const startedAt = Date.now();
+      do {
+        if (await hasPublishedCrossSigningKeys()) {
+          return true;
+        }
+        await sleep(250);
+      } while (Date.now() - startedAt < CROSS_SIGNING_PUBLICATION_WAIT_MS);
+      return false;
+    };
+
     if (options.forceResetCrossSigning) {
       const resetCrossSigning = async (): Promise<void> => {
         await crypto.bootstrapCrossSigning({
@@ -187,6 +205,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
       };
       try {
         await resetCrossSigning();
+        await this.trustFreshOwnIdentity(crypto);
       } catch (err) {
         const shouldRepairSecretStorage =
           options.allowSecretStorageRecreateWithoutRecoveryKey &&
@@ -202,6 +221,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
               forceNewSecretStorage: true,
             });
             await resetCrossSigning();
+            await this.trustFreshOwnIdentity(crypto);
           } catch (repairErr) {
             LogService.warn("MatrixClientLite", "Forced cross-signing reset failed:", repairErr);
             if (options.strict) {
@@ -287,6 +307,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         setupNewCrossSigning: true,
         authUploadDeviceSigningKeys,
       });
+      await this.trustFreshOwnIdentity(crypto);
     } catch (err) {
       LogService.warn("MatrixClientLite", "Fallback cross-signing bootstrap failed:", err);
       if (options.strict) {
@@ -296,6 +317,25 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     }
 
     return await finalize();
+  }
+
+  private async trustFreshOwnIdentity(crypto: MatrixCryptoBootstrapApi): Promise<void> {
+    const ownIdentity =
+      typeof crypto.getOwnIdentity === "function"
+        ? await crypto.getOwnIdentity().catch(() => undefined)
+        : undefined;
+    if (!ownIdentity) {
+      return;
+    }
+
+    try {
+      if (typeof ownIdentity.isVerified === "function" && ownIdentity.isVerified()) {
+        return;
+      }
+      await ownIdentity.verify?.();
+    } finally {
+      ownIdentity.free?.();
+    }
   }
 
   private async bootstrapSecretStorage(
@@ -349,7 +389,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
 
   private async ensureOwnDeviceTrust(
     crypto: MatrixCryptoBootstrapApi,
-    strict = false,
+    options: {
+      strict: boolean;
+    },
   ): Promise<boolean | null> {
     const deviceId = this.deps.getDeviceId()?.trim();
     if (!deviceId) {
@@ -386,8 +428,10 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         ? await crypto.getDeviceVerificationStatus(userId, deviceId).catch(() => null)
         : null;
     const verified = isMatrixDeviceOwnerVerified(refreshedStatus);
-    if (!verified && strict) {
-      throw new Error(`Matrix own device ${deviceId} is not verified by its owner after bootstrap`);
+    if (!verified && options.strict) {
+      throw new Error(
+        `Matrix own device ${deviceId} does not have full Matrix identity trust after bootstrap`,
+      );
     }
     return verified;
   }

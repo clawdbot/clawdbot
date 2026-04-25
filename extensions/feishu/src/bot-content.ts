@@ -4,7 +4,7 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
-import type { FeishuMediaInfo } from "./types.js";
+import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
 
 export type FeishuMention = {
   key: string;
@@ -54,6 +54,7 @@ export function resolveFeishuGroupSession(params: {
   messageId: string;
   rootId?: string;
   threadId?: string;
+  chatType?: FeishuChatType;
   groupConfig?: {
     groupSessionScope?: GroupSessionScope;
     topicSessionMode?: "enabled" | "disabled";
@@ -65,7 +66,8 @@ export function resolveFeishuGroupSession(params: {
     replyInThread?: "enabled" | "disabled";
   };
 }): ResolvedFeishuGroupSession {
-  const { chatId, senderOpenId, messageId, rootId, threadId, groupConfig, feishuCfg } = params;
+  const { chatId, senderOpenId, messageId, rootId, threadId, chatType, groupConfig, feishuCfg } =
+    params;
   const normalizedThreadId = threadId?.trim();
   const normalizedRootId = rootId?.trim();
   const threadReply = Boolean(normalizedThreadId || normalizedRootId);
@@ -78,9 +80,14 @@ export function resolveFeishuGroupSession(params: {
     groupConfig?.groupSessionScope ??
     feishuCfg?.groupSessionScope ??
     (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+  const normalizedTopicGroupThreadId =
+    chatType === "topic_group" ? (normalizedThreadId ?? normalizedRootId) : undefined;
   const topicScope =
     groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender"
-      ? (normalizedRootId ?? normalizedThreadId ?? (replyInThread ? messageId : null))
+      ? (normalizedTopicGroupThreadId ??
+        normalizedRootId ??
+        normalizedThreadId ??
+        (replyInThread ? messageId : null))
       : null;
 
   let peerId = chatId;

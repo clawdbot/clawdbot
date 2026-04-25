@@ -1,3 +1,4 @@
+import { migrateLegacyRuntimeModelRef } from "../../../agents/model-runtime-aliases.js";
 import { isLegacyModelsAddCodexMetadataModel } from "../../../agents/openai-codex-models-add-legacy.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
@@ -9,8 +10,28 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
+
+export function normalizeLegacyCommandsConfig(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawCommands = cfg.commands;
+  if (!isRecord(rawCommands) || !("modelsWrite" in rawCommands)) {
+    return cfg;
+  }
+
+  const commands = { ...rawCommands };
+  delete commands.modelsWrite;
+  changes.push("Removed deprecated commands.modelsWrite (/models add is deprecated).");
+
+  return {
+    ...cfg,
+    commands: commands as OpenClawConfig["commands"],
+  };
+}
 
 export function normalizeLegacyBrowserConfig(
   cfg: OpenClawConfig,
@@ -172,6 +193,193 @@ type ModelProviderEntry = Partial<
 >;
 type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
 type ModelDefinitionEntry = NonNullable<ModelProviderEntry["models"]>[number];
+type AgentEmbeddedHarnessPatch = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["embeddedHarness"]
+>;
+
+function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
+  if (!isRecord(legacyEntry) || !isRecord(currentEntry)) {
+    return currentEntry ?? legacyEntry;
+  }
+  return { ...legacyEntry, ...currentEntry };
+}
+
+function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
+  value?: unknown;
+  changed: boolean;
+  selectedRuntime?: string;
+} {
+  if (typeof raw === "string") {
+    const migrated = migrateLegacyRuntimeModelRef(raw);
+    return migrated
+      ? { value: migrated.ref, changed: true, selectedRuntime: migrated.runtime }
+      : { value: raw, changed: false };
+  }
+  if (!isRecord(raw)) {
+    return { value: raw, changed: false };
+  }
+
+  const migratedPrimary =
+    typeof raw.primary === "string" ? migrateLegacyRuntimeModelRef(raw.primary) : null;
+  if (!migratedPrimary) {
+    return { value: raw, changed: false };
+  }
+
+  const next: Record<string, unknown> = { ...raw, primary: migratedPrimary.ref };
+  if (Array.isArray(raw.fallbacks)) {
+    next.fallbacks = raw.fallbacks.map((fallback) => {
+      if (typeof fallback !== "string") {
+        return fallback;
+      }
+      const migratedFallback = migrateLegacyRuntimeModelRef(fallback);
+      return migratedFallback?.runtime === migratedPrimary.runtime
+        ? migratedFallback.ref
+        : fallback;
+    });
+  }
+  return {
+    value: next,
+    changed: true,
+    selectedRuntime: migratedPrimary.runtime,
+  };
+}
+
+function normalizeLegacyRuntimeAllowlistModels(
+  rawModels: unknown,
+  selectedRuntime: string | undefined,
+): {
+  value?: unknown;
+  changed: boolean;
+} {
+  if (!selectedRuntime || !isRecord(rawModels)) {
+    return { value: rawModels, changed: false };
+  }
+
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  const legacyEntries: Array<[string, unknown]> = [];
+  for (const [rawKey, entry] of Object.entries(rawModels)) {
+    const migrated = migrateLegacyRuntimeModelRef(rawKey);
+    if (migrated?.runtime === selectedRuntime) {
+      changed = true;
+      legacyEntries.push([migrated.ref, entry]);
+      continue;
+    }
+    next[rawKey] = mergeModelEntry(entry, next[rawKey]);
+  }
+  for (const [migratedKey, entry] of legacyEntries) {
+    next[migratedKey] = mergeModelEntry(entry, next[migratedKey]);
+  }
+  return { value: next, changed };
+}
+
+function ensureEmbeddedHarnessRuntime(
+  raw: unknown,
+  selectedRuntime: string,
+): {
+  value: AgentEmbeddedHarnessPatch;
+  changed: boolean;
+} {
+  if (!isRecord(raw)) {
+    return { value: { runtime: selectedRuntime }, changed: true };
+  }
+  const currentRuntime = normalizeOptionalLowercaseString(raw.runtime);
+  if (!currentRuntime || currentRuntime === "auto") {
+    return {
+      value: { ...raw, runtime: selectedRuntime } as AgentEmbeddedHarnessPatch,
+      changed: currentRuntime !== selectedRuntime,
+    };
+  }
+  return { value: raw as AgentEmbeddedHarnessPatch, changed: false };
+}
+
+function normalizeLegacyRuntimeAgentContainer(
+  raw: Record<string, unknown>,
+  path: string,
+  changes: string[],
+): { value: Record<string, unknown>; changed: boolean } {
+  let changed = false;
+  const next: Record<string, unknown> = { ...raw };
+
+  const model = normalizeLegacyRuntimeAgentModelConfig(raw.model);
+  if (model.changed) {
+    next.model = model.value;
+    changed = true;
+    const runtimeSuffix = model.selectedRuntime
+      ? ` and selected ${model.selectedRuntime} runtime`
+      : "";
+    changes.push(
+      `Moved ${path}.model legacy runtime primary refs to canonical provider refs${runtimeSuffix}.`,
+    );
+  }
+
+  const models = normalizeLegacyRuntimeAllowlistModels(raw.models, model.selectedRuntime);
+  if (models.changed) {
+    next.models = models.value;
+    changed = true;
+    changes.push(`Moved ${path}.models legacy runtime keys to canonical provider keys.`);
+  }
+
+  if (model.selectedRuntime) {
+    const harness = ensureEmbeddedHarnessRuntime(raw.embeddedHarness, model.selectedRuntime);
+    if (harness.changed) {
+      next.embeddedHarness = harness.value;
+      changed = true;
+    }
+  }
+
+  return { value: next, changed };
+}
+
+export function normalizeLegacyRuntimeModelRefs(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawAgents = cfg.agents;
+  if (!isRecord(rawAgents)) {
+    return cfg;
+  }
+
+  let changed = false;
+  const nextAgents: Record<string, unknown> = { ...rawAgents };
+  if (isRecord(rawAgents.defaults)) {
+    const defaults = normalizeLegacyRuntimeAgentContainer(
+      rawAgents.defaults,
+      "agents.defaults",
+      changes,
+    );
+    if (defaults.changed) {
+      nextAgents.defaults = defaults.value;
+      changed = true;
+    }
+  }
+
+  if (Array.isArray(rawAgents.list)) {
+    const nextList = rawAgents.list.map((entry, index) => {
+      if (!isRecord(entry)) {
+        return entry;
+      }
+      const agentId = normalizeOptionalString(entry.id);
+      const path = agentId ? `agents.list.${sanitizeForLog(agentId)}` : `agents.list[${index}]`;
+      const agent = normalizeLegacyRuntimeAgentContainer(entry, path, changes);
+      if (agent.changed) {
+        changed = true;
+        return agent.value;
+      }
+      return entry;
+    });
+    if (changed) {
+      nextAgents.list = nextList;
+    }
+  }
+
+  return changed
+    ? {
+        ...cfg,
+        agents: nextAgents as OpenClawConfig["agents"],
+      }
+    : cfg;
+}
 
 export function normalizeLegacyOpenAICodexModelsAddMetadata(
   cfg: OpenClawConfig,
@@ -204,8 +412,10 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
         })
       ) {
         providerChanged = true;
+        const safeProviderId = sanitizeForLog(providerId);
+        const safeModelId = sanitizeForLog(model.id);
         changes.push(
-          `Marked models.providers.${providerId}.models.${model.id} as /models add metadata so official OpenAI Codex metadata can override it.`,
+          `Marked models.providers.${safeProviderId}.models.${safeModelId} as /models add metadata so official OpenAI Codex metadata can override it.`,
         );
         nextModels.push(Object.assign({}, model, { metadataSource: "models-add" }));
       } else {

@@ -19,6 +19,7 @@ export function collectDiscordAuditChannelIds(params: {
 }
 
 export async function auditDiscordChannelPermissions(params: {
+  cfg: OpenClawConfig;
   token: string;
   accountId?: string | null;
   channelIds: string[];

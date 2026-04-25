@@ -91,6 +91,10 @@ as `.clobbered.*`, restores the last-known-good copy, and logs the recovery
 reason. The next agent turn also receives a system-event warning so the main
 agent does not blindly rewrite the restored config. Promotion to last-known-good
 is skipped when a candidate contains redacted secret placeholders such as `***`.
+When every validation issue is scoped to `plugins.entries.<id>...`, OpenClaw
+does not perform whole-file recovery. It keeps the current config active and
+surfaces the plugin-local failure so a plugin schema or host-version mismatch
+cannot roll back unrelated user settings.
 
 ## Common tasks
 
@@ -504,6 +508,10 @@ config writes use the same schema gate before writing; destructive clobbers such
 as dropping `gateway.mode` or shrinking the file by more than half are rejected
 and saved as `.rejected.*` for inspection.
 
+Plugin-local validation failures are the exception: if all issues are under
+`plugins.entries.<id>...`, reload keeps the current config and reports the plugin
+issue instead of restoring `.last-good`.
+
 If you see `Config auto-restored from last-known-good` or
 `config reload restored last-known-good config` in logs, inspect the matching
 `.clobbered.*` file next to `openclaw.json`, fix the rejected payload, then run
@@ -537,7 +545,7 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 | Agent & models      | `agent`, `agents`, `models`, `routing`                            | No              |
 | Automation          | `hooks`, `cron`, `agent.heartbeat`                                | No              |
 | Sessions & messages | `session`, `messages`                                             | No              |
-| Tools & media       | `tools`, `browser`, `skills`, `audio`, `talk`                     | No              |
+| Tools & media       | `tools`, `browser`, `skills`, `mcp`, `audio`, `talk`              | No              |
 | UI & misc           | `ui`, `logging`, `identity`, `bindings`                           | No              |
 | Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)              | **Yes**         |
 | Infrastructure      | `discovery`, `canvasHost`, `plugins`                              | **Yes**         |

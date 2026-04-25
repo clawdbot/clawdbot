@@ -114,6 +114,48 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   return providers.values().next().value;
 }
 
+export function inferUniqueProviderFromCatalog(params: {
+  catalog: readonly ModelCatalogEntry[];
+  model: string;
+}): string | undefined {
+  const model = params.model.trim();
+  if (!model) {
+    return undefined;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(model);
+  const providers = new Set<string>();
+  for (const entry of params.catalog) {
+    const entryId = entry.id.trim();
+    if (!entryId) {
+      continue;
+    }
+    if (entryId !== model && normalizeLowercaseStringOrEmpty(entryId) !== normalized) {
+      continue;
+    }
+    const provider = normalizeProviderId(entry.provider);
+    if (provider) {
+      providers.add(provider);
+    }
+    if (providers.size > 1) {
+      return undefined;
+    }
+  }
+  return providers.size === 1 ? providers.values().next().value : undefined;
+}
+
+export function resolveBareModelDefaultProvider(params: {
+  cfg: OpenClawConfig;
+  catalog: readonly ModelCatalogEntry[];
+  model: string;
+  defaultProvider: string;
+}): string {
+  return (
+    inferUniqueProviderFromConfiguredModels({ cfg: params.cfg, model: params.model }) ??
+    inferUniqueProviderFromCatalog({ catalog: params.catalog, model: params.model }) ??
+    params.defaultProvider
+  );
+}
+
 function isConcreteOpenRouterFreeModelRef(ref: ModelRef): boolean {
   return ref.provider === "openrouter" && ref.model.includes("/") && ref.model.endsWith(":free");
 }
@@ -496,10 +538,19 @@ export function buildAllowedModelSetWithFallbacks(params: {
   const allowedKeys = new Set<string>();
   const syntheticCatalogEntries = new Map<string, ModelCatalogEntry>();
   const addAllowedModelRef = (raw: string) => {
+    const trimmed = raw.trim();
+    const defaultProvider = !trimmed.includes("/")
+      ? resolveBareModelDefaultProvider({
+          cfg: params.cfg,
+          catalog,
+          model: trimmed,
+          defaultProvider: params.defaultProvider,
+        })
+      : params.defaultProvider;
     const parsed = parseModelRefWithCompatAlias({
       cfg: params.cfg,
       raw,
-      defaultProvider: params.defaultProvider,
+      defaultProvider,
     });
     if (!parsed) {
       return;

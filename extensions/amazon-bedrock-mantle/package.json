@@ -7,7 +7,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "0.90.0",
     "@aws/bedrock-token-generator": "^1.1.0",
-    "@mariozechner/pi-ai": "0.70.0"
+    "@mariozechner/pi-ai": "0.70.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

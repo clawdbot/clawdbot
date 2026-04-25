@@ -19,6 +19,10 @@ type UpdateSessionStore = (
 
 export type PersistCronSessionEntry = () => Promise<void>;
 
+function cloneSessionEntry(entry: MutableCronSessionEntry): MutableCronSessionEntry {
+  return globalThis.structuredClone(entry);
+}
+
 export function createPersistCronSessionEntry(params: {
   isFastTestEnv: boolean;
   cronSession: MutableCronSession;
@@ -30,14 +34,15 @@ export function createPersistCronSessionEntry(params: {
     if (params.isFastTestEnv) {
       return;
     }
+    const runSessionEntry = cloneSessionEntry(params.cronSession.sessionEntry);
     params.cronSession.store[params.agentSessionKey] = params.cronSession.sessionEntry;
     if (params.runSessionKey !== params.agentSessionKey) {
-      params.cronSession.store[params.runSessionKey] = params.cronSession.sessionEntry;
+      params.cronSession.store[params.runSessionKey] = runSessionEntry;
     }
     await params.updateSessionStore(params.cronSession.storePath, (store) => {
       store[params.agentSessionKey] = params.cronSession.sessionEntry;
       if (params.runSessionKey !== params.agentSessionKey) {
-        store[params.runSessionKey] = params.cronSession.sessionEntry;
+        store[params.runSessionKey] = runSessionEntry;
       }
     });
   };

@@ -1,19 +1,19 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 let edgeTTS: typeof import("./tts.js").edgeTTS;
 
-let mockTtsPromise = vi.fn<(text: string, filePath: string) => Promise<void>>();
-
-vi.mock("node-edge-tts", () => ({
-  EdgeTTS: class {
-    ttsPromise(text: string, filePath: string) {
-      return mockTtsPromise(text, filePath);
-    }
-  },
-}));
+function createEdgeTTSDeps(ttsPromise: (text: string, filePath: string) => Promise<void>) {
+  return {
+    EdgeTTS: class {
+      ttsPromise(text: string, filePath: string) {
+        return ttsPromise(text, filePath);
+      }
+    },
+  };
+}
 
 const baseEdgeConfig = {
   voice: "en-US-MichelleNeural",
@@ -40,17 +40,20 @@ describe("edgeTTS empty audio validation", () => {
     tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
     const outputPath = path.join(tempDir, "voice.mp3");
 
-    mockTtsPromise = vi.fn(async (_text: string, filePath: string) => {
+    const deps = createEdgeTTSDeps(async (_text: string, filePath: string) => {
       writeFileSync(filePath, "");
     });
 
     await expect(
-      edgeTTS({
-        text: "Hello",
-        outputPath,
-        config: baseEdgeConfig,
-        timeoutMs: 10000,
-      }),
+      edgeTTS(
+        {
+          text: "Hello",
+          outputPath,
+          config: baseEdgeConfig,
+          timeoutMs: 10000,
+        },
+        deps,
+      ),
     ).rejects.toThrow("Edge TTS produced empty audio file");
   });
 
@@ -58,17 +61,20 @@ describe("edgeTTS empty audio validation", () => {
     tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
     const outputPath = path.join(tempDir, "voice.mp3");
 
-    mockTtsPromise = vi.fn(async (_text: string, filePath: string) => {
+    const deps = createEdgeTTSDeps(async (_text: string, filePath: string) => {
       writeFileSync(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     });
 
     await expect(
-      edgeTTS({
-        text: "Hello",
-        outputPath,
-        config: baseEdgeConfig,
-        timeoutMs: 10000,
-      }),
+      edgeTTS(
+        {
+          text: "Hello",
+          outputPath,
+          config: baseEdgeConfig,
+          timeoutMs: 10000,
+        },
+        deps,
+      ),
     ).resolves.toBeUndefined();
   });
 });

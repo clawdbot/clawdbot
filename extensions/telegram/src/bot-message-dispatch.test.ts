@@ -7,6 +7,7 @@ import {
   createSequencedTestDraftStream,
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
+import { renderTelegramHtmlText } from "./format.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -426,6 +427,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
+        dispatcherOptions: expect.objectContaining({
+          beforeDeliver: expect.any(Function),
+        }),
         replyOptions: expect.objectContaining({
           disableBlockStreaming: true,
         }),
@@ -496,6 +500,125 @@ describe("dispatchTelegramMessage draft streaming", () => {
         minInitialChars: 30,
       }),
     );
+  });
+
+  it("streams Telegram tool progress by default when preview streaming is active", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Working…\n• `tool: exec`\n• `exec ls ~/Desktop`",
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          suppressDefaultToolProgressMessages: true,
+        }),
+      }),
+    );
+  });
+
+  it("suppresses Telegram tool progress when explicitly disabled", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { preview: { toolProgress: false } } },
+    });
+
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          suppressDefaultToolProgressMessages: true,
+        }),
+      }),
+    );
+  });
+
+  it("keeps Telegram tool progress links inside code formatting", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({ progressText: "read [label](tg://user?id=123)" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+    });
+
+    const lastPreviewText = draftStream.update.mock.calls.at(-1)?.[0];
+    expect(lastPreviewText).toBe("Working…\n• `tool: exec`\n• `read [label](tg://user?id=123)`");
+    expect(renderTelegramHtmlText(lastPreviewText ?? "")).not.toContain("<a ");
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          suppressDefaultToolProgressMessages: true,
+        }),
+      }),
+    );
+  });
+
+  it("bounds Telegram tool progress markdown preview formatting", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    const longProgress = `${"`".repeat(1000)}${"x".repeat(1000)}[label](tg://user?id=123)`;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({ progressText: longProgress });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { preview: { toolProgress: true } } },
+    });
+
+    const lastPreviewText = draftStream.update.mock.calls.at(-1)?.[0] ?? "";
+    const progressLine = lastPreviewText.split("\n").at(1) ?? "";
+
+    expect(lastPreviewText.length).toBeLessThan(340);
+    expect(progressLine).toMatch(/^• `'{10}/);
+    expect(progressLine).toContain("…");
+    expect(renderTelegramHtmlText(lastPreviewText)).not.toContain("<a ");
+  });
+
+  it("does not let Telegram tool progress backticks break out of code formatting", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    const breakoutProgress = `${"`".repeat(10)} [label](tg://user?id=123)`;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({ progressText: breakoutProgress });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { preview: { toolProgress: true } } },
+    });
+
+    const lastPreviewText = draftStream.update.mock.calls.at(-1)?.[0] ?? "";
+
+    expect(lastPreviewText).toContain(`• \`'''''''''' [label](tg://user?id=123)\``);
+    expect(renderTelegramHtmlText(lastPreviewText)).not.toContain("<a ");
   });
 
   it("keeps block streaming enabled when account config enables it", async () => {

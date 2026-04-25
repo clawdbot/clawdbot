@@ -82,7 +82,7 @@ describe("inbound_claim hook runner", () => {
 
     expect(result).toEqual({ handled: true });
     expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("inbound_claim handler from test-plugin failed: Error: boom"),
+      expect.stringContaining("inbound_claim handler from test-plugin failed: boom"),
     );
     expect(succeeding).toHaveBeenCalledTimes(1);
   });

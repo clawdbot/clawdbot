@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+import { applyDefaultModel, applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 
 describe("applyProviderAuthConfigPatch", () => {
   const base = {
@@ -99,6 +99,77 @@ describe("applyProviderAuthConfigPatch", () => {
           },
         },
       },
+    });
+  });
+});
+
+describe("applyDefaultModel", () => {
+  it("sets the primary when none exists", () => {
+    const config = {
+      agents: { defaults: {} },
+    } as OpenClawConfig;
+    const next = applyDefaultModel(config, "openrouter/auto");
+    expect(next.agents?.defaults?.model).toEqual({ primary: "openrouter/auto" });
+  });
+
+  it("overwrites an existing primary by default", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+    const next = applyDefaultModel(config, "openrouter/auto");
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "openrouter/auto",
+    });
+  });
+
+  it("preserves an existing primary when requested", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+    const next = applyDefaultModel(config, "openrouter/auto", {
+      preserveExistingPrimary: true,
+    });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+    });
+  });
+
+  it("preserves an existing primary and keeps fallbacks", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const next = applyDefaultModel(config, "openrouter/auto", {
+      preserveExistingPrimary: true,
+    });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: ["openai/gpt-5.4"],
+    });
+  });
+
+  it("adds the model to the allowlist", () => {
+    const config = {
+      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
+    } as OpenClawConfig;
+    const next = applyDefaultModel(config, "openrouter/auto");
+    expect(next.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": {},
+      "openrouter/auto": {},
     });
   });
 });

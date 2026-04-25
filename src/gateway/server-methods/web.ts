@@ -136,6 +136,10 @@ export const webHandlers: GatewayRequestHandlers = {
             ? (params as { timeoutMs?: number }).timeoutMs
             : undefined,
         accountId,
+        currentQrDataUrl:
+          typeof (params as { currentQrDataUrl?: unknown }).currentQrDataUrl === "string"
+            ? (params as { currentQrDataUrl?: string }).currentQrDataUrl
+            : undefined,
       });
       if (result.connected) {
         await context.startChannel(provider.id, accountId);

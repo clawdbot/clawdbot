@@ -19,7 +19,7 @@ export function normalizeDiscordToken(raw: unknown, path: string): string | unde
 }
 
 export function resolveDiscordToken(
-  cfg?: OpenClawConfig,
+  cfg: OpenClawConfig,
   opts: { accountId?: string | null; envToken?: string | null } = {},
 ): DiscordTokenResolution {
   const accountId = normalizeAccountId(opts.accountId);

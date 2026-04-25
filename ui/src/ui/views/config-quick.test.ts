@@ -32,8 +32,11 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     onSecurityConfigure: vi.fn(),
     theme: "claw",
     themeMode: "system",
+    hasCustomTheme: false,
+    customThemeLabel: null,
     borderRadius: 50,
     setTheme: vi.fn(),
+    onOpenCustomThemeImport: vi.fn(),
     setThemeMode: vi.fn(),
     setBorderRadius: vi.fn(),
     userName: "Val",
@@ -89,5 +92,68 @@ describe("renderQuickSettings", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("always shows the custom theme option in quick settings", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps()), container);
+
+    expect(
+      Array.from(container.querySelectorAll("button")).some(
+        (button) => button.textContent?.trim() === "Custom",
+      ),
+    ).toBe(true);
+  });
+
+  it("routes custom clicks into the tweakcn importer until a custom theme exists", () => {
+    const setTheme = vi.fn();
+    const onOpenCustomThemeImport = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          hasCustomTheme: false,
+          setTheme,
+          onOpenCustomThemeImport,
+        }),
+      ),
+      container,
+    );
+
+    const customButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Custom",
+    );
+    customButton?.click();
+
+    expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
+    expect(setTheme).not.toHaveBeenCalled();
+  });
+
+  it("applies the imported custom theme from quick settings once it exists", () => {
+    const setTheme = vi.fn();
+    const onOpenCustomThemeImport = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          theme: "claw",
+          hasCustomTheme: true,
+          setTheme,
+          onOpenCustomThemeImport,
+        }),
+      ),
+      container,
+    );
+
+    const customButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Custom",
+    );
+    customButton?.click();
+
+    expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
+    expect(onOpenCustomThemeImport).not.toHaveBeenCalled();
   });
 });

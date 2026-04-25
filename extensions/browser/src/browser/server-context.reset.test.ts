@@ -32,6 +32,7 @@ function localOpenClawProfile(): Parameters<typeof createProfileResetOps>[0]["pr
     cdpPort: 18800,
     color: "#f60",
     driver: "openclaw",
+    headless: false,
     attachOnly: false,
   };
 }

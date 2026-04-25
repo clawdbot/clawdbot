@@ -409,12 +409,12 @@ For channel-specific config, use the channel config section instead:
 
 ### Building channel config schemas
 
-Use `buildChannelConfigSchema` from `openclaw/plugin-sdk/core` to convert a
-Zod schema into the `ChannelConfigSchema` wrapper that OpenClaw validates:
+Use `buildChannelConfigSchema` to convert a Zod schema into the
+`ChannelConfigSchema` wrapper used by plugin-owned config artifacts:
 
 ```typescript
 import { z } from "zod";
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/core";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 
 const accountSchema = z.object({
   token: z.string().optional(),
@@ -425,6 +425,11 @@ const accountSchema = z.object({
 
 const configSchema = buildChannelConfigSchema(accountSchema);
 ```
+
+For third-party plugins, the cold-path contract is still the plugin manifest:
+mirror the generated JSON Schema into `openclaw.plugin.json#channelConfigs` so
+config schema, setup, and UI surfaces can inspect `channels.<id>` without
+loading runtime code.
 
 ## Setup wizards
 
@@ -561,6 +566,6 @@ startup installs; keep using the explicit plugin installer.
 
 ## Related
 
-- [SDK Entry Points](/plugins/sdk-entrypoints) -- `definePluginEntry` and `defineChannelPluginEntry`
-- [Plugin Manifest](/plugins/manifest) -- full manifest schema reference
-- [Building Plugins](/plugins/building-plugins) -- step-by-step getting started guide
+- [SDK entry points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry`
+- [Plugin manifest](/plugins/manifest) — full manifest schema reference
+- [Building plugins](/plugins/building-plugins) — step-by-step getting started guide

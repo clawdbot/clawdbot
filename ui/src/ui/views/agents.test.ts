@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
+import { renderAgentFiles } from "./agents-panels-status-files.ts";
 import { renderAgents, type AgentsProps } from "./agents.ts";
 
 function createSkill() {
@@ -175,5 +176,163 @@ describe("renderAgents", () => {
     );
 
     expect(skillsTab?.textContent?.trim()).toContain("1");
+  });
+});
+
+describe("renderAgentFiles", () => {
+  it("renders the upgraded markdown preview structure with file metadata", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            {
+              name: "USER.md",
+              path: "/tmp/workspace/USER.md",
+              missing: false,
+              size: 128,
+              updatedAtMs: 1_700_000_000_000,
+            },
+          ],
+        },
+        agentFilesLoading: false,
+        agentFilesError: null,
+        agentFileActive: "USER.md",
+        agentFileContents: {
+          "USER.md": "# User Profile\n\nHello world",
+        },
+        agentFileDrafts: {
+          "USER.md": "# User Profile\n\nHello world",
+        },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile: () => undefined,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".md-preview-dialog__reader.sidebar-markdown")).not.toBeNull();
+    expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
+      "USER.md",
+    );
+    expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(
+      "Saved Preview",
+    );
+    expect(container.textContent).toContain("Markdown Preview");
+  });
+
+  it("renders preview header controls as icon-only buttons with accessible labels", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            {
+              name: "USER.md",
+              path: "/tmp/workspace/USER.md",
+              missing: false,
+              size: 128,
+              updatedAtMs: 1_700_000_000_000,
+            },
+          ],
+        },
+        agentFilesLoading: false,
+        agentFilesError: null,
+        agentFileActive: "USER.md",
+        agentFileContents: {
+          "USER.md": "# User Profile\n\nHello world",
+        },
+        agentFileDrafts: {
+          "USER.md": "# User Profile\n\nHello world",
+        },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile: () => undefined,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    const actions = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".md-preview-dialog__actions button"),
+    );
+
+    expect(actions).toHaveLength(3);
+    expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Expand preview",
+      "Edit file",
+      "Close preview",
+    ]);
+    expect(actions.map((button) => button.textContent?.trim())).toEqual(["", "", ""]);
+  });
+
+  it("resets the expanded preview button state when the dialog closes", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            {
+              name: "USER.md",
+              path: "/tmp/workspace/USER.md",
+              missing: false,
+              size: 128,
+              updatedAtMs: 1_700_000_000_000,
+            },
+          ],
+        },
+        agentFilesLoading: false,
+        agentFilesError: null,
+        agentFileActive: "USER.md",
+        agentFileContents: {
+          "USER.md": "# User Profile\n\nHello world",
+        },
+        agentFileDrafts: {
+          "USER.md": "# User Profile\n\nHello world",
+        },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile: () => undefined,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    const dialog = container.querySelector<HTMLDialogElement>(".md-preview-dialog");
+    const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel");
+    const expandButton = container.querySelector<HTMLButtonElement>(".md-preview-expand-btn");
+
+    expandButton?.click();
+
+    expect(panel?.classList.contains("fullscreen")).toBe(true);
+    expect(expandButton?.classList.contains("is-fullscreen")).toBe(true);
+    expect(expandButton?.getAttribute("aria-pressed")).toBe("true");
+    expect(expandButton?.getAttribute("aria-label")).toBe("Collapse preview");
+
+    dialog?.dispatchEvent(new Event("close"));
+
+    expect(panel?.classList.contains("fullscreen")).toBe(false);
+    expect(expandButton?.classList.contains("is-fullscreen")).toBe(false);
+    expect(expandButton?.getAttribute("aria-pressed")).toBe("false");
+    expect(expandButton?.getAttribute("aria-label")).toBe("Expand preview");
   });
 });

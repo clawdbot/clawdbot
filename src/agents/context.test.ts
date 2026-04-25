@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   applyConfiguredContextWindows,
@@ -6,6 +6,8 @@ import {
   resolveContextTokensForModel,
 } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
+
+vi.mock("../config/config.js", () => ({ loadConfig: () => ({}) }));
 
 function testModelContextWindow(id: string, contextWindow: number) {
   return {

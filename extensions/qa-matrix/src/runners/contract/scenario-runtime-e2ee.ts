@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createMatrixQaClient } from "../../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
@@ -26,6 +29,13 @@ import {
   MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
 } from "./scenario-media-fixtures.js";
 import {
+  formatMatrixQaCliCommand,
+  redactMatrixQaCliOutput,
+  runMatrixQaOpenClawCli,
+  startMatrixQaOpenClawCli,
+  type MatrixQaCliRunResult,
+} from "./scenario-runtime-cli.js";
+import {
   assertThreadReplyArtifact,
   assertTopLevelReplyArtifact,
   buildMatrixQaToken,
@@ -40,14 +50,45 @@ import type { MatrixQaReplyArtifact, MatrixQaScenarioExecution } from "./scenari
 
 const MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT = "/_matrix/client/v3/room_keys/version";
 const MATRIX_QA_ROOM_KEY_BACKUP_FAULT_RULE_ID = "room-key-backup-version-unavailable";
+const MATRIX_QA_OWNER_SIGNATURE_UPLOAD_BLOCKED_RULE_ID = "owner-signature-upload-blocked";
+const MATRIX_QA_KEYS_SIGNATURES_UPLOAD_ENDPOINT = "/_matrix/client/v3/keys/signatures/upload";
 
 type MatrixQaE2eeBootstrapResult = Awaited<ReturnType<typeof runMatrixQaE2eeBootstrap>>;
+type MatrixQaCliVerificationStatus = {
+  backup?: {
+    decryptionKeyCached?: boolean | null;
+    keyLoadError?: string | null;
+    matchesDecryptionKey?: boolean | null;
+    trusted?: boolean | null;
+  };
+  crossSigningVerified?: boolean;
+  verified?: boolean;
+  signedByOwner?: boolean;
+  deviceId?: string | null;
+  userId?: string | null;
+};
+type MatrixQaCliBackupRestoreStatus = {
+  success?: boolean;
+  backup?: MatrixQaCliVerificationStatus["backup"];
+  error?: string;
+};
+
+function isMatrixQaCliBackupUsable(backup: MatrixQaCliVerificationStatus["backup"]): boolean {
+  return Boolean(backup?.trusted && backup.matchesDecryptionKey && !backup.keyLoadError);
+}
 
 function requireMatrixQaE2eeOutputDir(context: MatrixQaScenarioContext) {
   if (!context.outputDir) {
     throw new Error("Matrix E2EE QA scenarios require an output directory");
   }
   return context.outputDir;
+}
+
+function requireMatrixQaCliRuntimeEnv(context: MatrixQaScenarioContext) {
+  if (!context.gatewayRuntimeEnv) {
+    throw new Error("Matrix CLI QA scenarios require the gateway runtime environment");
+  }
+  return context.gatewayRuntimeEnv;
 }
 
 function requireMatrixQaPassword(context: MatrixQaScenarioContext, actor: "driver" | "observer") {
@@ -75,6 +116,9 @@ function assertMatrixQaBootstrapSucceeded(label: string, result: MatrixQaE2eeBoo
   }
   if (!result.verification.verified || !result.verification.signedByOwner) {
     throw new Error(`${label} bootstrap did not leave the device verified by its owner`);
+  }
+  if (!result.verification.crossSigningVerified) {
+    throw new Error(`${label} bootstrap did not establish full Matrix identity trust`);
   }
   if (!result.crossSigning.published) {
     throw new Error(`${label} bootstrap did not publish cross-signing keys`);
@@ -190,6 +234,244 @@ function formatMatrixQaSasEmoji(summary: MatrixVerificationSummary) {
   return summary.sas?.emoji?.map(([emoji, label]) => `${emoji} ${label}`) ?? [];
 }
 
+function parseMatrixQaCliJsonText(text: string): unknown {
+  const candidate = text.trim();
+  if (!candidate) {
+    throw new Error("no JSON payload found");
+  }
+  return JSON.parse(candidate) as unknown;
+}
+
+function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
+  const stdout = result.stdout.trim();
+  const stderr = result.stderr.trim();
+  if (stdout && stderr) {
+    throw new Error(
+      `${formatMatrixQaCliCommand(result.args)} printed JSON with extra output\nstdout:\n${redactMatrixQaCliOutput(stdout)}\nstderr:\n${redactMatrixQaCliOutput(stderr)}`,
+    );
+  }
+  if (stdout) {
+    try {
+      return parseMatrixQaCliJsonText(stdout);
+    } catch (error) {
+      throw new Error(
+        `${formatMatrixQaCliCommand(result.args)} printed invalid JSON: ${
+          error instanceof Error ? error.message : String(error)
+        }\nstdout:\n${redactMatrixQaCliOutput(stdout)}`,
+        { cause: error },
+      );
+    }
+  }
+
+  if (!stderr) {
+    throw new Error(`${formatMatrixQaCliCommand(result.args)} did not print JSON`);
+  }
+  try {
+    return parseMatrixQaCliJsonText(stderr);
+  } catch (error) {
+    throw new Error(
+      `${formatMatrixQaCliCommand(result.args)} printed invalid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }\nstderr:\n${redactMatrixQaCliOutput(stderr)}`,
+      { cause: error },
+    );
+  }
+}
+
+function parseMatrixQaCliSasText(
+  text: string,
+  label: string,
+): { kind: "emoji"; value: string } | { kind: "decimal"; value: string } {
+  const emoji = text.match(/^SAS emoji:\s*(.+)$/m)?.[1]?.trim();
+  if (emoji) {
+    return { kind: "emoji", value: emoji };
+  }
+  const decimal = text.match(/^SAS decimals:\s*(.+)$/m)?.[1]?.trim();
+  if (decimal) {
+    return { kind: "decimal", value: decimal };
+  }
+  throw new Error(`${label} did not print SAS emoji or decimals`);
+}
+
+function parseMatrixQaCliSummaryField(text: string, field: string): string | null {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.match(new RegExp(`^${escaped}:\\s*(.+)$`, "m"))?.[1]?.trim() ?? null;
+}
+
+async function writeMatrixQaCliOutputArtifacts(params: {
+  label: string;
+  result: MatrixQaCliRunResult;
+  rootDir: string;
+}) {
+  await mkdir(params.rootDir, { mode: 0o700, recursive: true });
+  await chmod(params.rootDir, 0o700).catch(() => undefined);
+  const prefix = params.label.replace(/[^A-Za-z0-9_-]/g, "-");
+  const stdoutPath = path.join(params.rootDir, `${prefix}.stdout.txt`);
+  const stderrPath = path.join(params.rootDir, `${prefix}.stderr.txt`);
+  await Promise.all([
+    writeFile(stdoutPath, redactMatrixQaCliOutput(params.result.stdout), { mode: 0o600 }),
+    writeFile(stderrPath, redactMatrixQaCliOutput(params.result.stderr), { mode: 0o600 }),
+  ]);
+  return { stderrPath, stdoutPath };
+}
+
+async function assertMatrixQaPrivatePathMode(pathToCheck: string, label: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  const mode = (await stat(pathToCheck)).mode & 0o777;
+  if ((mode & 0o077) !== 0) {
+    throw new Error(`${label} permissions are too broad: ${mode.toString(8)}`);
+  }
+}
+
+function assertMatrixQaCliSasMatches(params: {
+  cliSas: ReturnType<typeof parseMatrixQaCliSasText>;
+  owner: MatrixVerificationSummary;
+}) {
+  if (params.cliSas.kind === "emoji") {
+    const ownerEmoji = formatMatrixQaSasEmoji(params.owner).join(" | ");
+    if (!ownerEmoji) {
+      throw new Error("Matrix owner client did not expose SAS emoji");
+    }
+    if (params.cliSas.value !== ownerEmoji) {
+      throw new Error("Matrix CLI SAS emoji did not match the owner client");
+    }
+    return ownerEmoji.split(" | ");
+  }
+
+  const ownerDecimal = params.owner.sas?.decimal?.join(" ");
+  if (!ownerDecimal) {
+    throw new Error("Matrix owner client did not expose SAS decimals");
+  }
+  if (params.cliSas.value !== ownerDecimal) {
+    throw new Error("Matrix CLI SAS decimals did not match the owner client");
+  }
+  return [ownerDecimal];
+}
+
+function isMatrixQaCliOwnerSelfVerification(params: {
+  cliDeviceId?: string;
+  driverUserId: string;
+  requireCompleted?: boolean;
+  requirePending?: boolean;
+  requireSas?: boolean;
+  summary: MatrixVerificationSummary;
+  transactionId?: string;
+}) {
+  const summary = params.summary;
+  if (
+    !summary.isSelfVerification ||
+    summary.initiatedByMe ||
+    summary.otherUserId !== params.driverUserId
+  ) {
+    return false;
+  }
+  if (params.transactionId) {
+    if (summary.transactionId !== params.transactionId) {
+      return false;
+    }
+  } else if (params.cliDeviceId && summary.otherDeviceId !== params.cliDeviceId) {
+    return false;
+  }
+  if (params.requirePending === true && !summary.pending) {
+    return false;
+  }
+  if (params.requireSas === true && !summary.hasSas) {
+    return false;
+  }
+  return params.requireCompleted !== true || summary.completed;
+}
+
+async function createMatrixQaCliSelfVerificationRuntime(params: {
+  accountId: string;
+  accessToken: string;
+  context: MatrixQaScenarioContext;
+  deviceId: string;
+  userId: string;
+}) {
+  const outputDir = requireMatrixQaE2eeOutputDir(params.context);
+  const rootDir = await mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-cli-qa-"),
+  );
+  const artifactDir = path.join(
+    outputDir,
+    "cli-self-verification",
+    randomUUID().replaceAll("-", "").slice(0, 12),
+  );
+  const stateDir = path.join(rootDir, "state");
+  const configPath = path.join(rootDir, "config.json");
+  await chmod(rootDir, 0o700).catch(() => undefined);
+  await assertMatrixQaPrivatePathMode(rootDir, "Matrix QA CLI temp directory");
+  await mkdir(artifactDir, { mode: 0o700, recursive: true });
+  await chmod(artifactDir, 0o700).catch(() => undefined);
+  await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
+  await mkdir(stateDir, { mode: 0o700, recursive: true });
+  await chmod(stateDir, 0o700).catch(() => undefined);
+  await assertMatrixQaPrivatePathMode(stateDir, "Matrix QA CLI state directory");
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        channels: {
+          matrix: {
+            defaultAccount: params.accountId,
+            accounts: {
+              [params.accountId]: {
+                accessToken: params.accessToken,
+                deviceId: params.deviceId,
+                encryption: true,
+                homeserver: params.context.baseUrl,
+                initialSyncLimit: 1,
+                name: "Matrix QA CLI self-verification",
+                network: {
+                  dangerouslyAllowPrivateNetwork: true,
+                },
+                startupVerification: "off",
+                userId: params.userId,
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    { flag: "wx", mode: 0o600 },
+  );
+  await assertMatrixQaPrivatePathMode(configPath, "Matrix QA CLI config file");
+  const env = {
+    ...requireMatrixQaCliRuntimeEnv(params.context),
+    FORCE_COLOR: "0",
+    NO_COLOR: "1",
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_DISABLE_AUTO_UPDATE: "1",
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+  const run = async (args: string[], timeoutMs = params.context.timeoutMs) =>
+    await runMatrixQaOpenClawCli({
+      args,
+      env,
+      timeoutMs,
+    });
+  const start = (args: string[], timeoutMs = params.context.timeoutMs) =>
+    startMatrixQaOpenClawCli({
+      args,
+      env,
+      timeoutMs,
+    });
+  return {
+    configPath,
+    dispose: async () => {
+      await rm(rootDir, { force: true, recursive: true });
+    },
+    run,
+    rootDir: artifactDir,
+    start,
+    stateDir,
+  };
+}
+
 function assertMatrixQaSasEmojiMatches(params: {
   initiator: MatrixVerificationSummary;
   recipient: MatrixVerificationSummary;
@@ -203,20 +485,6 @@ function assertMatrixQaSasEmojiMatches(params: {
     throw new Error("Matrix SAS emoji did not match between verification devices");
   }
   return initiatorEmoji;
-}
-
-function isMatrixQaOwnerVerificationOnlyRecoveryError(error: string | undefined) {
-  return error?.toLowerCase().includes("device is still not verified by its owner") === true;
-}
-
-function hasMatrixQaUsableRecoveryBackup(
-  result: Awaited<ReturnType<MatrixQaE2eeScenarioClient["verifyWithRecoveryKey"]>>,
-) {
-  return (
-    Boolean(result.backup.serverVersion) &&
-    result.backup.decryptionKeyCached !== false &&
-    result.backup.keyLoadError === null
-  );
 }
 
 function isMatrixQaE2eeNoticeTriggeredSutReply(params: {
@@ -405,6 +673,20 @@ function buildRoomKeyBackupUnavailableFaultRule(accessToken: string): MatrixQaFa
   };
 }
 
+function buildOwnerSignatureUploadBlockedFaultRule(accessToken: string): MatrixQaFaultProxyRule {
+  return {
+    id: MATRIX_QA_OWNER_SIGNATURE_UPLOAD_BLOCKED_RULE_ID,
+    match: (request) =>
+      request.method === "POST" &&
+      request.path === MATRIX_QA_KEYS_SIGNATURES_UPLOAD_ENDPOINT &&
+      request.bearerToken === accessToken,
+    response: () => ({
+      body: {},
+      status: 200,
+    }),
+  };
+}
+
 async function runMatrixQaFaultedE2eeBootstrap(context: MatrixQaScenarioContext): Promise<{
   faultHits: MatrixQaFaultProxyHit[];
   result: MatrixQaE2eeBootstrapResult;
@@ -431,6 +713,77 @@ async function runMatrixQaFaultedE2eeBootstrap(context: MatrixQaScenarioContext)
     };
   } finally {
     await proxy.stop();
+  }
+}
+
+async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
+  accessToken: string;
+  context: MatrixQaScenarioContext;
+  deviceId: string;
+  encodedRecoveryKey: string;
+  userId: string;
+}): Promise<{
+  faultHits: MatrixQaFaultProxyHit[];
+  restore: Awaited<ReturnType<MatrixQaE2eeScenarioClient["restoreRoomKeyBackup"]>>;
+  verification: Awaited<ReturnType<MatrixQaE2eeScenarioClient["verifyWithRecoveryKey"]>>;
+}> {
+  const proxy = await startMatrixQaFaultProxy({
+    targetBaseUrl: params.context.baseUrl,
+    rules: [buildOwnerSignatureUploadBlockedFaultRule(params.accessToken)],
+  });
+  const recoveryClient = await createMatrixQaE2eeScenarioClient({
+    accessToken: params.accessToken,
+    actorId: `driver-recovery-${randomUUID().slice(0, 8)}`,
+    baseUrl: proxy.baseUrl,
+    deviceId: params.deviceId,
+    observedEvents: params.context.observedEvents,
+    outputDir: requireMatrixQaE2eeOutputDir(params.context),
+    scenarioId: "matrix-e2ee-recovery-owner-verification-required",
+    timeoutMs: params.context.timeoutMs,
+    userId: params.userId,
+  });
+  try {
+    const verification = await recoveryClient.verifyWithRecoveryKey(params.encodedRecoveryKey);
+    const restore = await waitForMatrixQaNonEmptyRoomKeyRestore({
+      client: recoveryClient,
+      recoveryKey: params.encodedRecoveryKey,
+      timeoutMs: params.context.timeoutMs,
+    });
+    return {
+      faultHits: proxy.hits(),
+      restore,
+      verification,
+    };
+  } finally {
+    await recoveryClient.stop().catch(() => undefined);
+    await proxy.stop();
+  }
+}
+
+function assertMatrixQaFaultedRecoveryOwnerVerificationRequired(
+  faulted: Awaited<ReturnType<typeof runMatrixQaFaultedRecoveryOwnerVerification>>,
+) {
+  if (faulted.faultHits.length === 0) {
+    throw new Error("Matrix E2EE owner signature fault proxy was not exercised");
+  }
+  if (faulted.verification.success) {
+    throw new Error(
+      "Matrix E2EE recovery verification unexpectedly succeeded while owner signature upload was blocked",
+    );
+  }
+  if (!faulted.verification.recoveryKeyAccepted) {
+    throw new Error("Matrix E2EE recovery key was not accepted");
+  }
+  if (!faulted.verification.backupUsable) {
+    throw new Error("Matrix E2EE recovery key did not leave room-key backup usable");
+  }
+  if (faulted.verification.deviceOwnerVerified) {
+    throw new Error("Matrix E2EE recovery device should still require Matrix identity trust");
+  }
+  if (!faulted.restore.success) {
+    throw new Error(
+      `Matrix E2EE room-key backup restore failed after owner-verification fault: ${faulted.restore.error ?? "unknown error"}`,
+    );
   }
 }
 
@@ -617,6 +970,7 @@ export async function runMatrixQaE2eeBootstrapSuccessScenario(
       details: [
         "driver bootstrap succeeded through real Matrix crypto bootstrap",
         `device verified: ${result.verification.verified ? "yes" : "no"}`,
+        `cross-signing verified: ${result.verification.crossSigningVerified ? "yes" : "no"}`,
         `signed by owner: ${result.verification.signedByOwner ? "yes" : "no"}`,
         `cross-signing published: ${result.crossSigning.published ? "yes" : "no"}`,
         `room-key backup version: ${result.verification.backupVersion ?? "<none>"}`,
@@ -677,11 +1031,7 @@ export async function runMatrixQaE2eeRecoveryKeyLifecycleScenario(
       let cleanupRecoveryDevice = true;
       try {
         const recoveryVerification = await recoveryClient.verifyWithRecoveryKey(encodedRecoveryKey);
-        const recoveryKeyUsable =
-          recoveryVerification.success ||
-          isMatrixQaOwnerVerificationOnlyRecoveryError(recoveryVerification.error) ||
-          hasMatrixQaUsableRecoveryBackup(recoveryVerification);
-        if (!recoveryVerification.success && !recoveryKeyUsable) {
+        if (!recoveryVerification.success) {
           throw new Error(
             `Matrix E2EE recovery device verification failed: ${recoveryVerification.error ?? "unknown error"}`,
           );
@@ -709,9 +1059,10 @@ export async function runMatrixQaE2eeRecoveryKeyLifecycleScenario(
             bootstrapSuccess: ready.bootstrap?.success ?? true,
             recoveryDeviceId: recoveryDevice.deviceId,
             recoveryKeyId: recoveryKey?.keyId ?? null,
-            recoveryKeyUsable,
+            recoveryKeyUsable:
+              recoveryVerification.recoveryKeyAccepted && recoveryVerification.backupUsable,
             recoveryKeyStored: true,
-            recoveryVerified: recoveryVerification.success,
+            recoveryVerified: recoveryVerification.deviceOwnerVerified,
             restoreImported: restored.imported,
             restoreTotal: restored.total,
             seededEventId,
@@ -721,8 +1072,8 @@ export async function runMatrixQaE2eeRecoveryKeyLifecycleScenario(
             `bootstrap backup version: ${ready.verification.backupVersion ?? "<none>"}`,
             `seeded encrypted event: ${seededEventId}`,
             `recovery device: ${recoveryDevice.deviceId}`,
-            `recovery key usable: ${recoveryKeyUsable ? "yes" : "no"}`,
-            `recovery device verified: ${recoveryVerification.success ? "yes" : "no"}`,
+            `recovery key usable: ${recoveryVerification.backupUsable ? "yes" : "no"}`,
+            `recovery device verified: ${recoveryVerification.deviceOwnerVerified ? "yes" : "no"}`,
             `restore imported/total: ${restored.imported}/${restored.total}`,
             `restore loaded from secret storage: ${restored.loadedFromSecretStorage ? "yes" : "no"}`,
             `reset previous version: ${reset.previousVersion ?? "<none>"}`,
@@ -733,6 +1084,310 @@ export async function runMatrixQaE2eeRecoveryKeyLifecycleScenario(
         if (cleanupRecoveryDevice) {
           await recoveryClient.stop().catch(() => undefined);
           await client.deleteOwnDevices([recoveryDevice.deviceId]).catch(() => undefined);
+        }
+      }
+    },
+  );
+}
+
+export async function runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario(
+  context: MatrixQaScenarioContext,
+): Promise<MatrixQaScenarioExecution> {
+  const driverPassword = requireMatrixQaPassword(context, "driver");
+  return await withMatrixQaE2eeDriver(
+    context,
+    "matrix-e2ee-recovery-owner-verification-required",
+    async (client) => {
+      const { roomId } = resolveMatrixQaE2eeScenarioGroupRoom(
+        context,
+        "matrix-e2ee-recovery-owner-verification-required",
+      );
+      const ready = await ensureMatrixQaE2eeOwnDeviceVerified({
+        client,
+        label: "driver",
+      });
+      const recoveryKey = ready.recoveryKey;
+      const encodedRecoveryKey = recoveryKey?.encodedPrivateKey?.trim();
+      if (!encodedRecoveryKey) {
+        throw new Error("Matrix E2EE bootstrap did not expose an encoded recovery key");
+      }
+      const seededEventId = await client.sendTextMessage({
+        body: `E2EE recovery owner-verification seed ${randomUUID().slice(0, 8)}`,
+        roomId,
+      });
+      const loginClient = createMatrixQaClient({
+        baseUrl: context.baseUrl,
+      });
+      const recoveryDevice = await loginClient.loginWithPassword({
+        deviceName: "OpenClaw Matrix QA Owner Verification Required Device",
+        password: driverPassword,
+        userId: context.driverUserId,
+      });
+      if (!recoveryDevice.deviceId) {
+        throw new Error("Matrix E2EE recovery login did not return a secondary device id");
+      }
+      try {
+        const faulted = await runMatrixQaFaultedRecoveryOwnerVerification({
+          accessToken: recoveryDevice.accessToken,
+          context,
+          deviceId: recoveryDevice.deviceId,
+          encodedRecoveryKey,
+          userId: recoveryDevice.userId,
+        });
+        assertMatrixQaFaultedRecoveryOwnerVerificationRequired(faulted);
+        return {
+          artifacts: {
+            backupRestored: faulted.restore.success,
+            backupUsable: faulted.verification.backupUsable,
+            faultHitCount: faulted.faultHits.length,
+            faultedEndpoints: faulted.faultHits.map((hit) => hit.path),
+            faultRuleId: MATRIX_QA_OWNER_SIGNATURE_UPLOAD_BLOCKED_RULE_ID,
+            recoveryDeviceId: recoveryDevice.deviceId,
+            recoveryKeyAccepted: faulted.verification.recoveryKeyAccepted,
+            recoveryKeyId: recoveryKey?.keyId ?? null,
+            recoveryVerified: faulted.verification.deviceOwnerVerified,
+            restoreImported: faulted.restore.imported,
+            restoreTotal: faulted.restore.total,
+            verificationSuccess: faulted.verification.success,
+          },
+          details: [
+            "driver recovery key unlocked backup while owner signature upload was blocked",
+            `seeded encrypted event: ${seededEventId}`,
+            `recovery device: ${recoveryDevice.deviceId}`,
+            `fault hits: ${faulted.faultHits.length}`,
+            `recovery key accepted: ${faulted.verification.recoveryKeyAccepted ? "yes" : "no"}`,
+            `backup usable: ${faulted.verification.backupUsable ? "yes" : "no"}`,
+            `device owner verified: ${faulted.verification.deviceOwnerVerified ? "yes" : "no"}`,
+            `restore imported/total: ${faulted.restore.imported}/${faulted.restore.total}`,
+          ].join("\n"),
+        };
+      } finally {
+        await client.deleteOwnDevices([recoveryDevice.deviceId]).catch(() => undefined);
+      }
+    },
+  );
+}
+
+export async function runMatrixQaE2eeCliSelfVerificationScenario(
+  context: MatrixQaScenarioContext,
+): Promise<MatrixQaScenarioExecution> {
+  const driverPassword = requireMatrixQaPassword(context, "driver");
+  const accountId = "cli";
+  return await withMatrixQaE2eeDriver(
+    context,
+    "matrix-e2ee-cli-self-verification",
+    async (owner) => {
+      const ownerReady = await ensureMatrixQaE2eeOwnDeviceVerified({
+        client: owner,
+        label: "driver",
+      });
+      const encodedRecoveryKey = ownerReady.recoveryKey?.encodedPrivateKey?.trim();
+      if (!encodedRecoveryKey) {
+        throw new Error("Matrix E2EE self-verification scenario did not expose a recovery key");
+      }
+      const loginClient = createMatrixQaClient({
+        baseUrl: context.baseUrl,
+      });
+      const cliDevice = await loginClient.loginWithPassword({
+        deviceName: "OpenClaw Matrix QA CLI Self Verification Device",
+        password: driverPassword,
+        userId: context.driverUserId,
+      });
+      if (!cliDevice.deviceId) {
+        throw new Error("Matrix E2EE CLI verification login did not return a device id");
+      }
+
+      const cli = await createMatrixQaCliSelfVerificationRuntime({
+        accountId,
+        accessToken: cliDevice.accessToken,
+        context,
+        deviceId: cliDevice.deviceId,
+        userId: cliDevice.userId,
+      });
+      try {
+        const restoreResult = await cli.run([
+          "matrix",
+          "verify",
+          "backup",
+          "restore",
+          "--account",
+          accountId,
+          "--recovery-key",
+          encodedRecoveryKey,
+          "--json",
+        ]);
+        const restoreArtifacts = await writeMatrixQaCliOutputArtifacts({
+          label: "verify-backup-restore",
+          result: restoreResult,
+          rootDir: cli.rootDir,
+        });
+        const restored = parseMatrixQaCliJson(restoreResult) as MatrixQaCliBackupRestoreStatus;
+        if (
+          restored.success !== true ||
+          restored.backup?.decryptionKeyCached !== true ||
+          restored.backup?.matchesDecryptionKey !== true ||
+          restored.backup?.keyLoadError
+        ) {
+          throw new Error(
+            `Matrix CLI recovery key did not load matching room-key backup material before self-verification: ${
+              restored.error ?? restored.backup?.keyLoadError ?? "unknown backup state"
+            }`,
+          );
+        }
+        const session = cli.start(["matrix", "verify", "self", "--account", accountId]);
+        try {
+          const requestOutput = await session.waitForOutput(
+            (output) => output.text.includes("Accept this verification request"),
+            "self-verification request guidance",
+            context.timeoutMs,
+          );
+          const cliTransactionId = parseMatrixQaCliSummaryField(
+            requestOutput.text,
+            "Transaction id",
+          );
+          const ownerRequested = await waitForMatrixQaVerificationSummary({
+            client: owner,
+            label: "owner received CLI self-verification request",
+            predicate: (summary) =>
+              isMatrixQaCliOwnerSelfVerification({
+                cliDeviceId: cliTransactionId ? undefined : cliDevice.deviceId,
+                driverUserId: context.driverUserId,
+                requirePending: true,
+                summary,
+                transactionId: cliTransactionId ?? undefined,
+              }),
+            timeoutMs: context.timeoutMs,
+          });
+          if (ownerRequested.canAccept) {
+            await owner.acceptVerification(ownerRequested.id);
+          }
+
+          const sasOutput = await session.waitForOutput(
+            (output) => /^SAS (?:emoji|decimals):/m.test(output.text),
+            "SAS emoji or decimals",
+            context.timeoutMs,
+          );
+          const cliSas = parseMatrixQaCliSasText(
+            sasOutput.text,
+            "interactive openclaw matrix verify self",
+          );
+          const ownerSas = await waitForMatrixQaVerificationSummary({
+            client: owner,
+            label: "owner SAS for CLI self-verification",
+            predicate: (summary) =>
+              isMatrixQaCliOwnerSelfVerification({
+                cliDeviceId: cliTransactionId ? undefined : cliDevice.deviceId,
+                driverUserId: context.driverUserId,
+                requireSas: true,
+                summary,
+                transactionId: cliTransactionId ?? undefined,
+              }),
+            timeoutMs: context.timeoutMs,
+          });
+          const sasArtifact = assertMatrixQaCliSasMatches({
+            cliSas,
+            owner: ownerSas,
+          });
+          await session.writeStdin("yes\n");
+          await owner.confirmVerificationSas(ownerSas.id);
+          const completedCli = await session.wait();
+          const selfVerificationArtifacts = await writeMatrixQaCliOutputArtifacts({
+            label: "verify-self",
+            result: completedCli,
+            rootDir: cli.rootDir,
+          });
+          if (!/^Device verified by owner:\s*yes$/m.test(completedCli.stdout)) {
+            throw new Error(
+              "Interactive Matrix CLI self-verification did not report final device verification",
+            );
+          }
+          if (!/^Cross-signing verified:\s*yes$/m.test(completedCli.stdout)) {
+            throw new Error(
+              "Interactive Matrix CLI self-verification did not report full Matrix identity trust",
+            );
+          }
+          const completedOwner = await waitForMatrixQaVerificationSummary({
+            client: owner,
+            label: "owner completed CLI self-verification",
+            predicate: (summary) =>
+              isMatrixQaCliOwnerSelfVerification({
+                cliDeviceId: cliTransactionId ? undefined : cliDevice.deviceId,
+                driverUserId: context.driverUserId,
+                requireCompleted: true,
+                summary,
+                transactionId: cliTransactionId ?? undefined,
+              }),
+            timeoutMs: context.timeoutMs,
+          });
+          const cliVerificationId =
+            completedCli.stdout.match(/^Verification id:\s*(\S+)/m)?.[1] ?? "interactive-cli";
+          const statusResult = await cli.run([
+            "matrix",
+            "verify",
+            "status",
+            "--account",
+            accountId,
+            "--json",
+          ]);
+          const statusArtifacts = await writeMatrixQaCliOutputArtifacts({
+            label: "verify-status",
+            result: statusResult,
+            rootDir: cli.rootDir,
+          });
+          const status = parseMatrixQaCliJson(statusResult) as MatrixQaCliVerificationStatus;
+          if (
+            status.verified !== true ||
+            status.crossSigningVerified !== true ||
+            status.signedByOwner !== true ||
+            status.backup?.trusted !== true ||
+            status.backup?.matchesDecryptionKey !== true ||
+            status.backup?.keyLoadError
+          ) {
+            throw new Error(
+              `Matrix CLI device was not fully usable after SAS completion: ownerVerified=${
+                status.verified === true &&
+                status.crossSigningVerified === true &&
+                status.signedByOwner === true
+                  ? "yes"
+                  : "no"
+              }, backupUsable=${isMatrixQaCliBackupUsable(status.backup) ? "yes" : "no"}${
+                status.backup?.keyLoadError ? `, backupError=${status.backup.keyLoadError}` : ""
+              }`,
+            );
+          }
+          return {
+            artifacts: {
+              completedVerificationIds: [cliVerificationId, completedOwner.id],
+              currentDeviceId: status.deviceId ?? cliDevice.deviceId,
+              ...(cliSas.kind === "emoji" ? { sasEmoji: sasArtifact } : {}),
+              secondaryDeviceId: cliDevice.deviceId,
+            },
+            details: [
+              "Matrix CLI self-verification established full Matrix identity trust through interactive openclaw matrix verify self",
+              "cli secret config cleaned after run: yes",
+              `cli backup restore stdout: ${restoreArtifacts.stdoutPath}`,
+              `cli backup restore stderr: ${restoreArtifacts.stderrPath}`,
+              `cli verify self stdout: ${selfVerificationArtifacts.stdoutPath}`,
+              `cli verify self stderr: ${selfVerificationArtifacts.stderrPath}`,
+              `cli verify status stdout: ${statusArtifacts.stdoutPath}`,
+              `cli verify status stderr: ${statusArtifacts.stderrPath}`,
+              `cli device: ${cliDevice.deviceId}`,
+              `cli verification id: ${cliVerificationId}`,
+              `owner-side verification id: ${completedOwner.id}`,
+              `transaction: ${completedOwner.transactionId ?? "<none>"}`,
+              `cli verified by owner: ${status.verified ? "yes" : "no"}`,
+              `cli cross-signing verified: ${status.crossSigningVerified ? "yes" : "no"}`,
+              `cli backup usable: ${isMatrixQaCliBackupUsable(status.backup) ? "yes" : "no"}`,
+            ].join("\n"),
+          };
+        } finally {
+          session.kill();
+        }
+      } finally {
+        try {
+          await cli.dispose();
+        } finally {
+          await owner.deleteOwnDevices([cliDevice.deviceId]).catch(() => undefined);
         }
       }
     },

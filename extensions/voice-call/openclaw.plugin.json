@@ -402,6 +402,10 @@
           "instructions": {
             "type": "string"
           },
+          "toolPolicy": {
+            "type": "string",
+            "enum": ["safe-read-only", "owner", "none"]
+          },
           "tools": {
             "type": "array",
             "items": {

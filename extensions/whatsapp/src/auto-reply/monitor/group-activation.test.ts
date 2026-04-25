@@ -1,5 +1,7 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeSessionStore } from "../../auto-reply.test-harness.js";
 import { loadSessionStore } from "../config.runtime.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
@@ -12,6 +14,20 @@ type SessionStoreEntry = {
   sessionId?: unknown;
   updatedAt?: unknown;
 };
+
+async function makeSessionStore(
+  entries: Record<string, unknown> = {},
+): Promise<{ storePath: string; cleanup: () => Promise<void> }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
+  const storePath = path.join(dir, "sessions.json");
+  await fs.writeFile(storePath, JSON.stringify(entries));
+  return {
+    storePath,
+    cleanup: async () => {
+      await fs.rm(dir, { recursive: true, force: true });
+    },
+  };
+}
 
 const resolveWorkGroupActivation = (storePath: string) =>
   resolveGroupActivationFor({

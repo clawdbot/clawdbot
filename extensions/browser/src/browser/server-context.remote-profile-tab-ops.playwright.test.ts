@@ -59,6 +59,41 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("assigns stable tab ids and resolves labels", async () => {
+    const listPagesViaPlaywright = vi.fn(async () => [
+      page("A", "https://example.com"),
+      page("B", "https://docs.example.com"),
+    ]);
+    const focusPageByTargetIdViaPlaywright = vi.fn(async () => {});
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      focusPageByTargetIdViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { remote } = deps.createRemoteRouteHarness();
+
+    const tabs = await remote.listTabs();
+    expect(tabs.map((tab) => [tab.targetId, tab.tabId])).toEqual([
+      ["A", "t1"],
+      ["B", "t2"],
+    ]);
+    expect(tabs.map((tab) => tab.suggestedTargetId)).toEqual(["t1", "t2"]);
+
+    const labeled = await remote.labelTab("t2", "docs");
+    expect(labeled).toMatchObject({
+      targetId: "B",
+      suggestedTargetId: "docs",
+      tabId: "t2",
+      label: "docs",
+    });
+
+    await remote.focusTab("docs");
+    expect(focusPageByTargetIdViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "B" }),
+    );
+  });
+
   it("prefers lastTargetId for remote profiles when targetId is omitted", async () => {
     const responses = [
       [

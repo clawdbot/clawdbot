@@ -232,6 +232,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       to,
       text,
       mediaUrl,
+      audioAsVoice,
       accountId,
       mediaLocalRoots,
       replyToId,
@@ -271,6 +272,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             accountId: accountId ?? undefined,
             mediaLocalRoots,
             replyToMessageId,
+            ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
         } catch (err) {
           // Log the error for debugging

@@ -17,6 +17,16 @@ export type BrowserActRequest =
       timeoutMs?: number;
     }
   | {
+      kind: "clickCoords";
+      x: number;
+      y: number;
+      targetId?: string;
+      doubleClick?: boolean;
+      button?: string;
+      delayMs?: number;
+      timeoutMs?: number;
+    }
+  | {
       kind: "type";
       ref?: string;
       selector?: string;

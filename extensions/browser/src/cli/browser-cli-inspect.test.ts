@@ -101,12 +101,17 @@ describe("browser cli snapshot defaults", () => {
       args: ["--format", "aria"],
       expectMode: undefined,
     },
+    {
+      label: "does not apply config snapshot defaults to explicit ai snapshots",
+      args: ["--format", "ai"],
+      expectMode: undefined,
+    },
   ])("$label", async ({ args, expectMode }) => {
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
 
-    if (args.includes("--format")) {
+    if (args.includes("--format") && args.includes("aria")) {
       gatewayMocks.callGatewayFromCli.mockResolvedValueOnce({
         ok: true,
         format: "aria",
@@ -143,6 +148,14 @@ describe("browser cli snapshot defaults", () => {
     });
   });
 
+  it("passes URL expansion for snapshots", async () => {
+    const params = await runSnapshot(["--urls"]);
+    expect(params?.query).toMatchObject({
+      format: "ai",
+      urls: true,
+    });
+  });
+
   it("sends screenshot request with trimmed target id and jpeg type", async () => {
     const params = await runBrowserInspect(["screenshot", " tab-1 ", "--type", "jpeg"], true);
     expect(params?.path).toBe("/screenshot");
@@ -150,6 +163,15 @@ describe("browser cli snapshot defaults", () => {
       targetId: "tab-1",
       type: "jpeg",
       fullPage: false,
+    });
+  });
+
+  it("passes screenshot labels", async () => {
+    const params = await runBrowserInspect(["screenshot", "tab-1", "--labels"], true);
+    expect(params?.path).toBe("/screenshot");
+    expect((params as { body?: Record<string, unknown> } | undefined)?.body).toMatchObject({
+      targetId: "tab-1",
+      labels: true,
     });
   });
 });

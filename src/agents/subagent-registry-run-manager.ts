@@ -6,7 +6,7 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { waitForAgentRun } from "./run-wait.js";
+import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
@@ -30,6 +30,7 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
+const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
 
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
@@ -75,6 +76,7 @@ export function createSubagentRunManager(params: {
   resumeSubagentRun(runId: string): void;
   clearPendingLifecycleError(runId: string): void;
   resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
+  scheduleOrphanRecovery(args?: { delayMs?: number; maxRetries?: number }): void;
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
     reason: "completed" | "deleted" | "released";
@@ -112,6 +114,26 @@ export function createSubagentRunManager(params: {
         return;
       }
       if (wait.status === "pending") {
+        return;
+      }
+      if (wait.status === "error" && isRecoverableAgentWaitError(wait.error)) {
+        log.info("subagent wait interrupted; scheduling recovery", {
+          runId,
+          childSessionKey: expectedEntry?.childSessionKey ?? entry?.childSessionKey,
+          error: wait.error,
+        });
+        params.scheduleOrphanRecovery({ delayMs: 1_000 });
+        const scheduledEntry = entry;
+        setTimeout(() => {
+          if (!scheduledEntry) {
+            return;
+          }
+          const current = params.runs.get(runId);
+          if (!current || current !== scheduledEntry || typeof current.endedAt === "number") {
+            return;
+          }
+          void waitForSubagentCompletion(runId, waitTimeoutMs, scheduledEntry);
+        }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
         return;
       }
       let mutated = false;

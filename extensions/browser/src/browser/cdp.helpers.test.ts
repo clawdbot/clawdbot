@@ -159,6 +159,7 @@ function createProfile(overrides: Partial<ResolvedBrowserProfile>): ResolvedBrow
     driver: "openclaw",
     attachOnly: false,
     ...overrides,
+    headless: overrides.headless ?? false,
   };
 }
 

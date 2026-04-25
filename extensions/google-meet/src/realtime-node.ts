@@ -13,6 +13,7 @@ import {
 } from "./agent-consult.js";
 import type { GoogleMeetConfig } from "./config.js";
 import { resolveGoogleMeetRealtimeProvider } from "./realtime.js";
+import type { GoogleMeetChromeHealth } from "./transports/types.js";
 
 export type ChromeNodeRealtimeAudioBridgeHandle = {
   type: "node-command-pair";
@@ -20,6 +21,7 @@ export type ChromeNodeRealtimeAudioBridgeHandle = {
   nodeId: string;
   bridgeId: string;
   speak: (instructions?: string) => void;
+  getHealth: () => GoogleMeetChromeHealth;
   stop: () => Promise<void>;
 };
 
@@ -45,6 +47,11 @@ export async function startNodeRealtimeAudioBridge(params: {
 }): Promise<ChromeNodeRealtimeAudioBridgeHandle> {
   let stopped = false;
   let bridge: RealtimeVoiceBridgeSession | null = null;
+  let realtimeReady = false;
+  let lastInputAt: string | undefined;
+  let lastOutputAt: string | undefined;
+  let lastInputBytes = 0;
+  let lastOutputBytes = 0;
   const resolved = resolveGoogleMeetRealtimeProvider({
     config: params.config,
     fullConfig: params.fullConfig,
@@ -83,12 +90,14 @@ export async function startNodeRealtimeAudioBridge(params: {
     providerConfig: resolved.providerConfig,
     instructions: params.config.realtime.instructions,
     initialGreetingInstructions: params.config.realtime.introMessage,
-    triggerGreetingOnReady: Boolean(params.config.realtime.introMessage),
+    triggerGreetingOnReady: false,
     markStrategy: "ack-immediately",
     tools: resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy),
     audioSink: {
       isOpen: () => !stopped,
       sendAudio: (muLaw) => {
+        lastOutputAt = new Date().toISOString();
+        lastOutputBytes += muLaw.byteLength;
         void params.runtime.nodes
           .invoke({
             nodeId: params.nodeId,
@@ -149,9 +158,13 @@ export async function startNodeRealtimeAudioBridge(params: {
       void stop();
     },
     onClose: (reason) => {
+      realtimeReady = false;
       if (reason === "error") {
         void stop();
       }
+    },
+    onReady: () => {
+      realtimeReady = true;
     },
   });
 
@@ -169,10 +182,13 @@ export async function startNodeRealtimeAudioBridge(params: {
           params: { action: "pullAudio", bridgeId: params.bridgeId, timeoutMs: 250 },
           timeoutMs: 2_000,
         });
-        const result = asRecord(raw);
+        const result = asRecord(asRecord(raw).payload ?? raw);
         const base64 = readString(result.base64);
         if (base64) {
-          bridge?.sendAudio(Buffer.from(base64, "base64"));
+          const audio = Buffer.from(base64, "base64");
+          lastInputAt = new Date().toISOString();
+          lastInputBytes += audio.byteLength;
+          bridge?.sendAudio(audio);
         }
         if (result.closed === true) {
           await stop();
@@ -194,6 +210,17 @@ export async function startNodeRealtimeAudioBridge(params: {
     speak: (instructions) => {
       bridge?.triggerGreeting(instructions);
     },
+    getHealth: () => ({
+      providerConnected: bridge?.bridge.isConnected() ?? false,
+      realtimeReady,
+      audioInputActive: lastInputBytes > 0,
+      audioOutputActive: lastOutputBytes > 0,
+      lastInputAt,
+      lastOutputAt,
+      lastInputBytes,
+      lastOutputBytes,
+      bridgeClosed: stopped,
+    }),
     stop,
   };
 }

@@ -6,8 +6,6 @@ read_when:
 title: "Signal"
 ---
 
-# Signal (signal-cli)
-
 Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-RPC + SSE.
 
 ## Prerequisites
@@ -210,6 +208,7 @@ Groups:
 - Outbound text is chunked to `channels.signal.textChunkLimit` (default 4000).
 - Optional newline chunking: set `channels.signal.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
 - Attachments supported (base64 fetched from `signal-cli`).
+- Voice-note attachments use the `signal-cli` filename as a MIME fallback when `contentType` is missing, so audio transcription can still classify AAC voice memos.
 - Default media cap: `channels.signal.mediaMaxMb` (default 8).
 - Use `channels.signal.ignoreAttachments` to skip downloading media.
 - Group history context uses `channels.signal.historyLimit` (or `channels.signal.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).

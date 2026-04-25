@@ -339,6 +339,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../bootstrap-files.js", () => ({
     makeBootstrapWarn: vi.fn(() => () => {}),
+    resolveContextInjectionMode: vi.fn(() => "always"),
     resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
   }));
 
@@ -359,7 +360,10 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../docs-path.js", () => ({
-    resolveOpenClawDocsPath: vi.fn(async () => undefined),
+    resolveOpenClawReferencePaths: vi.fn(async () => ({
+      docsPath: undefined,
+      sourcePath: undefined,
+    })),
   }));
 
   vi.doMock("../channel-tools.js", () => ({
@@ -390,6 +394,7 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("./extra-params.js", () => ({
     applyExtraParamsToAgent: applyExtraParamsToAgentMock,
     resolveAgentTransportOverride: resolveAgentTransportOverrideMock,
+    resolvePreparedExtraParams: vi.fn(() => ({})),
   }));
 
   vi.doMock("./tool-split.js", () => ({

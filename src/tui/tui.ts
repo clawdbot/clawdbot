@@ -46,6 +46,7 @@ import type {
   SessionInfo,
   SessionScope,
   TuiOptions,
+  TuiResult,
   TuiStateAccess,
 } from "./tui-types.js";
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
@@ -283,7 +284,7 @@ export function resolveCtrlCAction(params: {
   };
 }
 
-export async function runTui(opts: TuiOptions) {
+export async function runTui(opts: TuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true;
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
@@ -318,6 +319,7 @@ export async function runTui(opts: TuiOptions) {
   let sessionInfo: SessionInfo = {};
   let lastCtrlCAt = 0;
   let exitRequested = false;
+  let exitResult: TuiResult = { exitReason: "exit" };
   let activityStatus = "idle";
   let connectionStatus = isLocalMode ? "starting local runtime" : "connecting";
   let statusTimeout: NodeJS.Timeout | null = null;
@@ -906,14 +908,19 @@ export async function runTui(opts: TuiOptions) {
     clearLocalBtwRunIds,
   });
 
-  const requestExit = () => {
+  let finishTui: (() => void) | null = null;
+  const requestExit = (result?: Partial<TuiResult>) => {
     if (exitRequested) {
       return;
     }
     exitRequested = true;
+    exitResult = {
+      exitReason: result?.exitReason ?? "exit",
+      ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
+    };
     client.stop();
     void drainAndStopTuiSafely(tui).then(() => {
-      process.exit(0);
+      finishTui?.();
     });
   };
 
@@ -1113,8 +1120,12 @@ export async function runTui(opts: TuiOptions) {
       }
       process.removeListener("SIGINT", sigintHandler);
       process.removeListener("SIGTERM", sigtermHandler);
+      process.removeListener("exit", finish);
+      finishTui = null;
       resolve();
     };
+    finishTui = finish;
     process.once("exit", finish);
   });
+  return exitResult;
 }

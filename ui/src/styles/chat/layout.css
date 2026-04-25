@@ -151,16 +151,19 @@
   align-self: center;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 7px 14px;
   margin: 0 auto 8px;
+  max-width: calc(100% - 20px);
   border-radius: var(--radius-full);
   border: 1px solid color-mix(in srgb, var(--ctx-color, #d97706) 35%, transparent);
   background: var(--ctx-bg, rgba(217, 119, 6, 0.12));
   color: var(--ctx-color, #d97706);
   font-size: 13px;
   line-height: 1.2;
-  white-space: nowrap;
+  white-space: normal;
   user-select: none;
   animation: fade-in 0.2s var(--ease-out);
 }
@@ -175,6 +178,52 @@
 .context-notice__detail {
   color: color-mix(in srgb, currentColor 72%, var(--muted));
   font-variant-numeric: tabular-nums;
+}
+
+.context-notice__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, currentColor 38%, transparent);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: currentColor;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 150ms ease-out,
+    border-color 150ms ease-out,
+    opacity 150ms ease-out;
+}
+
+.context-notice__action:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  border-color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.context-notice__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.context-notice__action svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.context-notice__action--busy svg {
+  animation: compaction-spin 1s linear infinite;
 }
 
 /* Chat compose - sticky at bottom */
@@ -1113,6 +1162,19 @@
   display: grid;
   place-items: center;
   overflow: hidden;
+}
+
+.agent-chat__avatar--text {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-lg);
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  color: var(--foreground);
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  font-weight: 700;
 }
 
 .agent-chat__avatar--logo img {

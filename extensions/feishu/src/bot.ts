@@ -54,7 +54,11 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 import type { FeishuMessageEvent } from "./event-types.js";
-import type { FeishuMessageContext, FeishuMessageInfo } from "./types.js";
+import {
+  isFeishuGroupChatType,
+  type FeishuMessageContext,
+  type FeishuMessageInfo,
+} from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
 export { toMessageResourceType } from "./bot-content.js";
@@ -300,7 +304,7 @@ export async function handleFeishuMessage(params: {
   }
 
   let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
-  const isGroup = ctx.chatType === "group";
+  const isGroup = isFeishuGroupChatType(ctx.chatType);
   const isDirect = !isGroup;
   const senderUserId = normalizeOptionalString(event.sender.sender_id.user_id);
 
@@ -391,6 +395,7 @@ export async function handleFeishuMessage(params: {
         messageId: ctx.messageId,
         rootId: ctx.rootId,
         threadId: ctx.threadId,
+        chatType: ctx.chatType,
         groupConfig,
         feishuCfg,
       })

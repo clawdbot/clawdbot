@@ -614,6 +614,29 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
+  it("overwrites an existing primary when login uses --set-default", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          models: { "anthropic/claude-opus-4-6": {} },
+        },
+      },
+    };
+
+    await modelsAuthLoginCommand({ provider: "openai-codex", setDefault: true }, runtime);
+
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.5",
+    });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-6": {},
+      "openai-codex/gpt-5.5": {},
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.5");
+  });
+
   it("survives lockout clearing failure without blocking login", async () => {
     const runtime = createRuntime();
     mocks.loadAuthProfileStoreForRuntime.mockImplementation(() => {

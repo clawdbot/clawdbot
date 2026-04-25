@@ -126,7 +126,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         bootstrapFiles: [],
         contextFiles: [],
       })),
-      resolveOpenClawDocsPath: vi.fn(async () => null),
+      resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);

@@ -152,6 +152,141 @@ describe("pruneContextMessages", () => {
     ).not.toThrow();
   });
 
+  it("does not crash on toolResult with malformed text block (missing text string)", () => {
+    // Regression: a plugin returning undefined produces {type: "text"} with no text property,
+    // which crashed estimateTextAndImageChars / collectTextSegments / collectPrunableToolResultSegments.
+    // See https://github.com/openclaw/openclaw/issues/34979
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "sentinel_control",
+      content: [{ type: "text" }],
+      isError: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      makeUser("remove sentinel"),
+      makeAssistant([
+        { type: "toolCall", toolCallId: "call_1", toolName: "sentinel_control", arguments: {} },
+      ] as unknown as AssistantContentBlock[]),
+      malformedToolResult,
+      makeUser("follow up"),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    expect(() =>
+      pruneContextMessages({
+        messages,
+        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        ctx: CONTEXT_WINDOW_1M,
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not crash on toolResult with malformed text block during soft-trim (image path)", () => {
+    // The collectPrunableToolResultSegments path is exercised when the tool result
+    // contains image blocks alongside a malformed text block.
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "read",
+      content: [{ type: "text" }, { type: "image", data: "img", mimeType: "image/png" }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      makeUser("show image"),
+      malformedToolResult,
+      makeAssistant([{ type: "text", text: "here it is" }]),
+    ];
+
+    expect(() =>
+      pruneContextMessages({
+        messages,
+        settings: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+          keepLastAssistants: 1,
+          softTrimRatio: 0,
+          hardClear: {
+            ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+            enabled: false,
+          },
+          softTrim: {
+            maxChars: 5_000,
+            headChars: 2_000,
+            tailChars: 2_000,
+          },
+        },
+        ctx: CONTEXT_WINDOW_1M,
+        isToolPrunable: () => true,
+        contextWindowTokensOverride: 1,
+      }),
+    ).not.toThrow();
+  });
+
+  it("counts malformed non-string text blocks when deciding to trim tool results", () => {
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "read",
+      content: [{ type: "text", text: { payload: "X".repeat(5_000) } }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const result = pruneContextMessages({
+      messages: [
+        makeUser("show data"),
+        malformedToolResult,
+        makeAssistant([{ type: "text", text: "done" }]),
+      ],
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 200,
+          headChars: 80,
+          tailChars: 40,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    const toolResult = result.find((message) => message.role === "toolResult") as Extract<
+      AgentMessage,
+      { role: "toolResult" }
+    >;
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toContain("[Tool result trimmed:");
+  });
+
+  it("does not crash on toolResult with null content entries", () => {
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "read",
+      content: [null, { type: "text", text: "ok" }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      makeUser("hello"),
+      malformedToolResult,
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    expect(() =>
+      pruneContextMessages({
+        messages,
+        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        ctx: CONTEXT_WINDOW_1M,
+      }),
+    ).not.toThrow();
+  });
+
   it("handles well-formed thinking blocks correctly", () => {
     const messages: AgentMessage[] = [
       makeUser("hello"),

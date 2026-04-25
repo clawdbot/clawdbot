@@ -526,6 +526,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           cfg,
           agentId: effectiveAgentId,
           sessionKey: outboundSessionKey,
+          conversationType: outboundRoute?.chatType,
         });
         const results = await deliverOutboundPayloads({
           cfg,

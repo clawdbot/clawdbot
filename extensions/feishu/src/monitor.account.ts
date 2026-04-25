@@ -1,7 +1,6 @@
 import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
   handleFeishuMessage,
@@ -10,50 +9,30 @@ import {
   type FeishuBotAddedEvent,
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
-import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { createEventDispatcher } from "./client.js";
-import { handleFeishuCommentEvent } from "./comment-handler.js";
 import { isRecord, readString } from "./comment-shared.js";
 import {
-  claimUnprocessedFeishuMessage,
   hasProcessedFeishuMessage,
   recordProcessedFeishuMessage,
-  releaseFeishuMessageProcessing,
   warmupDedupFromDisk,
 } from "./dedup.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
-import { parseFeishuDriveCommentNoticeEventPayload } from "./monitor.comment.js";
+import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
+import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
+import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
-import { createSequentialQueue } from "./sequential-queue.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 
-export class FeishuRetryableSyntheticEventError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "FeishuRetryableSyntheticEventError";
-  }
-}
-
-function isFeishuRetryableSyntheticEventError(
-  error: unknown,
-): error is FeishuRetryableSyntheticEventError {
-  return (
-    error instanceof FeishuRetryableSyntheticEventError ||
-    (typeof error === "object" &&
-      error !== null &&
-      "name" in error &&
-      error.name === "FeishuRetryableSyntheticEventError")
-  );
-}
+export { FeishuRetryableSyntheticEventError };
 
 export type FeishuReactionCreatedEvent = {
   message_id: string;
@@ -104,6 +83,7 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
+  const { resolveFeishuAccount } = await import("./accounts.js");
   const account = resolveFeishuAccount({ cfg, accountId });
   const reactionNotifications = account.config.reactionNotifications ?? "own";
   if (reactionNotifications === "off") {
@@ -176,7 +156,9 @@ export async function resolveReactionSyntheticEvent(
 }
 
 function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
-  return value === "group" || value === "private" || value === "p2p" ? value : undefined;
+  return value === "group" || value === "topic_group" || value === "private" || value === "p2p"
+    ? value
+    : undefined;
 }
 
 type RegisterEventHandlersContext = {
@@ -186,19 +168,6 @@ type RegisterEventHandlersContext = {
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
 };
-
-type FeishuBotMenuEvent = {
-  event_key?: string;
-  timestamp?: string | number;
-  operator?: {
-    operator_name?: string;
-    operator_id?: { open_id?: string; user_id?: string; union_id?: string };
-  };
-};
-
-function readStringOrNumber(value: unknown): string | number | undefined {
-  return typeof value === "string" || typeof value === "number" ? value : undefined;
-}
 
 function parseFeishuBotAddedEventPayload(value: unknown): FeishuBotAddedEvent | null {
   if (!isRecord(value) || !readString(value.chat_id) || !isRecord(value.operator_id)) {
@@ -212,32 +181,6 @@ function parseFeishuBotRemovedChatId(value: unknown): string | null {
     return null;
   }
   return readString(value.chat_id) ?? null;
-}
-
-function parseFeishuBotMenuEvent(value: unknown): FeishuBotMenuEvent | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const operator = value.operator;
-  if (operator !== undefined && !isRecord(operator)) {
-    return null;
-  }
-  return {
-    event_key: readString(value.event_key),
-    timestamp: readStringOrNumber(value.timestamp),
-    operator: operator
-      ? {
-          operator_name: readString(operator.operator_name),
-          operator_id: isRecord(operator.operator_id)
-            ? {
-                open_id: readString(operator.operator_id.open_id),
-                user_id: readString(operator.operator_id.user_id),
-                union_id: readString(operator.operator_id.union_id),
-              }
-            : undefined,
-        }
-      : undefined,
-  };
 }
 
 function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEvent | null {
@@ -291,16 +234,6 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   };
 }
 
-function buildCommentNoticeQueueKey(event: {
-  notice_meta?: {
-    file_type?: string;
-    file_token?: string;
-  };
-}): string {
-  const fileType = event.notice_meta?.file_type?.trim() || "unknown";
-  const fileToken = event.notice_meta?.file_token?.trim() || "unknown";
-  return `comment-doc:${fileType}:${fileToken}`;
-}
 function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
@@ -308,8 +241,6 @@ function registerEventHandlers(
   const { cfg, accountId, runtime, chatHistories, fireAndForget } = context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
-  // Non-message lifecycle events still share FIFO execution by resource key.
-  const enqueue = createSequentialQueue();
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
     if (fireAndForget) {
       void params.task().catch((err) => {
@@ -366,68 +297,12 @@ function registerEventHandlers(
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }
     },
-    "drive.notice.comment_add_v1": async (data: unknown) => {
-      await runFeishuHandler({
-        errorMessage: `feishu[${accountId}]: error handling drive comment notice`,
-        task: async () => {
-          const event = parseFeishuDriveCommentNoticeEventPayload(data);
-          if (!event) {
-            error(`feishu[${accountId}]: ignoring malformed drive comment notice payload`);
-            return;
-          }
-          const eventId = event.event_id?.trim();
-          const syntheticMessageId = eventId ? `drive-comment:${eventId}` : undefined;
-          if (syntheticMessageId) {
-            const claim = await claimUnprocessedFeishuMessage({
-              messageId: syntheticMessageId,
-              namespace: accountId,
-              log,
-            });
-            if (claim === "duplicate") {
-              log(`feishu[${accountId}]: dropping duplicate comment event ${syntheticMessageId}`);
-              return;
-            }
-            if (claim === "inflight") {
-              log(`feishu[${accountId}]: dropping in-flight comment event ${syntheticMessageId}`);
-              return;
-            }
-          }
-          log(
-            `feishu[${accountId}]: received drive comment notice ` +
-              `event=${event.event_id ?? "unknown"} ` +
-              `type=${event.notice_meta?.notice_type ?? "unknown"} ` +
-              `file=${event.notice_meta?.file_type ?? "unknown"}:${event.notice_meta?.file_token ?? "unknown"} ` +
-              `comment=${event.comment_id ?? "unknown"} ` +
-              `reply=${event.reply_id ?? "none"} ` +
-              `from=${event.notice_meta?.from_user_id?.open_id ?? "unknown"} ` +
-              `mentioned=${event.is_mentioned === true ? "yes" : "no"}`,
-          );
-          try {
-            await enqueue(buildCommentNoticeQueueKey(event), async () => {
-              await handleFeishuCommentEvent({
-                cfg,
-                accountId,
-                event,
-                botOpenId: botOpenIds.get(accountId),
-                runtime,
-              });
-            });
-            if (syntheticMessageId) {
-              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
-            }
-          } catch (err) {
-            if (syntheticMessageId && !isFeishuRetryableSyntheticEventError(err)) {
-              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
-            }
-            throw err;
-          } finally {
-            if (syntheticMessageId) {
-              releaseFeishuMessageProcessing(syntheticMessageId, accountId);
-            }
-          }
-        },
-      });
-    },
+    "drive.notice.comment_add_v1": createFeishuDriveCommentNoticeHandler({
+      cfg,
+      accountId,
+      runtime,
+      fireAndForget,
+    }),
     "im.message.reaction.created_v1": async (data) => {
       await runFeishuHandler({
         errorMessage: `feishu[${accountId}]: error handling reaction event`,
@@ -487,96 +362,13 @@ function registerEventHandlers(
         },
       });
     },
-    "application.bot.menu_v6": async (data) => {
-      try {
-        const event = parseFeishuBotMenuEvent(data);
-        if (!event) {
-          return;
-        }
-        const operatorOpenId = event.operator?.operator_id?.open_id?.trim();
-        const eventKey = event.event_key?.trim();
-        if (!operatorOpenId || !eventKey) {
-          return;
-        }
-        const syntheticEvent: FeishuMessageEvent = {
-          sender: {
-            sender_id: {
-              open_id: operatorOpenId,
-              user_id: event.operator?.operator_id?.user_id,
-              union_id: event.operator?.operator_id?.union_id,
-            },
-            sender_type: "user",
-          },
-          message: {
-            message_id: `bot-menu:${eventKey}:${event.timestamp ?? Date.now()}`,
-            chat_id: `p2p:${operatorOpenId}`,
-            chat_type: "p2p",
-            message_type: "text",
-            content: JSON.stringify({
-              text: `/menu ${eventKey}`,
-            }),
-          },
-        };
-        const syntheticMessageId = syntheticEvent.message.message_id;
-        const claim = await claimUnprocessedFeishuMessage({
-          messageId: syntheticMessageId,
-          namespace: accountId,
-          log,
-        });
-        if (claim === "duplicate") {
-          log(`feishu[${accountId}]: dropping duplicate bot-menu event for ${syntheticMessageId}`);
-          return;
-        }
-        if (claim === "inflight") {
-          log(`feishu[${accountId}]: dropping in-flight bot-menu event for ${syntheticMessageId}`);
-          return;
-        }
-        const handleLegacyMenu = () =>
-          handleFeishuMessage({
-            cfg,
-            event: syntheticEvent,
-            botOpenId: botOpenIds.get(accountId),
-            botName: botNames.get(accountId),
-            runtime,
-            chatHistories,
-            accountId,
-            processingClaimHeld: true,
-          });
-
-        const promise = maybeHandleFeishuQuickActionMenu({
-          cfg,
-          eventKey,
-          operatorOpenId,
-          runtime,
-          accountId,
-        })
-          .then(async (handledMenu) => {
-            if (handledMenu) {
-              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
-              releaseFeishuMessageProcessing(syntheticMessageId, accountId);
-              return;
-            }
-            return await handleLegacyMenu();
-          })
-          .catch(async (err) => {
-            if (isFeishuRetryableSyntheticEventError(err)) {
-              releaseFeishuMessageProcessing(syntheticMessageId, accountId);
-            } else {
-              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
-            }
-            throw err;
-          });
-        if (fireAndForget) {
-          promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
-          });
-          return;
-        }
-        await promise;
-      } catch (err) {
-        error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
-      }
-    },
+    "application.bot.menu_v6": createFeishuBotMenuHandler({
+      cfg,
+      accountId,
+      runtime,
+      chatHistories,
+      fireAndForget,
+    }),
     "card.action.trigger": async (data: unknown) => {
       try {
         const event = parseFeishuCardActionEventPayload(data);

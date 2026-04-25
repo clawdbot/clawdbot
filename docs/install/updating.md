@@ -52,13 +52,17 @@ pnpm add -g openclaw@latest
 bun add -g openclaw@latest
 ```
 
-### Root-owned global npm installs
+### Global npm installs and runtime dependencies
 
-Some Linux npm setups install global packages under root-owned directories such as
-`/usr/lib/node_modules/openclaw`. OpenClaw supports that layout: the installed
-package is treated as read-only at runtime, and bundled plugin runtime
+OpenClaw treats packaged global installs as read-only at runtime, even when the
+global package directory is writable by the current user. Bundled plugin runtime
 dependencies are staged into a writable runtime directory instead of mutating the
-package tree.
+package tree. This keeps `openclaw update` from racing with a running gateway or
+local agent that is repairing plugin dependencies during the same install.
+
+Some Linux npm setups install global packages under root-owned directories such
+as `/usr/lib/node_modules/openclaw`. OpenClaw supports that layout through the
+same external staging path.
 
 For hardened systemd units, set a writable stage directory that is included in
 `ReadWritePaths`:
@@ -70,6 +74,18 @@ ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
 
 If `OPENCLAW_PLUGIN_STAGE_DIR` is not set, OpenClaw uses `$STATE_DIRECTORY` when
 systemd provides it, then falls back to `~/.openclaw/plugin-runtime-deps`.
+
+### Bundled plugin runtime dependencies
+
+Packaged installs keep bundled plugin runtime dependencies out of the read-only
+package tree. On startup and during `openclaw doctor --fix`, OpenClaw repairs
+runtime dependencies only for bundled plugins that are active in config, active
+through legacy channel config, or enabled by their bundled manifest default.
+
+Explicit disablement wins. A disabled plugin or channel does not get its
+runtime dependencies repaired just because it exists in the package. External
+plugins and custom load paths still use `openclaw plugins install` or
+`openclaw plugins update`.
 
 ## Auto-updater
 

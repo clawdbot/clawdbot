@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeResolvedSecretInputString, resolveSecretInputString } from "./types.secrets.js";
+import {
+  normalizeResolvedSecretInputString,
+  parseLegacySecretRefEnvMarker,
+  resolveSecretInputString,
+} from "./types.secrets.js";
 
 describe("resolveSecretInputString", () => {
   it("returns available for non-empty string values", () => {
@@ -76,5 +80,27 @@ describe("normalizeResolvedSecretInputString", () => {
         path: "models.providers.openai.apiKey",
       }),
     ).toThrow(/unresolved SecretRef/);
+  });
+});
+
+describe("parseLegacySecretRefEnvMarker", () => {
+  it("parses legacy env marker strings without making them valid SecretInput strings", () => {
+    expect(parseLegacySecretRefEnvMarker("secretref-env:OPENAI_API_KEY")).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+    expect(parseLegacySecretRefEnvMarker("secretref-env:not-valid")).toBeNull();
+    expect(
+      resolveSecretInputString({
+        value: "secretref-env:OPENAI_API_KEY",
+        path: "models.providers.openai.apiKey",
+        mode: "inspect",
+      }),
+    ).toEqual({
+      status: "available",
+      value: "secretref-env:OPENAI_API_KEY",
+      ref: null,
+    });
   });
 });

@@ -48,7 +48,7 @@ As of the bundled pi catalog, the provider includes:
       </Step>
       <Step title="Set a Go model as default">
         ```bash
-        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.5"
+        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.6"
         ```
       </Step>
       <Step title="Verify models are available">
@@ -80,7 +80,7 @@ As of the bundled pi catalog, the provider includes:
 ```json5
 {
   env: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" }, // pragma: allowlist secret
-  agents: { defaults: { model: { primary: "opencode-go/kimi-k2.5" } } },
+  agents: { defaults: { model: { primary: "opencode-go/kimi-k2.6" } } },
 }
 ```
 

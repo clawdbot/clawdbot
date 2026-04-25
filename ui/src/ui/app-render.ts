@@ -1,13 +1,8 @@
 import { html, nothing } from "lit";
 import { applyMergePatch } from "../../../src/config/merge-patch.ts";
-import {
-  buildAgentMainSessionKey,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { refreshChatAvatar } from "./app-chat.ts";
+import { refreshChat } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -120,9 +115,14 @@ import {
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
-import "./components/dashboard-header.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import "./components/dashboard-header.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
+import {
+  buildAgentMainSessionKey,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "./session-key.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
@@ -867,6 +867,18 @@ export function renderApp(state: AppViewState) {
     themeMode: state.themeMode,
     setTheme: (theme, context) => state.setTheme(theme, context),
     setThemeMode: (mode, context) => state.setThemeMode(mode, context),
+    hasCustomTheme: Boolean(state.settings.customTheme),
+    customThemeLabel: state.settings.customTheme?.label ?? null,
+    customThemeSourceUrl: state.settings.customTheme?.sourceUrl ?? null,
+    customThemeImportUrl: state.customThemeImportUrl,
+    customThemeImportBusy: state.customThemeImportBusy,
+    customThemeImportMessage: state.customThemeImportMessage,
+    customThemeImportExpanded: state.customThemeImportExpanded,
+    customThemeImportFocusToken: state.customThemeImportFocusToken,
+    onCustomThemeImportUrlChange: (next) => state.setCustomThemeImportUrl(next),
+    onOpenCustomThemeImport: () => state.openCustomThemeImport(),
+    onImportCustomTheme: () => void state.importCustomTheme(),
+    onClearCustomTheme: () => state.clearCustomTheme(),
     borderRadius: state.settings.borderRadius,
     setBorderRadius: (value) => state.setBorderRadius(value),
     gatewayUrl: state.settings.gatewayUrl,
@@ -1007,8 +1019,19 @@ export function renderApp(state: AppViewState) {
             },
             theme: state.theme,
             themeMode: state.themeMode,
+            hasCustomTheme: Boolean(state.settings.customTheme),
+            customThemeLabel: state.settings.customTheme?.label ?? null,
             borderRadius: state.settings.borderRadius,
             setTheme: (theme, context) => state.setTheme(theme, context),
+            onOpenCustomThemeImport: () => {
+              state.setTab("appearance");
+              state.appearanceFormMode = "form";
+              state.appearanceSearchQuery = "";
+              state.appearanceActiveSection = "__appearance__";
+              state.appearanceActiveSubsection = null;
+              state.openCustomThemeImport();
+              requestHostUpdate?.();
+            },
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
             userName: state.userName ?? null,
@@ -2242,7 +2265,7 @@ export function renderApp(state: AppViewState) {
               onRefresh: () => {
                 state.chatSideResult = null;
                 state.resetToolStream();
-                return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+                return refreshChat(state, { scheduleScroll: false });
               },
               onToggleFocusMode: () => {
                 if (state.onboarding) {
@@ -2260,6 +2283,7 @@ export function renderApp(state: AppViewState) {
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
               onSend: () => state.handleSendChat(),
+              onCompact: () => state.handleSendChat("/compact", { restoreDraft: true }),
               onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),

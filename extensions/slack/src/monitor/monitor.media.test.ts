@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetSlackThreadStarterCacheForTest, resolveSlackThreadStarter } from "./media.js";
+import { resetSlackThreadStarterCacheForTest, resolveSlackThreadStarter } from "./thread.js";
 
 type ThreadStarterClient = Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 

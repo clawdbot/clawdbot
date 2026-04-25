@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as discordClientModule from "../client.js";
 import * as discordSendModule from "../send.js";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const DEFAULT_SEND_RESULT = {
@@ -29,6 +30,17 @@ beforeAll(async () => {
   ({ maybeSendBindingMessage, resolveChannelIdForBinding } =
     await import("./thread-bindings.discord-api.js"));
 });
+
+function resolveTestChannelIdForBinding(
+  params: Omit<Parameters<typeof resolveChannelIdForBinding>[0], "cfg"> & {
+    cfg?: OpenClawConfig;
+  },
+) {
+  return resolveChannelIdForBinding({
+    cfg: EMPTY_DISCORD_TEST_CONFIG,
+    ...params,
+  });
+}
 
 describe("resolveChannelIdForBinding", () => {
   beforeEach(() => {
@@ -59,7 +71,7 @@ describe("resolveChannelIdForBinding", () => {
   });
 
   it("returns explicit channelId without resolving route", async () => {
-    const resolved = await resolveChannelIdForBinding({
+    const resolved = await resolveTestChannelIdForBinding({
       accountId: "default",
       threadId: "thread-1",
       channelId: "channel-explicit",
@@ -71,7 +83,7 @@ describe("resolveChannelIdForBinding", () => {
   });
 
   it("normalizes prefixed explicit channelId without resolving route", async () => {
-    const resolved = await resolveChannelIdForBinding({
+    const resolved = await resolveTestChannelIdForBinding({
       accountId: "default",
       threadId: "thread-1",
       channelId: "channel:123456789012345678",
@@ -88,7 +100,7 @@ describe("resolveChannelIdForBinding", () => {
       type: ChannelType.GuildText,
     });
 
-    const resolved = await resolveChannelIdForBinding({
+    const resolved = await resolveTestChannelIdForBinding({
       accountId: "default",
       threadId: "channel:123456789012345678",
     });
@@ -106,7 +118,7 @@ describe("resolveChannelIdForBinding", () => {
       parent_id: "channel-parent",
     });
 
-    const resolved = await resolveChannelIdForBinding({
+    const resolved = await resolveTestChannelIdForBinding({
       accountId: "default",
       threadId: "thread-1",
     });
@@ -124,14 +136,16 @@ describe("resolveChannelIdForBinding", () => {
       parent_id: "channel-parent",
     });
 
-    await resolveChannelIdForBinding({
+    await resolveTestChannelIdForBinding({
       cfg,
       accountId: "default",
       threadId: "thread-1",
     });
 
     const createDiscordRestClientCalls = createDiscordRestClient.mock.calls as unknown[][];
-    expect(createDiscordRestClientCalls[0]?.[1]).toBe(cfg);
+    expect(
+      (createDiscordRestClientCalls[0]?.[0] as { cfg?: OpenClawConfig } | undefined)?.cfg,
+    ).toBe(cfg);
   });
 
   it("keeps non-thread channel id even when parent_id exists", async () => {
@@ -141,7 +155,7 @@ describe("resolveChannelIdForBinding", () => {
       parent_id: "category-1",
     });
 
-    const resolved = await resolveChannelIdForBinding({
+    const resolved = await resolveTestChannelIdForBinding({
       accountId: "default",
       threadId: "channel-text",
     });
@@ -156,7 +170,7 @@ describe("resolveChannelIdForBinding", () => {
       parent_id: "category-1",
     });
 
-    const resolved = await resolveChannelIdForBinding({
+    const resolved = await resolveTestChannelIdForBinding({
       accountId: "default",
       threadId: "forum-1",
     });

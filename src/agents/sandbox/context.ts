@@ -4,7 +4,10 @@ import {
   ensureBrowserControlAuth,
   resolveBrowserControlAuth,
 } from "../../plugin-sdk/browser-control-auth.js";
-import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../plugin-sdk/browser-profiles.js";
+import {
+  DEFAULT_BROWSER_EVALUATE_ENABLED,
+  resolveBrowserConfig,
+} from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
@@ -171,8 +174,11 @@ export async function resolveSandboxContext(params: {
     configLabelKind: backend.configLabelKind ?? "Image",
   });
 
+  const resolvedBrowserConfig = resolvedCfg.browser.enabled
+    ? resolveBrowserConfig(params.config?.browser, params.config)
+    : undefined;
   const evaluateEnabled =
-    params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
+    resolvedBrowserConfig?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
 
   const bridgeAuth = cfg.browser.enabled
     ? await (async () => {
@@ -204,6 +210,7 @@ export async function resolveSandboxContext(params: {
           cfg: resolvedCfg,
           evaluateEnabled,
           bridgeAuth,
+          ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,
         })
       : null;
 

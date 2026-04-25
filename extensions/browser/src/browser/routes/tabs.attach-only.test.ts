@@ -23,6 +23,7 @@ describe("browser tab routes attachOnly loopback profiles", () => {
         cdpPort: 9222,
         color: "#00AA00",
         driver: "openclaw",
+        headless: false,
         attachOnly: true,
       },
       resolvedOverrides: {
@@ -72,6 +73,8 @@ describe("browser tab routes attachOnly loopback profiles", () => {
       tabs: [
         {
           targetId: "PAGE-1",
+          suggestedTargetId: "t1",
+          tabId: "t1",
           title: "WordPress",
           url: "https://example.com/wp-login.php",
           wsUrl: "ws://127.0.0.1:9222/devtools/page/PAGE-1",

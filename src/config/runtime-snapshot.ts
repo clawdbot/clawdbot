@@ -22,6 +22,31 @@ let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 const runtimeConfigWriteListeners = new Set<(event: RuntimeConfigWriteNotification) => void>();
 
+function stableConfigStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableConfigStringify(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).toSorted();
+  return `{${keys
+    .map((key) => `${JSON.stringify(key)}:${stableConfigStringify(record[key])}`)
+    .join(",")}}`;
+}
+
+function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {
+  if (left === right) {
+    return true;
+  }
+  try {
+    return stableConfigStringify(left) === stableConfigStringify(right);
+  } catch {
+    return false;
+  }
+}
+
 export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
@@ -45,6 +70,32 @@ export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
 
 export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
   return runtimeConfigSourceSnapshot;
+}
+
+export function selectApplicableRuntimeConfig(params: {
+  inputConfig?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig | null;
+  runtimeSourceConfig?: OpenClawConfig | null;
+}): OpenClawConfig | undefined {
+  const runtimeConfig = params.runtimeConfig ?? null;
+  if (!runtimeConfig) {
+    return params.inputConfig;
+  }
+  const inputConfig = params.inputConfig;
+  if (!inputConfig) {
+    return runtimeConfig;
+  }
+  if (inputConfig === runtimeConfig) {
+    return inputConfig;
+  }
+  const runtimeSourceConfig = params.runtimeSourceConfig ?? null;
+  if (!runtimeSourceConfig) {
+    return runtimeConfig;
+  }
+  if (configSnapshotsMatch(inputConfig, runtimeSourceConfig)) {
+    return runtimeConfig;
+  }
+  return inputConfig;
 }
 
 export function setRuntimeConfigSnapshotRefreshHandler(

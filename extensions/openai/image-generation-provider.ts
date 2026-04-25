@@ -22,11 +22,12 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { canonicalizeCodexResponsesBaseUrl, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = "https://chatgpt.com/backend-api/codex";
+const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
@@ -534,7 +535,7 @@ async function generateOpenAICodexImage(params: {
   const codexProviderConfig = req.cfg?.models?.providers?.["openai-codex"];
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
-      baseUrl: codexProviderConfig?.baseUrl,
+      baseUrl: canonicalizeCodexResponsesBaseUrl(codexProviderConfig?.baseUrl),
       defaultBaseUrl: DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL,
       defaultHeaders: {
         Authorization: `Bearer ${apiKey}`,

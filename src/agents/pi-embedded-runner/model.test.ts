@@ -1156,7 +1156,7 @@ describe("resolveModel", () => {
       baseUrl: "https://chatgpt.com/backend-api",
       reasoning: true,
       input: ["text", "image"],
-      contextWindow: 1_000_000,
+      contextWindow: 400_000,
       contextTokens: 272_000,
       maxTokens: 128_000,
     });

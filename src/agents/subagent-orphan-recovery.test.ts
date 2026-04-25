@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sessions from "../config/sessions.js";
 import * as gateway from "../gateway/call.js";
 import * as sessionUtils from "../gateway/session-utils.fs.js";
-import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
+import * as announceDelivery from "./subagent-announce-delivery.js";
+import {
+  recoverOrphanedSubagentSessions,
+  scheduleOrphanRecovery,
+} from "./subagent-orphan-recovery.js";
 import * as subagentRegistrySteerRuntime from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -28,8 +32,19 @@ vi.mock("../gateway/session-utils.fs.js", () => ({
   readSessionMessages: vi.fn(() => []),
 }));
 
+vi.mock("./subagent-announce-delivery.js", () => ({
+  deliverSubagentAnnouncement: vi.fn(async () => ({ delivered: true, path: "direct" })),
+  isInternalAnnounceRequesterSession: vi.fn(() => false),
+  loadRequesterSessionEntry: vi.fn(() => ({ entry: {} })),
+}));
+
+vi.mock("./subagent-announce-origin.js", () => ({
+  resolveAnnounceOrigin: vi.fn((entry, requesterOrigin) => requesterOrigin),
+}));
+
 vi.mock("./subagent-registry-steer-runtime.js", () => ({
   replaceSubagentRunAfterSteer: vi.fn(() => true),
+  finalizeInterruptedSubagentRun: vi.fn(async () => 1),
 }));
 
 function createTestRunRecord(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -84,10 +99,12 @@ function getResumeMessage() {
 
 describe("subagent-orphan-recovery", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     vi.clearAllMocks();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -262,6 +279,13 @@ describe("subagent-orphan-recovery", () => {
 
     expect(result.recovered).toBe(0);
     expect(result.failed).toBe(1);
+    expect(result.failedRuns).toEqual([
+      expect.objectContaining({
+        runId: "run-1",
+        childSessionKey: "agent:main:subagent:test-session-1",
+        error: "gateway unavailable",
+      }),
+    ]);
 
     // abortedLastRun flag should NOT be cleared on failure,
     // so the next restart can retry the recovery
@@ -369,6 +393,38 @@ describe("subagent-orphan-recovery", () => {
     expect(message).toContain("config changes from your previous run were already applied");
   });
 
+  it("announces recovery-in-progress once when a later retry is attempting resume", async () => {
+    mockSingleAbortedSession();
+
+    const activeRuns = createActiveRuns(createTestRunRecord());
+    const notifiedRecoverySessionKeys = new Set<string>();
+
+    await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+      attemptNumber: 2,
+      maxAttempts: 4,
+      notifiedRecoverySessionKeys,
+    });
+
+    expect(announceDelivery.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
+    expect(announceDelivery.deliverSubagentAnnouncement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:quietchat:direct:+1234567890",
+        triggerMessage: expect.stringContaining("Automatic recovery is already in progress"),
+      }),
+    );
+    expect(notifiedRecoverySessionKeys).toEqual(new Set(["agent:main:subagent:test-session-1"]));
+
+    await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+      attemptNumber: 3,
+      maxAttempts: 4,
+      notifiedRecoverySessionKeys,
+    });
+
+    expect(announceDelivery.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
+  });
+
   it("prevents duplicate resume when updateSessionStore fails", async () => {
     vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "new-run" } as never);
     vi.mocked(sessions.updateSessionStore).mockRejectedValue(new Error("write failed"));
@@ -428,5 +484,42 @@ describe("subagent-orphan-recovery", () => {
     expect(second.skipped).toBe(1);
     expect(gateway.callGateway).toHaveBeenCalledOnce();
     expect(sessions.updateSessionStore).toHaveBeenCalledOnce();
+  });
+
+  it("finalizes interrupted runs with a readable failure after recovery retries are exhausted", async () => {
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:subagent:test-session-1": {
+        sessionId: "session-abc",
+        updatedAt: Date.now(),
+        abortedLastRun: true,
+      },
+    });
+    vi.mocked(gateway.callGateway).mockRejectedValue(new Error("service restart"));
+
+    const activeRuns = createActiveRuns(createTestRunRecord());
+
+    scheduleOrphanRecovery({
+      getActiveRuns: () => activeRuns,
+      delayMs: 1,
+      maxRetries: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(2);
+    await Promise.resolve();
+
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        childSessionKey: "agent:main:subagent:test-session-1",
+        error: expect.stringContaining("Automatic recovery failed after 2 attempts"),
+      }),
+    );
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.stringContaining("service restart"),
+      }),
+    );
   });
 });

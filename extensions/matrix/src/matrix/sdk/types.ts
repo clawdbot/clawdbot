@@ -232,6 +232,14 @@ export type MatrixCryptoBootstrapApi = {
   }) => Promise<MatrixRoomKeyBackupRestoreResult>;
   setDeviceVerified?: (userId: string, deviceId: string, verified?: boolean) => Promise<void>;
   crossSignDevice?: (deviceId: string) => Promise<void>;
+  getOwnIdentity?: () => Promise<
+    | {
+        free?: () => void;
+        isVerified?: () => boolean;
+        verify?: () => Promise<unknown>;
+      }
+    | undefined
+  >;
   isCrossSigningReady?: () => Promise<boolean>;
   userHasCrossSigningKeys?: (userId?: string, downloadUncached?: boolean) => Promise<boolean>;
 };

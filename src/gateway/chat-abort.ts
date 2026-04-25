@@ -1,5 +1,7 @@
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 
+const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
+
 export type ChatAbortControllerEntry = {
   controller: AbortController;
   sessionId: string;
@@ -8,6 +10,20 @@ export type ChatAbortControllerEntry = {
   expiresAtMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  /**
+   * Which RPC owns this registration. Absent (undefined) is treated as
+   * `"chat-send"` so pre-existing callers that constructed entries without
+   * a kind keep their behavior. Consumers that need "chat.send specifically
+   * is active" must check `kind !== "agent"`, not just `.has(runId)`.
+   */
+  kind?: "chat-send" | "agent";
+};
+
+export type RegisteredChatAbortController = {
+  controller: AbortController;
+  registered: boolean;
+  entry?: ChatAbortControllerEntry;
+  cleanup: () => void;
 };
 
 export function isChatStopCommandText(text: string): boolean {
@@ -21,12 +37,73 @@ export function resolveChatRunExpiresAtMs(params: {
   minMs?: number;
   maxMs?: number;
 }): number {
-  const { now, timeoutMs, graceMs = 60_000, minMs = 2 * 60_000, maxMs = 24 * 60 * 60_000 } = params;
+  const {
+    now,
+    timeoutMs,
+    graceMs = DEFAULT_CHAT_RUN_ABORT_GRACE_MS,
+    minMs = 2 * 60_000,
+    maxMs = 24 * 60 * 60_000,
+  } = params;
   const boundedTimeoutMs = Math.max(0, timeoutMs);
   const target = now + boundedTimeoutMs + graceMs;
   const min = now + minMs;
   const max = now + maxMs;
   return Math.min(max, Math.max(min, target));
+}
+
+export function resolveAgentRunExpiresAtMs(params: {
+  now: number;
+  timeoutMs: number;
+  graceMs?: number;
+}): number {
+  const graceMs = Math.max(0, params.graceMs ?? DEFAULT_CHAT_RUN_ABORT_GRACE_MS);
+  return resolveChatRunExpiresAtMs({
+    now: params.now,
+    timeoutMs: params.timeoutMs,
+    graceMs,
+    minMs: graceMs,
+    maxMs: Math.max(0, params.timeoutMs) + graceMs,
+  });
+}
+
+export function registerChatAbortController(params: {
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  runId: string;
+  sessionId: string;
+  sessionKey?: string | null;
+  timeoutMs: number;
+  ownerConnId?: string;
+  ownerDeviceId?: string;
+  kind?: ChatAbortControllerEntry["kind"];
+  now?: number;
+  expiresAtMs?: number;
+}): RegisteredChatAbortController {
+  const controller = new AbortController();
+  const cleanup = () => {
+    const entry = params.chatAbortControllers.get(params.runId);
+    if (entry?.controller === controller) {
+      params.chatAbortControllers.delete(params.runId);
+    }
+  };
+
+  if (!params.sessionKey || params.chatAbortControllers.has(params.runId)) {
+    return { controller, registered: false, cleanup };
+  }
+
+  const now = params.now ?? Date.now();
+  const entry: ChatAbortControllerEntry = {
+    controller,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    startedAtMs: now,
+    expiresAtMs:
+      params.expiresAtMs ?? resolveChatRunExpiresAtMs({ now, timeoutMs: params.timeoutMs }),
+    ownerConnId: params.ownerConnId,
+    ownerDeviceId: params.ownerDeviceId,
+    kind: params.kind,
+  };
+  params.chatAbortControllers.set(params.runId, entry);
+  return { controller, registered: true, entry, cleanup };
 }
 
 export type ChatAbortOps = {

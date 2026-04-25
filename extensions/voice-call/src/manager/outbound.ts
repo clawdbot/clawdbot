@@ -213,7 +213,7 @@ export async function speak(
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    const voice = provider.name === "twilio" ? resolvePreferredTtsVoice(ctx.config) : undefined;
+    const voice = resolvePreferredTtsVoice(ctx.config);
     await provider.playTts({
       callId,
       providerCallId,
@@ -231,6 +231,19 @@ export async function speak(
     persistCallRecord(ctx.storePath, call);
     return { success: false, error: formatErrorMessage(err) };
   }
+}
+
+function shouldStartListeningAfterInitialMessage(ctx: ConversationContext): boolean {
+  if (ctx.provider?.name !== "twilio") {
+    return true;
+  }
+  if (!ctx.config.streaming.enabled) {
+    return true;
+  }
+  const streamAwareProvider = ctx.provider as typeof ctx.provider & {
+    isConversationStreamConnectEnabled?: () => boolean;
+  };
+  return streamAwareProvider.isConversationStreamConnectEnabled?.() !== true;
 }
 
 export async function sendDtmf(
@@ -316,6 +329,17 @@ export async function speakInitialMessage(
           await endCall(ctx, call.callId);
         }
       }, delaySec * 1000);
+    } else if (
+      mode === "conversation" &&
+      ctx.provider &&
+      shouldStartListeningAfterInitialMessage(ctx)
+    ) {
+      transitionState(call, "listening");
+      persistCallRecord(ctx.storePath, call);
+      await ctx.provider.startListening({
+        callId: call.callId,
+        providerCallId,
+      });
     }
   } finally {
     ctx.initialMessageInFlight.delete(call.callId);

@@ -181,6 +181,21 @@ describe("registerPluginCliCommands", () => {
     );
   });
 
+  it("injects gateway-backed node runtime into plugin CLI commands", async () => {
+    await registerPluginCliCommands(createProgram(), {} as OpenClawConfig);
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          nodes: {
+            list: expect.any(Function),
+            invoke: expect.any(Function),
+          },
+        },
+      }),
+    );
+  });
+
   it("loads plugin CLI commands from the auto-enabled config snapshot", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
     mocks.applyPluginAutoEnable.mockReturnValue({

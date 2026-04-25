@@ -21,6 +21,7 @@ export {
   recoverConfigFromJsonRootSuffix,
   resetConfigRuntimeState,
   resolveConfigSnapshotHash,
+  selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
   writeConfigFile,
@@ -28,6 +29,7 @@ export {
 export type { ConfigWriteNotification } from "./io.js";
 export { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
 export * from "./paths.js";
+export * from "./recovery-policy.js";
 export * from "./runtime-overrides.js";
 export * from "./types.js";
 export {

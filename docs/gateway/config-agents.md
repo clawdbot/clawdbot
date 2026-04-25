@@ -72,6 +72,7 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 Controls when workspace bootstrap files are injected into the system prompt. Default: `"always"`.
 
 - `"continuation-skip"`: safe continuation turns (after a completed assistant response) skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs and post-compaction retries still rebuild context.
+- `"never"`: disable workspace bootstrap and context-file injection on every turn. Use this only for agents that fully own their prompt lifecycle (custom context engines, native runtimes that build their own context, or specialized bootstrap-free workflows). Heartbeat and compaction-recovery turns also skip injection.
 
 ```json5
 {
@@ -316,7 +317,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       },
       params: { cacheRetention: "long" }, // global default provider params
       embeddedHarness: {
-        runtime: "auto", // auto | pi | registered harness id, e.g. codex
+        runtime: "pi", // pi | auto | registered harness id, e.g. codex
         fallback: "pi", // pi | none
       },
       pdfMaxBytesMb: 10,
@@ -363,22 +364,24 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4` for API-key access or `openai-codex/gpt-5.5` for Codex OAuth). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
-- `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`).
+- `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`, `extra_body`/`extraBody`).
   - Safe edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing allowlist entries unless you pass `--replace`.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
   - For direct OpenAI Responses models, server-side compaction is enabled automatically. Use `params.responsesServerCompaction: false` to stop injecting `context_management`, or `params.responsesCompactThreshold` to override the threshold. See [OpenAI server-side compaction](/providers/openai#server-side-compaction-responses-api).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
-- `embeddedHarness`: default low-level embedded agent runtime policy. Use `runtime: "auto"` to let registered plugin harnesses claim supported models, `runtime: "pi"` to force the built-in PI harness, or a registered harness id such as `runtime: "codex"`. Set `fallback: "none"` to disable automatic PI fallback.
+- `params.extra_body`/`params.extraBody`: advanced pass-through JSON merged into `api: "openai-completions"` request bodies for OpenAI-compatible proxies. If it collides with generated request keys, the extra body wins; non-native completions routes still strip OpenAI-only `store` afterward.
+- `embeddedHarness`: default low-level embedded agent runtime policy. Omitted runtime defaults to OpenClaw Pi. Use `runtime: "pi"` to force the built-in PI harness, `runtime: "auto"` to let registered plugin harnesses claim supported models, or a registered harness id such as `runtime: "codex"`. Set `fallback: "none"` to disable automatic PI fallback. Explicit plugin runtimes such as `codex` fail closed by default unless you set `fallback: "pi"` in the same override scope. Keep model refs canonical as `provider/model`; select Codex, Claude CLI, Gemini CLI, and other execution backends through runtime config instead of legacy runtime provider prefixes. See [Agent runtimes](/concepts/agent-runtimes) for how this differs from provider/model selection.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 4.
 
 ### `agents.defaults.embeddedHarness`
 
 `embeddedHarness` controls which low-level executor runs embedded agent turns.
-Most deployments should keep the default `{ runtime: "auto", fallback: "pi" }`.
+Most deployments should keep the default OpenClaw Pi runtime.
 Use it when a trusted plugin provides a native harness, such as the bundled
-Codex app-server harness.
+Codex app-server harness. For the mental model, see
+[Agent runtimes](/concepts/agent-runtimes).
 
 ```json5
 {
@@ -395,10 +398,10 @@ Codex app-server harness.
 ```
 
 - `runtime`: `"auto"`, `"pi"`, or a registered plugin harness id. The bundled Codex plugin registers `codex`.
-- `fallback`: `"pi"` or `"none"`. `"pi"` keeps the built-in PI harness as the compatibility fallback when no plugin harness is selected. `"none"` makes missing or unsupported plugin harness selection fail instead of silently using PI. Selected plugin harness failures always surface directly.
-- Environment overrides: `OPENCLAW_AGENT_RUNTIME=<id|auto|pi>` overrides `runtime`; `OPENCLAW_AGENT_HARNESS_FALLBACK=none` disables PI fallback for that process.
-- For Codex-only deployments, set `model: "openai/gpt-5.5"`, `embeddedHarness.runtime: "codex"`, and `embeddedHarness.fallback: "none"`.
-- Harness choice is pinned per session id after the first embedded run. Config/env changes affect new or reset sessions, not an existing transcript. Legacy sessions with transcript history but no recorded pin are treated as PI-pinned. `/status` shows non-PI harness ids such as `codex` next to `Fast`.
+- `fallback`: `"pi"` or `"none"`. In `runtime: "auto"`, omitted fallback defaults to `"pi"` so old configs can keep using PI when no plugin harness claims a run. In explicit plugin runtime mode, such as `runtime: "codex"`, omitted fallback defaults to `"none"` so a missing harness fails instead of silently using PI. Runtime overrides do not inherit fallback from a broader scope; set `fallback: "pi"` alongside the explicit runtime when you intentionally want that compatibility fallback. Selected plugin harness failures always surface directly.
+- Environment overrides: `OPENCLAW_AGENT_RUNTIME=<id|auto|pi>` overrides `runtime`; `OPENCLAW_AGENT_HARNESS_FALLBACK=pi|none` overrides fallback for that process.
+- For Codex-only deployments, set `model: "openai/gpt-5.5"` and `embeddedHarness.runtime: "codex"`. You may also set `embeddedHarness.fallback: "none"` explicitly for readability; it is the default for explicit plugin runtimes.
+- Harness choice is pinned per session id after the first embedded run. Config/env changes affect new or reset sessions, not an existing transcript. Legacy sessions with transcript history but no recorded pin are treated as PI-pinned. `/status` reports the effective runtime, for example `Runtime: OpenClaw Pi Default` or `Runtime: OpenAI Codex`.
 - This only controls the embedded chat harness. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
@@ -540,8 +543,10 @@ Periodic heartbeat runs.
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
         timeoutSeconds: 900,
         reserveTokensFloor: 24000,
+        keepRecentTokens: 50000,
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
+        qualityGuard: { enabled: true, maxRetries: 1 },
         postCompactionSections: ["Session Startup", "Red Lines"], // [] disables reinjection
         model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
         notifyUser: true, // send brief notices when compaction starts and completes (default: false)
@@ -560,8 +565,10 @@ Periodic heartbeat runs.
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `900`.
+- `keepRecentTokens`: Pi cut-point budget for keeping the most recent transcript tail verbatim. Manual `/compact` honors this when explicitly set; otherwise manual compaction is a hard checkpoint.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
+- `qualityGuard`: retry-on-malformed-output checks for safeguard summaries. Enabled by default in safeguard mode; set `enabled: false` to skip the audit.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Defaults to `["Session Startup", "Red Lines"]`; set `[]` to disable reinjection. When unset or explicitly set to that default pair, older `Every Session`/`Safety` headings are also accepted as a legacy fallback.
 - `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
 - `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
@@ -943,10 +950,10 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
-- `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
+- `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
-- `embeddedHarness`: optional per-agent low-level harness policy override. Use `{ runtime: "codex", fallback: "none" }` to make one agent Codex-only while other agents keep the default PI fallback.
+- `embeddedHarness`: optional per-agent low-level harness policy override. Use `{ runtime: "codex" }` to make one agent Codex-only while other agents keep the default PI fallback in `auto` mode.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
@@ -1256,27 +1263,34 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
       maxTextLength: 4000,
       timeoutMs: 30000,
       prefsPath: "~/.openclaw/settings/tts.json",
-      elevenlabs: {
-        apiKey: "elevenlabs_api_key",
-        baseUrl: "https://api.elevenlabs.io",
-        voiceId: "voice_id",
-        modelId: "eleven_multilingual_v2",
-        seed: 42,
-        applyTextNormalization: "auto",
-        languageCode: "en",
-        voiceSettings: {
-          stability: 0.5,
-          similarityBoost: 0.75,
-          style: 0.0,
-          useSpeakerBoost: true,
-          speed: 1.0,
+      providers: {
+        elevenlabs: {
+          apiKey: "elevenlabs_api_key",
+          baseUrl: "https://api.elevenlabs.io",
+          voiceId: "voice_id",
+          modelId: "eleven_multilingual_v2",
+          seed: 42,
+          applyTextNormalization: "auto",
+          languageCode: "en",
+          voiceSettings: {
+            stability: 0.5,
+            similarityBoost: 0.75,
+            style: 0.0,
+            useSpeakerBoost: true,
+            speed: 1.0,
+          },
         },
-      },
-      openai: {
-        apiKey: "openai_api_key",
-        baseUrl: "https://api.openai.com/v1",
-        model: "gpt-4o-mini-tts",
-        voice: "alloy",
+        microsoft: {
+          voice: "en-US-AvaMultilingualNeural",
+          lang: "en-US",
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        },
+        openai: {
+          apiKey: "openai_api_key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+        },
       },
     },
   },
@@ -1287,8 +1301,9 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
 - `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
 - API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
-- `openai.baseUrl` overrides the OpenAI TTS endpoint. Resolution order is config, then `OPENAI_TTS_BASE_URL`, then `https://api.openai.com/v1`.
-- When `openai.baseUrl` points to a non-OpenAI endpoint, OpenClaw treats it as an OpenAI-compatible TTS server and relaxes model/voice validation.
+- Bundled speech providers are plugin-owned. If `plugins.allow` is set, include each TTS provider plugin you want to use, for example `microsoft` for Edge TTS. The legacy `edge` provider id is accepted as an alias for `microsoft`.
+- `providers.openai.baseUrl` overrides the OpenAI TTS endpoint. Resolution order is config, then `OPENAI_TTS_BASE_URL`, then `https://api.openai.com/v1`.
+- When `providers.openai.baseUrl` points to a non-OpenAI endpoint, OpenClaw treats it as an OpenAI-compatible TTS server and relaxes model/voice validation.
 
 ---
 
@@ -1311,6 +1326,10 @@ Defaults for Talk mode (macOS/iOS/Android).
         outputFormat: "mp3_44100_128",
         apiKey: "elevenlabs_api_key",
       },
+      mlx: {
+        modelId: "mlx-community/Soprano-80M-bf16",
+      },
+      system: {},
     },
     silenceTimeoutMs: 1500,
     interruptOnSpeech: true,
@@ -1324,6 +1343,8 @@ Defaults for Talk mode (macOS/iOS/Android).
 - `providers.*.apiKey` accepts plaintext strings or SecretRef objects.
 - `ELEVENLABS_API_KEY` fallback applies only when no Talk API key is configured.
 - `providers.*.voiceAliases` lets Talk directives use friendly names.
+- `providers.mlx.modelId` selects the Hugging Face repo used by the macOS local MLX helper. If omitted, macOS uses `mlx-community/Soprano-80M-bf16`.
+- macOS MLX playback runs through the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`; `OPENCLAW_MLX_TTS_BIN` overrides the helper path for development.
 - `silenceTimeoutMs` controls how long Talk mode waits after user silence before it sends the transcript. Unset keeps the platform default pause window (`700 ms on macOS and Android, 900 ms on iOS`).
 
 ---

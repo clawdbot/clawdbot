@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTalkTestProviderConfig,
   TALK_TEST_PROVIDER_API_KEY_PATH,
@@ -9,6 +9,16 @@ import {
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import type { SecretsApplyPlan } from "./plan.js";
+
+const { clearSecretsRuntimeSnapshotMock, prepareSecretsRuntimeSnapshotMock } = vi.hoisted(() => ({
+  clearSecretsRuntimeSnapshotMock: vi.fn(),
+  prepareSecretsRuntimeSnapshotMock: vi.fn(async () => undefined),
+}));
+
+vi.mock("./runtime.js", () => ({
+  clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotMock,
+  prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
+}));
 
 let runSecretsApply: typeof import("./apply.js").runSecretsApply;
 let applyTesting: typeof import("./apply.js").__testing;
@@ -243,6 +253,7 @@ describe("secrets apply", () => {
   });
 
   beforeEach(async () => {
+    prepareSecretsRuntimeSnapshotMock.mockClear();
     clearSecretsRuntimeSnapshot();
     fixture = await createApplyFixture();
     await seedDefaultApplyFixture(fixture);
@@ -268,6 +279,7 @@ describe("secrets apply", () => {
     const applied = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(applied.mode).toBe("write");
     expect(applied.changed).toBe(true);
+    expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledTimes(1);
 
     const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
       models: { providers: { openai: { apiKey: unknown } } };

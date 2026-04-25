@@ -114,6 +114,36 @@ export function normalizeActRequest(
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };
     }
+    case "clickCoords": {
+      const x = toNumber(body.x);
+      const y = toNumber(body.y);
+      if (x === undefined || y === undefined || x < 0 || y < 0) {
+        throw new Error("clickCoords requires non-negative x and y");
+      }
+      const buttonRaw = toStringOrEmpty(body.button);
+      const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
+      if (buttonRaw && !button) {
+        throw new Error("clickCoords button must be left|right|middle");
+      }
+      const doubleClick = toBoolean(body.doubleClick);
+      const delayMs = normalizeActBoundedNonNegativeMs(
+        toNumber(body.delayMs),
+        "clickCoords delayMs",
+        ACT_MAX_CLICK_DELAY_MS,
+      );
+      const timeoutMs = toNumber(body.timeoutMs);
+      const targetId = toStringOrEmpty(body.targetId) || undefined;
+      return {
+        kind,
+        x,
+        y,
+        ...(targetId ? { targetId } : {}),
+        ...(doubleClick !== undefined ? { doubleClick } : {}),
+        ...(button ? { button } : {}),
+        ...(delayMs !== undefined ? { delayMs } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      };
+    }
     case "type": {
       const ref = toStringOrEmpty(body.ref) || undefined;
       const selector = toStringOrEmpty(body.selector) || undefined;

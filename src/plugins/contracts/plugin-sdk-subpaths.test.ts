@@ -128,6 +128,7 @@ const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParity
     extensionPath: "extensions/browser/browser-profiles.ts",
     expectedExports: [
       "DEFAULT_AI_SNAPSHOT_MAX_CHARS",
+      "DEFAULT_BROWSER_ACTION_TIMEOUT_MS",
       "DEFAULT_BROWSER_DEFAULT_PROFILE_NAME",
       "DEFAULT_BROWSER_EVALUATE_ENABLED",
       "DEFAULT_OPENCLAW_BROWSER_COLOR",
@@ -136,6 +137,7 @@ const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParity
       "DEFAULT_UPLOAD_DIR",
       "ResolvedBrowserConfig",
       "ResolvedBrowserProfile",
+      "ResolvedBrowserTabCleanupConfig",
       "resolveBrowserConfig",
       "resolveProfile",
     ],

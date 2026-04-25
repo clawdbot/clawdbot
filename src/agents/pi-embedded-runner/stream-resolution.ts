@@ -81,6 +81,10 @@ export function resolveEmbeddedAgentStreamFn(params: {
             systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
           }
         : context;
+    const mergeRunSignal = (options: Parameters<StreamFn>[2]) => {
+      const signal = options?.signal ?? params.signal;
+      return signal ? { ...options, signal } : options;
+    };
     // Provider-owned transports bypass pi-coding-agent's default auth lookup,
     // so keep injecting the resolved runtime apiKey for streamSimple-compatible
     // transports that still read credentials from options.apiKey.
@@ -93,12 +97,12 @@ export function resolveEmbeddedAgentStreamFn(params: {
           authStorage,
         });
         return inner(m, normalizeContext(context), {
-          ...options,
+          ...mergeRunSignal(options),
           apiKey: apiKey ?? options?.apiKey,
         });
       };
     }
-    return (m, context, options) => inner(m, normalizeContext(context), options);
+    return (m, context, options) => inner(m, normalizeContext(context), mergeRunSignal(options));
   }
 
   const currentStreamFn = params.currentStreamFn ?? streamSimple;

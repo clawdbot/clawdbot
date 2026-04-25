@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createSlackTurnDeliveryTracker,
   isSlackStreamingEnabled,
+  resolveSlackDisableBlockStreaming,
   resolveSlackStreamRecipientTeamId,
   resolveSlackStreamingThreadHint,
   shouldEnableSlackPreviewStreaming,
@@ -155,6 +156,17 @@ describe("slack native streaming thread hint", () => {
     ).toBe("1000.2");
   });
 
+  it("uses the message timestamp for top-level channel replies when replyToMode=all", () => {
+    expect(
+      resolveSlackStreamingThreadHint({
+        replyToMode: "all",
+        incomingThreadTs: undefined,
+        messageTs: "1000.4",
+        isThreadReply: false,
+      }),
+    ).toBe("1000.4");
+  });
+
   it("uses the existing incoming thread regardless of replyToMode", () => {
     expect(
       resolveSlackStreamingThreadHint({
@@ -240,5 +252,54 @@ describe("slack draft stream initialization", () => {
         useStreaming: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("slack block streaming suppression", () => {
+  it("disables block streaming when native Slack streaming is active", () => {
+    expect(
+      resolveSlackDisableBlockStreaming({
+        useStreaming: true,
+        shouldUseDraftStream: false,
+        blockStreamingEnabled: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("disables block streaming when draft preview streaming is active", () => {
+    expect(
+      resolveSlackDisableBlockStreaming({
+        useStreaming: false,
+        shouldUseDraftStream: true,
+        blockStreamingEnabled: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("respects explicit block streaming config when preview streaming is inactive", () => {
+    expect(
+      resolveSlackDisableBlockStreaming({
+        useStreaming: false,
+        shouldUseDraftStream: false,
+        blockStreamingEnabled: true,
+      }),
+    ).toBe(false);
+    expect(
+      resolveSlackDisableBlockStreaming({
+        useStreaming: false,
+        shouldUseDraftStream: false,
+        blockStreamingEnabled: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("leaves block streaming policy unset when no channel override exists", () => {
+    expect(
+      resolveSlackDisableBlockStreaming({
+        useStreaming: false,
+        shouldUseDraftStream: false,
+        blockStreamingEnabled: undefined,
+      }),
+    ).toBeUndefined();
   });
 });

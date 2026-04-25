@@ -2,6 +2,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   createAgentEventHandler,
   type ChatRunState,
@@ -30,7 +31,7 @@ export function startGatewayEventSubscriptions(params: {
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
-  chatAbortControllers: Map<string, unknown>;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   const agentUnsub = onAgentEvent(
     createAgentEventHandler({
@@ -43,7 +44,10 @@ export function startGatewayEventSubscriptions(params: {
       clearAgentRunContext: params.clearAgentRunContext,
       toolEventRecipients: params.toolEventRecipients,
       sessionEventSubscribers: params.sessionEventSubscribers,
-      isChatSendRunActive: (runId) => params.chatAbortControllers.has(runId),
+      isChatSendRunActive: (runId) => {
+        const entry = params.chatAbortControllers.get(runId);
+        return entry !== undefined && entry.kind !== "agent";
+      },
     }),
   );
 

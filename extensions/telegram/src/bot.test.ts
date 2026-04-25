@@ -926,7 +926,7 @@ describe("createTelegramBot", () => {
         inline_keyboard: [
           [
             { text: "◀ Prev", callback_data: "commands_page_1:main" },
-            { text: "2/5", callback_data: "commands_page_noop:main" },
+            { text: "2/6", callback_data: "commands_page_noop:main" },
             { text: "Next ▶", callback_data: "commands_page_3:main" },
           ],
         ],
@@ -1070,6 +1070,82 @@ describe("createTelegramBot", () => {
     } finally {
       await rm(storePath, { force: true });
     }
+  });
+
+  it("renders model callback lists with configured display names", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const buildModelsProviderDataMock =
+      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    buildModelsProviderDataMock.mockResolvedValueOnce({
+      byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
+      providers: ["openai"],
+      resolvedDefault: { provider: "openai", model: "gpt-5" },
+      modelNames: new Map<string, string>([
+        ["openai/gpt-4.1", "GPT 4.1 Bridge"],
+        ["openai/gpt-5", "GPT Five Bridge"],
+      ]),
+    });
+
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({
+      token: "tok",
+      config,
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-model-display-names-1",
+        data: "mdl_list_openai_1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 23,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    const [, , , params] = editMessageTextSpy.mock.calls[0] ?? [];
+    const buttons = (
+      params as {
+        reply_markup?: {
+          inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+        };
+      }
+    ).reply_markup?.inline_keyboard?.flat();
+
+    expect(buttons).toContainEqual({
+      text: "GPT 4.1 Bridge",
+      callback_data: "mdl_sel_openai/gpt-4.1",
+    });
+    const gpt5Button = buttons?.find((button) => button.callback_data === "mdl_sel_openai/gpt-5");
+    expect(gpt5Button?.text?.replace(" ✓", "")).toBe("GPT Five Bridge");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
   });
 
   it("resets overrides when selecting the configured default model", async () => {

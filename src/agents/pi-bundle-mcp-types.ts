@@ -38,6 +38,8 @@ export type SessionMcpRuntime = {
   configFingerprint: string;
   createdAt: number;
   lastUsedAt: number;
+  activeLeases?: number;
+  acquireLease?: () => () => void;
   getCatalog: () => Promise<McpToolCatalog>;
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
@@ -55,5 +57,6 @@ export type SessionMcpRuntimeManager = {
   resolveSessionId: (sessionKey: string) => string | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
   disposeAll: () => Promise<void>;
+  sweepIdleRuntimes: () => Promise<number>;
   listSessionIds: () => string[];
 };

@@ -20,6 +20,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
   resolveUnknownToolGuardThreshold,
+  shouldCreateBundleMcpRuntimeForAttempt,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldStripBootstrapFromEmbeddedContext,
@@ -69,6 +70,34 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     expect(
       applyEmbeddedAttemptToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name),
     ).toEqual(["exec", "read"]);
+  });
+});
+
+describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
+  it("skips bundle MCP when tools are disabled or unavailable", () => {
+    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: false })).toBe(false);
+    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, disableTools: true })).toBe(
+      false,
+    );
+  });
+
+  it("creates bundle MCP only when the allowlist can reach bundle MCP tool names", () => {
+    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })).toBe(true);
+    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, toolsAllow: [] })).toBe(
+      true,
+    );
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["memory_search", "memory_get"],
+      }),
+    ).toBe(false);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["strict__strict_probe"],
+      }),
+    ).toBe(true);
   });
 });
 

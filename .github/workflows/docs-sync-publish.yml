@@ -63,9 +63,31 @@ jobs:
         working-directory: publish
         run: |
           set -euo pipefail
+          remote_source_sha() {
+            git show refs/remotes/origin/main:.openclaw-sync/source.json 2>/dev/null \
+              | node -e 'const fs = require("node:fs"); try { const data = JSON.parse(fs.readFileSync(0, "utf8")); if (data.sha) process.stdout.write(data.sha); } catch {}' \
+              || true
+          }
+
+          skip_stale_source() {
+            current_source_sha="$(remote_source_sha)"
+            if [ -z "$current_source_sha" ] || [ "$current_source_sha" = "$GITHUB_SHA" ]; then
+              return
+            fi
+
+            if git -C "$GITHUB_WORKSPACE" merge-base --is-ancestor "$GITHUB_SHA" "$current_source_sha"; then
+              echo "Skipping stale publish sync for $GITHUB_SHA; origin/main already mirrors $current_source_sha."
+              exit 0
+            fi
+          }
+
           if git diff --quiet -- docs .openclaw-sync; then
             echo "No publish-repo changes."
             exit 0
+          fi
+
+          if git fetch origin main:refs/remotes/origin/main; then
+            skip_stale_source
           fi
 
           git config user.name "openclaw-docs-sync[bot]"
@@ -73,8 +95,11 @@ jobs:
           git add docs .openclaw-sync
           git commit -m "chore(sync): mirror docs from $GITHUB_REPOSITORY@$GITHUB_SHA"
           for attempt in 1 2 3 4 5; do
-            if git fetch origin main && git rebase origin/main && git push origin HEAD:main; then
-              exit 0
+            if git fetch origin main:refs/remotes/origin/main; then
+              skip_stale_source
+              if git rebase -X theirs origin/main && git push origin HEAD:main; then
+                exit 0
+              fi
             fi
             git rebase --abort >/dev/null 2>&1 || true
             echo "Publish sync attempt ${attempt} failed; retrying."

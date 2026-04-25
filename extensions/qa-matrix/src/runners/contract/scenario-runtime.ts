@@ -12,12 +12,14 @@ import {
   runMatrixQaE2eeArtifactRedactionScenario,
   runMatrixQaE2eeBasicReplyScenario,
   runMatrixQaE2eeBootstrapSuccessScenario,
+  runMatrixQaE2eeCliSelfVerificationScenario,
   runMatrixQaE2eeDeviceSasVerificationScenario,
   runMatrixQaE2eeDmSasVerificationScenario,
   runMatrixQaE2eeKeyBootstrapFailureScenario,
   runMatrixQaE2eeMediaImageScenario,
   runMatrixQaE2eeQrVerificationScenario,
   runMatrixQaE2eeRecoveryKeyLifecycleScenario,
+  runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario,
   runMatrixQaE2eeRestartResumeScenario,
   runMatrixQaE2eeStaleDeviceHygieneScenario,
   runMatrixQaE2eeThreadFollowUpScenario,
@@ -308,6 +310,10 @@ export async function runMatrixQaScenario(
       return await runMatrixQaE2eeBootstrapSuccessScenario(context);
     case "matrix-e2ee-recovery-key-lifecycle":
       return await runMatrixQaE2eeRecoveryKeyLifecycleScenario(context);
+    case "matrix-e2ee-recovery-owner-verification-required":
+      return await runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario(context);
+    case "matrix-e2ee-cli-self-verification":
+      return await runMatrixQaE2eeCliSelfVerificationScenario(context);
     case "matrix-e2ee-device-sas-verification":
       return await runMatrixQaE2eeDeviceSasVerificationScenario(context);
     case "matrix-e2ee-qr-verification":

@@ -31,6 +31,87 @@ export interface PlannedWsTurnInput {
   previousResponseId?: string;
 }
 
+export type PlannedWsRequestPayload = {
+  mode: "full_context" | "incremental";
+  payload: ResponseCreateEvent;
+};
+
+function stringifyStable(value: unknown): string {
+  if (value === undefined) {
+    return "";
+  }
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stringifyStable(entry)).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  return `{${entries
+    .map(([key, entry]) => `${JSON.stringify(key)}:${stringifyStable(entry)}`)
+    .join(",")}}`;
+}
+
+function payloadWithoutIncrementalFields(payload: ResponseCreateEvent): Record<string, unknown> {
+  const {
+    input: _input,
+    metadata: _metadata,
+    previous_response_id: _previousResponseId,
+    ...rest
+  } = payload;
+  return rest;
+}
+
+function payloadFieldsMatch(left: ResponseCreateEvent, right: ResponseCreateEvent): boolean {
+  return (
+    stringifyStable(payloadWithoutIncrementalFields(left)) ===
+    stringifyStable(payloadWithoutIncrementalFields(right))
+  );
+}
+
+function inputItemsStartWith(input: InputItem[], baseline: InputItem[]): boolean {
+  if (baseline.length > input.length) {
+    return false;
+  }
+  return baseline.every((item, index) => stringifyStable(item) === stringifyStable(input[index]));
+}
+
+export function planOpenAIWebSocketRequestPayload(params: {
+  fullPayload: ResponseCreateEvent;
+  previousRequestPayload?: ResponseCreateEvent;
+  previousResponseId?: string | null;
+  previousResponseInputItems?: InputItem[];
+}): PlannedWsRequestPayload {
+  const fullInputItems = Array.isArray(params.fullPayload.input) ? params.fullPayload.input : [];
+  const previousInputItems = Array.isArray(params.previousRequestPayload?.input)
+    ? params.previousRequestPayload.input
+    : [];
+  const previousResponseInputItems = params.previousResponseInputItems ?? [];
+
+  if (
+    params.previousResponseId &&
+    params.previousRequestPayload &&
+    payloadFieldsMatch(params.fullPayload, params.previousRequestPayload)
+  ) {
+    const baseline = [...previousInputItems, ...previousResponseInputItems];
+    if (inputItemsStartWith(fullInputItems, baseline)) {
+      return {
+        mode: "incremental",
+        payload: {
+          ...params.fullPayload,
+          previous_response_id: params.previousResponseId,
+          input: fullInputItems.slice(baseline.length),
+        },
+      };
+    }
+  }
+
+  const { previous_response_id: _previousResponseId, ...payload } = params.fullPayload;
+  return { mode: "full_context", payload };
+}
+
 export function buildOpenAIWebSocketWarmUpPayload(params: {
   model: string;
   tools?: FunctionToolDefinition[];

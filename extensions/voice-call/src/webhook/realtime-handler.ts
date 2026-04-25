@@ -101,7 +101,7 @@ export class RealtimeCallHandler {
     const token = this.issueStreamToken({
       from: params?.get("From") ?? undefined,
       to: params?.get("To") ?? undefined,
-      direction: rawDirection === "outbound-api" ? "outbound" : "inbound",
+      direction: rawDirection?.startsWith("outbound") ? "outbound" : "inbound",
     });
     const wsUrl = `wss://${host}${this.getStreamPathPattern()}/${token}`;
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>

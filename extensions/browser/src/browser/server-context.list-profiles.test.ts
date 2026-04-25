@@ -41,6 +41,7 @@ describe("browser server-context listProfiles", () => {
         cdpPort: 9222,
         color: "#00AA00",
         driver: "openclaw",
+        headless: false,
         attachOnly: true,
       },
       resolvedOverrides: {

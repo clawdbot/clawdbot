@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
@@ -7,6 +7,7 @@ import {
   makePersistedCall,
   writeCallsToStore,
 } from "./manager.test-harness.js";
+import { flushPendingCallRecordWritesForTest, loadActiveCallsFromStore } from "./manager/store.js";
 
 function requireSingleActiveCall(manager: CallManager) {
   const activeCalls = manager.getActiveCalls();
@@ -19,6 +20,10 @@ function requireSingleActiveCall(manager: CallManager) {
 }
 
 describe("CallManager verification on restore", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   async function initializeManager(params?: {
     callOverrides?: Parameters<typeof makePersistedCall>[0];
     providerResult?: FakeProvider["getCallStatusResult"];
@@ -44,7 +49,7 @@ describe("CallManager verification on restore", () => {
     const manager = new CallManager(config, storePath);
     await manager.initialize(provider, "https://example.com/voice/webhook");
 
-    return { call, manager };
+    return { call, manager, provider, storePath };
   }
 
   it("skips stale calls reported terminal by provider", async () => {
@@ -75,7 +80,7 @@ describe("CallManager verification on restore", () => {
   });
 
   it("skips calls older than maxDurationSeconds", async () => {
-    const { manager } = await initializeManager({
+    const { manager, provider, storePath } = await initializeManager({
       callOverrides: {
         startedAt: Date.now() - 600_000,
         answeredAt: Date.now() - 590_000,
@@ -84,6 +89,14 @@ describe("CallManager verification on restore", () => {
     });
 
     expect(manager.getActiveCalls()).toHaveLength(0);
+    expect(provider.hangupCalls).toEqual([
+      expect.objectContaining({
+        reason: "timeout",
+      }),
+    ]);
+
+    await flushPendingCallRecordWritesForTest();
+    expect(loadActiveCallsFromStore(storePath).activeCalls.size).toBe(0);
   });
 
   it("skips calls without providerCallId", async () => {
@@ -106,6 +119,33 @@ describe("CallManager verification on restore", () => {
     const activeCall = requireSingleActiveCall(manager);
     expect(activeCall.callId).toBe(call.callId);
     expect(activeCall.state).toBe(call.state);
+  });
+
+  it("uses only remaining max duration for restored answered calls", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-03-17T03:07:00Z");
+    vi.setSystemTime(now);
+    const { manager, provider } = await initializeManager({
+      callOverrides: {
+        startedAt: now.getTime() - 290_000,
+        answeredAt: now.getTime() - 290_000,
+        state: "answered",
+      },
+      configOverrides: { maxDurationSeconds: 300 },
+    });
+
+    expect(manager.getActiveCalls()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(manager.getActiveCalls()).toHaveLength(1);
+    expect(provider.hangupCalls).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(manager.getActiveCalls()).toHaveLength(0);
+    expect(provider.hangupCalls).toEqual([
+      expect.objectContaining({
+        reason: "timeout",
+      }),
+    ]);
   });
 
   it("restores dedupe keys from terminal persisted calls so replayed webhooks stay ignored", async () => {

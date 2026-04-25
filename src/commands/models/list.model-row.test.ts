@@ -15,6 +15,23 @@ const OPENROUTER_MODEL = {
 } as const;
 
 describe("toModelRow", () => {
+  it("keeps native context metadata and effective runtime context tokens distinct", () => {
+    const row = toModelRow({
+      model: {
+        ...OPENROUTER_MODEL,
+        contextWindow: 400_000,
+        contextTokens: 272_000,
+      } as never,
+      key: "openrouter/openai/gpt-5.4",
+      tags: [],
+    });
+
+    expect(row).toMatchObject({
+      contextWindow: 400_000,
+      contextTokens: 272_000,
+    });
+  });
+
   it("marks models available from auth profiles without loading model discovery", () => {
     const authStore: AuthProfileStore = {
       version: 1,

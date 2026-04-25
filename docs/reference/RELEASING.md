@@ -200,6 +200,11 @@ requires `NPM_TOKEN`, while the public repo keeps OIDC-only publish.
 That keeps the direct publish path and the beta-first promotion path both
 documented and operator-visible.
 
+If a maintainer must fall back to local npm authentication, run any 1Password
+CLI (`op`) commands only inside a dedicated tmux session. Do not call `op`
+directly from the main agent shell; keeping it inside tmux makes prompts,
+alerts, and OTP handling observable and prevents repeated host alerts.
+
 ## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)

@@ -8,7 +8,7 @@ read_when:
 
 Core config reference for `~/.openclaw/openclaw.json`. For a task-oriented overview, see [Configuration](/gateway/configuration).
 
-This page covers the main OpenClaw config surfaces and links out when a subsystem has its own deeper reference. It does **not** try to inline every channel/plugin-owned command catalog or every deep memory/QMD knob on one page.
+Covers the main OpenClaw config surfaces and links out when a subsystem has its own deeper reference. Channel- and plugin-owned command catalogs and deep memory/QMD knobs live on their own pages rather than on this one.
 
 Code truth:
 
@@ -19,7 +19,7 @@ Code truth:
 Dedicated deep references:
 
 - [Memory configuration reference](/reference/memory-config) for `agents.defaults.memorySearch.*`, `memory.qmd.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`
-- [Slash Commands](/tools/slash-commands) for the current built-in + bundled command catalog
+- [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog
 - owning channel/plugin pages for channel-specific command surfaces
 
 Config format is **JSON5** (comments + trailing commas allowed). All fields are optional — OpenClaw uses safe defaults when omitted.
@@ -50,6 +50,47 @@ Moved to a dedicated page — see
 Tool policy, experimental toggles, provider-backed tool config, and custom
 provider / base-URL setup moved to a dedicated page — see
 [Configuration — tools and custom providers](/gateway/config-tools).
+
+## MCP
+
+OpenClaw-managed MCP server definitions live under `mcp.servers` and are
+consumed by embedded Pi and other runtime adapters. The `openclaw mcp list`,
+`show`, `set`, and `unset` commands manage this block without connecting to the
+target server during config edits.
+
+```json5
+{
+  mcp: {
+    // Optional. Default: 600000 ms (10 minutes). Set 0 to disable idle eviction.
+    sessionIdleTtlMs: 600000,
+    servers: {
+      docs: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-fetch"],
+      },
+      remote: {
+        url: "https://example.com/mcp",
+        transport: "streamable-http", // streamable-http | sse
+        headers: {
+          Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
+        },
+      },
+    },
+  },
+}
+```
+
+- `mcp.servers`: named stdio or remote MCP server definitions for runtimes that
+  expose configured MCP tools.
+- `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
+  One-shot embedded runs request run-end cleanup; this TTL is the backstop for
+  long-lived sessions and future callers.
+- Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.
+  The next tool discovery/use recreates them from the new config, so removed
+  `mcp.servers` entries are reaped immediately instead of waiting for idle TTL.
+
+See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
+[CLI backends](/gateway/cli-backends#bundle-mcp-overlays) for runtime behavior.
 
 ## Skills
 
@@ -118,9 +159,11 @@ provider / base-URL setup moved to a dedicated page — see
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.
+- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, and `agent_end`.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
+- Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
   - `apiKey`: Firecrawl API key (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
   - `baseUrl`: Firecrawl API base URL (default: `https://api.firecrawl.dev`).
@@ -165,9 +208,19 @@ See [Plugins](/tools/plugin).
       // hostnameAllowlist: ["*.example.com", "example.com"],
       // allowedHostnames: ["localhost"],
     },
+    tabCleanup: {
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    },
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
-      work: { cdpPort: 18801, color: "#0066CC" },
+      work: {
+        cdpPort: 18801,
+        color: "#0066CC",
+        executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      },
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
       brave: {
         driver: "existing-session",
@@ -188,6 +241,9 @@ See [Plugins](/tools/plugin).
 ```
 
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
+- `tabCleanup` reclaims tracked primary-agent tabs after idle time or when a
+  session exceeds its cap. Set `idleMinutes: 0` or `maxTabsPerSession: 0` to
+  disable those individual cleanup modes.
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled when unset, so browser navigation stays strict by default.
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: true` only when you intentionally trust private-network browser navigation.
 - In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
@@ -207,7 +263,11 @@ See [Plugins](/tools/plugin).
   `responsebody`, PDF export, download interception, or batch actions.
 - Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
   set `cdpUrl` explicitly for remote CDP.
+- Local managed profiles can set `executablePath` to override the global
+  `browser.executablePath` for that profile. Use this to run one profile in
+  Chrome and another in Brave.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
+- `browser.executablePath` accepts `~` for your OS home directory.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example
   `--disable-gpu`, window sizing, or debug flags).
@@ -278,6 +338,14 @@ See [Plugins](/tools/plugin).
     trustedProxies: ["10.0.0.1"],
     // Optional. Default false.
     allowRealIpFallback: false,
+    nodes: {
+      pairing: {
+        // Optional. Default unset/disabled.
+        autoApproveCidrs: ["192.168.1.0/24", "fd00:1234:5678::/64"],
+      },
+      allowCommands: ["canvas.navigate"],
+      denyCommands: ["system.run"],
+    },
     tools: {
       // Additional /tools/invoke HTTP denies
       deny: ["browser"],
@@ -340,6 +408,8 @@ See [Plugins](/tools/plugin).
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `trustedProxies`: reverse proxy IPs that terminate TLS or inject forwarded-client headers. Only list proxies you control. Loopback entries are still valid for same-host proxy/local-detection setups (for example Tailscale Serve or a local reverse proxy), but they do **not** make loopback requests eligible for `gateway.auth.mode: "trusted-proxy"`.
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
+- `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
+- `gateway.nodes.allowCommands` / `gateway.nodes.denyCommands`: global allow/deny shaping for declared node commands after pairing and allowlist evaluation.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
 - `gateway.tools.allow`: remove tool names from the default HTTP deny list.
 
@@ -796,6 +866,14 @@ Notes:
       logs: false,
       sampleRate: 1.0,
       flushIntervalMs: 5000,
+      captureContent: {
+        enabled: false,
+        inputMessages: false,
+        outputMessages: false,
+        toolInputs: false,
+        toolOutputs: false,
+        systemPrompt: false,
+      },
     },
 
     cacheTrace: {
@@ -820,6 +898,8 @@ Notes:
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
 - `otel.sampleRate`: trace sampling rate `0`–`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
+- `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, and `systemPrompt` explicitly.
+- `OPENCLAW_OTEL_PRELOADED=1`: environment toggle for hosts that already registered a global OpenTelemetry SDK. OpenClaw then skips plugin-owned SDK startup/shutdown while keeping diagnostic listeners active.
 - `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
 - `cacheTrace.filePath`: output path for cache trace JSONL (default: `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`).
 - `cacheTrace.includeMessages` / `includePrompt` / `includeSystem`: control what is included in cache trace output (all default: `true`).

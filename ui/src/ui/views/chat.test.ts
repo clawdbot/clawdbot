@@ -105,3 +105,69 @@ describe("chat view queue steering", () => {
     expect(container.querySelector(".chat-queue__steer")).toBeNull();
   });
 });
+
+describe("renderChat", () => {
+  afterEach(() => {
+    cleanupChatModuleState();
+  });
+
+  it("keeps markdown raw text toggles idempotent", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    const rawMarkdown = "```ts\nconst value = 1;\n```";
+
+    render(
+      renderChat(
+        createProps({
+          sidebarOpen: true,
+          sidebarContent: {
+            kind: "markdown",
+            content: `\`\`\`\n${rawMarkdown}\n\`\`\``,
+            rawText: rawMarkdown,
+          },
+          stream: null,
+          streamStartedAt: null,
+          onCloseSidebar: () => undefined,
+          onOpenSidebar,
+        }),
+      ),
+      container,
+    );
+
+    const rawButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("View Raw Text"),
+    );
+    rawButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(rawButton).not.toBeNull();
+    expect(onOpenSidebar).toHaveBeenCalledWith({
+      kind: "markdown",
+      content: `\`\`\`\n${rawMarkdown}\n\`\`\``,
+      rawText: rawMarkdown,
+    });
+  });
+
+  it("renders configured assistant text avatars in transcript groups", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Val",
+          assistantAvatar: "VC",
+          assistantAvatarUrl: null,
+          messages: [{ role: "assistant", content: "hello", timestamp: 1000 }],
+          stream: null,
+          streamStartedAt: null,
+        }),
+      ),
+      container,
+    );
+
+    const avatar = container.querySelector<HTMLElement>(".chat-group.assistant .chat-avatar");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.tagName).toBe("DIV");
+    expect(avatar?.textContent).toContain("VC");
+    expect(avatar?.getAttribute("aria-label")).toBe("Val");
+  });
+});

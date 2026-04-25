@@ -1,6 +1,11 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  loadInstalledPluginIndex,
+  type InstalledPluginIndex,
+  type LoadInstalledPluginIndexParams,
+} from "./installed-plugin-index.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
@@ -28,7 +33,7 @@ function isSafeProviderConfigKey(value: string): boolean {
   return value !== "" && !DANGEROUS_PROVIDER_KEYS.has(value);
 }
 
-export async function resolvePluginDiscoveryProviders(params: {
+export type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -36,10 +41,43 @@ export async function resolvePluginDiscoveryProviders(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-}): Promise<ProviderPlugin[]> {
+};
+
+export type ResolveInstalledPluginProviderContributionIdsParams = LoadInstalledPluginIndexParams & {
+  index?: InstalledPluginIndex;
+  includeDisabled?: boolean;
+};
+
+function sortedValues(values: Iterable<string>): string[] {
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolveInstalledPluginProviderContributionIds(
+  params: ResolveInstalledPluginProviderContributionIdsParams = {},
+): string[] {
+  const index = params.index ?? loadInstalledPluginIndex(params);
+  const providerIds: string[] = [];
+  for (const plugin of index.plugins) {
+    if (!params.includeDisabled && !plugin.enabled) {
+      continue;
+    }
+    providerIds.push(...plugin.contributions.providers);
+  }
+  return sortedValues(providerIds);
+}
+
+export async function resolveRuntimePluginDiscoveryProviders(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderPlugin[]> {
   return (await loadProviderRuntime())
     .resolvePluginDiscoveryProvidersRuntime(params)
     .filter((provider) => resolveProviderCatalogOrderHook(provider));
+}
+
+export async function resolvePluginDiscoveryProviders(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderPlugin[]> {
+  return resolveRuntimePluginDiscoveryProviders(params);
 }
 
 export function groupPluginDiscoveryProvidersByOrder(

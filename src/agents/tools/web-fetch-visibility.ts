@@ -25,27 +25,22 @@ const HIDDEN_CLASS_NAMES = new Set([
   "screen-reader-only",
   "offscreen",
 ]);
-
-type ParsedHtml = {
-  document: Document;
-};
-
-type ParseHtml = (html: string) => ParsedHtml;
-
-type LinkedomModule = {
-  parseHTML: ParseHtml;
-};
-
-const LINKEDOM_MODULE = "linkedom";
-
-let parseHtmlPromise: Promise<ParseHtml> | null = null;
-
-async function loadParseHTML(): Promise<ParseHtml> {
-  parseHtmlPromise ??= (import(LINKEDOM_MODULE) as Promise<LinkedomModule>).then(
-    ({ parseHTML }) => parseHTML,
-  );
-  return parseHtmlPromise;
-}
+const HTML_VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
 
 function hasHiddenClass(className: string): boolean {
   const classes = normalizeLowercaseStringOrEmpty(className).split(/\s+/);
@@ -111,40 +106,53 @@ function isStyleHidden(style: string): boolean {
   return false;
 }
 
-function shouldRemoveElement(element: Element): boolean {
-  const tagName = normalizeLowercaseStringOrEmpty(element.tagName);
+function readAttribute(attrs: string, name: string): string | undefined {
+  const escapedName = name.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const unquotedAttributeValue = "[^\\s\"'=<>`]+";
+  const match = attrs.match(
+    new RegExp(
+      `(?:^|\\s)${escapedName}(?:\\s*=\\s*(?:"([^"]*)"|'([^']*)'|(${unquotedAttributeValue})))?`,
+      "i",
+    ),
+  );
+  if (!match) {
+    return undefined;
+  }
+  return match[1] ?? match[2] ?? match[3] ?? "";
+}
 
-  // Always-remove tags
+function hasAttribute(attrs: string, name: string): boolean {
+  return readAttribute(attrs, name) !== undefined;
+}
+
+function shouldRemoveElement(tagNameRaw: string, attrs: string): boolean {
+  const tagName = normalizeLowercaseStringOrEmpty(tagNameRaw);
+
   if (["meta", "template", "svg", "canvas", "iframe", "object", "embed"].includes(tagName)) {
     return true;
   }
 
-  // input type=hidden
   if (
     tagName === "input" &&
-    normalizeOptionalLowercaseString(element.getAttribute("type")) === "hidden"
+    normalizeOptionalLowercaseString(readAttribute(attrs, "type")) === "hidden"
   ) {
     return true;
   }
 
-  // aria-hidden=true
-  if (element.getAttribute("aria-hidden") === "true") {
+  if (normalizeOptionalLowercaseString(readAttribute(attrs, "aria-hidden")) === "true") {
     return true;
   }
 
-  // hidden attribute
-  if (element.hasAttribute("hidden")) {
+  if (hasAttribute(attrs, "hidden")) {
     return true;
   }
 
-  // class-based hiding
-  const className = element.getAttribute("class") ?? "";
+  const className = readAttribute(attrs, "class") ?? "";
   if (hasHiddenClass(className)) {
     return true;
   }
 
-  // inline style-based hiding
-  const style = element.getAttribute("style") ?? "";
+  const style = readAttribute(attrs, "style") ?? "";
   if (style && isStyleHidden(style)) {
     return true;
   }
@@ -152,28 +160,160 @@ function shouldRemoveElement(element: Element): boolean {
   return false;
 }
 
-export async function sanitizeHtml(html: string): Promise<string> {
-  // Strip HTML comments
-  let sanitized = html.replace(/<!--[\s\S]*?-->/g, "");
+type HtmlTagToken = {
+  tagName: string;
+  attrs: string;
+  closing: boolean;
+  selfClosing: boolean;
+};
 
-  let document: Document;
-  try {
-    const parseHTML = await loadParseHTML();
-    ({ document } = parseHTML(sanitized) as { document: Document });
-  } catch {
-    return sanitized;
-  }
-
-  // Walk all elements and remove hidden ones (bottom-up to avoid re-walking removed subtrees)
-  const all = Array.from(document.querySelectorAll("*"));
-  for (let i = all.length - 1; i >= 0; i--) {
-    const el = all[i];
-    if (shouldRemoveElement(el)) {
-      el.parentNode?.removeChild(el);
+function findTagEnd(html: string, start: number): number {
+  let quote: '"' | "'" | undefined;
+  for (let index = start + 1; index < html.length; index += 1) {
+    const char = html[index];
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === ">") {
+      return index;
     }
   }
+  return -1;
+}
 
-  return (document as unknown as { toString(): string }).toString();
+function readTagName(source: string, start: number): { tagName: string; end: number } | null {
+  let end = start;
+  while (end < source.length) {
+    const code = source.charCodeAt(end);
+    const isNameChar =
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      source[end] === "-" ||
+      source[end] === "_" ||
+      source[end] === ":";
+    if (!isNameChar) {
+      break;
+    }
+    end += 1;
+  }
+  if (end === start) {
+    return null;
+  }
+  return {
+    tagName: normalizeLowercaseStringOrEmpty(source.slice(start, end)),
+    end,
+  };
+}
+
+function parseHtmlTagToken(token: string): HtmlTagToken | null {
+  let inner = token.slice(1, -1).trim();
+  if (!inner || inner.startsWith("!") || inner.startsWith("?")) {
+    return null;
+  }
+
+  const closing = inner.startsWith("/");
+  if (closing) {
+    inner = inner.slice(1).trimStart();
+  }
+
+  const name = readTagName(inner, 0);
+  if (!name) {
+    return null;
+  }
+
+  const attrs = closing ? "" : inner.slice(name.end);
+  return {
+    tagName: name.tagName,
+    attrs,
+    closing,
+    selfClosing: !closing && attrs.trimEnd().endsWith("/"),
+  };
+}
+
+function popDroppedElement(dropStack: string[], tagName: string): void {
+  const index = dropStack.lastIndexOf(tagName);
+  if (index >= 0) {
+    dropStack.length = index;
+  }
+}
+
+function removeMarkedElements(html: string): string {
+  let output = "";
+  let cursor = 0;
+  const dropStack: string[] = [];
+
+  while (cursor < html.length) {
+    const tagStart = html.indexOf("<", cursor);
+    if (tagStart < 0) {
+      if (dropStack.length === 0) {
+        output += html.slice(cursor);
+      }
+      break;
+    }
+
+    if (dropStack.length === 0) {
+      output += html.slice(cursor, tagStart);
+    }
+
+    if (html.startsWith("<!--", tagStart)) {
+      const commentEnd = html.indexOf("-->", tagStart + 4);
+      cursor = commentEnd < 0 ? html.length : commentEnd + 3;
+      continue;
+    }
+
+    const tagEnd = findTagEnd(html, tagStart);
+    if (tagEnd < 0) {
+      if (dropStack.length === 0) {
+        output += html.slice(tagStart);
+      }
+      break;
+    }
+
+    const token = html.slice(tagStart, tagEnd + 1);
+    const parsed = parseHtmlTagToken(token);
+    if (!parsed) {
+      if (dropStack.length === 0) {
+        output += token;
+      }
+      cursor = tagEnd + 1;
+      continue;
+    }
+
+    if (dropStack.length > 0) {
+      if (parsed.closing) {
+        popDroppedElement(dropStack, parsed.tagName);
+      } else if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.tagName)) {
+        dropStack.push(parsed.tagName);
+      }
+      cursor = tagEnd + 1;
+      continue;
+    }
+
+    if (parsed.closing) {
+      output += token;
+    } else if (shouldRemoveElement(parsed.tagName, parsed.attrs)) {
+      if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.tagName)) {
+        dropStack.push(parsed.tagName);
+      }
+    } else {
+      output += token;
+    }
+    cursor = tagEnd + 1;
+  }
+
+  return output;
+}
+
+export async function sanitizeHtml(html: string): Promise<string> {
+  return removeMarkedElements(html);
 }
 
 // Zero-width and invisible Unicode characters used in prompt injection attacks

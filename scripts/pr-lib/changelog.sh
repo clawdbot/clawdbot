@@ -14,7 +14,13 @@ const lines = original.split("\n");
 const prPattern = new RegExp(`(?:\\(#${pr}\\)|openclaw#${pr})`, "i");
 
 function findActiveSectionIndex(arr) {
-  return arr.findIndex((line) => line.trim() === "## Unreleased");
+  const versionUnreleasedIndex = arr.findIndex((line) =>
+    /^##\s+.+\(\s*unreleased\s*\)\s*$/i.test(line.trim()),
+  );
+  if (versionUnreleasedIndex !== -1) {
+    return versionUnreleasedIndex;
+  }
+  return arr.findIndex((line) => line.trim().toLowerCase() === "## unreleased");
 }
 
 function findSectionEnd(arr, start) {
@@ -96,7 +102,7 @@ function sectionTailInsertIndex(arr, subsectionIndex) {
   return insertAt;
 }
 
-ensureActiveSection(lines);
+const activeHeading = lines[ensureActiveSection(lines)]?.trim() || "## Unreleased";
 
 const moved = [];
 for (let i = 0; i < lines.length; i += 1) {
@@ -104,7 +110,7 @@ for (let i = 0; i < lines.length; i += 1) {
     continue;
   }
   const ctx = contextFor(lines, i);
-  if (ctx.major === "## Unreleased") {
+  if (ctx.major === activeHeading) {
     continue;
   }
   moved.push({
@@ -221,6 +227,28 @@ FNR == NR {
   file_line_count = FNR
 }
 END {
+  active_release_line = 0
+  bare_release_line = 0
+  active_release_name = "unreleased"
+  for (i = 1; i <= file_line_count; i++) {
+    if (changelog[i] !~ /^## /) {
+      continue
+    }
+    heading = tolower(changelog[i])
+    if (heading ~ /^##[[:space:]]+.+\([[:space:]]*unreleased[[:space:]]*\)[[:space:]]*$/) {
+      active_release_line = i
+      active_release_name = changelog[i]
+      break
+    }
+    if (heading == "## unreleased" && bare_release_line == 0) {
+      bare_release_line = i
+    }
+  }
+  if (active_release_line == 0 && bare_release_line != 0) {
+    active_release_line = bare_release_line
+    active_release_name = changelog[bare_release_line]
+  }
+
   for (idx = 1; idx <= pr_added_count; idx++) {
     entry_line = pr_added_lines[idx]
     release_line = 0
@@ -235,8 +263,8 @@ END {
         break
       }
     }
-    if (release_line == 0 || changelog[release_line] != "## Unreleased") {
-      printf "CHANGELOG.md PR-linked entry must be in ## Unreleased: line %d: %s\n", entry_line, pr_added_text[entry_line]
+    if (release_line == 0 || release_line != active_release_line) {
+      printf "CHANGELOG.md PR-linked entry must be in %s: line %d: %s\n", active_release_name, entry_line, pr_added_text[entry_line]
       issue_count++
       continue
     }

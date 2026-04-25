@@ -161,6 +161,7 @@ const PluginEntrySchema = z
     hooks: z
       .object({
         allowPromptInjection: z.boolean().optional(),
+        allowConversationAccess: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -230,6 +231,21 @@ const McpServerSchema = z
 const McpConfigSchema = z
   .object({
     servers: z.record(z.string(), McpServerSchema).optional(),
+    sessionIdleTtlMs: z.number().finite().min(0).optional(),
+  })
+  .strict()
+  .optional();
+
+const CrestodianSchema = z
+  .object({
+    rescue: z
+      .object({
+        enabled: z.union([z.literal("auto"), z.boolean()]).optional(),
+        ownerDmOnly: z.boolean().optional(),
+        pendingTtlMinutes: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -298,6 +314,21 @@ export const OpenClawSchema = z
             logs: z.boolean().optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
+            captureContent: z
+              .union([
+                z.boolean(),
+                z
+                  .object({
+                    enabled: z.boolean().optional(),
+                    inputMessages: z.boolean().optional(),
+                    outputMessages: z.boolean().optional(),
+                    toolInputs: z.boolean().optional(),
+                    toolOutputs: z.boolean().optional(),
+                    systemPrompt: z.boolean().optional(),
+                  })
+                  .strict(),
+              ])
+              .optional(),
           })
           .strict()
           .optional(),
@@ -341,6 +372,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    crestodian: CrestodianSchema,
     update: z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
@@ -364,6 +396,7 @@ export const OpenClawSchema = z
         cdpUrl: z.string().optional(),
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
         remoteCdpHandshakeTimeoutMs: z.number().int().nonnegative().optional(),
+        actionTimeoutMs: z.number().int().positive().optional(),
         color: z.string().optional(),
         executablePath: z.string().optional(),
         headless: z.boolean().optional(),
@@ -393,6 +426,8 @@ export const OpenClawSchema = z
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),
+                headless: z.boolean().optional(),
+                executablePath: z.string().optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })
@@ -874,6 +909,12 @@ export const OpenClawSchema = z
                   .union([z.literal("auto"), z.literal("manual"), z.literal("off")])
                   .optional(),
                 node: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+            pairing: z
+              .object({
+                autoApproveCidrs: z.array(z.string()).optional(),
               })
               .strict()
               .optional(),

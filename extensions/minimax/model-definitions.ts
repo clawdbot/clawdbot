@@ -70,13 +70,11 @@ export function buildMinimaxModelDefinition(params: {
   maxTokens: number;
 }): ModelDefinitionConfig {
   const catalog = MINIMAX_TEXT_MODEL_CATALOG[params.id as MinimaxCatalogId];
-  // MiniMax-M2.7 supports image input
-  const isImageCapable = params.id === "MiniMax-M2.7" || params.id.startsWith("MiniMax-M2.7-");
   return {
     id: params.id,
     name: params.name ?? catalog?.name ?? `MiniMax ${params.id}`,
     reasoning: params.reasoning ?? catalog?.reasoning ?? false,
-    input: isImageCapable ? ["text", "image"] : ["text"],
+    input: ["text"],
     cost: params.cost,
     contextWindow: params.contextWindow,
     maxTokens: params.maxTokens,

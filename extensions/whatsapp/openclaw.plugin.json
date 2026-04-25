@@ -4,6 +4,17 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "pluginHooks": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "messageReceived": {
+            "type": "boolean",
+            "description": "Opt in to broadcasting inbound WhatsApp message_received hook payloads to loaded plugins."
+          }
+        }
+      }
+    }
   }
 }

@@ -4,6 +4,7 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
+import { hasExplicitPluginConfig } from "./config-policy.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -98,6 +99,105 @@ function findProviderById<K extends CapabilityProviderRegistryKey>(
   return undefined;
 }
 
+function mergeCapabilityProviders<K extends CapabilityProviderRegistryKey>(
+  left: PluginRegistry[K],
+  right: PluginRegistry[K],
+): CapabilityProviderForKey<K>[] {
+  const merged = new Map<string, CapabilityProviderForKey<K>>();
+  const unnamed: CapabilityProviderForKey<K>[] = [];
+  const addEntries = (entries: PluginRegistry[K]) => {
+    for (const entry of entries) {
+      const provider = entry.provider as CapabilityProviderForKey<K> & { id?: string };
+      if (!provider.id) {
+        unnamed.push(provider);
+        continue;
+      }
+      if (!merged.has(provider.id)) {
+        merged.set(provider.id, provider);
+      }
+    }
+  };
+
+  addEntries(left);
+  addEntries(right);
+  return [...merged.values(), ...unnamed];
+}
+
+function addObjectKeys(target: Set<string>, value: unknown): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    const normalized = key.trim().toLowerCase();
+    if (normalized) {
+      target.add(normalized);
+    }
+  }
+}
+
+function addStringValue(target: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized) {
+    target.add(normalized);
+  }
+}
+
+function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
+  const requested = new Set<string>();
+  const tts =
+    typeof cfg?.messages?.tts === "object" && cfg.messages.tts !== null
+      ? (cfg.messages.tts as Record<string, unknown>)
+      : undefined;
+  addStringValue(requested, tts?.provider);
+  addObjectKeys(requested, tts?.providers);
+  addObjectKeys(requested, cfg?.models?.providers);
+  return requested;
+}
+
+function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
+  for (const entry of entries as Array<{ provider: { id?: unknown; aliases?: unknown } }>) {
+    const provider = entry.provider as { id?: unknown; aliases?: unknown };
+    if (typeof provider.id === "string") {
+      requested.delete(provider.id.toLowerCase());
+    }
+    if (Array.isArray(provider.aliases)) {
+      for (const alias of provider.aliases) {
+        if (typeof alias === "string") {
+          requested.delete(alias.toLowerCase());
+        }
+      }
+    }
+  }
+}
+
+function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderRegistryKey>(params: {
+  key: K;
+  requested: Set<string>;
+  entries: PluginRegistry[K];
+}): PluginRegistry[K] {
+  if (params.key !== "speechProviders") {
+    return [] as unknown as PluginRegistry[K];
+  }
+  if (params.requested.size === 0) {
+    return [] as unknown as PluginRegistry[K];
+  }
+  return params.entries.filter((entry) => {
+    const provider = entry.provider as { id?: unknown; aliases?: unknown };
+    if (typeof provider.id === "string" && params.requested.has(provider.id.toLowerCase())) {
+      return true;
+    }
+    if (Array.isArray(provider.aliases)) {
+      return provider.aliases.some(
+        (alias) => typeof alias === "string" && params.requested.has(alias.toLowerCase()),
+      );
+    }
+    return false;
+  }) as PluginRegistry[K];
+}
+
 export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
   providerId: string;
@@ -123,7 +223,8 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
     cfg: params.cfg,
     pluginIds,
   });
-  const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
+  const loadOptions =
+    compatConfig === undefined ? undefined : { config: compatConfig, activate: false };
   const registry = resolveRuntimePluginRegistry(loadOptions);
   return findProviderById(registry?.[params.key] ?? [], params.providerId);
 }
@@ -134,29 +235,42 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
+  if (
+    activeProviders.length > 0 &&
+    params.key !== "memoryEmbeddingProviders" &&
+    params.key !== "speechProviders" &&
+    !hasExplicitPluginConfig(params.cfg?.plugins)
+  ) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
+  if (activeProviders.length > 0 && params.key === "speechProviders" && !params.cfg) {
+    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+  }
+  const missingRequestedSpeechProviders =
+    activeProviders.length > 0 && params.key === "speechProviders"
+      ? collectRequestedSpeechProviderIds(params.cfg)
+      : undefined;
+  if (missingRequestedSpeechProviders) {
+    removeActiveProviderIds(missingRequestedSpeechProviders, activeProviders);
+    if (missingRequestedSpeechProviders.size === 0) {
+      return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+    }
+  }
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
-  const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
+  const loadOptions =
+    compatConfig === undefined ? undefined : { config: compatConfig, activate: false };
   const registry = resolveRuntimePluginRegistry(loadOptions);
+  const loadedProviders = registry?.[params.key] ?? [];
   if (params.key !== "memoryEmbeddingProviders") {
-    return (registry?.[params.key] ?? []).map(
-      (entry) => entry.provider,
-    ) as CapabilityProviderForKey<K>[];
+    const mergeLoadedProviders =
+      activeProviders.length > 0
+        ? filterLoadedProvidersForRequestedConfig({
+            key: params.key,
+            requested: missingRequestedSpeechProviders ?? new Set(),
+            entries: loadedProviders,
+          })
+        : loadedProviders;
+    return mergeCapabilityProviders(activeProviders, mergeLoadedProviders);
   }
-  const merged = new Map<string, CapabilityProviderForKey<K>>();
-  for (const entry of activeProviders) {
-    const provider = entry.provider as CapabilityProviderForKey<K> & { id?: string };
-    if (provider.id) {
-      merged.set(provider.id, provider);
-    }
-  }
-  for (const entry of registry?.[params.key] ?? []) {
-    const provider = entry.provider as CapabilityProviderForKey<K> & { id?: string };
-    if (provider.id && !merged.has(provider.id)) {
-      merged.set(provider.id, provider);
-    }
-  }
-  return [...merged.values()];
+  return mergeCapabilityProviders(activeProviders, loadedProviders);
 }

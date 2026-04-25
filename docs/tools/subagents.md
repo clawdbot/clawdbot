@@ -75,6 +75,19 @@ higher-quality model. You can configure this via `agents.defaults.subagents.mode
 overrides. When a child genuinely needs the requester's current transcript, the agent can request
 `context: "fork"` on that one spawn.
 
+## Context modes
+
+Native sub-agents start isolated unless the caller explicitly asks to fork the
+current transcript.
+
+| Mode       | When to use it                                                                                                                         | Behavior                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `isolated` | Fresh research, independent implementation, slow tool work, or anything that can be briefed in the task text                           | Creates a clean child transcript. This is the default and keeps token use lower.  |
+| `fork`     | Work that depends on the current conversation, prior tool results, or nuanced instructions already present in the requester transcript | Branches the requester transcript into the child session before the child starts. |
+
+Use `fork` sparingly. It is for context-sensitive delegation, not a replacement
+for writing a clear task prompt.
+
 ## Tool
 
 Use `sessions_spawn`:
@@ -157,7 +170,7 @@ Auto-archive:
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
-## Nested Sub-Agents
+## Nested sub-agents
 
 By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). You can enable one level of nesting by setting `maxSpawnDepth: 2`, which allows the **orchestrator pattern**: main → orchestrator sub-agent → worker sub-sub-agents.
 
@@ -201,6 +214,11 @@ Operational guidance:
 - Start child work once and wait for completion events instead of building poll
   loops around `sessions_list`, `sessions_history`, `/subagents list`, or
   `exec` sleep commands.
+- `sessions_list` and `/subagents list` keep child-session relationships focused
+  on live work: live children remain attached, ended children stay visible for a
+  short recent window, and stale store-only child links are ignored after their
+  freshness window. This prevents old `spawnedBy` / `parentSessionKey` metadata
+  from resurrecting ghost children after restart.
 - If a child completion event arrives after you already sent the final answer,
   the correct follow-up is the exact silent token `NO_REPLY` / `no_reply`.
 
@@ -329,6 +347,18 @@ Sub-agents use a dedicated in-process queue lane:
 
 - Lane name: `subagent`
 - Concurrency: `agents.defaults.subagents.maxConcurrent` (default `8`)
+
+## Liveness and recovery
+
+OpenClaw does not treat `endedAt` absence as permanent proof that a sub-agent
+is still alive. Unended runs older than the stale-run window stop counting as
+active/pending in `/subagents list`, status summaries, descendant completion
+gating, and per-session concurrency checks.
+
+After a gateway restart, stale unended restored runs are pruned unless their
+child session is marked `abortedLastRun: true`. Those restart-aborted child
+sessions remain recoverable through the sub-agent orphan recovery flow, which
+sends a synthetic resume message before clearing the aborted marker.
 
 ## Stopping
 

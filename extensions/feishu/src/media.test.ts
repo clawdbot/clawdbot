@@ -9,6 +9,7 @@ const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
+const runFfmpegMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
 const imageCreateMock = vi.hoisted(() => vi.fn());
@@ -41,6 +42,14 @@ vi.mock("./runtime.js", () => ({
     },
   }),
 }));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+  return {
+    ...actual,
+    runFfmpeg: runFfmpegMock,
+  };
+});
 
 vi.mock("../../../src/channels/plugins/bundled.js", () => ({
   bundledChannelPlugins: [],
@@ -145,6 +154,10 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     imageGetMock.mockResolvedValue(Buffer.from("image-bytes"));
     messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
+    runFfmpegMock.mockImplementation(async (args: string[]) => {
+      await fs.writeFile(args.at(-1) ?? "", Buffer.from("opus-output"));
+      return "";
+    });
   });
 
   it("uses msg_type=media for mp4 video", async () => {
@@ -260,6 +273,104 @@ describe("sendMediaFeishu msg_type routing", () => {
         data: expect.objectContaining({ msg_type: "file" }),
       }),
     );
+    expect(runFfmpegMock).not.toHaveBeenCalled();
+  });
+
+  it("transcodes voice-intent mp3 to msg_type=audio", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote-mp3"),
+      fileName: "reply.mp3",
+      kind: "audio",
+      contentType: "audio/mpeg",
+    });
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/reply.mp3",
+      audioAsVoice: true,
+    });
+
+    expect(runFfmpegMock).toHaveBeenCalledWith(
+      expect.arrayContaining(["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]),
+    );
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          file_type: "opus",
+          file_name: "voice.ogg",
+          file: Buffer.from("opus-output"),
+        }),
+      }),
+    );
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "audio" }),
+      }),
+    );
+  });
+
+  it("leaves native voice audio unchanged when audioAsVoice is true", async () => {
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("opus"),
+      fileName: "reply.ogg",
+      audioAsVoice: true,
+    });
+
+    expect(runFfmpegMock).not.toHaveBeenCalled();
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          file_type: "opus",
+          file_name: "reply.ogg",
+        }),
+      }),
+    );
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "audio" }),
+      }),
+    );
+  });
+
+  it("falls back to file when voice-intent audio cannot be transcoded", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    runFfmpegMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote-mp3"),
+      fileName: "reply.mp3",
+      kind: "audio",
+      contentType: "audio/mpeg",
+    });
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/reply.mp3",
+      audioAsVoice: true,
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          file_type: "stream",
+          file_name: "reply.mp3",
+          file: Buffer.from("remote-mp3"),
+        }),
+      }),
+    );
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "file" }),
+      }),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("audioAsVoice transcode failed"),
+      expect.any(Error),
+    );
+    warnSpy.mockRestore();
   });
 
   it("configures the media client timeout for image uploads", async () => {

@@ -43,6 +43,18 @@ describe("config view", () => {
     themeMode: "system" as ThemeMode,
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
+    hasCustomTheme: false,
+    customThemeLabel: null,
+    customThemeSourceUrl: null,
+    customThemeImportUrl: "",
+    customThemeImportBusy: false,
+    customThemeImportMessage: null,
+    customThemeImportExpanded: false,
+    customThemeImportFocusToken: 0,
+    onCustomThemeImportUrlChange: vi.fn(),
+    onImportCustomTheme: vi.fn(),
+    onClearCustomTheme: vi.fn(),
+    onOpenCustomThemeImport: vi.fn(),
     borderRadius: 50,
     setBorderRadius: vi.fn(),
     gatewayUrl: "",
@@ -207,6 +219,12 @@ describe("config view", () => {
     );
     expect(formButton?.classList.contains("active")).toBe(true);
     expect(rawButton?.disabled).toBe(true);
+    const rawNotice = container.querySelector(".config-actions__notice");
+    const actionButtons = container.querySelector(".config-actions__buttons");
+    expect(rawNotice).not.toBeNull();
+    expect(actionButtons).not.toBeNull();
+    expect(actionButtons?.textContent).toContain("Reload");
+    expect(actionButtons?.textContent).toContain("Update");
     expect(normalizedText(container)).toContain(
       "Raw mode disabled (snapshot cannot safely round-trip raw text).",
     );
@@ -495,5 +513,85 @@ describe("config view", () => {
     input.value = "local";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFormPatch).toHaveBeenCalledWith(["gateway", "mode"], "local");
+  });
+
+  it("opens the tweakcn importer when custom is clicked without an imported theme", () => {
+    const onOpenCustomThemeImport = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      onOpenCustomThemeImport,
+    });
+
+    const customButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Custom",
+    );
+
+    expect(customButton?.disabled).toBe(false);
+    expect(normalizedText(container)).toContain("Click Custom to import a tweakcn theme");
+
+    customButton?.click();
+
+    expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the tweakcn importer once the custom slot is opened", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      customThemeImportExpanded: true,
+      customThemeImportFocusToken: 1,
+    });
+
+    const importButton = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Import custom theme"),
+    );
+
+    expect(importButton?.disabled).toBe(true);
+    expect(container.querySelector(".settings-theme-import__input")).not.toBeNull();
+  });
+
+  it("shows custom theme actions once a tweakcn import exists", () => {
+    const setTheme = vi.fn();
+    const onClearCustomTheme = vi.fn();
+    const onImportCustomTheme = vi.fn();
+    const onCustomThemeImportUrlChange = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      hasCustomTheme: true,
+      customThemeLabel: "Light Green",
+      customThemeSourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      customThemeImportUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      setTheme,
+      onClearCustomTheme,
+      onImportCustomTheme,
+      onCustomThemeImportUrlChange,
+    });
+
+    const customButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Custom",
+    );
+    expect(customButton?.disabled).toBe(false);
+    customButton?.click();
+    expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
+
+    const replaceButton = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Replace custom theme"),
+    );
+    const clearButton = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Clear custom theme"),
+    );
+    replaceButton?.click();
+    clearButton?.click();
+
+    expect(onImportCustomTheme).toHaveBeenCalledTimes(1);
+    expect(onClearCustomTheme).toHaveBeenCalledTimes(1);
+    expect(normalizedText(container)).toContain("Loaded Light Green");
+
+    const input = container.querySelector(".settings-theme-import__input") as HTMLInputElement;
+    input.value = "https://tweakcn.com/themes/custom";
+    input.dispatchEvent(new Event("input"));
+    expect(onCustomThemeImportUrlChange).toHaveBeenCalledWith("https://tweakcn.com/themes/custom");
   });
 });

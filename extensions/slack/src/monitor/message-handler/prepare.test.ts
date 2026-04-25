@@ -14,7 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
-import { resetSlackThreadStarterCacheForTest } from "../media.js";
+import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
@@ -364,14 +364,17 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
         text: "",
-        files: [{ name: "voice.ogg" }, { name: "photo.jpg" }],
+        files: [
+          { id: "FVOICE", name: "voice.ogg" },
+          { id: "FPHOTO", name: "photo.jpg" },
+        ],
       }),
     );
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.RawBody).toContain("[Slack file:");
-    expect(prepared!.ctxPayload.RawBody).toContain("voice.ogg");
-    expect(prepared!.ctxPayload.RawBody).toContain("photo.jpg");
+    expect(prepared!.ctxPayload.RawBody).toContain("voice.ogg (fileId: FVOICE)");
+    expect(prepared!.ctxPayload.RawBody).toContain("photo.jpg (fileId: FPHOTO)");
   });
 
   it("falls back to generic file label when a Slack file name is empty", async () => {

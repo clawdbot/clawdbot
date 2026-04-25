@@ -363,6 +363,15 @@ export type GatewayPushConfig = {
   apns?: GatewayPushApnsConfig;
 };
 
+export type GatewayNodePairingConfig = {
+  /**
+   * Opt-in CIDR/IP allowlist for auto-approving first-time node-role pairing.
+   * Only applies to fresh node pairing requests with no requested scopes.
+   * Default: unset/disabled.
+   */
+  autoApproveCidrs?: string[];
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -371,6 +380,8 @@ export type GatewayNodesConfig = {
     /** Pin to a specific node id/name (optional). */
     node?: string;
   };
+  /** Pairing policy for node-role gateway clients. */
+  pairing?: GatewayNodePairingConfig;
   /** Additional node.invoke commands to allow on the gateway. */
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */

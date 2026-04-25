@@ -3,21 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { typedCases } from "../../../test/helpers/plugins/typed-cases.js";
 import {
   allowListMatches,
-  buildDiscordMediaPayload,
   type DiscordGuildEntryResolved,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
-  registerDiscordListener,
   resolveDiscordChannelConfig,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
-  resolveDiscordReplyTarget,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
-  sanitizeDiscordThreadName,
   shouldEmitDiscordReactionNotification,
-} from "./monitor.js";
+} from "./monitor/allow-list.js";
+import { buildDiscordMediaPayload } from "./monitor/message-utils.js";
+import { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./monitor/threading.js";
 type DiscordReactionEvent = Parameters<
   import("./monitor/listeners.js").DiscordReactionListener["handle"]
 >[0];
@@ -913,7 +911,8 @@ vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueS
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
 
-const { DiscordMessageListener, DiscordReactionListener } = await import("./monitor/listeners.js");
+const { DiscordMessageListener, DiscordReactionListener, registerDiscordListener } =
+  await import("./monitor/listeners.js");
 
 function makeReactionEvent(overrides?: {
   guildId?: string;

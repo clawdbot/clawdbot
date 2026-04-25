@@ -1,10 +1,14 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { completeSimple, type Api, type Model } from "@mariozechner/pi-ai";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
@@ -166,6 +170,143 @@ describeLive("openai reasoning compat live", () => {
       }
 
       expect(result.text).toMatch(/^low reasoning ok\.?$/i);
+    },
+    3 * 60 * 1000,
+  );
+
+  it(
+    "accepts repaired OpenAI Codex parallel tool replay with aborted missing results",
+    async () => {
+      const { provider, modelId } = resolveTargetModelRef();
+      const cfg = loadConfig();
+      await ensureOpenClawModelsJson(cfg);
+
+      const agentDir = resolveOpenClawAgentDir();
+      const authStorage = discoverAuthStorage(agentDir);
+      const modelRegistry = discoverModels(authStorage, agentDir);
+      const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+
+      if (!model) {
+        logProgress(`[openai-reasoning-compat] model missing from registry: ${TARGET_MODEL_REF}`);
+        return;
+      }
+
+      let apiKeyInfo;
+      try {
+        apiKeyInfo = await getApiKeyForModel({
+          model,
+          cfg,
+          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+        });
+      } catch (error) {
+        logProgress(`[openai-reasoning-compat] skip (${String(error)})`);
+        return;
+      }
+
+      if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+        logProgress(
+          `[openai-reasoning-compat] skip (non-profile credential source: ${apiKeyInfo.source})`,
+        );
+        return;
+      }
+
+      const messages = [
+        {
+          role: "user",
+          content: "Use noop.",
+          timestamp: Date.now(),
+        },
+        {
+          role: "assistant",
+          provider: model.provider,
+          api: model.api,
+          model: model.id,
+          stopReason: "toolUse",
+          timestamp: Date.now(),
+          content: [
+            { type: "toolCall", id: "call_keep", name: "noop", arguments: {} },
+            { type: "toolCall", id: "call_missing_a", name: "noop", arguments: {} },
+            { type: "toolCall", id: "call_missing_b", name: "noop", arguments: {} },
+          ],
+        },
+        {
+          role: "user",
+          content: "Reply with exactly: replay ok.",
+          timestamp: Date.now(),
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_keep",
+          toolName: "noop",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+      ] as unknown as AgentMessage[];
+
+      const sanitized = await sanitizeSessionHistory({
+        messages,
+        modelApi: model.api,
+        provider: model.provider,
+        modelId: model.id,
+        sessionManager: SessionManager.inMemory(),
+        sessionId: "openai-codex-tool-replay-live",
+      });
+
+      expect(sanitized.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "toolResult",
+        "toolResult",
+        "toolResult",
+        "user",
+      ]);
+      expect(
+        sanitized.slice(2, 5).map((message) => (message as { toolCallId?: string }).toolCallId),
+      ).toEqual(["call_keep", "call_missing_a", "call_missing_b"]);
+      expect(
+        sanitized
+          .slice(3, 5)
+          .map((message) => (message as Extract<AgentMessage, { role: "toolResult" }>).content),
+      ).toEqual([[{ type: "text", text: "aborted" }], [{ type: "text", text: "aborted" }]]);
+      expect(JSON.stringify(sanitized)).not.toContain("missing tool result");
+
+      const response = await completeSimpleWithTimeout(
+        model,
+        {
+          systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
+          messages: sanitized as never,
+          tools: [
+            {
+              name: "noop",
+              description: "Return ok.",
+              parameters: Type.Object({}, { additionalProperties: false }),
+            },
+          ],
+        },
+        {
+          apiKey: requireApiKey(apiKeyInfo, model.provider),
+          reasoning: "low",
+          maxTokens: 64,
+        },
+        120_000,
+      );
+
+      const text = response.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text.trim())
+        .join(" ")
+        .trim();
+      const errorMessage =
+        typeof (response as { errorMessage?: unknown }).errorMessage === "string"
+          ? ((response as { errorMessage?: string }).errorMessage ?? "")
+          : "";
+      if (errorMessage && isKnownLiveBlocker(errorMessage)) {
+        logProgress(`[openai-reasoning-compat] skip (${errorMessage})`);
+        return;
+      }
+
+      expect(text).toMatch(/^replay ok\.?$/i);
     },
     3 * 60 * 1000,
   );

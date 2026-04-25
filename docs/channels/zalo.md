@@ -5,8 +5,6 @@ read_when:
 title: "Zalo"
 ---
 
-# Zalo (Bot API)
-
 Status: experimental. DMs are supported. The [Capabilities](#capabilities) section below reflects current Marketplace-bot behavior.
 
 ## Bundled plugin

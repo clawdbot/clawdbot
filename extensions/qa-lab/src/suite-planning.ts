@@ -8,6 +8,7 @@ import type { QaTransportId } from "./qa-transport-registry.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
+const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
 const QA_MERGE_PATCH_BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
@@ -174,18 +175,67 @@ function normalizeQaSuiteConcurrency(
   return Math.max(1, Math.min(Math.floor(raw), Math.max(1, scenarioCount)));
 }
 
+function resolveQaSuiteWorkerStartStaggerMs(
+  concurrency: number,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (concurrency <= 1) {
+    return 0;
+  }
+  const raw = env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS;
+  if (raw === undefined) {
+    return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
+  }
+  return Math.floor(parsed);
+}
+
 async function mapQaSuiteWithConcurrency<T, U>(
   items: readonly T[],
   concurrency: number,
   mapper: (item: T, index: number) => Promise<U>,
+  opts?: {
+    startStaggerMs?: number;
+    sleepImpl?: (ms: number) => Promise<unknown>;
+  },
 ) {
   const results = Array.from<U>({ length: items.length });
   let nextIndex = 0;
+  let nextStartGate = Promise.resolve();
   const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
+  const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
+  const sleepImpl =
+    opts?.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  async function waitForStartSlot(shouldReleaseNextSlot: boolean) {
+    const currentGate = nextStartGate;
+    let releaseNextSlot: (() => void) | undefined;
+    if (shouldReleaseNextSlot) {
+      nextStartGate = new Promise<void>((resolve) => {
+        releaseNextSlot = resolve;
+      });
+    }
+    await currentGate;
+    if (!releaseNextSlot) {
+      return;
+    }
+    void (async () => {
+      try {
+        if (startStaggerMs > 0) {
+          await sleepImpl(startStaggerMs);
+        }
+      } finally {
+        releaseNextSlot();
+      }
+    })();
+  }
   const workers = Array.from({ length: workerCount }, async () => {
     while (nextIndex < items.length) {
       const index = nextIndex;
       nextIndex += 1;
+      await waitForStartSlot(nextIndex < items.length);
       results[index] = await mapper(items[index], index);
     }
   });
@@ -218,6 +268,7 @@ export {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioMatchesLiveLane,
   scenarioRequiresControlUi,

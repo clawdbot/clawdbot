@@ -58,16 +58,18 @@ describe("comfy music-generation provider", () => {
       model: "workflow",
       prompt: "gentle ambient synth loop",
       cfg: {
-        models: {
-          providers: {
+        plugins: {
+          entries: {
             comfy: {
-              music: {
-                workflow: {
-                  "6": { inputs: { text: "" } },
-                  "9": { inputs: {} },
+              config: {
+                music: {
+                  workflow: {
+                    "6": { inputs: { text: "" } },
+                    "9": { inputs: {} },
+                  },
+                  promptNodeId: "6",
+                  outputNodeId: "9",
                 },
-                promptNodeId: "6",
-                outputNodeId: "9",
               },
             },
           },

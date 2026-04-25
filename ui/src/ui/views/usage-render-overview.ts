@@ -497,7 +497,7 @@ function renderUsageInsights(
     ? Math.round(totals.totalTokens / aggregates.messages.total)
     : 0;
   const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
-  const cacheBase = totals.input + totals.cacheRead;
+  const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
   const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
   const cacheHitLabel =
     cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : t("usage.common.emptyValue");

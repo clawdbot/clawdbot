@@ -28,8 +28,6 @@ import { createTelegramBot } from "./bot.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
-// Keep below Telegram/proxy read timeouts; grammY returns early while the handler continues.
-const TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS = 5_000;
 const InputFileCtor: typeof grammy.InputFile =
   typeof grammy.InputFile === "function"
     ? grammy.InputFile
@@ -278,12 +276,6 @@ export async function startTelegramWebhook(opts: {
     maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
     maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
   });
-  const handler = grammy.webhookCallback(bot, "callback", {
-    secretToken: secret,
-    onTimeout: "return",
-    timeoutMilliseconds: TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS,
-  });
-
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat(opts.config);
   }
@@ -353,38 +345,29 @@ export async function startTelegramWebhook(opts: {
         return;
       }
 
-      let replied = false;
-      const reply = async (json: string) => {
-        if (replied) {
-          return;
-        }
-        replied = true;
-        if (res.headersSent || res.writableEnded) {
-          return;
-        }
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-        res.end(json);
-      };
-      const unauthorized = async () => {
-        if (replied) {
-          return;
-        }
-        replied = true;
-        respondText(401, "unauthorized");
-      };
+      respondText(200);
 
-      await handler(body.value, reply, secretHeader, unauthorized);
-      if (!replied) {
-        respondText(200);
-      }
+      void (async () => {
+        await bot.handleUpdate(body.value as Parameters<typeof bot.handleUpdate>[0]);
 
-      if (diagnosticsEnabled) {
-        logWebhookProcessed({
-          channel: "telegram",
-          updateType: "telegram-post",
-          durationMs: Date.now() - startTime,
-        });
-      }
+        if (diagnosticsEnabled) {
+          logWebhookProcessed({
+            channel: "telegram",
+            updateType: "telegram-post",
+            durationMs: Date.now() - startTime,
+          });
+        }
+      })().catch((err) => {
+        const errMsg = formatErrorMessage(err);
+        if (diagnosticsEnabled) {
+          logWebhookError({
+            channel: "telegram",
+            updateType: "telegram-post",
+            error: errMsg,
+          });
+        }
+        runtime.log?.(`webhook update processing failed after ack: ${errMsg}`);
+      });
     })().catch((err) => {
       const errMsg = formatErrorMessage(err);
       if (diagnosticsEnabled) {
@@ -394,7 +377,7 @@ export async function startTelegramWebhook(opts: {
           error: errMsg,
         });
       }
-      runtime.log?.(`webhook handler failed: ${errMsg}`);
+      runtime.log?.(`webhook request failed: ${errMsg}`);
       respondText(500);
     });
   });

@@ -8,6 +8,7 @@ import {
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
+import { isCiLikeEnv } from "./lib/vitest-local-scheduling.mjs";
 import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
 export const CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS = "600000";
@@ -15,13 +16,30 @@ const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 
 export function createChangedCheckVitestEnv(baseEnv = process.env) {
-  return {
+  const env = {
     ...baseEnv,
     [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]:
       baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]?.trim() ||
       CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
     [VITEST_NO_OUTPUT_RETRY_ENV_KEY]: baseEnv[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim() || "0",
   };
+
+  const hasWorkerOverride = Boolean(
+    (baseEnv.OPENCLAW_VITEST_MAX_WORKERS ?? baseEnv.OPENCLAW_TEST_WORKERS)?.trim(),
+  );
+  const hasParallelOverride = Boolean(baseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL?.trim());
+  const serialOverride = baseEnv.OPENCLAW_TEST_PROJECTS_SERIAL?.trim();
+  if (
+    !isCiLikeEnv(baseEnv) &&
+    !hasWorkerOverride &&
+    !hasParallelOverride &&
+    serialOverride !== "0"
+  ) {
+    env.OPENCLAW_TEST_PROJECTS_SERIAL = serialOverride || "1";
+    env.OPENCLAW_VITEST_MAX_WORKERS = "1";
+  }
+
+  return env;
 }
 
 export function createChangedCheckPlan(result, options = {}) {

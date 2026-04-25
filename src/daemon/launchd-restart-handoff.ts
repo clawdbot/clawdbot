@@ -22,6 +22,9 @@ export type LaunchdRestartTarget = {
   serviceTarget: string;
 };
 
+const START_AFTER_EXIT_PRINT_RETRY_COUNT = 15;
+const START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS = 0.2;
+
 function assertValidLaunchAgentLabel(label: string): string {
   const trimmed = label.trim();
   if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) {
@@ -116,28 +119,36 @@ exit "$status"
 `;
   }
 
+  const verifyLaunchdReload = `print_retry_count="${START_AFTER_EXIT_PRINT_RETRY_COUNT}"
+while [ "$print_retry_count" -gt 0 ]; do
+  if launchctl print "$service_target" >/dev/null 2>&1; then
+    printf '[%s] openclaw restart done source=launchd-handoff mode=${mode} reason=launchd-auto-reload\\n' "$(date -u +%FT%TZ)" >&2
+    exit 0
+  fi
+  print_retry_count=$((print_retry_count - 1))
+  sleep ${START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS}
+done
+`;
+
   // Restart is explicit operator intent; undo any previous `launchctl disable`.
   return `service_target="$1"
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
+${verifyLaunchdReload}
 status=0
 launchctl enable "$service_target"
-if launchctl start "$label"; then
-  status=0
-else
-  status=$?
-  if launchctl bootstrap "$domain" "$plist_path"; then
-    if launchctl start "$label"; then
-      status=0
-    else
-      launchctl kickstart -k "$service_target"
-      status=$?
-    fi
+if launchctl bootstrap "$domain" "$plist_path"; then
+  if launchctl start "$label"; then
+    status=0
   else
     launchctl kickstart -k "$service_target"
     status=$?
   fi
+else
+  status=$?
+  launchctl kickstart -k "$service_target"
+  status=$?
 fi
 if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2

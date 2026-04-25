@@ -3,12 +3,12 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   isCommandFlagEnabled,
-  isModelsWriteEnabled,
   isRestartEnabled,
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "./commands.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 beforeEach(() => {
   setActivePluginRegistry(
@@ -201,24 +201,6 @@ describe("isRestartEnabled", () => {
   });
 });
 
-describe("isModelsWriteEnabled", () => {
-  it("defaults to enabled unless explicitly false", () => {
-    expect(isModelsWriteEnabled(undefined)).toBe(true);
-    expect(isModelsWriteEnabled({})).toBe(true);
-    expect(isModelsWriteEnabled({ commands: {} })).toBe(true);
-    expect(isModelsWriteEnabled({ commands: { modelsWrite: true } })).toBe(true);
-    expect(isModelsWriteEnabled({ commands: { modelsWrite: false } })).toBe(false);
-  });
-
-  it("ignores inherited modelsWrite flags", () => {
-    expect(
-      isModelsWriteEnabled({
-        commands: Object.create({ modelsWrite: false }) as Record<string, unknown>,
-      }),
-    ).toBe(true);
-  });
-});
-
 describe("isCommandFlagEnabled", () => {
   it("requires own boolean true", () => {
     expect(isCommandFlagEnabled({ commands: { bash: true } }, "bash")).toBe(true);
@@ -231,5 +213,19 @@ describe("isCommandFlagEnabled", () => {
         "bash",
       ),
     ).toBe(false);
+  });
+});
+
+describe("deprecated commands compatibility", () => {
+  it("ignores legacy modelsWrite during validation", () => {
+    const result = validateConfigObjectWithPlugins({
+      commands: { text: true, modelsWrite: false },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.commands).toMatchObject({ text: true });
+      expect(Object.hasOwn(result.config.commands ?? {}, "modelsWrite")).toBe(false);
+    }
   });
 });

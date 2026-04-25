@@ -488,7 +488,70 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **30%** of 4k\nModel: `gpt-4.1-mini`",
+      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **38%** of 4k\nModel: `gpt-4.1-mini`",
+    );
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+  });
+
+  it("keeps /usage context hidden when the context snapshot is stale", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              model: "gpt-4.1-mini",
+              inputTokens: 1200,
+              outputTokens: 300,
+              totalTokens: 1500,
+              totalTokensFresh: false,
+              contextTokens: 4000,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "usage",
+      "",
+    );
+
+    expect(result.content).toBe(
+      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **~1.5k** tokens\nModel: `gpt-4.1-mini`",
+    );
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+  });
+
+  it("uses the context snapshot for /usage while preserving cumulative total display", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              model: "gpt-4.1-mini",
+              inputTokens: 1200,
+              outputTokens: 300,
+              totalTokens: 1250,
+              contextTokens: 4000,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "usage",
+      "",
+    );
+
+    expect(result.content).toBe(
+      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **31%** of 4k\nModel: `gpt-4.1-mini`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
@@ -568,6 +631,101 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(4, "sessions.patch", {
       key: "agent:main:main",
       thinkingLevel: "xhigh",
+    });
+  });
+
+  it("uses default thinking options when the active session is absent", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: {
+            modelProvider: "openai-codex",
+            model: "gpt-5.5",
+            thinkingLevels: [
+              { id: "off", label: "off" },
+              { id: "minimal", label: "minimal" },
+              { id: "low", label: "low" },
+              { id: "medium", label: "medium" },
+              { id: "adaptive", label: "adaptive" },
+              { id: "high", label: "high" },
+              { id: "xhigh", label: "xhigh" },
+              { id: "max", label: "maximum" },
+            ],
+            thinkingOptions: [
+              "off",
+              "minimal",
+              "low",
+              "medium",
+              "adaptive",
+              "high",
+              "xhigh",
+              "maximum",
+            ],
+            thinkingDefault: "adaptive",
+          },
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "gpt-5.5", provider: "openai-codex", reasoning: true }],
+        };
+      }
+      if (method === "sessions.patch") {
+        return { ok: true, ...((payload ?? {}) as object) };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const status = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "",
+    );
+    const setXhigh = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "xhigh",
+    );
+    const setMax = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "max",
+    );
+    const setMaximum = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "maximum",
+    );
+    const setAdaptive = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "auto",
+    );
+
+    expect(status.content).toBe(
+      "Current thinking level: adaptive.\nOptions: off, minimal, low, medium, adaptive, high, xhigh, maximum.",
+    );
+    expect(setXhigh.content).toBe("Thinking level set to **xhigh**.");
+    expect(setMax.content).toBe("Thinking level set to **max**.");
+    expect(setMaximum.content).toBe("Thinking level set to **max**.");
+    expect(setAdaptive.content).toBe("Thinking level set to **adaptive**.");
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      thinkingLevel: "xhigh",
+    });
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      thinkingLevel: "max",
+    });
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      thinkingLevel: "adaptive",
     });
   });
 

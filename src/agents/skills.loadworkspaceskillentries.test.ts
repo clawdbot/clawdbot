@@ -19,24 +19,30 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   const path = await import("node:path");
   return {
     loadPluginManifestRegistry: (params: { workspaceDir?: string }) => {
-      const rootDir = path.join(params.workspaceDir ?? "", ".openclaw", "extensions", "open-prose");
-      if (!fs.existsSync(path.join(rootDir, "openclaw.plugin.json"))) {
-        return { plugins: [], diagnostics: [] };
+      const extensionsRoot = path.join(params.workspaceDir ?? "", ".openclaw", "extensions");
+      const plugins = [];
+      for (const id of ["open-prose", "browser"]) {
+        const rootDir = path.join(extensionsRoot, id);
+        const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+        if (!fs.existsSync(manifestPath)) {
+          continue;
+        }
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+          enabledByDefault?: boolean;
+          skills?: string[];
+        };
+        plugins.push({
+          id,
+          origin: id === "browser" ? "bundled" : "workspace",
+          enabledByDefault: manifest.enabledByDefault,
+          providers: [],
+          legacyPluginIds: [],
+          kind: [],
+          skills: manifest.skills ?? ["./skills"],
+          rootDir,
+        });
       }
-      return {
-        diagnostics: [],
-        plugins: [
-          {
-            id: "open-prose",
-            origin: "workspace",
-            providers: [],
-            legacyPluginIds: [],
-            kind: [],
-            skills: ["./skills"],
-            rootDir,
-          },
-        ],
-      };
+      return { plugins, diagnostics: [] };
     },
   };
 });
@@ -156,6 +162,51 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("prose");
+  });
+
+  it("loads the browser plugin automation skill when the bundled plugin is enabled", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "browser");
+
+    await writePluginWithSkill({
+      pluginRoot,
+      pluginId: "browser",
+      skillId: "browser-automation",
+      skillDescription: "Browser automation",
+    });
+    await fs.writeFile(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "browser",
+          enabledByDefault: true,
+          skills: ["./skills"],
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const enabledEntries = loadTestWorkspaceSkillEntries(workspaceDir, {
+      config: {},
+      managedSkillsDir: managedDir,
+    });
+
+    expect(enabledEntries.map((entry) => entry.skill.name)).toContain("browser-automation");
+
+    const blockedEntries = loadTestWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        plugins: {
+          entries: { browser: { enabled: false } },
+        },
+      },
+      managedSkillsDir: managedDir,
+    });
+
+    expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("browser-automation");
   });
 
   it("loads frontmatter edge cases in one workspace", async () => {

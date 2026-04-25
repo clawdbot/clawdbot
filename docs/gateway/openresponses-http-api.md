@@ -6,8 +6,6 @@ read_when:
 title: "OpenResponses API"
 ---
 
-# OpenResponses API (HTTP)
-
 OpenClaw’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
@@ -174,8 +172,9 @@ Current behavior:
   rasterized into images and passed to the model, and the injected file block uses
   the placeholder `[PDF content rendered to images]`.
 
-PDF parsing uses the Node-friendly `pdfjs-dist` legacy build (no worker). The modern
-PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.
+PDF parsing is provided by the bundled `document-extract` plugin, which uses the
+Node-friendly `pdfjs-dist` legacy build (no worker). The modern PDF.js build
+expects browser workers/DOM globals, so it is not used in the Gateway.
 
 URL fetch defaults:
 

@@ -1,0 +1,39 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.md"
+      - "docs/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Check docs
+        run: pnpm check:docs

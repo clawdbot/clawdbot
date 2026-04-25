@@ -147,6 +147,9 @@ const replyMediaPathMocks = vi.hoisted(() => ({
     (_params?: unknown) => async (payload: ReplyPayload) => payload,
   ),
 }));
+const runtimePluginMocks = vi.hoisted(() => ({
+  ensureRuntimePluginsLoaded: vi.fn(),
+}));
 const threadInfoMocks = vi.hoisted(() => ({
   parseSessionThreadInfo: vi.fn<
     (sessionKey: string | undefined) => {
@@ -247,8 +250,10 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
+  initializeGlobalHookRunner: vi.fn(),
   getGlobalHookRunner: () => hookMocks.runner,
   getGlobalPluginRegistry: () => hookMocks.registry,
+  resetGlobalHookRunner: vi.fn(),
 }));
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
@@ -336,6 +341,9 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 vi.mock("./reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: (params: unknown) =>
     replyMediaPathMocks.createReplyMediaPathNormalizer(params),
+}));
+vi.mock("../../agents/runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
 }));
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ({
@@ -657,7 +665,30 @@ describe("dispatchReplyFromConfig", () => {
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
       async (payload: ReplyPayload) => payload,
     );
+    runtimePluginMocks.ensureRuntimePluginsLoaded.mockClear();
   });
+
+  it("loads runtime plugins before reading inbound hook state", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      SessionKey: "agent:main:main",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: cfg,
+      workspaceDir: expect.any(String),
+    });
+    expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
+      hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
+    );
+  });
+
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
@@ -1083,6 +1114,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(mocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "imessage",
+        policyConversationType: "direct",
         to: "imessage:+15550001111",
       }),
     );
@@ -1604,7 +1636,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("delivers deterministic exec approval tool payloads for native commands", async () => {
+  it("delivers deterministic exec approval tool payloads for native commands with progress suppression", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1631,7 +1663,13 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "NO_REPLY" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(firstToolResultPayload(dispatcher)).toEqual(

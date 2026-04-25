@@ -1628,6 +1628,7 @@ export function createExecTool(
           approvalRunningNoticeMs,
           warnings,
           notifySessionKey,
+          notifyOnExit,
           trustedSafeBinDirs,
         });
       }

@@ -182,6 +182,20 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   switch (event.type) {
     case "call.initiated":
       transitionState(call, "initiated");
+      if (call.direction === "inbound" && call.providerCallId && ctx.provider?.answerCall) {
+        void ctx.provider
+          .answerCall({
+            callId: call.callId,
+            providerCallId: call.providerCallId,
+          })
+          .catch((err) => {
+            const message = formatErrorMessage(err);
+            console.warn(
+              `[voice-call] Failed to answer inbound call ${call.providerCallId}:`,
+              message,
+            );
+          });
+      }
       break;
 
     case "call.ringing":

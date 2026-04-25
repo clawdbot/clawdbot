@@ -1058,6 +1058,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       sessionKey?: string;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      sources?: MemorySource[];
     },
   ): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
@@ -1071,11 +1072,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.maybeWarmSession(opts?.sessionKey);
     await this.maybeSyncDirtySearchState();
     await this.waitForPendingUpdateBeforeSearch();
-    const limit = Math.min(
+    const resultLimit = Math.min(
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
-    const collectionNames = this.listManagedCollectionNames();
+    const requestedSources = opts?.sources?.length ? [...new Set(opts.sources)] : undefined;
+    const collectionNames = this.listManagedCollectionNames(requestedSources);
+    const limit = resultLimit;
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
@@ -1149,8 +1152,6 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
         const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
         args.push(...this.buildCollectionFilterArgs(collectionNames));
-        // Always scope to managed collections (default + custom). Even for `search`/`vsearch`,
-        // pass collection filters; if a given QMD build rejects these flags, we fall back to `query`.
         const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
         return parseQmdQueryJson(result.stdout, result.stderr);
       } catch (err) {
@@ -1229,7 +1230,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       effectiveMode: effectiveSearchMode,
       fallback: searchFallbackReason,
     });
-    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(results, limit));
+    let ranked = results;
+    if (opts?.sources?.length) {
+      const allow = new Set(opts.sources);
+      ranked = results.filter((r) => allow.has(r.source));
+    }
+    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
   }
 
   async sync(params?: {
@@ -2974,8 +2980,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     return [...bestByDocId.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }
 
-  private listManagedCollectionNames(): string[] {
-    return this.managedCollectionNames;
+  private listManagedCollectionNames(sources?: MemorySource[]): string[] {
+    if (!sources?.length) {
+      return this.managedCollectionNames;
+    }
+    const allowed = new Set(sources);
+    return this.managedCollectionNames.filter((name) => {
+      const source = this.collectionRoots.get(name)?.kind;
+      return source ? allowed.has(source) : false;
+    });
   }
 
   private computeManagedCollectionNames(): string[] {

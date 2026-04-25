@@ -8,7 +8,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   downloadBlueBubblesAttachment,
   fetchBlueBubblesMessageAttachments,

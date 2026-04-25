@@ -60,6 +60,11 @@ export type AppViewState = {
   themeMode: ThemeMode;
   themeResolved: ResolvedTheme;
   themeOrder: ThemeName[];
+  customThemeImportUrl: string;
+  customThemeImportBusy: boolean;
+  customThemeImportMessage: { kind: "success" | "error"; text: string } | null;
+  customThemeImportExpanded: boolean;
+  customThemeImportFocusToken: number;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -381,6 +386,10 @@ export type AppViewState = {
     setTab: (tab: Tab) => void;
     setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
     setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+    setCustomThemeImportUrl: (next: string) => void;
+    openCustomThemeImport: () => void;
+    importCustomTheme: () => Promise<void>;
+    clearCustomTheme: () => void;
     setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
     applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;

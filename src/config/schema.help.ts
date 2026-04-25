@@ -258,6 +258,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables browser capability wiring in the gateway so browser tools and CDP-driven workflows can run. Disable when browser automation is not needed to reduce surface area and startup work.",
   "browser.cdpUrl":
     "Remote CDP websocket URL used to attach to an externally managed browser instance. Use this for centralized browser hosts and keep URL access restricted to trusted network paths.",
+  "browser.actionTimeoutMs":
+    "Default timeout in milliseconds for browser act requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
   "browser.color":
     "Default accent color used for browser profile/UI cues where colored identity hints are displayed. Use consistent colors to help operators identify active browser profile context quickly.",
   "browser.executablePath":
@@ -282,6 +284,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory on the selected host or browser node.",
   "browser.profiles.*.driver":
     'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+  "browser.profiles.*.headless":
+    "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
   "browser.profiles.*.attachOnly":
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":
@@ -292,6 +296,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Default snapshot capture configuration used when callers do not provide explicit snapshot options. Tune this for consistent capture behavior across channels and automation paths.",
   "browser.snapshotDefaults.mode":
     "Default snapshot extraction mode controlling how page content is transformed for agent consumption. Choose the mode that balances readability, fidelity, and token footprint for your workflows.",
+  "browser.tabCleanup":
+    "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
+  "browser.tabCleanup.enabled":
+    "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+  "browser.tabCleanup.idleMinutes":
+    "Minutes of inactivity before a tracked primary-agent browser tab is eligible for closure. Set 0 to disable idle-time cleanup while keeping the per-session tab cap.",
+  "browser.tabCleanup.maxTabsPerSession":
+    "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
+  "browser.tabCleanup.sweepMinutes":
+    "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
   "browser.ssrfPolicy":
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
@@ -456,6 +470,10 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
+  "gateway.nodes.pairing":
+    "Node pairing policy settings. Defaults keep CIDR auto-approval disabled; enable only with explicit trusted CIDR/IP allowlists you control.",
+  "gateway.nodes.pairing.autoApproveCidrs":
+    "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
   "gateway.nodes.allowCommands":
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
@@ -548,6 +566,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+  "diagnostics.otel.captureContent":
+    "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
+  "diagnostics.otel.captureContent.enabled":
+    "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+  "diagnostics.otel.captureContent.inputMessages":
+    "Capture model input message text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.outputMessages":
+    "Capture model output message text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.toolInputs":
+    "Capture tool input text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.toolOutputs":
+    "Capture tool output text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.systemPrompt":
+    "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":
@@ -1106,6 +1138,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptInjection":
     "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+  "plugins.entries.*.hooks.allowConversationAccess":
+    "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
   "plugins.entries.*.subagent":
     "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
   "plugins.entries.*.subagent.allowModelOverride":
@@ -1149,17 +1183,17 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.embeddedHarness":
-    "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+    "Default embedded agent harness policy. Omitted runtime uses built-in OpenClaw Pi. Use runtime=auto for plugin harness selection, or a registered harness id such as codex.",
   "agents.defaults.embeddedHarness.runtime":
-    "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+    "Embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime uses built-in OpenClaw Pi.",
   "agents.defaults.embeddedHarness.fallback":
-    "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
+    "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
   "agents.list.*.embeddedHarness":
-    "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
+    "Per-agent embedded harness policy override. Use runtime=codex to force Codex for one agent while defaults stay in auto mode.",
   "agents.list.*.embeddedHarness.runtime":
-    "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+    "Per-agent embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime inherits the default OpenClaw Pi behavior.",
   "agents.list.*.embeddedHarness.fallback":
-    "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+    "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
@@ -1208,9 +1242,9 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.recentTurnsPreserve":
     "Number of most recent user/assistant turns kept verbatim outside safeguard summarization (default: 3). Raise this to preserve exact recent dialogue context, or lower it to maximize compaction savings.",
   "agents.defaults.compaction.qualityGuard":
-    "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
+    "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
   "agents.defaults.compaction.qualityGuard.enabled":
-    "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
+    "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
   "agents.defaults.compaction.qualityGuard.maxRetries":
     "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
   "agents.defaults.compaction.postIndexSync":
@@ -1258,8 +1292,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Registers native skill commands so users can invoke skills directly from provider command menus where supported. Keep aligned with your skill policy so exposed commands match what operators expect.",
   "commands.text":
     "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
-  "commands.modelsWrite":
-    "Allow model-management write commands such as `/models add` to register provider/model entries directly into config and make them available without restarting the gateway (default: true).",
   "commands.bash":
     "Allow bash chat command (`!`; `/bash` alias) to run host shell commands (default: false; requires tools.elevated).",
   "commands.bashForegroundMs":
@@ -1283,6 +1315,8 @@ export const FIELD_HELP: Record<string, string> = {
   mcp: "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
   "mcp.servers":
     "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+  "mcp.sessionIdleTtlMs":
+    "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
   session:
     "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.",
   "session.scope":

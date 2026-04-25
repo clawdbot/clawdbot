@@ -68,6 +68,7 @@ export async function runMediaUnderstandingFile(
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: [path.dirname(params.filePath)],
+    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
   });
 
   try {

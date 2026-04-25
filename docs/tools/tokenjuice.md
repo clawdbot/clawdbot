@@ -13,8 +13,9 @@ tool results after the command has already run.
 It changes the returned `tool_result`, not the command itself. Tokenjuice does
 not rewrite shell input, rerun commands, or change exit codes.
 
-Today this applies to Pi embedded runs, where tokenjuice hooks the embedded
-`tool_result` path and trims the output that goes back into the session.
+Today this applies to PI embedded runs and OpenClaw dynamic tools in the Codex
+app-server harness. Tokenjuice hooks OpenClaw's tool-result middleware and
+trims the output before it goes back into the active harness session.
 
 ## Enable the plugin
 

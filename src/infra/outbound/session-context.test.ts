@@ -115,6 +115,49 @@ describe("buildOutboundSessionContext", () => {
     });
   });
 
+  it("normalizes explicit conversation type for policy resolution", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "agent:main:generic",
+        conversationType: "channel",
+      }),
+    ).toEqual({
+      key: "agent:main:generic",
+      conversationType: "group",
+    });
+
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        conversationType: "dm",
+      }),
+    ).toEqual({
+      conversationType: "direct",
+    });
+  });
+
+  it("falls back to isGroup when no explicit conversation type is provided", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "agent:main:generic",
+        isGroup: true,
+      }),
+    ).toEqual({
+      key: "agent:main:generic",
+      conversationType: "group",
+    });
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        isGroup: false,
+      }),
+    ).toEqual({
+      conversationType: "direct",
+    });
+  });
+
   it("returns undefined when all sender and session fields are blank", () => {
     expect(
       buildOutboundSessionContext({

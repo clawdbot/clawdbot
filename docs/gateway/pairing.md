@@ -7,8 +7,6 @@ read_when:
 title: "Gateway-owned pairing"
 ---
 
-# Gateway-owned pairing (Option B)
-
 In Gateway-owned pairing, the **Gateway** is the source of truth for which nodes
 are allowed to join. UIs (macOS app, future clients) are just frontends that
 approve or reject pending requests.
@@ -116,6 +114,34 @@ The macOS app can optionally attempt a **silent approval** when:
 - the app can verify an SSH connection to the gateway host using the same user.
 
 If silent approval fails, it falls back to the normal “Approve/Reject” prompt.
+
+## Trusted-CIDR device auto-approval
+
+WS device pairing for `role: node` remains manual by default. For private
+node networks where the Gateway already trusts the network path, operators can
+opt in with explicit CIDRs or exact IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+    },
+  },
+}
+```
+
+Security boundary:
+
+- Disabled when `gateway.nodes.pairing.autoApproveCidrs` is unset.
+- No blanket LAN or private-network auto-approve mode exists.
+- Only fresh `role: node` device pairing with no requested scopes is eligible.
+- Operator, browser, Control UI, and WebChat clients stay manual.
+- Role, scope, metadata, and public-key upgrades stay manual.
+- Same-host loopback trusted-proxy header paths are not eligible because that
+  path can be spoofed by local callers.
 
 ## Metadata-upgrade auto-approval
 

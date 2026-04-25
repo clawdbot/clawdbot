@@ -140,6 +140,16 @@ async function runQaCredentialsList(opts: {
   await runtime.runQaCredentialsListCommand(opts);
 }
 
+async function runQaCredentialsDoctor(opts: {
+  actorId?: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  siteUrl?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCredentialsDoctorCommand(opts);
+}
+
 async function runQaUi(opts: {
   repoRoot?: string;
   host?: string;
@@ -433,6 +443,24 @@ export function registerQaLabCli(program: Command) {
   const credentials = qa
     .command("credentials")
     .description("Manage pooled Convex live credentials used by QA lanes");
+
+  credentials
+    .command("doctor")
+    .description("Check Convex credential broker env and admin reachability")
+    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
+    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
+    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
+    .option("--json", "Emit machine-readable JSON output", false)
+    .action(
+      async (opts: {
+        siteUrl?: string;
+        endpointPrefix?: string;
+        actorId?: string;
+        json?: boolean;
+      }) => {
+        await runQaCredentialsDoctor(opts);
+      },
+    );
 
   credentials
     .command("add")

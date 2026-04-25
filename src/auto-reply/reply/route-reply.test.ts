@@ -61,10 +61,18 @@ const slackMessaging: ChannelMessagingAdapter = {
 
 const slackThreading: ChannelThreadingAdapter = {
   resolveReplyTransport: ({ threadId, replyToId }) => ({
-    replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
+    replyToId: resolveSlackThreadTsCandidate(replyToId) ?? resolveSlackThreadTsCandidate(threadId),
     threadId: null,
   }),
 };
+
+function resolveSlackThreadTsCandidate(value?: string | number | null): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return /^\d+\.\d+$/.test(normalized) ? normalized : undefined;
+}
 
 const mattermostThreading: ChannelThreadingAdapter = {
   resolveReplyTransport: ({ threadId, replyToId }) => ({
@@ -245,6 +253,7 @@ describe("routeReply", () => {
       cfg,
       sessionKey: "agent:main:main",
       policySessionKey: "agent:main:direct:U123",
+      isGroup: true,
     });
 
     expect(res.ok).toBe(true);
@@ -253,6 +262,44 @@ describe("routeReply", () => {
       session: expect.objectContaining({
         key: "agent:main:main",
         policyKey: "agent:main:direct:U123",
+      }),
+    });
+    const session = mocks.deliverOutboundPayloads.mock.calls.at(-1)?.[0]?.session;
+    expect(session).not.toEqual(expect.objectContaining({ conversationType: "group" }));
+  });
+
+  it("uses explicit policy conversation type to preserve routed direct silent replies", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = await routeReply({
+      payload: { text: SILENT_REPLY_TOKEN },
+      channel: "slack",
+      to: "channel:C123",
+      cfg,
+      sessionKey: "agent:main:main",
+      policySessionKey: "agent:main:main",
+      policyConversationType: "direct",
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDelivery({
+      payloads: [expect.objectContaining({ text: SILENT_REPLY_TOKEN })],
+      session: expect.objectContaining({
+        key: "agent:main:main",
+        policyKey: "agent:main:main",
+        conversationType: "direct",
       }),
     });
   });
@@ -438,6 +485,21 @@ describe("routeReply", () => {
   it("uses threadId as threadTs for Slack when replyToId is missing", async () => {
     await routeReply({
       payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      threadId: "1710000000.9999",
+      cfg: {} as never,
+    });
+    expectLastDelivery({
+      channel: "slack",
+      replyToId: "1710000000.9999",
+      threadId: null,
+    });
+  });
+
+  it("uses Slack threadId when routed replyToId is an internal message id", async () => {
+    await routeReply({
+      payload: { text: "hi", replyToId: "msg-internal-1" },
       channel: "slack",
       to: "channel:C123",
       threadId: "1710000000.9999",

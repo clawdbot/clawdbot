@@ -64,6 +64,7 @@ steps:
             wakeMode: now
             payload:
               kind: agentTurn
+              timeoutSeconds: 90
               message:
                 expr: "config.reminderPromptTemplate.replace('{{marker}}', cronMarker)"
             delivery:

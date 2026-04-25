@@ -102,7 +102,7 @@ Example:
 
 Notes:
 
-- `allowlist` entries are glob patterns for resolved binary paths.
+- `allowlist` entries are glob patterns for resolved binary paths, or bare command names for PATH-invoked commands.
 - Raw shell command text that contains shell control or expansion syntax (`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss and requires explicit approval (or allowlisting the shell binary).
 - Choosing “Always Allow” in the prompt adds that command to the allowlist.
 - `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`) and then merged with the app’s environment.

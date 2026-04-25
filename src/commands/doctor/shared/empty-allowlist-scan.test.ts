@@ -56,4 +56,34 @@ describe("doctor empty allowlist policy scan", () => {
 
     expect(warnings).toContain("extra:channels.telegram");
   });
+
+  it("skips disabled channel and account entries", () => {
+    const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
+
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            enabled: false,
+            dmPolicy: "allowlist",
+            accounts: {
+              default: { dmPolicy: "allowlist" },
+            },
+          },
+          signal: {
+            accounts: {
+              disabled: { enabled: false, dmPolicy: "allowlist" },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix", extraWarningsForAccount },
+    );
+
+    expect(warnings).toEqual(["extra:channels.signal"]);
+    expect(extraWarningsForAccount).toHaveBeenCalledTimes(1);
+    expect(extraWarningsForAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ prefix: "channels.signal" }),
+    );
+  });
 });

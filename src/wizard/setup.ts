@@ -462,10 +462,14 @@ export async function runSetupWizard(
 
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
+    const { applySkipBootstrapConfig } = await import("../commands/onboard-config.js");
     const { logConfigUpdated } = await loadConfigLoggingModule();
     let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
       secretInputMode: opts.secretInputMode,
     });
+    if (opts.skipBootstrap) {
+      nextConfig = applySkipBootstrapConfig(nextConfig);
+    }
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     await writeConfigFile(nextConfig);
     logConfigUpdated(runtime);
@@ -484,8 +488,12 @@ export async function runSetupWizard(
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
-  const { applyLocalSetupWorkspaceConfig } = await import("../commands/onboard-config.js");
+  const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
+    await import("../commands/onboard-config.js");
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
 
   const authChoiceFromPrompt = opts.authChoice === undefined;
   let authChoice: AuthChoice | undefined = opts.authChoice;

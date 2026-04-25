@@ -1,7 +1,10 @@
 import { vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
-import type { BrowserServerState } from "./server-context.js";
-import { createBrowserRouteContext } from "./server-context.js";
+import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
+import type { ResolvedBrowserProfile } from "./config.js";
+import { createProfileSelectionOps } from "./server-context.selection.js";
+import { createProfileTabOps } from "./server-context.tab-ops.js";
+import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
 
 export const originalFetch = globalThis.fetch;
 
@@ -21,6 +24,7 @@ export function makeState(
       cdpIsLoopback: profile !== "remote",
       remoteCdpTimeoutMs: 1500,
       remoteCdpHandshakeTimeoutMs: 3000,
+      actionTimeoutMs: 60_000,
       evaluateEnabled: false,
       extraArgs: [],
       color: "#FF4500",
@@ -28,6 +32,12 @@ export function makeState(
       noSandbox: false,
       attachOnly: false,
       ssrfPolicy: { allowPrivateNetwork: true },
+      tabCleanup: {
+        enabled: true,
+        idleMinutes: 120,
+        maxTabsPerSession: 8,
+        sweepMinutes: 5,
+      },
       defaultProfile: profile,
       profiles: {
         remote: {
@@ -48,11 +58,73 @@ export function makeUnexpectedFetchMock() {
   });
 }
 
+function resolveProfileForTest(
+  state: BrowserServerState,
+  profileName: string,
+): ResolvedBrowserProfile {
+  const rawProfile = state.resolved.profiles[profileName] ?? {};
+  const cdpPort =
+    typeof rawProfile.cdpPort === "number"
+      ? rawProfile.cdpPort
+      : profileName === "remote"
+        ? 9222
+        : state.resolved.cdpPortRangeStart;
+  const cdpUrl =
+    typeof rawProfile.cdpUrl === "string"
+      ? rawProfile.cdpUrl
+      : `${state.resolved.cdpProtocol}://${state.resolved.cdpHost}:${cdpPort}`;
+  const parsed = new URL(cdpUrl.replace(/^ws/i, "http"));
+  const cdpHost = parsed.hostname;
+  const cdpIsLoopback = cdpHost === "localhost" || cdpHost === "127.0.0.1" || cdpHost === "::1";
+  return {
+    name: profileName,
+    cdpPort,
+    cdpUrl,
+    cdpHost,
+    cdpIsLoopback,
+    color: rawProfile.color ?? state.resolved.color,
+    driver: rawProfile.driver === "existing-session" ? "existing-session" : "openclaw",
+    headless: rawProfile.headless ?? state.resolved.headless,
+    attachOnly: rawProfile.attachOnly ?? state.resolved.attachOnly,
+    userDataDir: rawProfile.userDataDir,
+  };
+}
+
+export function createTestBrowserRouteContext(opts: { getState: () => BrowserServerState }) {
+  const forProfile = (profileName?: string) => {
+    const state = opts.getState();
+    const profile = resolveProfileForTest(state, profileName ?? state.resolved.defaultProfile);
+    const getProfileState = (): ProfileRuntimeState => {
+      let profileState = state.profiles.get(profile.name);
+      if (!profileState) {
+        profileState = { profile, running: null, lastTargetId: null, reconcile: null };
+        state.profiles.set(profile.name, profileState);
+      }
+      return profileState;
+    };
+    const tabOps = createProfileTabOps({
+      profile,
+      state: () => state,
+      getProfileState,
+    });
+    const selectionOps = createProfileSelectionOps({
+      profile,
+      getProfileState,
+      getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state.resolved.ssrfPolicy),
+      ensureBrowserAvailable: async () => {},
+      listTabs: tabOps.listTabs,
+      openTab: tabOps.openTab,
+    });
+    return { profile, ...tabOps, ...selectionOps };
+  };
+  return { forProfile };
+}
+
 export function createRemoteRouteHarness(fetchMock?: (url: unknown) => Promise<Response>) {
   const activeFetchMock = fetchMock ?? makeUnexpectedFetchMock();
   global.fetch = withBrowserFetchPreconnect(activeFetchMock);
   const state = makeState("remote");
-  const ctx = createBrowserRouteContext({ getState: () => state });
+  const ctx = createTestBrowserRouteContext({ getState: () => state });
   return { state, remote: ctx.forProfile("remote"), fetchMock: activeFetchMock };
 }
 

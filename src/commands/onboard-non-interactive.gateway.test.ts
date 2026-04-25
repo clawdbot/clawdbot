@@ -353,6 +353,38 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("persists skipBootstrap and skips workspace bootstrap creation", async () => {
+    ensureWorkspaceAndSessionsMock.mockClear();
+    await withStateDir("state-skip-bootstrap-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipBootstrap: true,
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+        },
+        runtime,
+      );
+
+      const cfg = readTestConfig();
+
+      expect(cfg.agents?.defaults?.workspace).toBe(workspace);
+      expect(cfg.agents?.defaults?.skipBootstrap).toBe(true);
+      expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledWith(
+        workspace,
+        runtime,
+        expect.objectContaining({ skipBootstrap: true }),
+      );
+    });
+  }, 60_000);
+
   it("writes gateway.remote url/token", async () => {
     await withStateDir("state-remote-", async (_stateDir) => {
       const port = getPseudoPort(30_000);

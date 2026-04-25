@@ -77,6 +77,7 @@ export function resolvePluginSkillDirs(params: {
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.config,
+      enabledByDefault: record.enabledByDefault,
     });
     if (!activationState.activated) {
       continue;

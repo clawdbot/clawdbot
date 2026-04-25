@@ -295,6 +295,37 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
   });
 
+  it("threads resolved audio contentType for Signal voice attachments", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        ignoreAttachments: false,
+        fetchAttachment: async ({ attachment }) => ({
+          path: `/tmp/${String(attachment.id)}.aac`,
+          contentType: "audio/aac",
+        }),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          attachments: [{ id: "voice1", contentType: undefined, filename: "voice.aac" }],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.MediaPath).toBe("/tmp/voice1.aac");
+    expect(capture.ctx?.MediaType).toBe("audio/aac");
+    expect(capture.ctx?.MediaTypes).toEqual(["audio/aac"]);
+  });
+
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {
     const ownUuid = "123e4567-e89b-12d3-a456-426614174000";
     const handler = createSignalEventHandler(

@@ -408,6 +408,7 @@ type PreparedCronRunContext = {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
+  suppressExecNotifyOnExit: boolean;
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
@@ -696,6 +697,7 @@ async function prepareCronRunContext(params: {
       deliveryPlan,
       resolvedDelivery,
       deliveryRequested,
+      suppressExecNotifyOnExit: deliveryPlan.mode === "none",
       toolPolicy,
       skillsSnapshot,
       liveSelection,
@@ -977,6 +979,7 @@ export async function runCronIsolatedAgentTurn(params: {
       isAborted,
       thinkLevel: prepared.context.thinkLevel,
       timeoutMs: prepared.context.timeoutMs,
+      suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
     });
     if (isAborted()) {
       return prepared.context.withRunSession({ status: "error", error: abortReason() });

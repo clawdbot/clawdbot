@@ -15,6 +15,8 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-sonnet-4-6",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3-flash-preview",
+  "deepseek/deepseek-v4-flash",
+  "deepseek/deepseek-v4-pro",
   "minimax/minimax-m2.7",
   "openai/gpt-5.2",
   "openai-codex/gpt-5.2",

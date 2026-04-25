@@ -130,6 +130,7 @@ function toConfiguredProviderListModel(params: {
     baseUrl: params.model.baseUrl ?? params.providerConfig.baseUrl,
     input: resolveConfiguredModelInput({ model: params.model }),
     contextWindow: params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens: params.model.contextTokens,
   };
 }
 
@@ -143,6 +144,7 @@ function shouldListConfiguredProviderModel(params: {
 export function appendDiscoveredRows(params: {
   rows: ModelRow[];
   models: Model<Api>[];
+  modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
 }): Set<string> {
   const seenKeys = new Set<string>();
@@ -156,7 +158,26 @@ export function appendDiscoveredRows(params: {
 
   for (const model of sorted) {
     const key = modelKey(model.provider, model.id);
-    appendVisibleRow({ rows: params.rows, model, key, context: params.context, seenKeys });
+    const resolvedModel = params.modelRegistry
+      ? resolveModelWithRegistry({
+          provider: model.provider,
+          modelId: model.id,
+          modelRegistry: params.modelRegistry,
+          cfg: params.context.cfg,
+          agentDir: params.context.agentDir,
+        })
+      : undefined;
+    const rowModel =
+      resolvedModel && modelKey(resolvedModel.provider, resolvedModel.id) === key
+        ? resolvedModel
+        : model;
+    appendVisibleRow({
+      rows: params.rows,
+      model: rowModel,
+      key,
+      context: params.context,
+      seenKeys,
+    });
   }
 
   return seenKeys;

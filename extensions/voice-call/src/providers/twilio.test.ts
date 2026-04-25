@@ -335,6 +335,7 @@ describe("TwilioProvider", () => {
 
       provider.setMediaStreamHandler(mediaStreamHandler as never);
       provider.setTTSProvider({
+        synthesisTimeoutMs: 5000,
         synthesizeForTelephony: async () => await new Promise<Buffer>(() => {}),
       });
 
@@ -344,8 +345,8 @@ describe("TwilioProvider", () => {
           providerCallId: "CA-timeout",
           text: "Timeout me",
         }),
-      ).rejects.toThrow("Telephony TTS synthesis timed out");
-      await vi.advanceTimersByTimeAsync(8_100);
+      ).rejects.toThrow("Telephony TTS synthesis timed out after 5000ms");
+      await vi.advanceTimersByTimeAsync(5_100);
       await playExpectation;
       expect(sendAudio).toHaveBeenCalled();
       expect(sendMark).not.toHaveBeenCalled();
@@ -373,6 +374,7 @@ describe("TwilioProvider", () => {
 
     provider.setMediaStreamHandler(mediaStreamHandler as never);
     provider.setTTSProvider({
+      synthesisTimeoutMs: 5000,
       synthesizeForTelephony: async () => Buffer.alloc(320),
     });
 
@@ -385,5 +387,39 @@ describe("TwilioProvider", () => {
     ).rejects.toThrow("Telephony stream playback failed");
     expect(sendAudio).toHaveBeenCalled();
     expect(sendMark).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails stream playback when telephony synthesis returns empty audio", async () => {
+    const provider = createProvider();
+    provider.registerCallStream("CA-empty", "MZ-empty");
+
+    const sendAudio = vi.fn();
+    const sendMark = vi.fn();
+    const mediaStreamHandler = {
+      queueTts: async (
+        _streamSid: string,
+        playFn: (signal: AbortSignal) => Promise<void>,
+      ): Promise<void> => {
+        await playFn(new AbortController().signal);
+      },
+      sendAudio,
+      sendMark,
+    };
+
+    provider.setMediaStreamHandler(mediaStreamHandler as never);
+    provider.setTTSProvider({
+      synthesisTimeoutMs: 5000,
+      synthesizeForTelephony: async () => Buffer.alloc(0),
+    });
+
+    await expect(
+      provider.playTts({
+        callId: "call-empty",
+        providerCallId: "CA-empty",
+        text: "Empty audio",
+      }),
+    ).rejects.toThrow("Telephony TTS produced no audio");
+    expect(sendAudio).toHaveBeenCalled();
+    expect(sendMark).not.toHaveBeenCalled();
   });
 });

@@ -398,12 +398,29 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       docsPath: "/tmp/openclaw/docs",
+      sourcePath: "/tmp/openclaw",
     });
 
     expect(prompt).toContain("## Documentation");
     expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
+    expect(prompt).toContain("Local source: /tmp/openclaw");
     expect(prompt).toContain(
       "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
+    );
+    expect(prompt).toContain(
+      "If docs are incomplete or stale, inspect the local OpenClaw source code before answering.",
+    );
+  });
+
+  it("falls back to public docs and GitHub source guidance when local docs are unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/work",
+    });
+
+    expect(prompt).toContain("OpenClaw docs: https://docs.openclaw.ai");
+    expect(prompt).toContain("Source: https://github.com/openclaw/openclaw");
+    expect(prompt).toContain(
+      "If docs are incomplete or stale, review the OpenClaw source on GitHub before answering.",
     );
   });
 

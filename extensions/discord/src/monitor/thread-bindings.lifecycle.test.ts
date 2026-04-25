@@ -9,6 +9,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 
 const hoisted = vi.hoisted(() => {
   const sendMessageDiscord = vi.fn(async (_to: string, _text: string, _opts?: unknown) => ({}));
@@ -69,6 +70,17 @@ const { resolveThreadBindingIntroText } = await import("./thread-bindings.messag
 const discordClientModule = await import("../client.js");
 const discordThreadBindingApi = await import("./thread-bindings.discord-api.js");
 const acpRuntime = await import("openclaw/plugin-sdk/acp-runtime");
+
+function createTestThreadBindingManager(
+  params: Omit<Parameters<typeof createThreadBindingManager>[0], "cfg"> & {
+    cfg?: OpenClawConfig;
+  },
+) {
+  return createThreadBindingManager({
+    cfg: EMPTY_DISCORD_TEST_CONFIG,
+    ...params,
+  });
+}
 
 describe("thread binding lifecycle", () => {
   beforeEach(() => {
@@ -200,7 +212,7 @@ describe("thread binding lifecycle", () => {
   });
 
   const createDefaultSweeperManager = () =>
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -257,9 +269,9 @@ describe("thread binding lifecycle", () => {
   it("auto-unfocuses idle-expired bindings and sends inactivity message", async () => {
     vi.useFakeTimers();
     try {
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
-        cfg: {} as OpenClawConfig,
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
         persist: false,
         enableSweeper: false,
         idleTimeoutMs: 60_000,
@@ -297,9 +309,9 @@ describe("thread binding lifecycle", () => {
   it("auto-unfocuses max-age-expired bindings and sends max-age message", async () => {
     vi.useFakeTimers();
     try {
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
-        cfg: {} as OpenClawConfig,
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
         persist: false,
         enableSweeper: false,
         idleTimeoutMs: 0,
@@ -378,7 +390,7 @@ describe("thread binding lifecycle", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-02-20T23:00:00.000Z"));
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -423,7 +435,7 @@ describe("thread binding lifecycle", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-02-20T10:00:00.000Z"));
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -464,7 +476,7 @@ describe("thread binding lifecycle", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-02-20T10:00:00.000Z"));
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -519,7 +531,7 @@ describe("thread binding lifecycle", () => {
   it("keeps binding when idle timeout is disabled per session key", async () => {
     vi.useFakeTimers();
     try {
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -561,7 +573,7 @@ describe("thread binding lifecycle", () => {
   it("keeps a binding when activity is touched during the same sweep pass", async () => {
     vi.useFakeTimers();
     try {
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -626,7 +638,7 @@ describe("thread binding lifecycle", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -667,7 +679,7 @@ describe("thread binding lifecycle", () => {
     try {
       __testing.resetThreadBindingsForTests();
       vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: true,
         enableSweeper: false,
@@ -690,7 +702,7 @@ describe("thread binding lifecycle", () => {
       manager.touchThread({ threadId: "thread-1" });
 
       __testing.resetThreadBindingsForTests();
-      const reloaded = createThreadBindingManager({
+      const reloaded = createTestThreadBindingManager({
         accountId: "default",
         persist: true,
         enableSweeper: false,
@@ -719,7 +731,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("reuses webhook credentials after unbind when rebinding in the same channel", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -756,7 +768,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("creates a new thread when spawning from an already bound thread", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -775,6 +787,7 @@ describe("thread binding lifecycle", () => {
     hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-2" });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       channel: "discord",
       to: "channel:thread-1",
@@ -797,7 +810,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("resolves parent channel when thread target is passed via to without threadId", async () => {
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -815,6 +828,7 @@ describe("thread binding lifecycle", () => {
     hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-lookup" });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       channel: "discord",
       to: "channel:thread-lookup",
@@ -836,7 +850,7 @@ describe("thread binding lifecycle", () => {
     const cfg = {
       channels: { discord: { token: "tok" } },
     } as OpenClawConfig;
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "runtime",
       token: "runtime-token",
       cfg,
@@ -892,7 +906,7 @@ describe("thread binding lifecycle", () => {
     const refreshedCfg = {
       channels: { discord: { token: "refreshed-token" } },
     } as OpenClawConfig;
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "runtime",
       token: "runtime-token",
       cfg: startupCfg,
@@ -943,7 +957,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("refreshes manager token when an existing manager is reused", async () => {
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "runtime",
       token: "token-old",
       persist: false,
@@ -951,7 +965,7 @@ describe("thread binding lifecycle", () => {
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
     });
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "runtime",
       token: "token-new",
       persist: false,
@@ -985,7 +999,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("normalizes prefixed parentConversationId before creating child thread bindings", async () => {
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1030,7 +1044,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("preserves prefixed current channel conversation ids as binding keys", async () => {
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1084,7 +1098,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("binds current Discord DMs as direct conversation bindings", async () => {
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1135,7 +1149,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("preserves direct-binding metadata when rebinding the same conversation", async () => {
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1196,14 +1210,14 @@ describe("thread binding lifecycle", () => {
   });
 
   it("keeps overlapping thread ids isolated per account", async () => {
-    const a = createThreadBindingManager({
+    const a = createTestThreadBindingManager({
       accountId: "a",
       persist: false,
       enableSweeper: false,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
     });
-    const b = createThreadBindingManager({
+    const b = createTestThreadBindingManager({
       accountId: "b",
       persist: false,
       enableSweeper: false,
@@ -1241,7 +1255,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("removes stale ACP bindings during startup reconciliation", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1301,7 +1315,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
@@ -1324,7 +1338,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("keeps ACP bindings when session store reads fail during startup reconciliation", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1345,7 +1359,7 @@ describe("thread binding lifecycle", () => {
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:uncertain",
       storeSessionKey: "agent:codex:acp:uncertain",
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       storePath: "/tmp/mock-sessions.json",
       storeReadFailed: true,
       entry: undefined,
@@ -1353,7 +1367,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
@@ -1368,7 +1382,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("does not reconcile plugin-owned direct bindings as stale ACP sessions", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1392,7 +1406,7 @@ describe("thread binding lifecycle", () => {
     hoisted.readAcpSessionEntry.mockReturnValue(null);
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
@@ -1409,7 +1423,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("removes ACP bindings when health probe marks running session as stale", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1441,7 +1455,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => ({ status: "stale", reason: "status-timeout-running-stale" }),
     });
@@ -1453,7 +1467,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("keeps running ACP bindings when health probe is uncertain", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1485,7 +1499,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => ({ status: "uncertain", reason: "status-timeout" }),
     });
@@ -1501,7 +1515,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("keeps ACP bindings in stored error state when no explicit stale probe verdict exists", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1533,7 +1547,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
@@ -1548,7 +1562,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("starts ACP health probes in parallel during startup reconciliation", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1599,7 +1613,7 @@ describe("thread binding lifecycle", () => {
     let secondProbeStartedBeforeFirstResolved = false;
 
     const reconcilePromise = reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => {
         probeCallCount += 1;
@@ -1624,7 +1638,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("caps ACP startup health probe concurrency", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1671,7 +1685,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const reconcilePromise = reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => {
         probeCalls += 1;
@@ -1743,7 +1757,7 @@ describe("thread binding lifecycle", () => {
         "utf-8",
       );
 
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,

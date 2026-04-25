@@ -60,7 +60,7 @@ async function fetchBotUserId(rest: RequestClient) {
 export async function fetchMemberGuildPermissionsDiscord(
   guildId: string,
   userId: string,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ): Promise<bigint | null> {
   const rest = resolveDiscordRest(opts);
   try {
@@ -96,7 +96,7 @@ async function hasGuildPermissionsDiscord(
   userId: string,
   requiredPermissions: bigint[],
   check: (permissions: bigint, requiredPermissions: bigint[]) => boolean,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ): Promise<boolean> {
   const permissions = await fetchMemberGuildPermissionsDiscord(guildId, userId, opts);
   if (permissions === null) {
@@ -115,7 +115,7 @@ export async function hasAnyGuildPermissionDiscord(
   guildId: string,
   userId: string,
   requiredPermissions: bigint[],
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ): Promise<boolean> {
   return await hasGuildPermissionsDiscord(
     guildId,
@@ -134,7 +134,7 @@ export async function hasAllGuildPermissionsDiscord(
   guildId: string,
   userId: string,
   requiredPermissions: bigint[],
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ): Promise<boolean> {
   return await hasGuildPermissionsDiscord(
     guildId,
@@ -153,7 +153,7 @@ export const hasGuildPermissionDiscord = hasAnyGuildPermissionDiscord;
 
 export async function fetchChannelPermissionsDiscord(
   channelId: string,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ): Promise<DiscordPermissionsSummary> {
   const rest = resolveDiscordRest(opts);
   const channel = (await rest.get(Routes.channel(channelId))) as APIChannel;

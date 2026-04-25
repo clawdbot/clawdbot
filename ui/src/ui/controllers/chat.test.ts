@@ -753,6 +753,101 @@ describe("loadChatHistory", () => {
     expect(state.lastError).toBeNull();
   });
 
+  it("filters heartbeat acknowledgements and internal-only user messages", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+                "subagent completion payload",
+                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+              ].join("\n"),
+            },
+          ],
+        },
+        { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+      ],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+    ]);
+  });
+
+  it("keeps local optimistic tail messages when history reload returns a stale snapshot", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      __openclaw: { seq: 1 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      timestamp: 10,
+    };
+    const optimisticAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "latest answer" }],
+      timestamp: 11,
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, optimisticUser, optimisticAssistant],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, optimisticUser, optimisticAssistant]);
+    expect(state.chatStream).toBeNull();
+  });
+
+  it("does not duplicate optimistic tail messages after history catches up", async () => {
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      timestamp: 10,
+    };
+    const historyUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      __openclaw: { seq: 1 },
+    };
+    const historyAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "latest answer" }],
+      __openclaw: { seq: 2 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [historyUser, historyAssistant],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([historyUser, historyAssistant]);
+  });
+
   it("shows a targeted message when chat history is unauthorized", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({

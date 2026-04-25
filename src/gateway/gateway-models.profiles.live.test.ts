@@ -351,7 +351,14 @@ function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: str
   if (!shouldStripAssistantScaffoldingForLiveModel(modelKey)) {
     return text;
   }
-  return stripAssistantInternalScaffolding(text).trim();
+  return stripAssistantInternalScaffolding(stripKnownLiveReasoningWrappers(text)).trim();
+}
+
+function stripKnownLiveReasoningWrappers(text: string): string {
+  return text
+    .replace(/<\s*think\b[^<>]*>[\s\S]*?<\s*\/\s*think\s*>/gi, "")
+    .replace(/^[\s\S]*?<\s*\/\s*think\s*>\s*/i, "")
+    .replace(/<\s*final\b[^<>]*>([\s\S]*?)<\s*\/\s*final\s*>/gi, "$1");
 }
 
 function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
@@ -425,6 +432,20 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
         "google/gemini-3.1-pro-preview-customtools",
       ),
     ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        [
+          "<think>",
+          "1. Inspect",
+          "```",
+          "draft",
+          "```",
+          "2. Draft the explanation",
+          "</think>The event loop drains the microtask queue before the next macrotask.",
+        ].join("\n"),
+        "google/gemini-3-flash-preview",
+      ),
+    ).toBe("The event loop drains the microtask queue before the next macrotask.");
   });
 
   it("strips scaffolding for known OpenAI transcript wrappers", () => {

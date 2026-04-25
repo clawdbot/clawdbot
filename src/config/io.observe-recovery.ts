@@ -7,6 +7,10 @@ import {
   type ConfigObserveAuditRecord,
 } from "./io.audit.js";
 import { resolveStateDir } from "./paths.js";
+import {
+  isPluginLocalInvalidConfigSnapshot,
+  shouldAttemptLastKnownGoodRecovery,
+} from "./recovery-policy.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 export type ObserveRecoveryDeps = {
@@ -1012,6 +1016,14 @@ export async function recoverConfigFromLastKnownGood(params: {
 }): Promise<boolean> {
   const { deps, snapshot } = params;
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
+    return false;
+  }
+  if (!shouldAttemptLastKnownGoodRecovery(snapshot)) {
+    if (isPluginLocalInvalidConfigSnapshot(snapshot)) {
+      deps.logger.warn(
+        `Config last-known-good recovery skipped: invalidity is scoped to plugin entries (${params.reason})`,
+      );
+    }
     return false;
   }
   const healthState = await readConfigHealthState(deps);

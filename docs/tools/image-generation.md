@@ -44,6 +44,21 @@ image endpoints remain blocked by default.
 
 The agent calls `image_generate` automatically. No tool allow-listing needed — it's enabled by default when a provider is available.
 
+## Common routes
+
+| Goal                                                 | Model ref                                          | Auth                                 |
+| ---------------------------------------------------- | -------------------------------------------------- | ------------------------------------ |
+| OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                     |
+| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI Codex OAuth                   |
+| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                 |
+| Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+
+The same `image_generate` tool handles text-to-image and reference-image
+editing. Use `image` for one reference or `images` for multiple references.
+Provider-supported output hints such as `quality`, `outputFormat`, and
+OpenAI-specific `background` are forwarded when available and reported as
+ignored when a provider does not support them.
+
 ## Supported providers
 
 | Provider   | Default model                           | Edit support                       | Auth                                                  |
@@ -157,10 +172,13 @@ When generating an image, OpenClaw tries providers in this order:
    - current default provider first
    - remaining registered image-generation providers in provider-id order
 
-If a provider fails (auth error, rate limit, etc.), the next candidate is tried automatically. If all fail, the error includes details from each attempt.
+If a provider fails (auth error, rate limit, etc.), the next configured candidate is tried automatically. If all fail, the error includes details from each attempt.
 
 Notes:
 
+- A per-call `model` override is exact: OpenClaw tries only that provider/model
+  and does not continue to configured primary/fallback or auto-detected
+  providers.
 - Auto-detection is auth-aware. A provider default only enters the candidate list
   when OpenClaw can actually authenticate that provider.
 - Auto-detection is enabled by default. Set
@@ -203,10 +221,12 @@ OpenClaw forwards `prompt`, `count`, reference images, and Gemini-compatible `as
 OpenAI image generation defaults to `openai/gpt-image-2`. If an
 `openai-codex` OAuth profile is configured, OpenClaw reuses the same OAuth
 profile used by Codex subscription chat models and sends the image request
-through the Codex Responses backend; it does not silently fall back to
-`OPENAI_API_KEY` for that request. To force direct OpenAI Images API routing,
-configure `models.providers.openai` explicitly with an API key, custom base URL,
-or Azure endpoint. The older
+through the Codex Responses backend. Legacy Codex base URLs such as
+`https://chatgpt.com/backend-api` are canonicalized to
+`https://chatgpt.com/backend-api/codex` for image requests. It does not
+silently fall back to `OPENAI_API_KEY` for that request. To force direct OpenAI
+Images API routing, configure `models.providers.openai` explicitly with an API
+key, custom base URL, or Azure endpoint. The older
 `openai/gpt-image-1` model can still be selected explicitly, but new OpenAI
 image-generation and image-editing requests should use `gpt-image-2`.
 

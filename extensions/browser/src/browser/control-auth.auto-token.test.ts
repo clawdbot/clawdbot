@@ -18,7 +18,9 @@ const mocks = vi.hoisted(() => ({
             ? undefined
             : undefined;
       const password = typeof authConfig?.password === "string" ? authConfig.password : undefined;
+      const mode = authConfig?.mode ?? (password ? "password" : token ? "token" : "token");
       return {
+        mode,
         token,
         password,
       };
@@ -96,6 +98,7 @@ async function expectUnresolvedBrowserSecretRefSkipsPersistence(cfg: OpenClawCon
 }
 
 let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserControlAuth;
+let resolveBrowserControlAuth: typeof import("./control-auth.js").resolveBrowserControlAuth;
 
 describe("ensureBrowserControlAuth", () => {
   const expectExplicitModeSkipsAutoAuth = async (mode: "password") => {
@@ -129,7 +132,7 @@ describe("ensureBrowserControlAuth", () => {
   };
 
   beforeAll(async () => {
-    ({ ensureBrowserControlAuth } = await import("./control-auth.js"));
+    ({ ensureBrowserControlAuth, resolveBrowserControlAuth } = await import("./control-auth.js"));
   });
 
   beforeEach(() => {
@@ -155,6 +158,100 @@ describe("ensureBrowserControlAuth", () => {
     expect(mocks.loadConfig).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+  });
+
+  it("returns only the active credential in password mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "password",
+          token: "inactive-token",
+          password: "active-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      password: "active-password",
+    });
+  });
+
+  it("returns only the resolved active credential when mode is inferred", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          token: "inactive-token",
+          password: "active-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      password: "active-password",
+    });
+  });
+
+  it("returns only the browser token in none mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "none",
+          token: "browser-token",
+          password: "inactive-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      token: "browser-token",
+    });
+  });
+
+  it("returns only the active token in token mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "active-token",
+          password: "inactive-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      token: "active-token",
+    });
+  });
+
+  it("returns only the browser password in trusted-proxy mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          token: "inactive-token",
+          password: "browser-password",
+          trustedProxy: { userHeader: "x-forwarded-user" },
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      password: "browser-password",
+    });
+  });
+
+  it("does not accept an inactive token in trusted-proxy mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          token: "inactive-token",
+          trustedProxy: { userHeader: "x-forwarded-user" },
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({});
   });
 
   it("auto-generates and persists a token when auth is missing", async () => {

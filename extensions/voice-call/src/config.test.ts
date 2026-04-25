@@ -226,6 +226,14 @@ describe("validateProviderConfig", () => {
   });
 });
 
+describe("resolveVoiceCallConfig", () => {
+  it("enables the pre-answer stale call reaper by default", () => {
+    const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
+
+    expect(config.staleCallReaperSeconds).toBe(120);
+  });
+});
+
 describe("normalizeVoiceCallConfig", () => {
   it("fills nested runtime defaults from a partial config boundary", () => {
     const normalized = normalizeVoiceCallConfig({
@@ -242,6 +250,8 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.streaming.provider).toBeUndefined();
     expect(normalized.streaming.providers).toEqual({});
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
+    expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
+    expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
   });
@@ -300,6 +310,7 @@ describe("resolveVoiceCallConfig", () => {
     });
 
     expect(resolved.realtime.instructions).toBe("Stay concise.");
+    expect(resolved.realtime.toolPolicy).toBe("safe-read-only");
     expect(resolved.realtime.provider).toBeUndefined();
   });
 
@@ -310,5 +321,15 @@ describe("resolveVoiceCallConfig", () => {
     });
 
     expect(resolved.responseModel).toBeUndefined();
+  });
+
+  it("preserves the configured voice response agent id", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      agentId: "voice",
+    });
+
+    expect(resolved.agentId).toBe("voice");
   });
 });

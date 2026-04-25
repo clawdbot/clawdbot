@@ -343,10 +343,11 @@ function isBinaryMediaMime(mime?: string): boolean {
 async function extractFileBlocks(params: {
   attachments: ReturnType<typeof normalizeMediaAttachments>;
   cache: ReturnType<typeof createMediaAttachmentCache>;
+  cfg: OpenClawConfig;
   limits: ReturnType<typeof resolveFileLimits>;
   skipAttachmentIndexes?: Set<number>;
 }): Promise<string[]> {
-  const { attachments, cache, limits, skipAttachmentIndexes } = params;
+  const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
   if (!attachments || attachments.length === 0) {
     return [];
   }
@@ -447,6 +448,7 @@ async function extractFileBlocks(params: {
           ...baseLimits,
           allowedMimes,
         },
+        config: cfg,
       });
     } catch (err) {
       if (shouldLogVerbose()) {
@@ -493,6 +495,7 @@ export async function applyMediaUnderstanding(params: {
   const providerRegistry = buildProviderRegistry(params.providers, cfg);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
+    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
   });
 
   try {
@@ -565,6 +568,7 @@ export async function applyMediaUnderstanding(params: {
     const fileBlocks = await extractFileBlocks({
       attachments,
       cache,
+      cfg,
       limits: resolveFileLimits(cfg),
       skipAttachmentIndexes: audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
     });

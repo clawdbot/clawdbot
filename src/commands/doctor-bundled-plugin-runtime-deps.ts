@@ -2,9 +2,10 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
-  installBundledRuntimeDeps,
+  repairBundledRuntimeDepsInstallRoot,
   resolveBundledRuntimeDependencyPackageInstallRoot,
   scanBundledPluginRuntimeDeps,
+  type BundledRuntimeDepsInstallParams,
 } from "../plugins/bundled-runtime-deps.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -17,11 +18,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   env?: NodeJS.ProcessEnv;
   packageRoot?: string | null;
   includeConfiguredChannels?: boolean;
-  installDeps?: (params: {
-    installRoot: string;
-    missingSpecs: string[];
-    installSpecs: string[];
-  }) => void;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
 }): Promise<void> {
   const packageRoot =
     params.packageRoot ??
@@ -89,16 +86,14 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
       env: params.env ?? process.env,
     });
-    const install =
-      params.installDeps ??
-      ((installParams) =>
-        installBundledRuntimeDeps({
-          installRoot: installParams.installRoot,
-          missingSpecs: installParams.installSpecs,
-          env: params.env ?? process.env,
-        }));
-    install({ installRoot, missingSpecs, installSpecs });
-    note(`Installed bundled plugin deps: ${installSpecs.join(", ")}`, "Bundled plugins");
+    const result = repairBundledRuntimeDepsInstallRoot({
+      installRoot,
+      missingSpecs,
+      installSpecs,
+      env: params.env ?? process.env,
+      installDeps: params.installDeps,
+    });
+    note(`Installed bundled plugin deps: ${result.installSpecs.join(", ")}`, "Bundled plugins");
   } catch (error) {
     params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);
   }

@@ -3,6 +3,7 @@ import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.
 import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
+  isSameSsrFPolicy,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "./ssrf.js";
 
@@ -165,5 +166,33 @@ describe("isBlockedHostnameOrIp", () => {
 
   it.each(["example.com", "api.example.net"])("does not block ordinary hostname %s", (value) => {
     expect(isBlockedHostnameOrIp(value)).toBe(false);
+  });
+});
+
+describe("isSameSsrFPolicy", () => {
+  it("compares policy fields semantically", () => {
+    expect(
+      isSameSsrFPolicy(
+        {
+          allowPrivateNetwork: true,
+          allowRfc2544BenchmarkRange: true,
+          allowedHostnames: ["b.example.com", "A.example.com"],
+          hostnameAllowlist: ["*.example.com", "api.example.com"],
+        },
+        {
+          allowPrivateNetwork: true,
+          allowRfc2544BenchmarkRange: true,
+          allowedHostnames: ["a.example.com", "B.EXAMPLE.COM"],
+          hostnameAllowlist: ["api.example.com", "*.example.com"],
+        },
+      ),
+    ).toBe(true);
+
+    expect(
+      isSameSsrFPolicy(
+        { dangerouslyAllowPrivateNetwork: true },
+        { dangerouslyAllowPrivateNetwork: true, allowRfc2544BenchmarkRange: true },
+      ),
+    ).toBe(false);
   });
 });

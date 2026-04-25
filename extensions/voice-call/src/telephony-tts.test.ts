@@ -116,4 +116,34 @@ describe("createTelephonyTtsProvider deepMerge hardening", () => {
       "[voice-call] Telephony TTS fallback used from=elevenlabs to=microsoft attempts=elevenlabs -> microsoft",
     );
   });
+
+  it("exposes configured timeoutMs as synthesisTimeoutMs", () => {
+    const provider = createTelephonyTtsProvider({
+      coreConfig: { messages: { tts: { provider: "openai", timeoutMs: 15000 } } },
+      runtime: {
+        textToSpeechTelephony: async () => ({
+          success: true,
+          audioBuffer: Buffer.alloc(2),
+          sampleRate: 8000,
+        }),
+      },
+    });
+
+    expect(provider.synthesisTimeoutMs).toBe(15000);
+  });
+
+  it("keeps the telephony timeout default when timeoutMs is not configured", () => {
+    const provider = createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: {
+        textToSpeechTelephony: async () => ({
+          success: true,
+          audioBuffer: Buffer.alloc(2),
+          sampleRate: 8000,
+        }),
+      },
+    });
+
+    expect(provider.synthesisTimeoutMs).toBe(8000);
+  });
 });

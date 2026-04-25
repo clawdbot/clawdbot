@@ -566,6 +566,7 @@ describe("active-memory plugin", () => {
           },
         },
       },
+      cleanupBundleMcpOnRunEnd: true,
     });
   });
 
@@ -653,6 +654,9 @@ describe("active-memory plugin", () => {
       "You receive conversation context, including the user's latest message.",
     );
     expect(runParams?.prompt).toContain("Use only memory_search and memory_get.");
+    expect(runParams?.prompt).toContain(
+      "When searching for preference or habit recall, use a permissive memory_search threshold before deciding that no useful memory exists.",
+    );
     expect(runParams?.prompt).toContain(
       "If the user is directly asking about favorites, preferences, habits, routines, or personal facts, treat that as a strong recall signal.",
     );

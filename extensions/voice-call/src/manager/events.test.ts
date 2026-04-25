@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import type { HangupCallInput, NormalizedEvent } from "../types.js";
+import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import { flushPendingCallRecordWritesForTest } from "./store.js";
@@ -180,6 +180,44 @@ describe("processEvent (functional)", () => {
         providerCallId: "prov-dup",
         reason: "hangup-bot",
       }),
+    ]);
+  });
+
+  it("answers accepted inbound calls when the provider requires an answer command", () => {
+    const answerCalls: AnswerCallInput[] = [];
+    const provider = createProvider({
+      answerCall: async (input: AnswerCallInput): Promise<void> => {
+        answerCalls.push(input);
+      },
+    });
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "telnyx",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        telnyx: {
+          apiKey: "KEY123",
+          connectionId: "CONN456",
+        },
+        skipSignatureVerification: true,
+      }),
+      provider,
+    });
+    const event = createInboundInitiatedEvent({
+      id: "evt-answer",
+      providerCallId: "call-control-1",
+      from: "+15552222222",
+    });
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(answerCalls).toEqual([
+      {
+        callId: call.callId,
+        providerCallId: "call-control-1",
+      },
     ]);
   });
 

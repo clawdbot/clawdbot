@@ -193,6 +193,15 @@ describe("discord subagent hook handlers", () => {
 
     expect(hookMocks.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
     expect(hookMocks.autoBindSpawnedDiscordSubagent).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        channels: expect.objectContaining({
+          discord: expect.objectContaining({
+            threadBindings: expect.objectContaining({
+              spawnSubagentSessions: true,
+            }),
+          }),
+        }),
+      }),
       accountId: "work",
       channel: "discord",
       to: "channel:123",

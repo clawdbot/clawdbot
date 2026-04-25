@@ -68,7 +68,11 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   }
 
   const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
-  return retryAfterSeconds !== undefined && retryAfterSeconds > maxWaitSeconds;
+  if (retryAfterSeconds !== undefined) {
+    return retryAfterSeconds > maxWaitSeconds;
+  }
+
+  return status === 429;
 }
 
 function buildManagedResponse(response: Response, release: () => Promise<void>): Response {

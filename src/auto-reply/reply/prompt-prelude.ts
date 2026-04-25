@@ -10,6 +10,7 @@ export function buildReplyPromptBodies(params: {
   sessionCtx: TemplateContext;
   effectiveBaseBody: string;
   prefixedBody: string;
+  transcriptBody?: string;
   threadContextNote?: string;
   systemEventBlocks?: string[];
 }): {
@@ -17,6 +18,7 @@ export function buildReplyPromptBodies(params: {
   mediaReplyHint?: string;
   prefixedCommandBody: string;
   queuedBody: string;
+  transcriptCommandBody: string;
 } {
   const combinedEventsBlock = (params.systemEventBlocks ?? []).filter(Boolean).join("\n");
   const prependEvents = (body: string) =>
@@ -38,10 +40,15 @@ export function buildReplyPromptBodies(params: {
   const prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody].filter(Boolean).join("\n").trim()
     : prefixedBody;
+  const transcriptBody = params.transcriptBody ?? params.effectiveBaseBody;
+  const transcriptCommandBody = mediaNote
+    ? [mediaNote, transcriptBody].filter(Boolean).join("\n").trim()
+    : transcriptBody;
   return {
     mediaNote,
     mediaReplyHint,
     prefixedCommandBody,
     queuedBody,
+    transcriptCommandBody,
   };
 }

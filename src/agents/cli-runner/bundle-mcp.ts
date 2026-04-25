@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeConfiguredMcpServers } from "../../config/mcp-config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -415,6 +416,14 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+  const configuredMcp = normalizeConfiguredMcpServers(params.config?.mcp?.servers);
+  if (Object.keys(configuredMcp).length > 0) {
+    const existingMcpServers = mergedConfig.mcpServers;
+    mergedConfig = {
+      ...mergedConfig,
+      mcpServers: existingMcpServers ? { ...existingMcpServers, ...configuredMcp } : configuredMcp,
+    } satisfies BundleMcpConfig;
+  }
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }

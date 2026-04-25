@@ -3,8 +3,6 @@ import {
   matchesHostnameAllowlist,
   normalizeHostname,
 } from "openclaw/plugin-sdk/browser-security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import {
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
@@ -20,6 +18,10 @@ function isAllowedNonNetworkNavigationUrl(parsed: URL): boolean {
   return SAFE_NON_NETWORK_URLS.has(parsed.href);
 }
 
+function normalizeNavigationUrl(url: string): string {
+  return url.trim();
+}
+
 export class InvalidBrowserNavigationUrlError extends Error {
   constructor(message: string) {
     super(message);
@@ -29,7 +31,10 @@ export class InvalidBrowserNavigationUrlError extends Error {
 
 export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationProxyMode;
 };
+
+export type BrowserNavigationProxyMode = "direct" | "explicit-browser-proxy";
 
 export type BrowserNavigationRequestLike = {
   url(): string;
@@ -38,8 +43,14 @@ export type BrowserNavigationRequestLike = {
 
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
+  opts?: { browserProxyMode?: BrowserNavigationProxyMode },
 ): BrowserNavigationPolicyOptions {
-  return ssrfPolicy ? { ssrfPolicy } : {};
+  return {
+    ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
+      ? { browserProxyMode: opts.browserProxyMode }
+      : {}),
+  };
 }
 
 export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
@@ -85,7 +96,7 @@ export async function assertBrowserNavigationAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  const rawUrl = normalizeOptionalString(opts.url) ?? "";
+  const rawUrl = normalizeNavigationUrl(opts.url);
   if (!rawUrl) {
     throw new InvalidBrowserNavigationUrlError("url is required");
   }
@@ -106,13 +117,15 @@ export async function assertBrowserNavigationAllowed(
     );
   }
 
-  // Browser network stacks may apply env proxy routing at connect-time, which
-  // can bypass strict destination-binding intent from pre-navigation DNS checks.
-  // In strict mode, fail closed unless private-network navigation is explicitly
-  // enabled by policy.
-  if (hasProxyEnvConfigured() && !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)) {
+  // Browser proxy routing hides the final connect target from this process.
+  // Only block when the browser profile is known to be proxy-routed; Gateway
+  // provider proxy env alone is not proof of browser page proxy behavior.
+  if (
+    opts.browserProxyMode === "explicit-browser-proxy" &&
+    !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)
+  ) {
     throw new InvalidBrowserNavigationUrlError(
-      "Navigation blocked: strict browser SSRF policy cannot be enforced while env proxy variables are set",
+      "Navigation blocked: strict browser SSRF policy cannot be enforced while this browser profile is proxy-routed",
     );
   }
 
@@ -150,7 +163,7 @@ export async function assertBrowserNavigationResultAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  const rawUrl = normalizeOptionalString(opts.url) ?? "";
+  const rawUrl = normalizeNavigationUrl(opts.url);
   if (!rawUrl) {
     return;
   }
@@ -185,6 +198,7 @@ export async function assertBrowserNavigationRedirectChainAllowed(
       url,
       lookupFn: opts.lookupFn,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
     });
   }
 }

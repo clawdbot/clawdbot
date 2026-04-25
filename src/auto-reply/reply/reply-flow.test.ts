@@ -21,7 +21,7 @@ describe("createReplyDispatcher", () => {
     expect(deliver.mock.calls[1]?.[0]?.text).toBe(`interject.${SILENT_REPLY_TOKEN}`);
   });
 
-  it("preserves exact NO_REPLY final payloads for direct sessions where silence is disallowed", async () => {
+  it("rewrites exact NO_REPLY final payloads for direct sessions where rewrite is enabled", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const cfg: OpenClawConfig = {
       agents: {
@@ -33,6 +33,39 @@ describe("createReplyDispatcher", () => {
           },
           silentReplyRewrite: {
             direct: true,
+          },
+        },
+      },
+    };
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      silentReplyContext: {
+        cfg,
+        sessionKey: "agent:main:telegram:direct:123",
+        surface: "telegram",
+      },
+    });
+
+    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(true);
+
+    await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]?.text).not.toBe(SILENT_REPLY_TOKEN);
+    expect(deliver.mock.calls[0]?.[0]?.text).toBeTruthy();
+  });
+
+  it("preserves exact NO_REPLY final payloads for direct sessions where rewrite is disabled", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: false,
           },
         },
       },

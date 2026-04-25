@@ -16,6 +16,7 @@ const FULL_PARITY_PASS_SCENARIOS: QaParityReportScenario[] = [
   { name: "Image understanding from attachment", status: "pass" as const },
   { name: "Subagent handoff", status: "pass" as const },
   { name: "Subagent fanout synthesis", status: "pass" as const },
+  { name: "Subagent stale child links", status: "pass" as const },
   { name: "Memory recall after context switch", status: "pass" as const },
   { name: "Thread memory isolation", status: "pass" as const },
   { name: "Config restart capability flip", status: "pass" as const },

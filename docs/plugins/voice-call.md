@@ -6,8 +6,6 @@ read_when:
 title: "Voice call plugin"
 ---
 
-# Voice Call (plugin)
-
 Voice calls for OpenClaw via a plugin. Supports outbound notifications and
 multi-turn conversations with inbound policies.
 
@@ -122,11 +120,53 @@ Set config under `plugins.entries.voice-call.config`:
             maxPendingConnectionsPerIp: 4,
             maxConnections: 128,
           },
+
+          realtime: {
+            enabled: false,
+            provider: "google", // optional; first registered realtime voice provider when unset
+            toolPolicy: "safe-read-only",
+            providers: {
+              google: {
+                model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                voice: "Kore",
+              },
+            },
+          },
         },
       },
     },
   },
 }
+```
+
+Check setup before testing with a real provider:
+
+```bash
+openclaw voicecall setup
+```
+
+The default output is readable in chat logs and terminal sessions. It checks
+whether the plugin is enabled, the provider and credentials are present, webhook
+exposure is configured, and only one audio mode is active. Use
+`openclaw voicecall setup --json` for scripts.
+
+For Twilio, Telnyx, and Plivo, setup must resolve to a public webhook URL. If the
+configured `publicUrl`, tunnel URL, Tailscale URL, or serve fallback resolves to
+loopback or private network space, setup fails instead of starting a provider
+that cannot receive real carrier webhooks.
+
+For a no-surprises smoke test, run:
+
+```bash
+openclaw voicecall smoke
+openclaw voicecall smoke --to "+15555550123"
+```
+
+The second command is still a dry run. Add `--yes` to place a short outbound
+notify call:
+
+```bash
+openclaw voicecall smoke --to "+15555550123" --yes
 ```
 
 Notes:
@@ -140,12 +180,111 @@ Notes:
 - If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
 - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
 - Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
+- `realtime.enabled` starts full voice-to-voice conversations; do not enable it together with `streaming.enabled`.
 - Streaming security defaults:
   - `streaming.preStartTimeoutMs` closes sockets that never send a valid `start` frame.
 - `streaming.maxPendingConnections` caps total unauthenticated pre-start sockets.
 - `streaming.maxPendingConnectionsPerIp` caps unauthenticated pre-start sockets per source IP.
 - `streaming.maxConnections` caps total open media stream sockets (pending + active).
 - Runtime fallback still accepts those old voice-call keys for now, but the rewrite path is `openclaw doctor --fix` and the compat shim is temporary.
+
+## Realtime voice conversations
+
+`realtime` selects a full duplex realtime voice provider for live call audio.
+It is separate from `streaming`, which only forwards audio to realtime
+transcription providers.
+
+Current runtime behavior:
+
+- `realtime.enabled` is supported for Twilio Media Streams.
+- `realtime.enabled` cannot be combined with `streaming.enabled`.
+- `realtime.provider` is optional. If unset, Voice Call uses the first
+  registered realtime voice provider.
+- Bundled realtime voice providers include Google Gemini Live (`google`) and
+  OpenAI (`openai`), registered by their provider plugins.
+- Provider-owned raw config lives under `realtime.providers.<providerId>`.
+- Voice Call exposes the shared `openclaw_agent_consult` realtime tool by
+  default. The realtime model can call it when the caller asks for deeper
+  reasoning, current information, or normal OpenClaw tools.
+- `realtime.toolPolicy` controls the consult run:
+  - `safe-read-only`: expose the consult tool and limit the regular agent to
+    `read`, `web_search`, `web_fetch`, `x_search`, `memory_search`, and
+    `memory_get`.
+  - `owner`: expose the consult tool and let the regular agent use the normal
+    agent tool policy.
+  - `none`: do not expose the consult tool. Custom `realtime.tools` are still
+    passed through to the realtime provider.
+- Consult session keys reuse the existing voice session when available, then
+  fall back to the caller/callee phone number so follow-up consult calls keep
+  context during the call.
+- If `realtime.provider` points at an unregistered provider, or no realtime
+  voice provider is registered at all, Voice Call logs a warning and skips
+  realtime media instead of failing the whole plugin.
+
+Google Gemini Live realtime defaults:
+
+- API key: `realtime.providers.google.apiKey`, `GEMINI_API_KEY`, or
+  `GOOGLE_GENERATIVE_AI_API_KEY`
+- model: `gemini-2.5-flash-native-audio-preview-12-2025`
+- voice: `Kore`
+
+Example:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          provider: "twilio",
+          inboundPolicy: "allowlist",
+          allowFrom: ["+15550005678"],
+          realtime: {
+            enabled: true,
+            provider: "google",
+            instructions: "Speak briefly. Call openclaw_agent_consult before using deeper tools.",
+            toolPolicy: "safe-read-only",
+            providers: {
+              google: {
+                apiKey: "${GEMINI_API_KEY}",
+                model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                voice: "Kore",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Use OpenAI instead:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          realtime: {
+            enabled: true,
+            provider: "openai",
+            providers: {
+              openai: {
+                apiKey: "${OPENAI_API_KEY}",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+See [Google provider](/providers/google) and [OpenAI provider](/providers/openai)
+for provider-specific realtime voice options.
 
 ## Streaming transcription
 
@@ -337,11 +476,14 @@ streaming speech on calls. You can override it under the plugin config with the
 
 Notes:
 
-- Legacy `tts.<provider>` keys inside plugin config (`openai`, `elevenlabs`, `microsoft`, `edge`) are auto-migrated to `tts.providers.<provider>` on load. Prefer the `providers` shape in committed config.
+- Legacy `tts.<provider>` keys inside plugin config (`openai`, `elevenlabs`, `microsoft`, `edge`) are repaired by `openclaw doctor --fix`; committed config should use `tts.providers.<provider>`.
 - **Microsoft speech is ignored for voice calls** (telephony audio needs PCM; the current Microsoft transport does not expose telephony PCM output).
 - Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
 - If a Twilio media stream is already active, Voice Call does not fall back to TwiML `<Say>`. If telephony TTS is unavailable in that state, the playback request fails instead of mixing two playback paths.
 - When telephony TTS falls back to a secondary provider, Voice Call logs a warning with the provider chain (`from`, `to`, `attempts`) for debugging.
+- When Twilio barge-in or stream teardown clears the pending TTS queue, queued
+  playback requests settle instead of hanging callers that are awaiting playback
+  completion.
 
 ### More examples
 
@@ -453,6 +595,10 @@ For outbound `conversation` calls, first-message handling is tied to live playba
 - Barge-in queue clear and auto-response are suppressed only while the initial greeting is actively speaking.
 - If initial playback fails, the call returns to `listening` and the initial message remains queued for retry.
 - Initial playback for Twilio streaming starts on stream connect without extra delay.
+- Barge-in aborts active playback and clears queued-but-not-yet-playing Twilio
+  TTS entries. Cleared entries resolve as skipped, so follow-up response logic
+  can continue without waiting on audio that will never play.
+- Realtime voice conversations use the realtime stream's own opening turn. Voice Call does not post a legacy `<Say>` TwiML update for that initial message, so outbound `<Connect><Stream>` sessions stay attached.
 
 ### Twilio stream disconnect grace
 

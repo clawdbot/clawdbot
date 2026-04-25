@@ -1,5 +1,6 @@
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -53,6 +54,15 @@ const PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number
   global: 2,
   workspace: 3,
 };
+const DESCRIPTOR_LABEL_ACRONYMS: ReadonlyMap<string, string> = new Map([
+  ["api", "API"],
+  ["jwt", "JWT"],
+  ["oauth", "OAuth"],
+  ["oidc", "OIDC"],
+  ["pkce", "PKCE"],
+  ["saml", "SAML"],
+  ["sso", "SSO"],
+] as const);
 
 function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin | undefined): number {
   if (!origin) {
@@ -91,6 +101,73 @@ function toProviderAuthChoiceCandidate(params: {
   };
 }
 
+function formatDescriptorLabel(value: string): string {
+  return sanitizeForLog(value)
+    .trim()
+    .split(/[-_\s]+/gu)
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase();
+      const acronym = DESCRIPTOR_LABEL_ACRONYMS.get(lower);
+      if (acronym) {
+        return acronym;
+      }
+      return `${lower.slice(0, 1).toUpperCase()}${lower.slice(1)}`;
+    })
+    .join(" ");
+}
+
+function normalizeManifestAuthDescriptorId(value: string): string {
+  return sanitizeForLog(value).trim();
+}
+
+function toSetupProviderAuthChoiceCandidate(params: {
+  plugin: PluginManifestRecord;
+  providerId: string;
+  methodId: string;
+}): ProviderAuthChoiceCandidate {
+  const providerLabel = formatDescriptorLabel(params.providerId);
+  const methodLabel = formatDescriptorLabel(params.methodId);
+  const choiceLabel =
+    params.methodId === "api-key" ? `${providerLabel} API key` : `${providerLabel} ${methodLabel}`;
+  return {
+    pluginId: params.plugin.id,
+    origin: params.plugin.origin,
+    providerId: params.providerId,
+    methodId: params.methodId,
+    choiceId: `${params.providerId}-${params.methodId}`,
+    choiceLabel,
+    groupId: params.providerId,
+    groupLabel: providerLabel,
+  };
+}
+
+function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
+  if (plugin.setup?.requiresRuntime !== false && plugin.setupSource) {
+    return [];
+  }
+  const explicitProviderMethods = new Set(
+    (plugin.providerAuthChoices ?? []).map((choice) => `${choice.provider}::${choice.method}`),
+  );
+  return (plugin.setup?.providers ?? []).flatMap((provider) => {
+    const providerId = normalizeManifestAuthDescriptorId(provider.id);
+    if (!providerId) {
+      return [];
+    }
+    return (provider.authMethods ?? [])
+      .map(normalizeManifestAuthDescriptorId)
+      .filter(Boolean)
+      .filter((methodId) => !explicitProviderMethods.has(`${providerId}::${methodId}`))
+      .map((methodId) =>
+        toSetupProviderAuthChoiceCandidate({
+          plugin,
+          providerId,
+          methodId,
+        }),
+      );
+  });
+}
+
 function stripChoiceOrigin(choice: ProviderAuthChoiceCandidate): ProviderAuthChoiceMetadata {
   const { origin: _origin, ...metadata } = choice;
   return metadata;
@@ -121,13 +198,18 @@ function resolveManifestProviderAuthChoiceCandidates(params?: {
     ) {
       return [];
     }
-    return (plugin.providerAuthChoices ?? []).map((choice) =>
-      toProviderAuthChoiceCandidate({
-        pluginId: plugin.id,
-        origin: plugin.origin,
-        choice,
-      }),
-    );
+    const choices: ProviderAuthChoiceCandidate[] = [];
+    for (const choice of plugin.providerAuthChoices ?? []) {
+      choices.push(
+        toProviderAuthChoiceCandidate({
+          pluginId: plugin.id,
+          origin: plugin.origin,
+          choice,
+        }),
+      );
+    }
+    choices.push(...listSetupProviderAuthChoiceCandidates(plugin));
+    return choices;
   });
 }
 

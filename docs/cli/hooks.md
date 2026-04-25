@@ -15,7 +15,7 @@ Running `openclaw hooks` with no subcommand is equivalent to `openclaw hooks lis
 Related:
 
 - Hooks: [Hooks](/automation/hooks)
-- Plugin hooks: [Plugin hooks](/plugins/architecture-internals#provider-runtime-hooks)
+- Plugin hooks: [Plugin hooks](/plugins/hooks)
 
 ## List All Hooks
 

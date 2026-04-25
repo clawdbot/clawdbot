@@ -23,6 +23,7 @@ export {
 } from "./browser/client-actions.js";
 export {
   browserCloseTab,
+  browserDoctor,
   browserFocusTab,
   browserOpenTab,
   browserProfiles,
@@ -38,6 +39,7 @@ export { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./browser/pa
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
 export {
+  touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser/session-tab-registry.js";

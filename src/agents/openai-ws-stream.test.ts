@@ -11,7 +11,10 @@
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResponseObject } from "./openai-ws-connection.js";
-import { buildOpenAIWebSocketResponseCreatePayload } from "./openai-ws-request.js";
+import {
+  buildOpenAIWebSocketResponseCreatePayload,
+  planOpenAIWebSocketRequestPayload,
+} from "./openai-ws-request.js";
 import {
   __testing as openAIWsStreamTesting,
   buildAssistantMessageFromResponse,
@@ -22,6 +25,7 @@ import {
   planTurnInput,
   releaseWsSession,
 } from "./openai-ws-stream.js";
+import type { InputItem, ResponseCreateEvent } from "./openai-ws-types.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
@@ -152,6 +156,10 @@ const { MockManager } = vi.hoisted(() => {
 
     // Test helper: simulate a server event
     simulateEvent(event: unknown): void {
+      const maybeEvent = event as { type?: string; response?: { id?: string } };
+      if (maybeEvent.type === "response.completed" && maybeEvent.response?.id) {
+        this._previousResponseId = maybeEvent.response.id;
+      }
       for (const fn of this._listeners) {
         fn(event);
       }
@@ -1678,6 +1686,101 @@ describe("planTurnInput", () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe("planOpenAIWebSocketRequestPayload", () => {
+  it("sends only the strict suffix when the full input extends the prior response chain", () => {
+    const previousInputItems: InputItem[] = [{ type: "message", role: "user", content: "Hello" }];
+    const previousRequest: ResponseCreateEvent = {
+      type: "response.create",
+      model: "gpt-5.4",
+      store: false,
+      instructions: "You are helpful.",
+      input: previousInputItems,
+    };
+    const previousResponseInputItems: InputItem[] = [
+      { type: "message", role: "assistant", content: "Hi" },
+    ];
+    const fullPayload: ResponseCreateEvent = {
+      type: "response.create",
+      model: "gpt-5.4",
+      store: false,
+      instructions: "You are helpful.",
+      input: [
+        ...previousInputItems,
+        ...previousResponseInputItems,
+        { type: "message", role: "user", content: "Next" },
+      ],
+    };
+
+    const plan = planOpenAIWebSocketRequestPayload({
+      fullPayload,
+      previousRequestPayload: previousRequest,
+      previousResponseId: "resp_prev",
+      previousResponseInputItems: [...previousResponseInputItems],
+    });
+
+    expect(plan.mode).toBe("incremental");
+    expect(plan.payload.previous_response_id).toBe("resp_prev");
+    expect(plan.payload.input).toEqual([{ type: "message", role: "user", content: "Next" }]);
+  });
+
+  it("falls back to full context when non-input fields differ", () => {
+    const previousInputItems: InputItem[] = [{ type: "message", role: "user", content: "Hello" }];
+    const previousRequest: ResponseCreateEvent = {
+      type: "response.create",
+      model: "gpt-5.4",
+      store: false,
+      instructions: "Old instructions",
+      input: previousInputItems,
+    };
+    const fullPayload: ResponseCreateEvent = {
+      ...previousRequest,
+      instructions: "New instructions",
+      input: [
+        ...previousInputItems,
+        { type: "message", role: "assistant", content: "Hi" },
+        { type: "message", role: "user", content: "Next" },
+      ],
+    };
+
+    const plan = planOpenAIWebSocketRequestPayload({
+      fullPayload,
+      previousRequestPayload: previousRequest,
+      previousResponseId: "resp_prev",
+      previousResponseInputItems: [{ type: "message", role: "assistant", content: "Hi" }],
+    });
+
+    expect(plan.mode).toBe("full_context");
+    expect(plan.payload.previous_response_id).toBeUndefined();
+    expect(plan.payload.input).toEqual(fullPayload.input);
+  });
+
+  it("falls back to full context when the input is not a strict response-chain extension", () => {
+    const previousRequest: ResponseCreateEvent = {
+      type: "response.create",
+      model: "gpt-5.4",
+      store: false,
+      input: [{ type: "message", role: "user", content: "Hello" }],
+    };
+    const fullPayload: ResponseCreateEvent = {
+      ...previousRequest,
+      input: [{ type: "message", role: "user", content: "Different" }],
+    };
+
+    const plan = planOpenAIWebSocketRequestPayload({
+      fullPayload,
+      previousRequestPayload: previousRequest,
+      previousResponseId: "resp_prev",
+      previousResponseInputItems: [{ type: "message", role: "assistant", content: "Hi" }],
+    });
+
+    expect(plan.mode).toBe("full_context");
+    expect(plan.payload.previous_response_id).toBeUndefined();
+    expect(plan.payload.input).toEqual(fullPayload.input);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 describe("createOpenAIWebSocketStreamFn", () => {
   const modelStub = {
     api: "openai-responses",
@@ -2738,7 +2841,6 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     // Server responds with a tool call
     const turn1Response = makeResponseObject("resp_turn1", undefined, "exec");
-    manager.setPreviousResponseId("resp_turn1");
     manager.simulateEvent({ type: "response.completed", response: turn1Response });
     await done1;
 
@@ -2747,8 +2849,8 @@ describe("createOpenAIWebSocketStreamFn", () => {
       systemPrompt: "You are helpful.",
       messages: [
         userMsg("Run ls"),
-        assistantMsg([], [{ id: "call_1", name: "exec", args: { cmd: "ls" } }]),
-        toolResultMsg("call_1", "file.txt"),
+        buildAssistantMessageFromResponse(turn1Response, modelStub),
+        toolResultMsg("call_abc|item_2", "file.txt"),
       ] as Parameters<typeof convertMessagesToInputItems>[0],
       tools: [],
     };
@@ -2785,7 +2887,68 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(inputTypes).toHaveLength(1);
   });
 
-  it("omits previous_response_id when replaying full context on follow-up turns", async () => {
+  it("sends only a follow-up user message when the full context is a strict extension", async () => {
+    const sessionId = "sess-user-delta";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const ctx1 = {
+      systemPrompt: "You are helpful.",
+      messages: [userMsg("Hello")] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx1 as Parameters<typeof streamFn>[1],
+    );
+    const done1 = (async () => {
+      for await (const _ of await resolveStream(stream1)) {
+        /* consume */
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    const turn1Response = makeResponseObject("resp_turn1_text", "Hi there.");
+    manager.simulateEvent({ type: "response.completed", response: turn1Response });
+    await done1;
+
+    const ctx2 = {
+      systemPrompt: "You are helpful.",
+      messages: [
+        userMsg("Hello"),
+        buildAssistantMessageFromResponse(turn1Response, modelStub),
+        userMsg("What can you do?"),
+      ] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx2 as Parameters<typeof streamFn>[1],
+    );
+    const done2 = (async () => {
+      for await (const _ of await resolveStream(stream2)) {
+        /* consume */
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_turn2_text", "I can help."),
+    });
+    await done2;
+
+    const sent2 = manager.sentEvents[1] as {
+      previous_response_id?: string;
+      input: Array<{ type: string; role?: string; content?: unknown }>;
+    };
+    expect(sent2.previous_response_id).toBe("resp_turn1_text");
+    expect(sent2.input).toEqual([{ type: "message", role: "user", content: "What can you do?" }]);
+  });
+
+  it("uses an empty incremental payload when replay context exactly matches the response chain", async () => {
     const sessionId = "sess-full-context-replay";
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
 
@@ -2830,7 +2993,6 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     await new Promise((r) => setImmediate(r));
     const manager = MockManager.lastInstance!;
-    manager.setPreviousResponseId("resp_turn1_reasoning");
     manager.simulateEvent({ type: "response.completed", response: turn1Response });
     await done1;
 
@@ -2864,14 +3026,8 @@ describe("createOpenAIWebSocketStreamFn", () => {
       previous_response_id?: string;
       input: Array<{ type: string; id?: string; call_id?: string }>;
     };
-    expect(sent2.previous_response_id).toBeUndefined();
-    expect(sent2.input.map((item) => item.type)).toEqual(["message", "reasoning", "function_call"]);
-    expect(sent2.input[1]).toMatchObject({ type: "reasoning", id: "rs_turn1" });
-    expect(sent2.input[2]).toMatchObject({
-      type: "function_call",
-      call_id: "call_turn1",
-      id: "fc_turn1",
-    });
+    expect(sent2.previous_response_id).toBe("resp_turn1_reasoning");
+    expect(sent2.input).toEqual([]);
   });
 
   it("sends instructions (system prompt) in each request", async () => {

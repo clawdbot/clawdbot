@@ -522,6 +522,13 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-setup-only-feature",
       );
 
+      expect(
+        bundled.listBundledChannelLegacyStateMigrationDetectors({
+          config: { channels: { alpha: { enabled: false } } },
+        }),
+      ).toEqual([]);
+      expect(testGlobal.__bundledSetupOnlySetupLoaded).toBeUndefined();
+
       const detectors = bundled.listBundledChannelLegacyStateMigrationDetectors();
       expect(
         detectors.map((detector) =>

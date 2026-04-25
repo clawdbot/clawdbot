@@ -365,7 +365,6 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
-        awaitStartupSidecars: true,
       });
       const client = await connectTestGatewayClient({
         url: `ws://127.0.0.1:${port}`,

@@ -1,7 +1,11 @@
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
-import { closePlaywrightBrowserConnection, listPagesViaPlaywright } from "./pw-session.js";
+import {
+  closePlaywrightBrowserConnection,
+  getPageForTargetId,
+  listPagesViaPlaywright,
+} from "./pw-session.js";
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
@@ -30,6 +34,24 @@ function makeBrowser(targetId: string, url: string): BrowserMockBundle {
       ),
       detach: vi.fn(async () => {}),
     })),
+  } as unknown as import("playwright-core").BrowserContext;
+
+  const browser = {
+    contexts: () => [context],
+    on: vi.fn(),
+    off: vi.fn(),
+    close: browserClose,
+  } as unknown as import("playwright-core").Browser;
+
+  return { browser, browserClose };
+}
+
+function makeEmptyBrowser(): BrowserMockBundle {
+  const browserClose = vi.fn(async () => {});
+  const context = {
+    pages: () => [],
+    on: vi.fn(),
+    newCDPSession: vi.fn(),
   } as unknown as import("playwright-core").BrowserContext;
 
   const browser = {
@@ -115,5 +137,38 @@ describe("pw-session connection scoping", () => {
 
     expect(browserA.browserClose).toHaveBeenCalledTimes(1);
     expect(browserB.browserClose).not.toHaveBeenCalled();
+  });
+
+  it("evicts only the stale cdpUrl when getPageForTargetId retries a cached connection", async () => {
+    const staleA = makeEmptyBrowser();
+    const refreshedA = makeBrowser("A", "https://a.example/recovered");
+    const browserB = makeBrowser("B", "https://b.example");
+    let callsForA = 0;
+
+    connectOverCdpSpy.mockImplementation((async (...args: unknown[]) => {
+      const endpointText = String(args[0]);
+      if (endpointText === "http://127.0.0.1:9222") {
+        callsForA += 1;
+        return callsForA === 1 ? staleA.browser : refreshedA.browser;
+      }
+      if (endpointText === "http://127.0.0.1:9333") {
+        return browserB.browser;
+      }
+      throw new Error(`unexpected endpoint: ${endpointText}`);
+    }) as never);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
+    await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9333" });
+
+    const recoveredA = await getPageForTargetId({ cdpUrl: "http://127.0.0.1:9222" });
+    const stillCachedB = await getPageForTargetId({ cdpUrl: "http://127.0.0.1:9333" });
+
+    expect(recoveredA.url()).toBe("https://a.example/recovered");
+    expect(stillCachedB.url()).toBe("https://b.example");
+    expect(staleA.browserClose).toHaveBeenCalledTimes(1);
+    expect(refreshedA.browserClose).not.toHaveBeenCalled();
+    expect(browserB.browserClose).not.toHaveBeenCalled();
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
   });
 });

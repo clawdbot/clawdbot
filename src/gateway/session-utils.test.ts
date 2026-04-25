@@ -5,11 +5,14 @@ import { afterEach, describe, expect, test } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStore,
   loadSessionEntry,
@@ -67,6 +70,7 @@ function createModelDefaultsConfig(params: {
 describe("gateway session utils", () => {
   afterEach(() => {
     resetConfigRuntimeState();
+    resetPluginRuntimeStateForTest();
   });
 
   test("capArrayByJsonBytes trims from the front", () => {
@@ -86,6 +90,53 @@ describe("gateway session utils", () => {
       id: "dev",
     });
     expect(parseGroupKey("foo:bar")).toBeNull();
+  });
+
+  test("session defaults include provider-owned thinking options", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "test",
+      source: "test",
+      provider: {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [],
+        resolveThinkingProfile: ({ modelId }) => ({
+          levels: [
+            { id: "off" },
+            { id: "minimal" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "adaptive" },
+            { id: "high" },
+            ...(modelId === "gpt-5.5" ? [{ id: "xhigh" as const }] : []),
+            { id: "max", label: "maximum" },
+          ],
+          defaultLevel: "adaptive",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const defaults = getSessionDefaults(
+      createModelDefaultsConfig({ primary: "openai-codex/gpt-5.5" }),
+    );
+
+    expect(defaults).toMatchObject({
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      thinkingDefault: "adaptive",
+    });
+    expect(defaults.thinkingLevels).toEqual(
+      expect.arrayContaining([
+        { id: "adaptive", label: "adaptive" },
+        { id: "xhigh", label: "xhigh" },
+        { id: "max", label: "maximum" },
+      ]),
+    );
+    expect(defaults.thinkingOptions).toEqual(
+      expect.arrayContaining(["adaptive", "xhigh", "maximum"]),
+    );
   });
 
   test("classifySessionKey respects chat type + prefixes", () => {

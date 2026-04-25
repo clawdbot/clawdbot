@@ -13,6 +13,9 @@ Note: The **Model** section now includes a multi-select for the
 `agents.defaults.models` allowlist (what shows up in `/model` and the model picker).
 Provider-scoped setup choices merge their selected models into the existing
 allowlist instead of replacing unrelated providers already in the config.
+Re-running provider auth from configure preserves an existing
+`agents.defaults.model.primary`; use `openclaw models auth login --provider <id> --set-default`
+or `openclaw models set <model>` when you intentionally want to change the default model.
 
 When configure starts from a provider auth choice, the default-model and
 allowlist pickers prefer that provider automatically. For paired providers such

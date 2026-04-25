@@ -110,6 +110,11 @@ describe("mime detection", () => {
     const mime = await detectMime({ filePath: "/tmp/style.css" });
     expect(mime).toBe("text/css");
   });
+
+  it("detects AAC from a bare filename when buffer sniffing is inconclusive", async () => {
+    const mime = await detectMime({ buffer: Buffer.alloc(16), filePath: "voice.aac" });
+    expect(mime).toBe("audio/aac");
+  });
 });
 
 describe("extensionForMime", () => {

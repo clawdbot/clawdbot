@@ -11,6 +11,7 @@ import {
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
+    resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => {
       if (params.provider !== "openrouter") {
         return params.context.streamFn;

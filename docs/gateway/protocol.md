@@ -7,8 +7,6 @@ read_when:
 title: "Gateway protocol"
 ---
 
-# Gateway protocol (WebSocket)
-
 The Gateway WS protocol is the **single control plane + node transport** for
 OpenClaw. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
 nodes) connect over WebSocket and declare their **role** + **scope** at

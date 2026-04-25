@@ -46,6 +46,26 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     });
   });
 
+  it("preserves explicit zero-valued VAD settings", () => {
+    const provider = buildOpenAIRealtimeTranscriptionProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      rawConfig: {
+        providers: {
+          openai: {
+            silenceDurationMs: 0,
+            vadThreshold: 0,
+          },
+        },
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      silenceDurationMs: 0,
+      vadThreshold: 0,
+    });
+  });
+
   it("accepts the legacy openai-realtime alias", () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
     expect(provider.aliases).toContain("openai-realtime");

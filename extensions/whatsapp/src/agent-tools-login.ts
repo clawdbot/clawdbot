@@ -2,6 +2,12 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
 import { Type } from "typebox";
 import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
 
+const QR_DATA_URL_MAX_LENGTH = 16_384;
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 export function createWhatsAppLoginTool(): ChannelAgentTool {
   return {
     label: "WhatsApp Login",
@@ -17,16 +23,56 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
       }),
       timeoutMs: Type.Optional(Type.Number()),
       force: Type.Optional(Type.Boolean()),
+      accountId: Type.Optional(Type.String()),
+      currentQrDataUrl: Type.Optional(
+        Type.String({
+          maxLength: QR_DATA_URL_MAX_LENGTH,
+          pattern: "^data:image/png;base64,",
+        }),
+      ),
     }),
     execute: async (_toolCallId, args) => {
+      const renderQrReply = (params: {
+        message: string;
+        qrDataUrl: string;
+        connected?: boolean;
+      }) => {
+        const text = [
+          params.message,
+          "",
+          "Open WhatsApp → Linked Devices and scan:",
+          "",
+          `![whatsapp-qr](${params.qrDataUrl})`,
+        ].join("\n");
+        return {
+          content: [{ type: "text" as const, text }],
+          details: {
+            connected: params.connected ?? false,
+            qr: true,
+          },
+        };
+      };
+
       const action = (args as { action?: string })?.action ?? "start";
+      const accountId = readOptionalString((args as { accountId?: unknown }).accountId);
       if (action === "wait") {
         const result = await waitForWebLogin({
+          accountId,
           timeoutMs:
             typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
               ? (args as { timeoutMs?: number }).timeoutMs
               : undefined,
+          currentQrDataUrl: readOptionalString(
+            (args as { currentQrDataUrl?: unknown }).currentQrDataUrl,
+          ),
         });
+        if (result.qrDataUrl) {
+          return renderQrReply({
+            message: result.message,
+            qrDataUrl: result.qrDataUrl,
+            connected: result.connected,
+          });
+        }
         return {
           content: [{ type: "text", text: result.message }],
           details: { connected: result.connected },
@@ -34,6 +80,7 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
       }
 
       const result = await startWebLoginWithQr({
+        accountId,
         timeoutMs:
           typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
             ? (args as { timeoutMs?: number }).timeoutMs
@@ -56,17 +103,11 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
         };
       }
 
-      const text = [
-        result.message,
-        "",
-        "Open WhatsApp → Linked Devices and scan:",
-        "",
-        `![whatsapp-qr](${result.qrDataUrl})`,
-      ].join("\n");
-      return {
-        content: [{ type: "text", text }],
-        details: { qr: true },
-      };
+      return renderQrReply({
+        message: result.message,
+        qrDataUrl: result.qrDataUrl,
+        connected: result.connected,
+      });
     },
   };
 }

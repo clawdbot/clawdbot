@@ -118,11 +118,11 @@ export async function handleDiscordMessagingAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
+  cfg: OpenClawConfig,
   options?: {
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
-  cfg?: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   const resolveChannelId = () =>
     discordMessagingActionRuntime.resolveDiscordChannelId(

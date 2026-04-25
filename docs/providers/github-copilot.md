@@ -90,6 +90,13 @@ openclaw models auth login --provider github-copilot --method device --set-defau
     selects the correct transport based on the model ref.
   </Accordion>
 
+  <Accordion title="Request compatibility">
+    OpenClaw sends Copilot IDE-style request headers on Copilot transports,
+    including built-in compaction, tool-result, and image follow-up turns. It
+    does not enable provider-level Responses continuation for Copilot unless
+    that behavior has been verified against Copilot's API.
+  </Accordion>
+
   <Accordion title="Environment variable resolution order">
     OpenClaw resolves Copilot auth from environment variables in the following
     priority order:

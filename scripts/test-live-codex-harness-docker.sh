@@ -75,8 +75,10 @@ if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
 fi
 
 PROFILE_MOUNT=()
+PROFILE_STATUS="none"
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  PROFILE_STATUS="$PROFILE_FILE"
 fi
 
 AUTH_FILES=()
@@ -167,16 +169,9 @@ if [ "${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}" = "api-key" ]; then
   printf '%s\n' "$OPENAI_API_KEY" | "$NPM_CONFIG_PREFIX/bin/codex" login --with-api-key >/dev/null
 fi
 tmp_dir="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmp_dir"
-}
-trap cleanup EXIT
 source /src/scripts/lib/live-docker-stage.sh
 openclaw_live_stage_source_tree "$tmp_dir"
-mkdir -p "$tmp_dir/node_modules"
-cp -aRs /app/node_modules/. "$tmp_dir/node_modules"
-rm -rf "$tmp_dir/node_modules/.vite-temp"
-mkdir -p "$tmp_dir/node_modules/.vite-temp"
+openclaw_live_stage_node_modules "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
@@ -210,6 +205,7 @@ echo "==> Image probe: ${OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE:-1}"
 echo "==> MCP probe: ${OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE:-1}"
 echo "==> Guardian probe: ${OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE:-1}"
 echo "==> Auth mode: $CODEX_HARNESS_AUTH_MODE"
+echo "==> Profile file: $PROFILE_STATUS"
 echo "==> CI-safe Codex config: ${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG:-1}"
 echo "==> Test files: ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}"
 echo "==> Harness fallback: none"
@@ -224,6 +220,7 @@ DOCKER_RUN_ARGS=(docker run --rm -t \
   -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
   -e OPENCLAW_CODEX_APP_SERVER_BIN="${OPENCLAW_CODEX_APP_SERVER_BIN:-codex}" \
   -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
+  -e OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_AUTH="$CODEX_HARNESS_AUTH_MODE" \
   -e OPENCLAW_LIVE_CODEX_HARNESS=1 \
   -e OPENCLAW_LIVE_CODEX_HARNESS_DEBUG="${OPENCLAW_LIVE_CODEX_HARNESS_DEBUG:-}" \

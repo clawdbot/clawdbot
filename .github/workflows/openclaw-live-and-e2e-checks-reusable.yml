@@ -623,6 +623,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      - name: Setup Docker builder
+        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+
       - name: Build and push shared Docker E2E image
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:

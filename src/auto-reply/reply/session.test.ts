@@ -28,10 +28,14 @@ import { initSessionState } from "./session.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
+  resolveParentForkTokenCount: vi.fn(),
   nextSessionId: 0,
 }));
 const channelSummaryMocks = vi.hoisted(() => ({
   buildChannelSummary: vi.fn(async () => [] as string[]),
+}));
+const browserMaintenanceMocks = vi.hoisted(() => ({
+  closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
 
 type ForkSessionParamsForTest = {
@@ -42,12 +46,18 @@ type ForkSessionParamsForTest = {
 vi.mock("./session-fork.js", () => ({
   forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
     sessionForkMocks.forkSessionFromParent(...args),
+  resolveParentForkTokenCount: (...args: [{ parentEntry: SessionEntry; storePath: string }]) =>
+    sessionForkMocks.resolveParentForkTokenCount(...args),
   resolveParentForkMaxTokens: (cfg: { session?: { parentForkMaxTokens?: unknown } }) => {
     const configured = cfg.session?.parentForkMaxTokens;
     return typeof configured === "number" && Number.isFinite(configured) && configured >= 0
       ? Math.floor(configured)
       : 100_000;
   },
+}));
+
+vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
+  closeTrackedBrowserTabsForSessions: browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -248,8 +258,15 @@ function registerCurrentConversationBindingAdapterForTest(params: {
 
 beforeEach(() => {
   channelSummaryMocks.buildChannelSummary.mockReset().mockResolvedValue([]);
+  browserMaintenanceMocks.closeTrackedBrowserTabsForSessions.mockReset().mockResolvedValue(0);
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   sessionForkMocks.nextSessionId = 0;
+  sessionForkMocks.resolveParentForkTokenCount.mockReset().mockImplementation(({ parentEntry }) => {
+    const tokens = parentEntry.totalTokens;
+    return typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0
+      ? Math.floor(tokens)
+      : undefined;
+  });
   sessionForkMocks.forkSessionFromParent
     .mockReset()
     .mockImplementation(async ({ parentEntry, sessionsDir }: ForkSessionParamsForTest) => {
@@ -515,6 +532,66 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     // Session file should NOT be the parent's file (it was not forked)
     expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
+  });
+
+  it("skips fork when resolved parent token estimate exceeds threshold", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-overflow-estimated-");
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir);
+
+    const parentSessionId = "parent-overflow-estimated";
+    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
+    await fs.writeFile(
+      parentSessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: parentSessionId,
+        timestamp: new Date().toISOString(),
+        cwd: process.cwd(),
+      })}\n`,
+      "utf-8",
+    );
+
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: parentSessionId,
+        sessionFile: parentSessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 1,
+        totalTokensFresh: false,
+      },
+    });
+    sessionForkMocks.resolveParentForkTokenCount.mockReturnValueOnce(170_000);
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:estimated";
+    const result = await initSessionState({
+      ctx: {
+        Body: "Thread reply",
+        SessionKey: threadSessionKey,
+        ParentSessionKey: parentSessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(sessionForkMocks.resolveParentForkTokenCount).toHaveBeenCalledWith({
+      parentEntry: expect.objectContaining({
+        sessionId: parentSessionId,
+        totalTokensFresh: false,
+      }),
+      storePath,
+    });
+    expect(result.sessionEntry.forkedFromParent).toBe(true);
+    expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
+    expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
+    expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
   });
 
   it("respects session.parentForkMaxTokens override", async () => {
@@ -1613,6 +1690,95 @@ describe("initSessionState reset policy", () => {
       sessionKey,
       previousSessionId: undefined,
     });
+  });
+});
+
+describe("initSessionState browser tab cleanup", () => {
+  it("closes tracked browser tabs when idle session expires", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const storePath = await createStorePath("openclaw-tab-cleanup-idle-");
+    const sessionKey = "agent:main:whatsapp:dm:tab-idle";
+    const existingSessionId = "tab-idle-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKeys: expect.arrayContaining([existingSessionId, sessionKey]),
+      }),
+    );
+  });
+
+  it("closes tracked browser tabs on explicit /new reset", async () => {
+    const storePath = await createStorePath("openclaw-tab-cleanup-reset-");
+    const sessionKey = "agent:main:telegram:dm:tab-reset";
+    const existingSessionId = "tab-reset-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKeys: expect.arrayContaining([existingSessionId, sessionKey]),
+      }),
+    );
+  });
+
+  it("does not close browser tabs for a fresh session without previous state", async () => {
+    const storePath = await createStorePath("openclaw-tab-cleanup-fresh-");
+    const sessionKey = "agent:main:telegram:dm:tab-fresh";
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
   });
 });
 

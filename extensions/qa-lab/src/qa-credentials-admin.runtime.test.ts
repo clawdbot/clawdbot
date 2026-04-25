@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   addQaCredentialSet,
+  diagnoseQaCredentialBroker,
   listQaCredentialSets,
   QaCredentialAdminError,
   removeQaCredentialSet,
@@ -203,5 +204,43 @@ describe("qa credential admin runtime", () => {
       includePayload: true,
       limit: 5,
     });
+  });
+
+  it("doctors credential broker env without exposing secret values", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({
+        status: "ok",
+        count: 1,
+        credentials: [
+          {
+            credentialId: "cred-2",
+            kind: "telegram",
+            status: "active",
+            createdAtMs: 100,
+            updatedAtMs: 100,
+            lastLeasedAtMs: 50,
+          },
+        ],
+      }),
+    );
+
+    const result = await diagnoseQaCredentialBroker({
+      siteUrl: "https://first-schnauzer-821.convex.site",
+      env: {
+        OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
+      },
+      fetchImpl,
+    });
+
+    expect(result.status).toBe("pass");
+    expect(JSON.stringify(result)).not.toContain("ci-secret");
+    expect(JSON.stringify(result)).not.toContain("maint-secret");
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({
+        name: "broker admin/list",
+        status: "pass",
+      }),
+    );
   });
 });

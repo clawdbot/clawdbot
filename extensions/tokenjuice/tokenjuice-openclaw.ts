@@ -1,5 +1,7 @@
 declare module "tokenjuice/openclaw" {
-  export function createTokenjuiceOpenClawEmbeddedExtension(): Parameters<
-    import("openclaw/plugin-sdk/plugin-entry").OpenClawPluginApi["registerEmbeddedExtensionFactory"]
-  >[0];
+  type OpenClawPiRuntime = {
+    on(event: string, handler: (event: unknown, ctx: { cwd: string }) => unknown): void;
+  };
+
+  export function createTokenjuiceOpenClawEmbeddedExtension(): (pi: OpenClawPiRuntime) => void;
 }

@@ -140,6 +140,9 @@ function isAnthropicCacheRetentionTarget(
 }
 
 function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
+  if (config.agents?.defaults?.embeddedHarness?.runtime === CLAUDE_CLI_BACKEND_ID) {
+    return true;
+  }
   const primary = resolveModelPrimaryValue(
     config.agents?.defaults?.model as
       | string
@@ -154,6 +157,12 @@ function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
     const parsed = parseProviderModelRef(key, "anthropic");
     return parsed?.provider === CLAUDE_CLI_BACKEND_ID;
   });
+}
+
+function toCanonicalAnthropicModelRef(ref: string): string {
+  return ref.startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)
+    ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
+    : ref;
 }
 
 export function normalizeAnthropicProviderConfig<T extends { api?: string; models?: unknown[] }>(
@@ -267,7 +276,8 @@ export function applyAnthropicConfigDefaults(params: {
   if (authMode === "oauth" && usesClaudeCliModelSelection(params.config)) {
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
-    for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
+    for (const rawRef of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
+      const ref = toCanonicalAnthropicModelRef(rawRef);
       if (ref in nextModels) {
         continue;
       }

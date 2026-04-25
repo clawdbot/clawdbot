@@ -175,11 +175,13 @@ only path.
 
 ## Allowlist + safe bins
 
-Manual allowlist enforcement matches **resolved binary paths only** (no basename matches). When
-`security=allowlist`, shell commands are auto-allowed only if every pipeline segment is
-allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
-allowlist mode unless every top-level segment satisfies the allowlist (including safe bins).
-Redirections remain unsupported.
+Manual allowlist enforcement matches resolved binary path globs and bare command-name
+globs. Bare names match only commands invoked through PATH, so `rg` can match
+`/opt/homebrew/bin/rg` when the command is `rg`, but not `./rg` or `/tmp/rg`.
+When `security=allowlist`, shell commands are auto-allowed only if every pipeline
+segment is allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections
+are rejected in allowlist mode unless every top-level segment satisfies the
+allowlist (including safe bins). Redirections remain unsupported.
 Durable `allow-always` trust does not bypass that rule: a chained command still requires every
 top-level segment to match.
 

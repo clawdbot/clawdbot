@@ -71,4 +71,26 @@ describe("command-descriptor-utils", () => {
       "delta",
     ]);
   });
+
+  it("strips terminal escapes from rendered descriptor descriptions", () => {
+    const program = new Command();
+
+    addCommandDescriptorsToProgram(program, [
+      {
+        name: "safe-command",
+        description: "Open \u001B]8;;https://example.test\u0007link\u001B]8;;\u0007 now\u001B[2J",
+      },
+    ]);
+
+    expect(program.commands[0]?.description()).toBe("Open link now");
+  });
+
+  it("rejects unsafe descriptor command names before rendering", () => {
+    const program = new Command();
+
+    expect(() =>
+      addCommandDescriptorsToProgram(program, [{ name: "bad\nname", description: "Bad" }]),
+    ).toThrow('Invalid CLI command name: "bad\\nname"');
+    expect(program.commands).toEqual([]);
+  });
 });

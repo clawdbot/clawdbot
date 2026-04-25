@@ -7,6 +7,7 @@ import type {
   ConfigWriteNotification,
   GatewayReloadMode,
 } from "../config/config.js";
+import { shouldAttemptLastKnownGoodRecovery } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { isPlainObject } from "../utils.js";
 import {
@@ -67,6 +68,7 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartCron &&
     !plan.restartHeartbeat &&
     !plan.restartHealthMonitor &&
+    !plan.disposeMcpRuntimes &&
     plan.restartChannels.size === 0
   );
 }
@@ -220,6 +222,12 @@ export function startGatewayConfigReloader(opts: {
     reason: string,
   ): Promise<ConfigFileSnapshot | null> => {
     if (!opts.recoverSnapshot) {
+      return null;
+    }
+    if (!shouldAttemptLastKnownGoodRecovery(snapshot)) {
+      opts.log.warn(
+        `config reload recovery skipped after ${reason}: invalidity is scoped to plugin entries`,
+      );
       return null;
     }
     const recovered = await opts.recoverSnapshot(snapshot, reason);

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import {
   resolveProviderModelPickerEntries,
@@ -28,7 +29,7 @@ export type ProviderSetupFlowContribution = FlowContribution & {
   pluginId?: string;
   option: ProviderSetupFlowOption;
   onboardingScopes?: ProviderFlowScope[];
-  source: "runtime" | "install-catalog";
+  source: "manifest" | "runtime" | "install-catalog";
 };
 
 export type ProviderModelPickerFlowContribution = FlowContribution & {
@@ -121,6 +122,51 @@ function resolveInstallCatalogProviderSetupFlowContributions(params?: {
     });
 }
 
+function resolveManifestProviderSetupFlowContributions(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  scope?: ProviderFlowScope;
+}): ProviderSetupFlowContribution[] {
+  const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
+  return resolveManifestProviderAuthChoices({
+    ...params,
+    includeUntrustedWorkspacePlugins: false,
+  })
+    .filter((choice) => includesProviderFlowScope(choice.onboardingScopes, scope))
+    .map((choice) => {
+      const groupId = choice.groupId ?? choice.providerId;
+      const groupLabel = choice.groupLabel ?? choice.choiceLabel;
+      return Object.assign(
+        {
+          id: `provider:setup:${choice.choiceId}`,
+          kind: `provider` as const,
+          surface: `setup` as const,
+          providerId: choice.providerId,
+          pluginId: choice.pluginId,
+          option: {
+            value: choice.choiceId,
+            label: choice.choiceLabel,
+            ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
+            ...(choice.assistantPriority !== undefined
+              ? { assistantPriority: choice.assistantPriority }
+              : {}),
+            ...(choice.assistantVisibility
+              ? { assistantVisibility: choice.assistantVisibility }
+              : {}),
+            group: {
+              id: groupId,
+              label: groupLabel,
+              ...(choice.groupHint ? { hint: choice.groupHint } : {}),
+            },
+          },
+        },
+        choice.onboardingScopes ? { onboardingScopes: [...choice.onboardingScopes] } : {},
+        { source: `manifest` as const },
+      );
+    });
+}
+
 export function resolveProviderSetupFlowContributions(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -129,8 +175,16 @@ export function resolveProviderSetupFlowContributions(params?: {
 }): ProviderSetupFlowContribution[] {
   const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
   const docsByProvider = resolveProviderDocsById(params ?? {});
+  const manifestContributions = resolveManifestProviderSetupFlowContributions({
+    ...params,
+    scope,
+  });
+  const seenOptionValues = new Set(
+    manifestContributions.map((contribution) => contribution.option.value),
+  );
   const runtimeContributions = resolveProviderWizardOptions(params ?? {})
     .filter((option) => includesProviderFlowScope(option.onboardingScopes, scope))
+    .filter((option) => !seenOptionValues.has(option.value))
     .map((option) =>
       Object.assign(
         {
@@ -162,14 +216,18 @@ export function resolveProviderSetupFlowContributions(params?: {
         { source: `runtime` as const },
       ),
     );
-  const seenOptionValues = new Set(
-    runtimeContributions.map((contribution) => contribution.option.value),
-  );
+  for (const contribution of runtimeContributions) {
+    seenOptionValues.add(contribution.option.value);
+  }
   const installCatalogContributions = resolveInstallCatalogProviderSetupFlowContributions({
     ...params,
     scope,
   }).filter((contribution) => !seenOptionValues.has(contribution.option.value));
-  return sortFlowContributionsByLabel([...runtimeContributions, ...installCatalogContributions]);
+  return sortFlowContributionsByLabel([
+    ...manifestContributions,
+    ...runtimeContributions,
+    ...installCatalogContributions,
+  ]);
 }
 
 export function resolveProviderModelPickerFlowEntries(params?: {

@@ -5,8 +5,10 @@ import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
+import { normalizeThinkLevel } from "../thinking.ts";
 import type {
   GatewaySessionRow,
+  GatewayThinkingLevelOption,
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../types.ts";
@@ -78,13 +80,26 @@ const FAST_LEVELS = [
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
-function resolveThinkLevelOptions(row: GatewaySessionRow): readonly string[] {
-  const options = row.thinkingOptions?.length ? row.thinkingOptions : DEFAULT_THINK_LEVELS;
-  return ["", ...options];
+function normalizeThinkingOptionValue(raw: string): string {
+  return normalizeThinkLevel(raw) ?? normalizeLowercaseStringOrEmpty(raw);
 }
 
-function isBinaryThinkingRow(row: GatewaySessionRow): boolean {
-  return row.thinkingOptions?.includes("on") === true;
+function resolveThinkLevelOptions(
+  row: GatewaySessionRow,
+): readonly { value: string; label: string }[] {
+  const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
+    ? row.thinkingLevels
+    : (row.thinkingOptions?.length ? row.thinkingOptions : DEFAULT_THINK_LEVELS).map((label) => ({
+        id: normalizeThinkingOptionValue(label),
+        label,
+      }));
+  return [
+    { value: "", label: "inherit" },
+    ...options.map((option) => ({
+      value: normalizeThinkingOptionValue(option.id),
+      label: option.label,
+    })),
+  ];
 }
 
 function withCurrentOption(options: readonly string[], current: string): string[] {
@@ -110,25 +125,9 @@ function withCurrentLabeledOption(
   return [...options, { value: current, label: `${current} (custom)` }];
 }
 
-function resolveThinkLevelDisplay(value: string, isBinary: boolean): string {
-  if (!isBinary) {
-    return value;
-  }
-  if (!value || value === "off") {
-    return value;
-  }
-  return "on";
-}
-
-function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string | null {
+function resolveThinkLevelPatchValue(value: string): string | null {
   if (!value) {
     return null;
-  }
-  if (!isBinary) {
-    return value;
-  }
-  if (value === "on") {
-    return "low";
   }
   return value;
 }
@@ -442,9 +441,8 @@ export function renderSessions(props: SessionsProps) {
 function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
   const rawThinking = row.thinkingLevel ?? "";
-  const isBinaryThinking = isBinaryThinkingRow(row);
-  const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
-  const thinkLevels = withCurrentOption(resolveThinkLevelOptions(row), thinking);
+  const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
+  const thinkLevels = withCurrentLabeledOption(resolveThinkLevelOptions(row), thinking);
   const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
   const fastLevels = withCurrentLabeledOption(FAST_LEVELS, fastMode);
   const verbose = row.verboseLevel ?? "";
@@ -562,14 +560,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
             props.onPatch(row.key, {
-              thinkingLevel: resolveThinkLevelPatchValue(value, isBinaryThinking),
+              thinkingLevel: resolveThinkLevelPatchValue(value),
             });
           }}
         >
           ${thinkLevels.map(
             (level) =>
-              html`<option value=${level} ?selected=${thinking === level}>
-                ${level || "inherit"}
+              html`<option value=${level.value} ?selected=${thinking === level.value}>
+                ${level.label}
               </option>`,
           )}
         </select>

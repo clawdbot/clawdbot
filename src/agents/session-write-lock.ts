@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
+import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 type LockFilePayload = {
   pid?: number;
@@ -584,7 +585,7 @@ export async function acquireSessionWriteLock(params: {
 
   const payload = await readLockPayload(lockPath);
   const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
-  throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
+  throw new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath });
 }
 
 export const __testing = {

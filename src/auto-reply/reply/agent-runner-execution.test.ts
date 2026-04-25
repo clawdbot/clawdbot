@@ -691,6 +691,7 @@ describe("runAgentTurnWithFallback", () => {
       didStream: vi.fn(() => false),
       isAborted: vi.fn(() => false),
       hasSentPayload: vi.fn(() => false),
+      getSentMediaUrls: vi.fn(() => []),
     };
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = { payloads: [], meta: {} };

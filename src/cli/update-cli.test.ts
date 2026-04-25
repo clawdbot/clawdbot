@@ -837,7 +837,7 @@ describe("update-cli", () => {
     );
   });
 
-  it("skips package-manager updates when the installed version already matches the target", async () => {
+  it("refreshes package-manager updates when the installed version already matches the target", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
     readPackageVersion.mockResolvedValue("2026.4.22");
@@ -853,15 +853,11 @@ describe("update-cli", () => {
       .mock.calls.filter(
         ([argv]) => Array.isArray(argv) && argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g",
       );
-    expect(installCalls).toEqual([]);
-    expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
-    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(installCalls).toHaveLength(1);
+    expect(updateNpmInstalledPlugins).toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
-    expect(runRestartScript).not.toHaveBeenCalled();
-    expect(runDaemonRestart).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
-    expect(logs.join("\n")).toContain("already-current");
+    expect(logs.join("\n")).not.toContain("already-current");
   });
 
   it("blocks package updates when the target requires a newer Node runtime", async () => {
@@ -1040,6 +1036,78 @@ describe("update-cli", () => {
         }),
       }),
     );
+  });
+
+  it("refreshes package installs even when the current version already matches the target", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-current-"));
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const entryPath = path.join(pkgRoot, "dist", "index.js");
+    mockPackageInstallStatus(pkgRoot);
+    readPackageVersion.mockResolvedValue("2026.4.23");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.23",
+    });
+    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.23" }),
+      "utf-8",
+    );
+    await fs.writeFile(entryPath, "export {};\n", "utf-8");
+    for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
+      const absolutePath = path.join(pkgRoot, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+    }
+    await writePackageDistInventory(pkgRoot);
+    pathExists.mockImplementation(async (candidate: string) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), entryPath, "doctor", "--non-interactive"],
+      expect.any(Object),
+    );
+    expect(updateNpmInstalledPlugins).toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).not.toContain("already-current");
   });
 
   it("uses the owning npm binary for package updates when PATH npm points elsewhere", async () => {

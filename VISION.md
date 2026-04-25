@@ -53,12 +53,24 @@ We prioritize secure defaults, but also expose clear knobs for trusted high-powe
 
 OpenClaw has an extensive plugin API.
 Core stays lean; optional capability should usually ship as plugins.
+We are generally slimming down core while expanding what plugins can do.
+If a useful feature cannot be built as a plugin yet, we welcome PRs and design discussions that extend the plugin API instead of adding one-off core behavior.
+
+There are two broad plugin styles:
+
+- Code plugins run OpenClaw plugin code and are appropriate for deeper runtime extension.
+- Bundle-style plugins package stable external surfaces such as skills, MCP servers, and related configuration.
+
+Prefer bundle-style plugins when they can express the capability.
+They have a smaller, more stable interface and better security boundaries.
+Use code plugins when the capability needs runtime hooks, providers, channels, tools, or other in-process extension points.
 
 Preferred plugin path is npm package distribution plus local extension loading for development.
 If you build a plugin, host and maintain it in your own repository.
 The bar for adding optional plugins to core is intentionally high.
 Plugin docs: [`docs/tools/plugin.md`](docs/tools/plugin.md)
-Community plugin listing + PR bar: https://docs.openclaw.ai/plugins/community
+Plugin discovery, official publisher status, provenance, and security review live in [ClawHub](https://clawhub.ai/).
+OpenClaw docs should document core extension points; plugin promotion belongs in ClawHub, preferably under vetted org publishers for official plugins.
 
 Memory is a special plugin slot where only one memory plugin can be active at a time.
 Today we ship multiple memory options; over time we plan to converge on one recommended default path.
@@ -66,21 +78,16 @@ Today we ship multiple memory options; over time we plan to converge on one reco
 ### Skills
 
 We still ship some bundled skills for baseline UX.
-New skills should be published to ClawHub first (`clawhub.ai`), not added to core by default.
-Core skill additions should be rare and require a strong product or security reason.
+New skills should be published through [ClawHub](https://clawhub.ai/) first, not added to core by default.
+Official or bundled promotion should require a clear product, security, or maintainer-ownership reason.
 
 ### MCP Support
 
-OpenClaw supports MCP through `mcporter`: https://github.com/steipete/mcporter
+OpenClaw supports MCP as both a server and a runtime integration surface.
+MCP details live in [`docs/cli/mcp.md`](docs/cli/mcp.md).
 
-This keeps MCP integration flexible and decoupled from core runtime:
-
-- add or change MCP servers without restarting the gateway
-- keep core tool/context surface lean
-- reduce MCP churn impact on core stability and security
-
-For now, we prefer this bridge model over building first-class MCP runtime into core.
-If there is an MCP server or feature `mcporter` does not support yet, please open an issue there.
+The project goal is pragmatic MCP support without duplicating existing agent,
+tool, ACPX, plugin, or ClawHub paths.
 
 ### Setup
 
@@ -98,11 +105,11 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 
 ## What We Will Not Merge (For Now)
 
-- New core skills when they can live on ClawHub
+- New core skills when they can live on [ClawHub](https://clawhub.ai/)
 - Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
 - Commercial service integrations that do not clearly fit the model-provider category
 - Wrapper channels around already supported channels without a clear capability or security gap
-- First-class MCP runtime in core when `mcporter` already provides the integration path
+- MCP work that duplicates existing MCP, ACPX, plugin, or ClawHub paths without a clear product or security gap
 - Agent-hierarchy frameworks (manager-of-managers / nested planner trees) as a default architecture
 - Heavy orchestration layers that duplicate existing agent and tool infrastructure
 

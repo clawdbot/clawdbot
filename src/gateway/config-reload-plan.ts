@@ -1,5 +1,9 @@
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginChannelRegistryVersion,
+  getActivePluginRegistry,
+  getActivePluginRegistryVersion,
+} from "../plugins/runtime.js";
 import { isPlainObject } from "../utils.js";
 
 export type ChannelKind = ChannelId;
@@ -15,6 +19,7 @@ export type GatewayReloadPlan = {
   restartHeartbeat: boolean;
   restartHealthMonitor: boolean;
   restartChannels: Set<ChannelKind>;
+  disposeMcpRuntimes: boolean;
   noopPaths: string[];
 };
 
@@ -30,6 +35,7 @@ type ReloadAction =
   | "restart-cron"
   | "restart-heartbeat"
   | "restart-health-monitor"
+  | "dispose-mcp-runtimes"
   | `restart-channel:${ChannelId}`;
 
 export type GatewayReloadPlanOptions = {
@@ -86,6 +92,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
+  { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
@@ -113,12 +120,22 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 
 let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
+let cachedActiveRegistryVersion = -1;
+let cachedChannelRegistryVersion = -1;
 
 function listReloadRules(): ReloadRule[] {
   const registry = getActivePluginRegistry();
-  if (registry !== cachedRegistry) {
+  const activeRegistryVersion = getActivePluginRegistryVersion();
+  const channelRegistryVersion = getActivePluginChannelRegistryVersion();
+  if (
+    registry !== cachedRegistry ||
+    activeRegistryVersion !== cachedActiveRegistryVersion ||
+    channelRegistryVersion !== cachedChannelRegistryVersion
+  ) {
     cachedReloadRules = null;
     cachedRegistry = registry;
+    cachedActiveRegistryVersion = activeRegistryVersion;
+    cachedChannelRegistryVersion = channelRegistryVersion;
   }
   if (cachedReloadRules) {
     return cachedReloadRules;
@@ -262,6 +279,7 @@ export function buildGatewayReloadPlan(
     restartHeartbeat: false,
     restartHealthMonitor: false,
     restartChannels: new Set(),
+    disposeMcpRuntimes: false,
     noopPaths: [],
   };
 
@@ -286,6 +304,9 @@ export function buildGatewayReloadPlan(
         break;
       case "restart-health-monitor":
         plan.restartHealthMonitor = true;
+        break;
+      case "dispose-mcp-runtimes":
+        plan.disposeMcpRuntimes = true;
         break;
       default:
         break;

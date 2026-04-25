@@ -42,6 +42,7 @@ export * from "../infra/exec-approval-session-target.ts";
 export * from "../infra/exec-approvals.ts";
 export * from "../infra/approval-native-delivery.ts";
 export * from "../infra/approval-native-runtime.ts";
+export * from "../infra/approval-display-paths.ts";
 export * from "../infra/plugin-approvals.ts";
 export * from "../infra/fetch.js";
 export * from "../infra/file-lock.js";

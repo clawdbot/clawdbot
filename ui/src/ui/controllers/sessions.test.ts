@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applySessionsChangedEvent,
   deleteSessionsAndRefresh,
   loadSessions,
   subscribeSessions,
@@ -129,9 +130,112 @@ describe("deleteSessionsAndRefresh", () => {
     expect(deleted).toEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("queues refreshes requested during delete without releasing mutation loading", async () => {
+    let resolveDelete: () => void = () => undefined;
+    let signalDeleteStarted: () => void = () => undefined;
+    const deleteStarted = new Promise<void>((resolve) => {
+      signalDeleteStarted = resolve;
+    });
+    const deleteBlocker = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        signalDeleteStarted();
+        await deleteBlocker;
+        return { ok: true };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 2,
+          path: "(multiple)",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const deletePromise = deleteSessionsAndRefresh(state, ["key-a"]);
+    await deleteStarted;
+    expect(state.sessionsLoading).toBe(true);
+
+    await loadSessions(state);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.sessionsLoading).toBe(true);
+
+    resolveDelete();
+    const deleted = await deletePromise;
+
+    expect(deleted).toEqual(["key-a"]);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(state.sessionsLoading).toBe(false);
+  });
 });
 
 describe("loadSessions", () => {
+  it("coalesces overlapping refreshes instead of dropping the latest request", async () => {
+    let resolveFirst: () => void = () => undefined;
+    const firstBlocker = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      if (request.mock.calls.length === 1) {
+        await firstBlocker;
+        return {
+          ts: 1,
+          path: "(multiple)",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      return {
+        ts: 2,
+        path: "(multiple)",
+        count: 0,
+        defaults: {},
+        sessions: [],
+      };
+    });
+    const state = createState(request, {
+      sessionsFilterActive: "30",
+      sessionsFilterLimit: "10",
+    });
+
+    const first = loadSessions(state);
+    const second = loadSessions(state, { activeMinutes: 0, limit: 0 });
+    expect(request).toHaveBeenCalledTimes(1);
+
+    resolveFirst();
+    await Promise.all([first, second]);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      activeMinutes: 30,
+      limit: 10,
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(state.sessionsResult?.ts).toBe(2);
+    expect(state.sessionsLoading).toBe(false);
+  });
+
   it("refreshes expanded checkpoint cards when the row summary changes", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
@@ -216,5 +320,78 @@ describe("loadSessions", () => {
     expect(
       state.sessionsCheckpointItemsByKey["agent:main:main"]?.map((item) => item.checkpointId),
     ).toEqual(["checkpoint-new"]);
+  });
+});
+
+describe("applySessionsChangedEvent", () => {
+  it("updates fresh context usage from websocket event payloads", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5.4", contextTokens: 200_000 },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            totalTokens: 20_000,
+            totalTokensFresh: true,
+            contextTokens: 200_000,
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      ts: 2,
+      totalTokens: 190_000,
+      totalTokensFresh: true,
+      contextTokens: 200_000,
+      model: "gpt-5.4",
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.ts).toBe(2);
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      key: "agent:main:main",
+      totalTokens: 190_000,
+      totalTokensFresh: true,
+      contextTokens: 200_000,
+      model: "gpt-5.4",
+    });
+  });
+
+  it("clears old token totals when the gateway marks the measurement stale", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: 200_000 },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            totalTokens: 190_000,
+            totalTokensFresh: true,
+            contextTokens: 200_000,
+          },
+        ],
+      },
+    });
+
+    applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      totalTokensFresh: false,
+      contextTokens: 200_000,
+    });
+
+    expect(state.sessionsResult?.sessions[0]?.totalTokens).toBeUndefined();
+    expect(state.sessionsResult?.sessions[0]?.totalTokensFresh).toBe(false);
+    expect(state.sessionsResult?.sessions[0]?.contextTokens).toBe(200_000);
   });
 });

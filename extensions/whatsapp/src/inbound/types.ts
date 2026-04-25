@@ -57,6 +57,8 @@ export type WebInboundMessage = {
   conversationId: string; // alias for clarity (same as from)
   to: string;
   accountId: string;
+  /** Set by the real inbound monitor after access-control / pairing checks pass. */
+  accessControlPassed?: boolean;
   body: string;
   pushName?: string;
   timestamp?: number;

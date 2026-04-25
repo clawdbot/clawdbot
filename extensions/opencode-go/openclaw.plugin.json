@@ -20,6 +20,17 @@
       "cliDescription": "OpenCode API key (Go catalog)"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["opencode-go"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "opencode-go": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "kimi-k2.6"
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -30,7 +30,28 @@ const MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY = "connector_name";
 const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY = "tool_title";
 const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY = "tool_description";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY = "tool_params_display";
+const MAX_DISPLAY_PARAM_ENTRIES = 8;
 const MAX_DISPLAY_PARAM_VALUE_LENGTH = 120;
+const MAX_DISPLAY_VALUE_ARRAY_ITEMS = 8;
+const MAX_DISPLAY_VALUE_OBJECT_KEYS = 8;
+const MAX_DISPLAY_VALUE_DEPTH = 3;
+const DISPLAY_TEXT_SCAN_MAX_LENGTH = 4096;
+const ANSI_OSC_SEQUENCE_RE = new RegExp(
+  String.raw`(?:\u001b]|\u009d)[^\u001b\u009c\u0007]*(?:\u0007|\u001b\\|\u009c)`,
+  "g",
+);
+const ANSI_CONTROL_SEQUENCE_RE = new RegExp(
+  String.raw`(?:\u001b\[[0-?]*[ -/]*[@-~]|\u009b[0-?]*[ -/]*[@-~]|\u001b[@-Z\\-_])`,
+  "g",
+);
+const CONTROL_CHARACTER_RE = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f]+`, "g");
+const INVISIBLE_FORMATTING_CONTROL_RE = new RegExp(
+  String.raw`[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufe00-\ufe0f\u{e0100}-\u{e01ef}]`,
+  "gu",
+);
+const DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE = new RegExp(
+  String.raw`(?:\u001b\][^\u001b\u009c\u0007]*|\u009d[^\u001b\u009c\u0007]*|\u001b\[[0-?]*[ -/]*|\u009b[0-?]*[ -/]*|\u001b)$`,
+);
 
 export async function handleCodexAppServerElicitationRequest(params: {
   requestParams: JsonValue | undefined;
@@ -97,14 +118,15 @@ function readBridgeableApprovalElicitation(
     return undefined;
   }
 
-  const title = readString(requestParams, "message") ?? "Codex MCP tool approval";
+  const title =
+    sanitizeDisplayText(readString(requestParams, "message") ?? "") || "Codex MCP tool approval";
   return {
     title,
     description: buildApprovalDescription({
       title,
       meta: requestParams._meta,
       requestedSchema,
-      serverName: readString(requestParams, "serverName"),
+      serverName: sanitizeOptionalDisplayText(readString(requestParams, "serverName")),
     }),
     requestedSchema,
     meta: requestParams._meta,
@@ -117,13 +139,20 @@ function buildApprovalDescription(params: {
   requestedSchema: JsonObject;
   serverName: string | undefined;
 }): string {
-  const summaryLines = [
-    readString(params.meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY) &&
-      `App: ${readString(params.meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY)}`,
-    readString(params.meta, MCP_TOOL_APPROVAL_TOOL_TITLE_KEY) &&
-      `Tool: ${readString(params.meta, MCP_TOOL_APPROVAL_TOOL_TITLE_KEY)}`,
-    params.serverName && `MCP server: ${params.serverName}`,
+  const connectorName = sanitizeOptionalDisplayText(
+    readString(params.meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY),
+  );
+  const toolTitle = sanitizeOptionalDisplayText(
+    readString(params.meta, MCP_TOOL_APPROVAL_TOOL_TITLE_KEY),
+  );
+  const toolDescription = sanitizeOptionalDisplayText(
     readString(params.meta, MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY),
+  );
+  const summaryLines = [
+    connectorName && `App: ${connectorName}`,
+    toolTitle && `Tool: ${toolTitle}`,
+    params.serverName && `MCP server: ${params.serverName}`,
+    toolDescription,
   ].filter((line): line is string => Boolean(line));
   const paramLines = readDisplayParamLines(params.meta);
   const propertyLines = readPropertyDescriptionLines(params.requestedSchema);
@@ -145,8 +174,11 @@ function readPropertyDescriptionLines(requestedSchema: JsonObject): string[] {
       if (!schema) {
         return undefined;
       }
-      const propTitle = readString(schema, "title") ?? name;
-      const description = readString(schema, "description");
+      const propTitle =
+        sanitizeDisplayText(readString(schema, "title") ?? "") ||
+        sanitizeDisplayText(name) ||
+        "field";
+      const description = sanitizeOptionalDisplayText(readString(schema, "description"));
       return description ? `- ${propTitle}: ${description}` : `- ${propTitle}`;
     })
     .filter((line): line is string => Boolean(line));
@@ -157,26 +189,105 @@ function readDisplayParamLines(meta: JsonObject): string[] {
   if (!Array.isArray(displayParams)) {
     return [];
   }
-  return displayParams
+  const lines = displayParams
+    .slice(0, MAX_DISPLAY_PARAM_ENTRIES)
     .map((entry) => {
       const param = isJsonObject(entry) ? entry : undefined;
       if (!param) {
         return undefined;
       }
-      const name = readString(param, "display_name") ?? readString(param, "name");
+      const name =
+        sanitizeOptionalDisplayText(readString(param, "display_name")) ??
+        sanitizeOptionalDisplayText(readString(param, "name"));
       if (!name) {
         return undefined;
       }
       return `- ${name}: ${formatDisplayParamValue(param.value)}`;
     })
     .filter((line): line is string => Boolean(line));
+  const remaining = displayParams.length - MAX_DISPLAY_PARAM_ENTRIES;
+  return remaining > 0 ? [...lines, `- Additional parameters: ${remaining} more`] : lines;
 }
 
 function formatDisplayParamValue(value: JsonValue | undefined): string {
-  const formatted = typeof value === "string" ? value : JSON.stringify(value ?? null);
-  return formatted.length <= MAX_DISPLAY_PARAM_VALUE_LENGTH
-    ? formatted
-    : `${formatted.slice(0, MAX_DISPLAY_PARAM_VALUE_LENGTH - 3)}...`;
+  const formatted = typeof value === "string" ? value : formatDisplayJsonValue(value ?? null);
+  return truncateDisplayText(sanitizeDisplayText(formatted), MAX_DISPLAY_PARAM_VALUE_LENGTH);
+}
+
+function formatDisplayJsonValue(value: JsonValue, depth = MAX_DISPLAY_VALUE_DEPTH): string {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return JSON.stringify(truncateDisplayText(sanitizeDisplayText(value), 80));
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    if (depth <= 0) {
+      return "[truncated]";
+    }
+    const parts: string[] = [];
+    const limit = Math.min(value.length, MAX_DISPLAY_VALUE_ARRAY_ITEMS);
+    for (let i = 0; i < limit; i += 1) {
+      parts.push(formatDisplayJsonValue(value[i] ?? null, depth - 1));
+    }
+    if (value.length > MAX_DISPLAY_VALUE_ARRAY_ITEMS) {
+      parts.push("...");
+    }
+    return `[${parts.join(",")}]`;
+  }
+  if (typeof value === "object") {
+    if (depth <= 0) {
+      return "{truncated}";
+    }
+    const parts: string[] = [];
+    let count = 0;
+    let truncated = false;
+    for (const key in value) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) {
+        continue;
+      }
+      if (count >= MAX_DISPLAY_VALUE_OBJECT_KEYS) {
+        truncated = true;
+        break;
+      }
+      const safeKey = truncateDisplayText(sanitizeDisplayText(key), 80);
+      parts.push(
+        `${JSON.stringify(safeKey)}:${formatDisplayJsonValue(value[key] ?? null, depth - 1)}`,
+      );
+      count += 1;
+    }
+    if (truncated) {
+      parts.push("...");
+    }
+    return `{${parts.join(",")}}`;
+  }
+  return "null";
+}
+
+function sanitizeOptionalDisplayText(value: string | undefined): string | undefined {
+  const sanitized = value === undefined ? "" : sanitizeDisplayText(value);
+  return sanitized || undefined;
+}
+
+function sanitizeDisplayText(value: string): string {
+  const scanned = value.slice(0, DISPLAY_TEXT_SCAN_MAX_LENGTH);
+  const clipped = value.length > DISPLAY_TEXT_SCAN_MAX_LENGTH;
+  const sanitized = scanned
+    .replace(ANSI_OSC_SEQUENCE_RE, "")
+    .replace(ANSI_CONTROL_SEQUENCE_RE, "")
+    .replace(DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE, "")
+    .replace(INVISIBLE_FORMATTING_CONTROL_RE, " ")
+    .replace(CONTROL_CHARACTER_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clipped ? `${sanitized}...` : sanitized;
+}
+
+function truncateDisplayText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 async function requestPluginApprovalOutcome(params: {

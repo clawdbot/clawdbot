@@ -8,7 +8,7 @@ describe("createOpencodeCatalogApiKeyAuthMethod", () => {
       label: "OpenCode Go catalog",
       optionKey: "opencodeGoApiKey",
       flagName: "--opencode-go-api-key",
-      defaultModel: "opencode-go/kimi-k2.5",
+      defaultModel: "opencode-go/kimi-k2.6",
       applyConfig: (cfg) => cfg,
       noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
       choiceId: "opencode-go",

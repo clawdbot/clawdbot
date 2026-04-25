@@ -5,6 +5,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   createConfigIO,
+  registerConfigWriteListener,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
   writeConfigFile,
@@ -213,6 +214,42 @@ describe("config io write", () => {
       await io.writeConfigFile({
         gateway: { mode: "local" },
       });
+
+      const overwriteLogs = warn.mock.calls.filter(
+        (call) => typeof call[0] === "string" && call[0].startsWith("Config overwrite:"),
+      );
+      expect(overwriteLogs).toHaveLength(0);
+    });
+  });
+
+  it("suppresses overwrite audit output when skipOutputLogs is set", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: {
+          VITEST: "true",
+          OPENCLAW_TEST_CONFIG_OVERWRITE_LOG: "1",
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: {
+          warn,
+          error: vi.fn(),
+        },
+      });
+
+      await io.writeConfigFile(
+        {
+          gateway: { mode: "local", port: 18790 },
+        },
+        { skipOutputLogs: true },
+      );
 
       const overwriteLogs = warn.mock.calls.filter(
         (call) => typeof call[0] === "string" && call[0].startsWith("Config overwrite:"),
@@ -528,6 +565,94 @@ describe("config io write", () => {
           delete process.env.OPENCLAW_CONFIG_PATH;
         } else {
           process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+      }
+    });
+  });
+
+  it("notifies in-process reloaders with resolved source config when persisted env refs are restored", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      const previousGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      process.env.OPENCLAW_GATEWAY_TOKEN = "gateway-token-runtime";
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: {
+              mode: "local",
+              auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+            },
+            agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      const observedSources: unknown[] = [];
+      const unsubscribe = registerConfigWriteListener((event) => {
+        observedSources.push(event.sourceConfig);
+      });
+
+      try {
+        setRuntimeConfigSnapshot(
+          {
+            gateway: {
+              mode: "local",
+              auth: { mode: "token", token: "gateway-token-runtime" },
+            },
+            agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+          },
+          {
+            gateway: {
+              mode: "local",
+              auth: { mode: "token", token: "gateway-token-runtime" },
+            },
+            agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+          },
+        );
+
+        await writeConfigFile({
+          gateway: {
+            mode: "local",
+            auth: { mode: "token", token: "gateway-token-runtime" },
+          },
+          agents: { defaults: { model: { primary: "openrouter/anthropic/claude-sonnet-4.6" } } },
+        });
+
+        expect(JSON.parse(await fs.readFile(configPath, "utf-8"))).toMatchObject({
+          gateway: {
+            auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" },
+          },
+        });
+        expect(observedSources).toEqual([
+          expect.objectContaining({
+            gateway: {
+              mode: "local",
+              auth: { mode: "token", token: "gateway-token-runtime" },
+            },
+            agents: {
+              defaults: {
+                model: { primary: "openrouter/anthropic/claude-sonnet-4.6" },
+              },
+            },
+          }),
+        ]);
+      } finally {
+        unsubscribe();
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+        if (previousGatewayToken === undefined) {
+          delete process.env.OPENCLAW_GATEWAY_TOKEN;
+        } else {
+          process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayToken;
         }
       }
     });

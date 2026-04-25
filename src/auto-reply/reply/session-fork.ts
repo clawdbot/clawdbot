@@ -30,3 +30,11 @@ export async function forkSessionFromParent(params: {
   const runtime = await loadSessionForkRuntime();
   return runtime.forkSessionFromParentRuntime(params);
 }
+
+export async function resolveParentForkTokenCount(params: {
+  parentEntry: SessionEntry;
+  storePath: string;
+}): Promise<number | undefined> {
+  const runtime = await loadSessionForkRuntime();
+  return runtime.resolveParentForkTokenCountRuntime(params);
+}

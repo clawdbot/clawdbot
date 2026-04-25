@@ -16,7 +16,7 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
-import type { SessionsListResult } from "../types.ts";
+import type { GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 
@@ -139,7 +139,7 @@ function resolveThinkingTargetModel(state: AppViewState): {
 }
 
 function buildThinkingOptions(
-  labels: readonly string[],
+  levels: readonly GatewayThinkingLevelOption[],
   currentOverride: string,
 ): ChatThinkingSelectOption[] {
   const seen = new Set<string>();
@@ -159,14 +159,36 @@ function buildThinkingOptions(
     );
   };
 
-  for (const label of labels) {
-    const normalized = normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label);
-    addOption(normalized, label);
+  for (const level of levels) {
+    const normalized = normalizeThinkLevel(level.id) ?? normalizeLowercaseStringOrEmpty(level.id);
+    addOption(normalized, level.label);
   }
   if (currentOverride) {
     addOption(currentOverride);
   }
   return options;
+}
+
+function resolveThinkingLevelOptions(
+  activeRow: SessionsListResult["sessions"][number] | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+  provider: string | null,
+  model: string | null,
+): GatewayThinkingLevelOption[] {
+  if (activeRow?.thinkingLevels?.length) {
+    return activeRow.thinkingLevels;
+  }
+  if (defaults?.thinkingLevels?.length) {
+    return defaults.thinkingLevels;
+  }
+  const labels =
+    activeRow?.thinkingOptions ??
+    defaults?.thinkingOptions ??
+    (provider && model ? listThinkingLevelLabels(provider, model) : listThinkingLevelLabels());
+  return labels.map((label) => ({
+    id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
+    label,
+  }));
 }
 
 function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
@@ -177,11 +199,15 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
       ? (normalizeThinkLevel(persisted) ?? persisted.trim())
       : "";
   const { provider, model } = resolveThinkingTargetModel(state);
-  const labels =
-    activeRow?.thinkingOptions ??
-    (provider && model ? listThinkingLevelLabels(provider, model) : listThinkingLevelLabels());
+  const levels = resolveThinkingLevelOptions(
+    activeRow,
+    state.sessionsResult?.defaults,
+    provider,
+    model,
+  );
   const defaultLevel =
     activeRow?.thinkingDefault ??
+    state.sessionsResult?.defaults?.thinkingDefault ??
     (provider && model
       ? resolveThinkingDefaultForModel({
           provider,
@@ -192,7 +218,7 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
   return {
     currentOverride,
     defaultLabel: `Default (${defaultLevel})`,
-    options: buildThinkingOptions(labels, currentOverride),
+    options: buildThinkingOptions(levels, currentOverride),
   };
 }
 

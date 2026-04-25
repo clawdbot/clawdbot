@@ -1,4 +1,8 @@
 import {
+  createProviderHttpError,
+  formatProviderHttpErrorMessage,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   DEFAULT_SEARCH_COUNT,
   buildSearchCacheKey,
   formatCliCommand,
@@ -134,15 +138,18 @@ async function runMiniMaxSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(`MiniMax Search API error (${res.status}): ${detail || res.statusText}`);
+        throw await createProviderHttpError(res, "MiniMax Search API error");
       }
 
       const data = (await res.json()) as MiniMaxSearchResponse;
 
       if (data.base_resp?.status_code && data.base_resp.status_code !== 0) {
         throw new Error(
-          `MiniMax Search API error (${data.base_resp.status_code}): ${data.base_resp.status_msg || "unknown error"}`,
+          formatProviderHttpErrorMessage({
+            label: "MiniMax Search API error",
+            status: data.base_resp.status_code,
+            detail: data.base_resp.status_msg || "unknown error",
+          }),
         );
       }
 

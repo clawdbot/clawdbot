@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/web-readability-plugin",
+  "version": "2026.4.24",
+  "private": true,
+  "description": "OpenClaw local Readability web extraction plugin",
+  "type": "module",
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "linkedom": "^0.18.12"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

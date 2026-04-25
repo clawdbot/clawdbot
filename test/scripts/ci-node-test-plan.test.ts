@@ -96,6 +96,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .map((shard) => ({
         configs: shard.configs,
         requiresDist: shard.requiresDist,
+        runner: shard.runner,
         shardName: shard.shardName,
       }));
 
@@ -110,6 +111,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.runtime-config.config.ts",
         ],
         requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
         shardName: "core-runtime-infra",
       },
       {
@@ -121,6 +123,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.wizard.config.ts",
         ],
         requiresDist: false,
+        runner: undefined,
         shardName: "core-runtime-media-ui",
       },
       {
@@ -132,6 +135,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,
+        runner: undefined,
         shardName: "core-runtime-shared",
       },
     ]);
@@ -149,7 +153,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       checkName: "checks-node-agentic-control-plane",
       shardName: "agentic-control-plane",
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      runner: "blacksmith-4vcpu-ubuntu-2404",
       requiresDist: false,
+      runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(commandsShard).toEqual({
       checkName: "checks-node-agentic-commands",

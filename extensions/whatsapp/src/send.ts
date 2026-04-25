@@ -67,6 +67,7 @@ export async function sendMessageWhatsApp(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
+    audioAsVoice?: boolean;
     accountId?: string;
     quotedMessageKey?: {
       id: string;

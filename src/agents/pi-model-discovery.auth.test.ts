@@ -6,7 +6,7 @@ import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 import {
   addEnvBackedPiCredentials,
   scrubLegacyStaticAuthJsonEntriesForDiscovery,
-} from "./pi-model-discovery.js";
+} from "./pi-auth-discovery-core.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
   resolveProviderEnvApiKeyCandidates: () => ({

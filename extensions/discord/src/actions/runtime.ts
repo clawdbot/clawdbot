@@ -66,7 +66,7 @@ export async function handleDiscordAction(
   const isActionEnabled = createDiscordActionGate({ cfg, accountId });
 
   if (messagingActions.has(action)) {
-    return await handleDiscordMessagingAction(action, params, isActionEnabled, options, cfg);
+    return await handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
   }
   if (guildActions.has(action)) {
     return await handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);

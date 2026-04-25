@@ -535,8 +535,20 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
 
   try {
     return await new Promise((resolve) => {
+      let settled = false;
+      const settle = (res) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(res);
+      };
+      childProcess.on("error", (error) => {
+        logRunner(`Spawn failed: ${error?.message ?? String(error)}`, deps);
+        settle({ exitCode: 1, exitSignal: null, forwardedSignal });
+      });
       childProcess.on("exit", (exitCode, exitSignal) => {
-        resolve({ exitCode, exitSignal, forwardedSignal });
+        settle({ exitCode, exitSignal, forwardedSignal });
       });
     });
   } finally {

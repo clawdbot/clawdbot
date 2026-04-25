@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
   isDiagnosticsEnabled,
+  onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
@@ -112,6 +113,50 @@ describe("diagnostic-events", () => {
     });
 
     expect(events).toEqual([{ trace, type: "message.queued" }]);
+  });
+
+  it("dispatches high-frequency tool and model lifecycle events asynchronously", async () => {
+    const events: string[] = [];
+    onDiagnosticEvent((event) => {
+      events.push(event.type);
+    });
+
+    emitDiagnosticEvent({
+      type: "tool.execution.started",
+      toolName: "read",
+    });
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    expect(events).toEqual([]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(events).toEqual(["tool.execution.started", "model.call.started"]);
+  });
+
+  it("keeps log records off the public diagnostic event stream", async () => {
+    const publicEvents: string[] = [];
+    const internalEvents: string[] = [];
+    onDiagnosticEvent((event) => {
+      publicEvents.push(event.type);
+    });
+    onInternalDiagnosticEvent((event) => {
+      internalEvents.push(event.type);
+    });
+
+    emitDiagnosticEvent({
+      type: "log.record",
+      level: "INFO",
+      message: "private log",
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(publicEvents).toEqual([]);
+    expect(internalEvents).toEqual(["log.record"]);
   });
 
   it("skips event enrichment and subscribers when diagnostics are disabled", () => {

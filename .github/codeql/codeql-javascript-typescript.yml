@@ -12,6 +12,9 @@ paths-ignore:
   - docs
   - "**/node_modules"
   - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
   - "**/*.test.ts"
   - "**/*.test.tsx"
   - "**/*.e2e.test.ts"

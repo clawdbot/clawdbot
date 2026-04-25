@@ -5,6 +5,7 @@ import {
 import {
   createBedrockEmbeddingProvider,
   DEFAULT_BEDROCK_EMBEDDING_MODEL,
+  hasAwsCredentials,
 } from "./embedding-provider.js";
 
 export const bedrockMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
@@ -16,6 +17,15 @@ export const bedrockMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapt
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
+    if (!(await hasAwsCredentials())) {
+      throw new Error(
+        'No API key found for provider "bedrock". ' +
+          "AWS credentials are not available. " +
+          "Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, AWS_PROFILE, or AWS_BEARER_TOKEN_BEDROCK, " +
+          "configure an EC2/ECS/EKS role, " +
+          "or set agents.defaults.memorySearch.provider to another provider.",
+      );
+    }
     const { provider, client } = await createBedrockEmbeddingProvider({
       ...options,
       provider: "bedrock",

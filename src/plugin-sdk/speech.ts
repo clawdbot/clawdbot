@@ -35,12 +35,16 @@ export {
   asBoolean,
   asFiniteNumber,
   asObject,
+  assertOkOrThrowProviderError,
+  createProviderHttpError,
   extractProviderErrorDetail,
+  extractProviderRequestId,
+  formatProviderHttpErrorMessage,
   formatProviderErrorPayload,
   readResponseTextLimited,
   trimToUndefined,
   truncateErrorDetail,
-} from "../tts/provider-error-utils.js";
+} from "../agents/provider-http-errors.js";
 export {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,

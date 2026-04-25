@@ -42,14 +42,17 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 
-type ThinkingLevelOption = {
+export type ThinkingLevelOption = {
   id: ThinkLevel;
   label: string;
+};
+
+type RankedThinkingLevelOption = ThinkingLevelOption & {
   rank: number;
 };
 
 type ResolvedThinkingProfile = {
-  levels: ThinkingLevelOption[];
+  levels: RankedThinkingLevelOption[];
   defaultLevel?: ThinkLevel | null;
 };
 
@@ -70,7 +73,7 @@ function resolveThinkingPolicyContext(params: {
 
 function normalizeProfileLevel(
   level: ProviderThinkingProfile["levels"][number],
-): ThinkingLevelOption | undefined {
+): RankedThinkingLevelOption | undefined {
   const normalized = normalizeThinkLevel(level.id);
   if (!normalized) {
     return undefined;
@@ -83,7 +86,7 @@ function normalizeProfileLevel(
 }
 
 function normalizeThinkingProfile(profile: ProviderThinkingProfile): ResolvedThinkingProfile {
-  const byId = new Map<ThinkLevel, ThinkingLevelOption>();
+  const byId = new Map<ThinkLevel, RankedThinkingLevelOption>();
   for (const raw of profile.levels) {
     const level = normalizeProfileLevel(raw);
     if (level) {
@@ -204,9 +207,16 @@ export function listThinkingLevels(provider?: string | null, model?: string | nu
   return profile.levels.map((level) => level.id);
 }
 
-export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
+export function listThinkingLevelOptions(
+  provider?: string | null,
+  model?: string | null,
+): ThinkingLevelOption[] {
   const profile = resolveThinkingProfile({ provider, model });
-  return profile.levels.map((level) => level.label);
+  return profile.levels.map(({ id, label }) => ({ id, label }));
+}
+
+export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
+  return listThinkingLevelOptions(provider, model).map((level) => level.label);
 }
 
 export function formatThinkingLevels(

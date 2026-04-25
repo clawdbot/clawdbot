@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { slugifySessionKey } from "../agents/sandbox/shared.js";
+import { CONFIG_DIR } from "../utils.js";
 import {
   createSandboxMediaContexts,
   createSandboxMediaStageConfig,
@@ -50,7 +52,7 @@ function createRemoteStageParams(home: string): {
     cfg: createSandboxMediaStageConfig(home),
     workspaceDir: join(home, "openclaw"),
     sessionKey,
-    remoteCacheDir: join(home, ".openclaw", "media", "remote-cache", sessionKey),
+    remoteCacheDir: join(home, ".openclaw", "media", "remote-cache", slugifySessionKey(sessionKey)),
   };
 }
 
@@ -84,6 +86,35 @@ describe("stageSandboxMedia scp remote paths", () => {
       expect(sessionCtx.MediaPath).toBe(remotePath);
       expect(ctx.MediaUrl).toBe(remotePath);
       expect(sessionCtx.MediaUrl).toBe(remotePath);
+    });
+  });
+
+  it("uses a slugged remote cache directory for session keys with path separators", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir } = createRemoteStageParams(home);
+      const sessionKey = "agent:main:explicit:../../escape";
+      const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+      const { ctx, sessionCtx } = createRemoteContexts(remotePath);
+      childProcessMocks.spawn.mockImplementation(() => {
+        throw new Error("stop before scp");
+      });
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey,
+        workspaceDir,
+      });
+
+      const remoteCacheRoot = join(CONFIG_DIR, "media", "remote-cache");
+      const expectedSafeDir = join(remoteCacheRoot, slugifySessionKey(sessionKey));
+      try {
+        await expect(fs.stat(expectedSafeDir)).resolves.toBeTruthy();
+        await expect(fs.stat(join(CONFIG_DIR, "escape"))).rejects.toThrow();
+      } finally {
+        await fs.rm(expectedSafeDir, { recursive: true, force: true });
+      }
     });
   });
 });

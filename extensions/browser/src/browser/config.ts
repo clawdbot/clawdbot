@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
@@ -18,8 +20,12 @@ import { resolveUserPath } from "../utils.js";
 import { parseBrowserHttpUrl, redactCdpUrl, isLoopbackHost } from "./cdp.helpers.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
+  DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES,
+  DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION,
+  DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -29,6 +35,7 @@ import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
@@ -61,6 +68,7 @@ export type ResolvedBrowserConfig = {
   cdpIsLoopback: boolean;
   remoteCdpTimeoutMs: number;
   remoteCdpHandshakeTimeoutMs: number;
+  actionTimeoutMs: number;
   color: string;
   executablePath?: string;
   headless: boolean;
@@ -68,8 +76,16 @@ export type ResolvedBrowserConfig = {
   attachOnly: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
+  tabCleanup: ResolvedBrowserTabCleanupConfig;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+};
+
+export type ResolvedBrowserTabCleanupConfig = {
+  enabled: boolean;
+  idleMinutes: number;
+  maxTabsPerSession: number;
+  sweepMinutes: number;
 };
 
 export type ResolvedBrowserProfile = {
@@ -81,6 +97,8 @@ export type ResolvedBrowserProfile = {
   userDataDir?: string;
   color: string;
   driver: "openclaw" | "existing-session";
+  executablePath?: string;
+  headless: boolean;
   attachOnly: boolean;
 };
 
@@ -101,6 +119,48 @@ function normalizeHexColor(raw: string | undefined): string {
 function normalizeTimeoutMs(raw: number | undefined, fallback: number): number {
   const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
   return value < 0 ? fallback : value;
+}
+
+function normalizeNonNegativeInteger(raw: number | undefined, fallback: number): number {
+  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
+  return value < 0 ? fallback : value;
+}
+
+function normalizePositiveInteger(raw: number | undefined, fallback: number): number {
+  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
+  return value <= 0 ? fallback : value;
+}
+
+function normalizeExecutablePath(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+  if (!/^~(?=$|[\\/])/.test(value)) {
+    return value;
+  }
+  return path.resolve(value.replace(/^~(?=$|[\\/])/, os.homedir()));
+}
+
+function resolveBrowserTabCleanupConfig(
+  cfg: BrowserConfig | undefined,
+): ResolvedBrowserTabCleanupConfig {
+  const raw = cfg?.tabCleanup;
+  return {
+    enabled: raw?.enabled ?? true,
+    idleMinutes: normalizeNonNegativeInteger(
+      raw?.idleMinutes,
+      DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES,
+    ),
+    maxTabsPerSession: normalizeNonNegativeInteger(
+      raw?.maxTabsPerSession,
+      DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION,
+    ),
+    sweepMinutes: normalizePositiveInteger(
+      raw?.sweepMinutes,
+      DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES,
+    ),
+  };
 }
 
 function resolveCdpPortRangeStart(
@@ -206,6 +266,10 @@ export function resolveBrowserConfig(
     cfg?.remoteCdpHandshakeTimeoutMs,
     Math.max(2000, remoteCdpTimeoutMs * 2),
   );
+  const actionTimeoutMs = normalizeTimeoutMs(
+    cfg?.actionTimeoutMs,
+    DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  );
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
   const cdpRangeSpan = derivedCdpRange.end - derivedCdpRange.start;
@@ -244,7 +308,7 @@ export function resolveBrowserConfig(
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
-  const executablePath = normalizeOptionalString(cfg?.executablePath);
+  const executablePath = normalizeExecutablePath(cfg?.executablePath);
   const defaultProfileFromConfig = normalizeOptionalString(cfg?.defaultProfile);
 
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
@@ -286,6 +350,7 @@ export function resolveBrowserConfig(
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
     remoteCdpTimeoutMs,
     remoteCdpHandshakeTimeoutMs,
+    actionTimeoutMs,
     color: defaultColor,
     executablePath,
     headless,
@@ -293,6 +358,7 @@ export function resolveBrowserConfig(
     attachOnly,
     defaultProfile,
     profiles,
+    tabCleanup: resolveBrowserTabCleanupConfig(cfg),
     ssrfPolicy: resolveBrowserSsrFPolicy(cfg),
     extraArgs,
   };
@@ -312,6 +378,8 @@ export function resolveProfile(
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
   const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
+  const headless = profile.headless ?? resolved.headless;
+  const executablePath = normalizeExecutablePath(profile.executablePath) ?? resolved.executablePath;
 
   if (driver === "existing-session") {
     return {
@@ -323,6 +391,8 @@ export function resolveProfile(
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       color: profile.color,
       driver,
+      executablePath,
+      headless,
       attachOnly: true,
     };
   }
@@ -356,6 +426,8 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
+    executablePath,
+    headless,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
 }

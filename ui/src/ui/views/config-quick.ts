@@ -77,8 +77,11 @@ export type QuickSettingsProps = {
   // Appearance
   theme: ThemeName;
   themeMode: ThemeMode;
+  hasCustomTheme: boolean;
+  customThemeLabel?: string | null;
   borderRadius: number;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
+  onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setBorderRadius: (value: number) => void;
   userName?: string | null;
@@ -103,7 +106,7 @@ export type QuickSettingsProps = {
 // ── Theme options ──
 
 type ThemeOption = { id: ThemeName; label: string };
-const THEME_OPTIONS: ThemeOption[] = [
+const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw" },
   { id: "knot", label: "Knot" },
   { id: "dash", label: "Dash" },
@@ -378,6 +381,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
 }
 
 function renderAppearanceCard(props: QuickSettingsProps) {
+  const themeOptions: ThemeOption[] = [...BUILTIN_THEME_OPTIONS, { id: "custom", label: "Custom" }];
   return html`
     <div class="qs-card">
       ${renderCardHeader(icons.spark, "Appearance")}
@@ -385,13 +389,17 @@ function renderAppearanceCard(props: QuickSettingsProps) {
         <div class="qs-row">
           <span class="qs-row__label">Theme</span>
           <div class="qs-segmented">
-            ${THEME_OPTIONS.map(
+            ${themeOptions.map(
               (opt) => html`
                 <button
                   class="qs-segmented__btn ${opt.id === props.theme
                     ? "qs-segmented__btn--active"
                     : ""}"
                   @click=${(e: Event) => {
+                    if (opt.id === "custom" && !props.hasCustomTheme) {
+                      props.onOpenCustomThemeImport?.();
+                      return;
+                    }
                     if (opt.id !== props.theme) {
                       props.setTheme(opt.id, {
                         element: (e.currentTarget as HTMLElement) ?? undefined,

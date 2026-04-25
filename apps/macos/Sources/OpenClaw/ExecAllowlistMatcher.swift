@@ -9,8 +9,14 @@ enum ExecAllowlistMatcher {
         for entry in entries {
             switch ExecApprovalHelpers.validateAllowlistPattern(entry.pattern) {
             case let .valid(pattern):
-                let target = resolvedPath ?? rawExecutable
-                if self.matches(pattern: pattern, target: target) { return entry }
+                if ExecApprovalHelpers.patternHasPathSelector(pattern) {
+                    let target = resolvedPath ?? rawExecutable
+                    if self.matches(pattern: pattern, target: target) { return entry }
+                } else if pattern != "*",
+                          !ExecApprovalHelpers.patternHasPathSelector(rawExecutable),
+                          self.matchesExecutableBasename(pattern: pattern, resolution: resolution) {
+                    return entry
+                }
             case .invalid:
                 continue
             }
@@ -32,6 +38,20 @@ enum ExecAllowlistMatcher {
             matches.append(match)
         }
         return matches
+    }
+
+    private static func matchesExecutableBasename(
+        pattern: String,
+        resolution: ExecCommandResolution) -> Bool
+    {
+        var candidates = Set<String>()
+        if !resolution.executableName.isEmpty {
+            candidates.insert(resolution.executableName)
+        }
+        if let resolvedPath = resolution.resolvedPath, !resolvedPath.isEmpty {
+            candidates.insert(URL(fileURLWithPath: resolvedPath).lastPathComponent)
+        }
+        return candidates.contains { self.matches(pattern: pattern, target: $0) }
     }
 
     private static func matches(pattern: String, target: String) -> Bool {

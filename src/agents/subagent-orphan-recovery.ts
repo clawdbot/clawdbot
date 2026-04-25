@@ -20,8 +20,19 @@ import {
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessages } from "../gateway/session-utils.fs.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { replaceSubagentRunAfterSteer } from "./subagent-registry-steer-runtime.js";
+import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
+import {
+  deliverSubagentAnnouncement,
+  isInternalAnnounceRequesterSession,
+  loadRequesterSessionEntry,
+} from "./subagent-announce-delivery.js";
+import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+import {
+  finalizeInterruptedSubagentRun,
+  replaceSubagentRunAfterSteer,
+} from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("subagent-orphan-recovery");
@@ -60,6 +71,75 @@ function buildResumeMessage(task: string, lastHumanMessage?: string): string {
   return message;
 }
 
+function buildRecoveryProgressPrompt(params: {
+  task: string;
+  attemptNumber: number;
+  maxAttempts: number;
+}): string {
+  const maxTaskLen = 160;
+  const taskLabel =
+    params.task.length > maxTaskLen ? `${params.task.slice(0, maxTaskLen)}...` : params.task;
+  return (
+    `A spawned subagent task was interrupted by a gateway restart or connection loss. ` +
+    `Automatic recovery is already in progress for "${taskLabel}" ` +
+    `(retry ${params.attemptNumber}/${params.maxAttempts}). ` +
+    `Send one brief update now in your normal voice: say the task was interrupted, ` +
+    `you are automatically resuming/retrying it, and you will report back when it either continues or truly fails. ` +
+    `Do not say the task has failed.`
+  );
+}
+
+async function announceRecoveryInProgress(params: {
+  runRecord: SubagentRunRecord;
+  attemptNumber: number;
+  maxAttempts: number;
+}): Promise<boolean> {
+  const requesterSessionKey = params.runRecord.requesterSessionKey?.trim();
+  if (!requesterSessionKey) {
+    return false;
+  }
+
+  const requesterOrigin = params.runRecord.requesterOrigin;
+  const requesterIsSubagent = isInternalAnnounceRequesterSession(requesterSessionKey);
+  let directOrigin = requesterOrigin;
+  if (!requesterIsSubagent) {
+    const { entry } = loadRequesterSessionEntry(requesterSessionKey);
+    directOrigin = resolveAnnounceOrigin(entry, requesterOrigin);
+  }
+
+  const prompt = buildRecoveryProgressPrompt({
+    task: params.runRecord.label || params.runRecord.task,
+    attemptNumber: params.attemptNumber,
+    maxAttempts: params.maxAttempts,
+  });
+
+  try {
+    const delivery = await deliverSubagentAnnouncement({
+      requesterSessionKey,
+      announceId: `${params.runRecord.runId}:recovery-progress`,
+      triggerMessage: prompt,
+      steerMessage: prompt,
+      summaryLine: params.runRecord.label || params.runRecord.task,
+      requesterSessionOrigin: requesterOrigin,
+      requesterOrigin,
+      completionDirectOrigin: requesterOrigin,
+      directOrigin,
+      sourceSessionKey: params.runRecord.childSessionKey,
+      sourceTool: "subagent_orphan_recovery",
+      targetRequesterSessionKey: requesterSessionKey,
+      requesterIsSubagent,
+      expectsCompletionMessage: false,
+      bestEffortDeliver: true,
+      directIdempotencyKey: buildAnnounceIdempotencyKey(
+        `${params.runRecord.runId}:recovery-progress`,
+      ),
+    });
+    return delivery.delivered;
+  } catch {
+    return false;
+  }
+}
+
 function extractMessageText(msg: unknown): string | undefined {
   if (!msg || typeof msg !== "object") {
     return undefined;
@@ -95,7 +175,7 @@ async function resumeOrphanedSession(params: {
   configChangeHint?: string;
   originalRunId: string;
   originalRun: SubagentRunRecord;
-}): Promise<boolean> {
+}): Promise<{ resumed: boolean; error?: string }> {
   let resumeMessage = buildResumeMessage(params.task, params.lastHumanMessage);
   if (params.configChangeHint) {
     resumeMessage += params.configChangeHint;
@@ -122,13 +202,14 @@ async function resumeOrphanedSession(params: {
       log.warn(
         `resumed orphaned session ${params.sessionKey} but remap failed (old run already removed); treating resume as accepted to avoid duplicate restarts`,
       );
-      return true;
+      return { resumed: true };
     }
     log.info(`resumed orphaned session: ${params.sessionKey}`);
-    return true;
+    return { resumed: true };
   } catch (err) {
-    log.warn(`failed to resume orphaned session ${params.sessionKey}: ${String(err)}`);
-    return false;
+    const error = formatErrorMessage(err);
+    log.warn(`failed to resume orphaned session ${params.sessionKey}: ${error}`);
+    return { resumed: false, error };
   }
 }
 
@@ -147,9 +228,28 @@ export async function recoverOrphanedSubagentSessions(params: {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
   /** Persisted across retries so already-resumed sessions are not resumed again. */
   resumedSessionKeys?: Set<string>;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+  /** Human-visible attempt number for this recovery pass. */
+  attemptNumber?: number;
+  /** Total recovery attempts before giving up. */
+  maxAttempts?: number;
+  /** Persisted across retries so recovery-in-progress notices stay deduped. */
+  notifiedRecoverySessionKeys?: Set<string>;
+}): Promise<{
+  recovered: number;
+  failed: number;
+  skipped: number;
+  failedRuns: Array<{ runId: string; childSessionKey: string; error?: string }>;
+}> {
+  const result = {
+    recovered: 0,
+    failed: 0,
+    skipped: 0,
+    failedRuns: [] as Array<{ runId: string; childSessionKey: string; error?: string }>,
+  };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
+  const attemptNumber = Math.max(1, params.attemptNumber ?? 1);
+  const maxAttempts = Math.max(attemptNumber, params.maxAttempts ?? attemptNumber);
+  const notifiedRecoverySessionKeys = params.notifiedRecoverySessionKeys ?? new Set<string>();
   const configChangePattern = /openclaw\.json|openclaw gateway restart|config\.patch/i;
 
   try {
@@ -218,11 +318,22 @@ export async function recoverOrphanedSubagentSessions(params: {
           return typeof text === "string" && configChangePattern.test(text);
         });
 
+        if (attemptNumber > 1 && !notifiedRecoverySessionKeys.has(childSessionKey)) {
+          const notified = await announceRecoveryInProgress({
+            runRecord,
+            attemptNumber,
+            maxAttempts,
+          });
+          if (notified) {
+            notifiedRecoverySessionKeys.add(childSessionKey);
+          }
+        }
+
         // Resume the session with the original task context.
         // We intentionally do NOT clear abortedLastRun before attempting
         // the resume — if callGateway fails (e.g. gateway still booting),
         // the flag stays true so the next restart can retry.
-        const resumed = await resumeOrphanedSession({
+        const resumeResult = await resumeOrphanedSession({
           sessionKey: childSessionKey,
           task: runRecord.task,
           lastHumanMessage: extractMessageText(lastHumanMessage),
@@ -233,7 +344,7 @@ export async function recoverOrphanedSubagentSessions(params: {
           originalRun: runRecord,
         });
 
-        if (resumed) {
+        if (resumeResult.resumed) {
           resumedSessionKeys.add(childSessionKey);
           // Only clear the aborted flag after confirmed successful resume.
           try {
@@ -257,10 +368,21 @@ export async function recoverOrphanedSubagentSessions(params: {
             `resume failed for ${childSessionKey}; abortedLastRun flag preserved for retry on next restart`,
           );
           result.failed++;
+          result.failedRuns.push({
+            runId,
+            childSessionKey,
+            error: resumeResult.error,
+          });
         }
       } catch (err) {
-        log.warn(`error processing orphaned session ${childSessionKey}: ${String(err)}`);
+        const error = formatErrorMessage(err);
+        log.warn(`error processing orphaned session ${childSessionKey}: ${error}`);
         result.failed++;
+        result.failedRuns.push({
+          runId,
+          childSessionKey,
+          error,
+        });
       }
     }
   } catch (err) {
@@ -285,6 +407,18 @@ const MAX_RECOVERY_RETRIES = 3;
 /** Backoff multiplier between retries (exponential). */
 const RETRY_BACKOFF_MULTIPLIER = 2;
 
+function buildRecoveryFailureMessage(params: { attempts: number; error?: string }): string {
+  const base =
+    `Subagent run was interrupted by a gateway restart or connection loss. ` +
+    `Automatic recovery failed after ${params.attempts} attempt${params.attempts === 1 ? "" : "s"}. ` +
+    `Please retry.`;
+  const detail = params.error?.trim();
+  if (!detail) {
+    return base;
+  }
+  return `${base} (${detail})`;
+}
+
 /**
  * Schedule orphan recovery after a delay, with retry logic.
  * The delay gives the gateway time to fully bootstrap after restart.
@@ -299,10 +433,17 @@ export function scheduleOrphanRecovery(params: {
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
 
   const resumedSessionKeys = new Set<string>();
+  const notifiedRecoverySessionKeys = new Set<string>();
 
   const attemptRecovery = (attempt: number, delay: number) => {
     setTimeout(() => {
-      void recoverOrphanedSubagentSessions({ ...params, resumedSessionKeys })
+      void recoverOrphanedSubagentSessions({
+        ...params,
+        resumedSessionKeys,
+        attemptNumber: attempt + 1,
+        maxAttempts: maxRetries + 1,
+        notifiedRecoverySessionKeys,
+      })
         .then((result) => {
           if (result.failed > 0 && attempt < maxRetries) {
             const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
@@ -310,7 +451,24 @@ export function scheduleOrphanRecovery(params: {
               `orphan recovery had ${result.failed} failure(s); retrying in ${nextDelay}ms (attempt ${attempt + 1}/${maxRetries})`,
             );
             attemptRecovery(attempt + 1, nextDelay);
+            return;
           }
+          if (result.failedRuns.length === 0) {
+            return;
+          }
+          const attempts = attempt + 1;
+          void Promise.allSettled(
+            result.failedRuns.map((run) =>
+              finalizeInterruptedSubagentRun({
+                runId: run.runId,
+                childSessionKey: run.childSessionKey,
+                error: buildRecoveryFailureMessage({
+                  attempts,
+                  error: run.error,
+                }),
+              }),
+            ),
+          );
         })
         .catch((err) => {
           if (attempt < maxRetries) {

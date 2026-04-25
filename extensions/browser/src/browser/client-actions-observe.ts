@@ -25,7 +25,7 @@ function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>)
 export async function browserConsoleMessages(
   baseUrl: string | undefined,
   opts: { level?: string; targetId?: string; profile?: string } = {},
-): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string }> {
+): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string; url?: string }> {
   const suffix = buildQuerySuffix([
     ["level", opts.level],
     ["targetId", opts.targetId],
@@ -35,6 +35,7 @@ export async function browserConsoleMessages(
     ok: true;
     messages: BrowserConsoleMessage[];
     targetId: string;
+    url?: string;
   }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs: 20000 });
 }
 
@@ -54,7 +55,7 @@ export async function browserPdfSave(
 export async function browserPageErrors(
   baseUrl: string | undefined,
   opts: { targetId?: string; clear?: boolean; profile?: string } = {},
-): Promise<{ ok: true; targetId: string; errors: BrowserPageError[] }> {
+): Promise<{ ok: true; targetId: string; url?: string; errors: BrowserPageError[] }> {
   const suffix = buildQuerySuffix([
     ["targetId", opts.targetId],
     ["clear", typeof opts.clear === "boolean" ? opts.clear : undefined],
@@ -63,6 +64,7 @@ export async function browserPageErrors(
   return await fetchBrowserJson<{
     ok: true;
     targetId: string;
+    url?: string;
     errors: BrowserPageError[];
   }>(withBaseUrl(baseUrl, `/errors${suffix}`), { timeoutMs: 20000 });
 }
@@ -75,7 +77,7 @@ export async function browserRequests(
     clear?: boolean;
     profile?: string;
   } = {},
-): Promise<{ ok: true; targetId: string; requests: BrowserNetworkRequest[] }> {
+): Promise<{ ok: true; targetId: string; url?: string; requests: BrowserNetworkRequest[] }> {
   const suffix = buildQuerySuffix([
     ["targetId", opts.targetId],
     ["filter", opts.filter],
@@ -85,6 +87,7 @@ export async function browserRequests(
   return await fetchBrowserJson<{
     ok: true;
     targetId: string;
+    url?: string;
     requests: BrowserNetworkRequest[];
   }>(withBaseUrl(baseUrl, `/requests${suffix}`), { timeoutMs: 20000 });
 }

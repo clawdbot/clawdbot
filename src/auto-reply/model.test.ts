@@ -29,6 +29,14 @@ describe("extractModelDirective", () => {
       expect(result.rawModel).toBe("anthropic/claude-opus-4-6");
     });
 
+    it("extracts /model with a runtime override", () => {
+      const result = extractModelDirective("/model anthropic/claude-opus-4-7 --runtime claude-cli");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("anthropic/claude-opus-4-7");
+      expect(result.rawRuntime).toBe("claude-cli");
+      expect(result.cleaned).toBe("");
+    });
+
     it("extracts /model with profile override", () => {
       const result = extractModelDirective("/model gpt-5@myprofile");
       expect(result.hasDirective).toBe(true);

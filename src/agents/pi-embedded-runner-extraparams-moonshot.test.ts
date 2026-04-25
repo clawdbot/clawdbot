@@ -10,6 +10,7 @@ import {
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
+    resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => {
       if (params.provider === "moonshot") {
         const thinkingType = resolveMoonshotThinkingType({

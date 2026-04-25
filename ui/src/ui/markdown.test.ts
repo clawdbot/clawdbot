@@ -528,5 +528,7 @@ describe("renderMarkdownSidebar", () => {
     );
 
     expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("world");
+    expect(container.textContent).toContain("Rendered Markdown");
+    expect(container.textContent).toContain("View Raw Text");
   });
 });

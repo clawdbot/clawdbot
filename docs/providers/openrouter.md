@@ -79,6 +79,32 @@ OpenRouter can also back the `image_generate` tool. Use an OpenRouter image mode
 
 OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`.
 
+## Text-to-speech
+
+OpenRouter can also be used as a TTS provider through its OpenAI-compatible
+`/audio/speech` endpoint.
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "openrouter",
+      providers: {
+        openrouter: {
+          model: "hexgrad/kokoro-82m",
+          voice: "af_alloy",
+          responseFormat: "mp3",
+        },
+      },
+    },
+  },
+}
+```
+
+If `messages.tts.providers.openrouter.apiKey` is omitted, TTS reuses
+`models.providers.openrouter.apiKey`, then `OPENROUTER_API_KEY`.
+
 ## Authentication and headers
 
 OpenRouter uses a Bearer token with your API key under the hood.

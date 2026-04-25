@@ -493,18 +493,42 @@ API key auth, and dynamic model resolution.
     <Tabs>
       <Tab title="Speech (TTS)">
         ```typescript
+        import {
+          assertOkOrThrowProviderError,
+          postJsonRequest,
+        } from "openclaw/plugin-sdk/provider-http";
+
         api.registerSpeechProvider({
           id: "acme-ai",
           label: "Acme Speech",
           isConfigured: ({ config }) => Boolean(config.messages?.tts),
-          synthesize: async (req) => ({
-            audioBuffer: Buffer.from(/* PCM data */),
-            outputFormat: "mp3",
-            fileExtension: ".mp3",
-            voiceCompatible: false,
-          }),
+          synthesize: async (req) => {
+            const { response, release } = await postJsonRequest({
+              url: "https://api.example.com/v1/speech",
+              headers: new Headers({ "Content-Type": "application/json" }),
+              body: { text: req.text },
+              timeoutMs: req.timeoutMs,
+              fetchFn: fetch,
+              auditContext: "acme speech",
+            });
+            try {
+              await assertOkOrThrowProviderError(response, "Acme Speech API error");
+              return {
+                audioBuffer: Buffer.from(await response.arrayBuffer()),
+                outputFormat: "mp3",
+                fileExtension: ".mp3",
+                voiceCompatible: false,
+              };
+            } finally {
+              await release();
+            }
+          },
         });
         ```
+
+        Use `assertOkOrThrowProviderError(...)` for provider HTTP failures so
+        plugins share capped error-body reads, JSON error parsing, and
+        request-id suffixes.
       </Tab>
       <Tab title="Realtime transcription">
         Prefer `createRealtimeTranscriptionWebSocketSession(...)` — the shared

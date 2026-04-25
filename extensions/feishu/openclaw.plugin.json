@@ -12,7 +12,102 @@
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
-    "properties": {}
+    "additionalProperties": true,
+    "$defs": {
+      "secretRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": ["env", "file", "exec"]
+          },
+          "provider": { "type": "string" },
+          "id": { "type": "string" }
+        },
+        "required": ["source", "provider", "id"]
+      },
+      "secretInput": {
+        "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
+      },
+      "account": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "name": { "type": "string" },
+          "appId": { "type": "string" },
+          "appSecret": { "$ref": "#/$defs/secretInput" },
+          "encryptKey": { "$ref": "#/$defs/secretInput" },
+          "verificationToken": { "$ref": "#/$defs/secretInput" },
+          "domain": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["feishu", "lark"]
+              },
+              {
+                "type": "string",
+                "format": "uri"
+              }
+            ]
+          },
+          "connectionMode": {
+            "type": "string",
+            "enum": ["websocket", "webhook"]
+          },
+          "renderMode": {
+            "type": "string",
+            "enum": ["auto", "raw", "card"]
+          },
+          "streaming": { "type": "boolean" },
+          "replyInThread": {
+            "type": "string",
+            "enum": ["disabled", "enabled"]
+          },
+          "typingIndicator": { "type": "boolean" }
+        }
+      }
+    },
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "defaultAccount": { "type": "string" },
+      "appId": { "type": "string" },
+      "appSecret": { "$ref": "#/$defs/secretInput" },
+      "encryptKey": { "$ref": "#/$defs/secretInput" },
+      "verificationToken": { "$ref": "#/$defs/secretInput" },
+      "domain": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": ["feishu", "lark"]
+          },
+          {
+            "type": "string",
+            "format": "uri"
+          }
+        ]
+      },
+      "connectionMode": {
+        "type": "string",
+        "enum": ["websocket", "webhook"]
+      },
+      "renderMode": {
+        "type": "string",
+        "enum": ["auto", "raw", "card"]
+      },
+      "streaming": { "type": "boolean" },
+      "replyInThread": {
+        "type": "string",
+        "enum": ["disabled", "enabled"]
+      },
+      "typingIndicator": { "type": "boolean" },
+      "accounts": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/account"
+        }
+      }
+    }
   }
 }

@@ -6,8 +6,6 @@ read_when:
 title: "Authentication"
 ---
 
-# Authentication (Model Providers)
-
 <Note>
 This page covers **model provider** authentication (API keys, OAuth, Claude CLI reuse, and Anthropic setup-token). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 </Note>

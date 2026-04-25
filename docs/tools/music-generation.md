@@ -64,7 +64,7 @@ Generate an energetic chiptune loop about launching a rocket at sunrise.
 The bundled `comfy` plugin plugs into the shared `music_generate` tool through
 the music-generation provider registry.
 
-1. Configure `models.providers.comfy.music` with a workflow JSON and
+1. Configure `plugins.entries.comfy.config.music` with a workflow JSON and
    prompt/output nodes.
 2. If you use Comfy Cloud, set `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY`.
 3. Ask the agent for music or call the tool directly.

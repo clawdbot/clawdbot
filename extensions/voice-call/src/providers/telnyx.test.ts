@@ -1,7 +1,19 @@
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebhookContext } from "../types.js";
 import { TelnyxProvider } from "./telnyx.js";
+
+const apiMocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(),
+}));
+
+vi.mock("../../api.js", () => ({
+  fetchWithSsrFGuard: apiMocks.fetchWithSsrFGuard,
+}));
+
+afterEach(() => {
+  apiMocks.fetchWithSsrFGuard.mockReset();
+});
 
 function createCtx(params?: Partial<WebhookContext>): WebhookContext {
   return {
@@ -254,5 +266,75 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
         confidence: 0.977219,
       }),
     );
+  });
+});
+
+describe("TelnyxProvider answer control", () => {
+  it("answers inbound call-control legs with a deterministic command id", async () => {
+    const release = vi.fn(async () => {});
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      release,
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.answerCall({
+      callId: "call-1",
+      providerCallId: "call-control-1",
+    });
+
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.telnyx.com/v2/calls/call-control-1/actions/answer",
+        auditContext: "voice-call.telnyx.api",
+        policy: { allowedHostnames: ["api.telnyx.com"] },
+        init: expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ command_id: "openclaw-answer-call-1" }),
+        }),
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TelnyxProvider speak control", () => {
+  it("passes custom Telnyx voice ids to the speak action", async () => {
+    const release = vi.fn(async () => {});
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      release,
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.playTts({
+      callId: "call-1",
+      providerCallId: "call-control-1",
+      text: "hello",
+      voice: "Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc",
+    });
+
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.telnyx.com/v2/calls/call-control-1/actions/speak",
+        auditContext: "voice-call.telnyx.api",
+        policy: { allowedHostnames: ["api.telnyx.com"] },
+        init: expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining(
+            '"voice":"Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc"',
+          ),
+        }),
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });

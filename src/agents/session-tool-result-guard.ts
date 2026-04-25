@@ -90,6 +90,7 @@ export function installSessionToolResultGuard(
      * Defaults to true.
      */
     allowSyntheticToolResults?: boolean;
+    missingToolResultText?: string;
     /**
      * Optional set/list of tool names accepted for assistant toolCall/toolUse blocks.
      * When set, tool calls with unknown names are dropped before persistence.
@@ -127,6 +128,7 @@ export function installSessionToolResultGuard(
   };
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
+  const missingToolResultText = opts?.missingToolResultText;
   const beforeWrite = opts?.beforeMessageWriteHook;
   const maxToolResultChars = resolveMaxToolResultChars(opts);
 
@@ -154,7 +156,11 @@ export function installSessionToolResultGuard(
     }
     if (allowSyntheticToolResults) {
       for (const [id, name] of pendingState.entries()) {
-        const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
+        const synthetic = makeMissingToolResult({
+          toolCallId: id,
+          toolName: name,
+          text: missingToolResultText,
+        });
         const flushed = applyBeforeWriteHook(
           persistToolResult(persistMessage(synthetic), {
             toolCallId: id,

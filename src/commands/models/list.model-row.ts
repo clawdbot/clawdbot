@@ -11,6 +11,7 @@ export type ListRowModel = {
   input: Array<"text" | "image">;
   baseUrl?: string;
   contextWindow?: number | null;
+  contextTokens?: number | null;
 };
 
 export type ModelAuthAvailabilityResolver = (params: {
@@ -97,6 +98,7 @@ export function toModelRow(params: {
     name: model.name || model.id,
     input,
     contextWindow: model.contextWindow ?? null,
+    ...(typeof model.contextTokens === "number" ? { contextTokens: model.contextTokens } : {}),
     local,
     available,
     tags: Array.from(mergedTags),

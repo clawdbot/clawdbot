@@ -286,10 +286,11 @@ export async function runSubagentAnnounceFlow(params: {
       outcome = { status: "unknown" };
     }
     const failedTerminalOutcome = outcome.status === "error";
+    const allowFailedOutputCapture =
+      !failedTerminalOutcome || (!params.roundOneReply && !params.fallbackReply);
     if (failedTerminalOutcome) {
       reply = undefined;
     }
-
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
@@ -370,17 +371,19 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
-    if (!childCompletionFindings && !failedTerminalOutcome) {
-      const fallbackReply = normalizeOptionalString(params.fallbackReply);
+    if (!childCompletionFindings) {
+      const fallbackReply = failedTerminalOutcome
+        ? undefined
+        : normalizeOptionalString(params.fallbackReply);
       const fallbackIsSilent =
         Boolean(fallbackReply) &&
         (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
 
-      if (!reply) {
+      if (!reply && allowFailedOutputCapture) {
         reply = await readSubagentOutput(params.childSessionKey, outcome);
       }
 
-      if (!reply?.trim()) {
+      if (!reply?.trim() && allowFailedOutputCapture) {
         reply = await readLatestSubagentOutputWithRetry({
           sessionKey: params.childSessionKey,
           maxWaitMs: params.timeoutMs,

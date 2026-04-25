@@ -107,7 +107,7 @@ describe("before_agent_reply hook runner (claiming pattern)", () => {
 
     expect(result).toEqual({ handled: true, reply: { text: "ok" } });
     expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("before_agent_reply handler from test-plugin failed: Error: boom"),
+      expect.stringContaining("before_agent_reply handler from test-plugin failed: boom"),
     );
   });
 

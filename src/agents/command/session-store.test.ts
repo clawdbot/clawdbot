@@ -185,6 +185,47 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("uses the runtime context budget from agent metadata instead of cold fallback", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-runtime-context";
+      const sessionId = "test-runtime-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "openai-codex",
+            model: "gpt-5.5",
+            contextTokens: 400_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.5",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
+      expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(400_000);
+    });
+  });
+
   it("clears the embedded harness pin after a CLI run", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {

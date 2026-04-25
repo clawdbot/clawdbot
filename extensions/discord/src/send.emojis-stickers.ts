@@ -5,12 +5,12 @@ import { normalizeEmojiName, resolveDiscordRest } from "./send.shared.js";
 import type { DiscordEmojiUpload, DiscordReactOpts, DiscordStickerUpload } from "./send.types.js";
 import { DISCORD_MAX_EMOJI_BYTES, DISCORD_MAX_STICKER_BYTES } from "./send.types.js";
 
-export async function listGuildEmojisDiscord(guildId: string, opts: DiscordReactOpts = {}) {
+export async function listGuildEmojisDiscord(guildId: string, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
   return await rest.get(Routes.guildEmojis(guildId));
 }
 
-export async function uploadEmojiDiscord(payload: DiscordEmojiUpload, opts: DiscordReactOpts = {}) {
+export async function uploadEmojiDiscord(payload: DiscordEmojiUpload, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
   const media = await loadWebMediaRaw(payload.mediaUrl, DISCORD_MAX_EMOJI_BYTES);
   const contentType = normalizeOptionalLowercaseString(media.contentType);
@@ -31,10 +31,7 @@ export async function uploadEmojiDiscord(payload: DiscordEmojiUpload, opts: Disc
   });
 }
 
-export async function uploadStickerDiscord(
-  payload: DiscordStickerUpload,
-  opts: DiscordReactOpts = {},
-) {
+export async function uploadStickerDiscord(payload: DiscordStickerUpload, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
   const media = await loadWebMediaRaw(payload.mediaUrl, DISCORD_MAX_STICKER_BYTES);
   const contentType = normalizeOptionalLowercaseString(media.contentType);

@@ -51,6 +51,21 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
   }
 }
 
+export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
+  return Array.from(pluginCommands.values());
+}
+
+export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {
+  pluginCommands.clear();
+  for (const command of commands) {
+    const name = normalizeOptionalLowercaseString(command.name);
+    if (!name) {
+      continue;
+    }
+    pluginCommands.set(`/${name}`, command);
+  }
+}
+
 function resolvePluginNativeName(
   command: OpenClawPluginCommandDefinition,
   provider?: string,

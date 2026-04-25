@@ -10,6 +10,12 @@
 .bun
 .artifacts
 **/.artifacts
+.local
+**/.local
+.pi
+**/.pi
+__openclaw_vitest__
+**/__openclaw_vitest__
 .tmp
 **/.tmp
 .DS_Store
@@ -40,6 +46,9 @@ docs/.generated
 *.log
 tmp
 **/tmp
+dist-runtime
+**/dist-runtime
+openclaw-path-alias-*
 
 # build artifacts
 dist

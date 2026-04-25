@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { TelnyxConfig } from "../config.js";
 import type {
+  AnswerCallInput,
   EndReason,
   GetCallStatusInput,
   GetCallStatusResult,
@@ -278,6 +279,15 @@ export class TelnyxProvider implements VoiceCallProvider {
       { command_id: crypto.randomUUID() },
       { allowNotFound: true },
     );
+  }
+
+  /**
+   * Answer an inbound Telnyx Call Control leg.
+   */
+  async answerCall(input: AnswerCallInput): Promise<void> {
+    await this.apiRequest(`/calls/${input.providerCallId}/actions/answer`, {
+      command_id: `openclaw-answer-${input.callId}`,
+    });
   }
 
   /**

@@ -2,6 +2,7 @@ import type { Client } from "@buape/carbon";
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {
   resolveDiscordMemberAllowed,
@@ -432,6 +433,7 @@ describe("maybeCreateDiscordAutoThread", () => {
       threadChannel: null,
       baseText: "hello",
       combinedBody: "hello",
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
     };
   }
 
@@ -489,6 +491,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       threadChannel: overrides?.threadChannel ?? null,
       baseText: "hello",
       combinedBody: "hello",
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       replyToMode: "all" as const,
       agentId: "agent",
       channel: "discord" as const,

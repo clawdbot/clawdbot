@@ -7,8 +7,6 @@ read_when:
   - You are comparing embedded PI and Codex app-server context behavior
 ---
 
-# Codex Harness Context Engine Port
-
 ## Status
 
 Draft implementation specification.

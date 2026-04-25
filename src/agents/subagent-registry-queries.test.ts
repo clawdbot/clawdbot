@@ -3,11 +3,14 @@ import {
   countActiveRunsForSessionFromRuns,
   countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
+  getSubagentRunByChildSessionKeyFromRuns,
+  isSubagentSessionRunActiveFromRuns,
   listRunsForRequesterFromRuns,
   resolveRequesterForChildSessionFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { STALE_UNENDED_SUBAGENT_RUN_MS } from "./subagent-run-liveness.js";
 
 function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   const runId = overrides.runId ?? "run-default";
@@ -30,6 +33,142 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
 }
 
 describe("subagent registry query regressions", () => {
+  it("does not treat stale unended rows as active child-session liveness", () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:stale-live-check";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-stale",
+        childSessionKey,
+        createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+        startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      }),
+    ]);
+
+    expect(isSubagentSessionRunActiveFromRuns(runs, childSessionKey)).toBe(false);
+
+    runs.set(
+      "run-fresh",
+      makeRun({
+        runId: "run-fresh",
+        childSessionKey,
+        createdAt: now - 60_000,
+        startedAt: now - 60_000,
+      }),
+    );
+
+    expect(isSubagentSessionRunActiveFromRuns(runs, childSessionKey)).toBe(true);
+  });
+
+  it("does not count stale unended direct children as active concurrency", () => {
+    const now = Date.now();
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-stale-child",
+        childSessionKey: "agent:main:subagent:stale-child",
+        requesterSessionKey: "agent:main:main",
+        createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+        startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      }),
+      makeRun({
+        runId: "run-fresh-child",
+        childSessionKey: "agent:main:subagent:fresh-child",
+        requesterSessionKey: "agent:main:main",
+        createdAt: now - 60_000,
+        startedAt: now - 60_000,
+      }),
+    ]);
+
+    expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
+  });
+
+  it("does not count stale unended descendants as pending work", () => {
+    const now = Date.now();
+    const parentSessionKey = "agent:main:subagent:parent-stale-desc";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-stale-descendant",
+        childSessionKey: `${parentSessionKey}:subagent:stale`,
+        requesterSessionKey: parentSessionKey,
+        createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+        startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      }),
+      makeRun({
+        runId: "run-ended-cleanup-pending",
+        childSessionKey: `${parentSessionKey}:subagent:cleanup`,
+        requesterSessionKey: parentSessionKey,
+        createdAt: now - 10_000,
+        startedAt: now - 9_000,
+        endedAt: now - 1_000,
+        cleanupCompletedAt: undefined,
+      }),
+    ]);
+
+    expect(countPendingDescendantRunsFromRuns(runs, parentSessionKey)).toBe(1);
+  });
+
+  it("keeps a stale unended orchestrator active only when live descendants remain", () => {
+    const now = Date.now();
+    const parentSessionKey = "agent:main:subagent:stale-orchestrator";
+    const liveChildSessionKey = `${parentSessionKey}:subagent:live-child`;
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-parent-stale",
+        childSessionKey: parentSessionKey,
+        requesterSessionKey: "agent:main:main",
+        createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+        startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      }),
+      makeRun({
+        runId: "run-live-child",
+        childSessionKey: liveChildSessionKey,
+        requesterSessionKey: parentSessionKey,
+        createdAt: now - 60_000,
+        startedAt: now - 60_000,
+      }),
+    ]);
+
+    expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
+
+    runs.set(
+      "run-live-child",
+      makeRun({
+        runId: "run-live-child",
+        childSessionKey: liveChildSessionKey,
+        requesterSessionKey: parentSessionKey,
+        createdAt: now - 60_000,
+        startedAt: now - 60_000,
+        endedAt: now - 1_000,
+        cleanupCompletedAt: now,
+      }),
+    );
+
+    expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(0);
+  });
+
+  it("prefers the newest ended child row over an older stale unended row", () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:stale-prefer-ended";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-stale",
+        childSessionKey,
+        createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+        startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      }),
+      makeRun({
+        runId: "run-ended",
+        childSessionKey,
+        createdAt: now - 60_000,
+        startedAt: now - 59_000,
+        endedAt: now - 1_000,
+        cleanupCompletedAt: now,
+      }),
+    ]);
+
+    expect(getSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey)?.runId).toBe("run-ended");
+  });
+
   it("regression descendant count gating, pending descendants block announce until cleanup completion is recorded", () => {
     // Regression guard: parent announce must defer while any descendant cleanup is still pending.
     const parentSessionKey = "agent:main:subagent:parent";

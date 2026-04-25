@@ -35,21 +35,37 @@ const {
   resolveBundledWebFetchProvidersFromPublicArtifactsMock: vi.fn(() => buildTestWebFetchProviders()),
 }));
 const {
+  resolveManifestContractPluginIdsMock,
   resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
   resolveManifestContractOwnerPluginIdMock,
-  runtimeManifestActual,
 } = vi.hoisted(() => ({
+  resolveManifestContractPluginIdsMock: vi.fn(() => [
+    "brave",
+    "duckduckgo",
+    "google",
+    "moonshot",
+    "perplexity",
+    "xai",
+  ]),
   resolveManifestContractPluginIdsByCompatibilityRuntimePathMock: vi.fn(() => ["brave"]),
-  resolveManifestContractOwnerPluginIdMock: vi.fn(),
-  runtimeManifestActual: {
-    resolveManifestContractOwnerPluginId: undefined as
-      | typeof import("./runtime-web-tools-manifest.runtime.js").resolveManifestContractOwnerPluginId
-      | undefined,
-  },
+  resolveManifestContractOwnerPluginIdMock: vi.fn(
+    ({ value }: { value: string }) =>
+      (
+        ({
+          brave: "brave",
+          firecrawl: "firecrawl",
+          gemini: "google",
+          grok: "xai",
+          kimi: "moonshot",
+          perplexity: "perplexity",
+        }) as Record<string, string | undefined>
+      )[value],
+  ),
 }));
 let secretResolve: typeof import("./resolve.js");
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
+let restoreResolveSecretRefValuesSpy: (() => void) | undefined;
 
 vi.mock("./runtime-web-tools-fallback.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-web-tools-fallback.runtime.js")>(
@@ -79,22 +95,12 @@ vi.mock("./runtime-web-tools-public-artifacts.runtime.js", () => ({
     resolveBundledWebFetchProvidersFromPublicArtifactsMock,
 }));
 
-vi.mock("./runtime-web-tools-manifest.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-web-tools-manifest.runtime.js")>(
-    "./runtime-web-tools-manifest.runtime.js",
-  );
-  runtimeManifestActual.resolveManifestContractOwnerPluginId =
-    actual.resolveManifestContractOwnerPluginId;
-  resolveManifestContractOwnerPluginIdMock.mockImplementation(
-    actual.resolveManifestContractOwnerPluginId,
-  );
-  return {
-    ...actual,
-    resolveManifestContractOwnerPluginId: resolveManifestContractOwnerPluginIdMock,
-    resolveManifestContractPluginIdsByCompatibilityRuntimePath:
-      resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
-  };
-});
+vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
+  resolveManifestContractPluginIds: resolveManifestContractPluginIdsMock,
+  resolveManifestContractOwnerPluginId: resolveManifestContractOwnerPluginIdMock,
+  resolveManifestContractPluginIdsByCompatibilityRuntimePath:
+    resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
+}));
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -313,16 +319,14 @@ describe("runtime web tools resolution", () => {
     resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock.mockClear();
     resolveBundledWebSearchProvidersFromPublicArtifactsMock.mockClear();
     resolveBundledWebFetchProvidersFromPublicArtifactsMock.mockClear();
-    resolveManifestContractOwnerPluginIdMock.mockReset();
-    resolveManifestContractOwnerPluginIdMock.mockImplementation(
-      runtimeManifestActual.resolveManifestContractOwnerPluginId!,
-    );
     resolveManifestContractOwnerPluginIdMock.mockClear();
+    resolveManifestContractPluginIdsMock.mockClear();
     resolveManifestContractPluginIdsByCompatibilityRuntimePathMock.mockClear();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    restoreResolveSecretRefValuesSpy?.();
+    restoreResolveSecretRefValuesSpy = undefined;
   });
 
   it("keeps web search inactive when only web fetch is configured", async () => {
@@ -925,6 +929,7 @@ describe("runtime web tools resolution", () => {
 
   it("does not resolve web fetch provider SecretRef when web fetch is inactive", async () => {
     const resolveSpy = vi.spyOn(secretResolve, "resolveSecretRefValues");
+    restoreResolveSecretRefValuesSpy = () => resolveSpy.mockRestore();
     const { metadata, context } = await runRuntimeWebTools({
       config: asConfig({
         plugins: {

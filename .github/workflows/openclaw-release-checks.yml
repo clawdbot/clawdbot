@@ -34,6 +34,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   PNPM_VERSION: "10.33.0"
+  OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL }}
 
 jobs:
   resolve_target:
@@ -245,13 +246,13 @@ jobs:
       - name: Build private QA runtime
         run: pnpm build
 
-      - name: Run GPT-5.4 lane
+      - name: Run OpenAI candidate lane
         run: |
           pnpm openclaw qa suite \
             --provider-mode mock-openai \
             --parity-pack agentic \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
-            --model openai/gpt-5.4 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model openai/gpt-5.4-alt \
             --output-dir .artifacts/qa-e2e/gpt54
 
@@ -271,7 +272,7 @@ jobs:
             --repo-root . \
             --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
             --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
-            --candidate-label openai/gpt-5.4 \
+            --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
             --baseline-label anthropic/claude-opus-4-6 \
             --output-dir .artifacts/qa-e2e/parity
 
@@ -341,8 +342,8 @@ jobs:
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
-            --model openai/gpt-5.4 \
-            --alt-model openai/gpt-5.4 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --fast
 
       - name: Upload Matrix QA artifacts
@@ -423,8 +424,8 @@ jobs:
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
-            --model openai/gpt-5.4 \
-            --alt-model openai/gpt-5.4 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --fast \
             --credential-source convex \
             --credential-role ci

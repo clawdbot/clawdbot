@@ -457,6 +457,24 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     );
   });
 
+  it("forwards audioAsVoice to sendMediaFeishu", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "https://example.com/reply.mp3",
+      audioAsVoice: true,
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
   it("forwards replyToId to text caption send", async () => {
     await feishuOutbound.sendMedia?.({
       cfg: emptyConfig,

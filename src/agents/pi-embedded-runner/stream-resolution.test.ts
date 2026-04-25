@@ -111,6 +111,21 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(streamFn).not.toBe(streamSimple);
   });
 
+  it("routes GitHub Copilot fallbacks through boundary-aware transports", () => {
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "github-copilot",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    expect(streamFn).not.toBe(streamSimple);
+  });
+
   it("injects the resolved run api key into provider-owned stream functions", async () => {
     const providerStreamFn = vi.fn(async (_model, _context, options) => options);
     const authStorage = {
@@ -137,5 +152,55 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
     expect(authStorage.getApiKey).not.toHaveBeenCalled();
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards the run abort signal into provider-owned stream functions", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const signal = new AbortController().signal;
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      signal,
+      model: {
+        api: "openai-responses",
+        provider: "github-copilot",
+        id: "gpt-5.4",
+      } as never,
+      resolvedApiKey: "resolved-key",
+    });
+
+    await expect(
+      streamFn({ provider: "github-copilot", id: "gpt-5.4" } as never, {} as never, {}),
+    ).resolves.toMatchObject({
+      signal,
+    });
+  });
+
+  it("does not overwrite an explicit provider-owned stream signal", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const runSignal = new AbortController().signal;
+    const explicitSignal = new AbortController().signal;
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      signal: runSignal,
+      model: {
+        api: "openai-responses",
+        provider: "github-copilot",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    await expect(
+      streamFn({ provider: "github-copilot", id: "gpt-5.4" } as never, {} as never, {
+        signal: explicitSignal,
+      }),
+    ).resolves.toMatchObject({
+      signal: explicitSignal,
+    });
   });
 });

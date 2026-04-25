@@ -431,6 +431,49 @@ describe("runSetupWizard", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
+  it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
+    ensureWorkspaceAndSessions.mockClear();
+    writeConfigFile.mockClear();
+
+    const workspaceDir = await makeCaseDir("skip-bootstrap-");
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipBootstrap: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            skipBootstrap: true,
+            workspace: workspaceDir,
+          }),
+        }),
+      }),
+    );
+    expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      workspaceDir,
+      runtime,
+      expect.objectContaining({ skipBootstrap: true }),
+    );
+  });
+
   it("fails fast if the auth choice prompt returns nothing", async () => {
     promptAuthChoiceGrouped.mockImplementationOnce(async () => undefined as never);
     const prompter = buildWizardPrompter();
@@ -705,6 +748,7 @@ describe("runSetupWizard", () => {
       {
         pluginId: "legacy-plugin",
         code: "legacy-before-agent-start",
+        compatCode: "legacy-before-agent-start",
         severity: "warn",
         message:
           "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",

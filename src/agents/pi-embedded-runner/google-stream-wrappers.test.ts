@@ -97,7 +97,7 @@ describe("sanitizeGoogleThinkingPayload — gemini-2.5-pro zero budget", () => {
     });
   });
 
-  it("fills thinkingLevel for Gemini 3 Flash negative budgets", () => {
+  it("rewrites Gemini 3 Flash negative budgets when a fixed thinking level is explicit", () => {
     const payload = {
       config: {
         thinkingConfig: { thinkingBudget: -1, includeThoughts: true },
@@ -111,6 +111,39 @@ describe("sanitizeGoogleThinkingPayload — gemini-2.5-pro zero budget", () => {
     expect(payload.config.thinkingConfig).toEqual({
       includeThoughts: true,
       thinkingLevel: "MEDIUM",
+    });
+  });
+
+  it("keeps Gemini 3 adaptive thinking on provider dynamic defaults", () => {
+    const payload = {
+      config: {
+        thinkingConfig: { thinkingBudget: 8192, includeThoughts: true },
+      },
+    };
+    sanitizeGoogleThinkingPayload({
+      payload,
+      modelId: "gemini-3-flash-preview",
+      thinkingLevel: "adaptive",
+    });
+    expect(payload.config.thinkingConfig).toEqual({
+      includeThoughts: true,
+    });
+  });
+
+  it("maps Gemini 2.5 adaptive thinking to thinkingBudget=-1", () => {
+    const payload = {
+      config: {
+        thinkingConfig: { thinkingBudget: 8192, includeThoughts: true },
+      },
+    };
+    sanitizeGoogleThinkingPayload({
+      payload,
+      modelId: "gemini-2.5-flash",
+      thinkingLevel: "adaptive",
+    });
+    expect(payload.config.thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingBudget: -1,
     });
   });
 });

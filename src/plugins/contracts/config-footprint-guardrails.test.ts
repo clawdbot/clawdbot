@@ -49,7 +49,24 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
   return out;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  expect(value && typeof value === "object" && !Array.isArray(value)).toBe(true);
+  return value as Record<string, unknown>;
+}
+
 describe("config footprint guardrails", () => {
+  it("keeps plugin entry config generic in the generated base schema", () => {
+    const root = asRecord(GENERATED_BASE_CONFIG_SCHEMA.schema);
+    const plugins = asRecord(asRecord(root.properties).plugins);
+    const entries = asRecord(asRecord(plugins.properties).entries);
+    const entry = asRecord(entries.additionalProperties);
+    const pluginConfig = asRecord(asRecord(entry.properties).config);
+
+    expect(pluginConfig.type).toBe("object");
+    expect(pluginConfig.additionalProperties).toEqual({});
+    expect(pluginConfig.properties).toBeUndefined();
+  });
+
   it("keeps retired legacy paths out of the generated base config schema", () => {
     const basePaths = new Set(collectSchemaPaths(GENERATED_BASE_CONFIG_SCHEMA.schema));
 
@@ -143,5 +160,36 @@ describe("config footprint guardrails", () => {
     expect(source).toContain(
       "return ssrfPolicyFromDangerouslyAllowPrivateNetwork(allowPrivateNetwork);",
     );
+  });
+
+  it("keeps bundled channel schemas as a fixed legacy SDK compatibility surface", () => {
+    const source = readSource("src/plugin-sdk/channel-config-schema.ts");
+    const legacySection = source.slice(source.indexOf("Legacy bundled channel schema exports"));
+    const bundledSchemaExportBlocks = Array.from(
+      legacySection.matchAll(
+        /export \{(?<exports>[\s\S]*?)\} from "\.\.\/config\/zod-schema\.providers-(?:core|whatsapp)\.js";/g,
+      ),
+    )
+      .map((match) => match.groups?.exports)
+      .filter((block): block is string => Boolean(block));
+    expect(bundledSchemaExportBlocks).toHaveLength(2);
+    const exportedSchemaNames = Array.from(
+      bundledSchemaExportBlocks.join("\n").matchAll(/\b([A-Z][A-Za-z0-9]+ConfigSchema)\b/g),
+    )
+      .map((match) => match[1])
+      .filter((name): name is string => Boolean(name))
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(exportedSchemaNames).toEqual([
+      "DiscordConfigSchema",
+      "GoogleChatConfigSchema",
+      "IMessageConfigSchema",
+      "MSTeamsConfigSchema",
+      "SignalConfigSchema",
+      "SlackConfigSchema",
+      "TelegramConfigSchema",
+      "WhatsAppConfigSchema",
+    ]);
+    expect(source).toContain("Legacy bundled channel schema exports");
   });
 });

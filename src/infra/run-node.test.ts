@@ -807,6 +807,40 @@ describe("run-node script", () => {
     });
   });
 
+  it("returns failure and releases the build lock when the compiler spawn errors", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      const spawn = (cmd: string, args: string[] = []) => {
+        if (cmd === process.execPath && args[0] === "scripts/tsdown-build.mjs") {
+          const events = new EventEmitter();
+          queueMicrotask(() => events.emit("error", new Error("spawn failed")));
+          return {
+            on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
+              events.on(event, cb);
+              return undefined;
+            },
+          };
+        }
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(1);
+      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
+    });
+  });
+
   it("forwards wrapper SIGTERM to the active openclaw child and returns 143", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {

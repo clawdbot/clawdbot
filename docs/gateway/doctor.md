@@ -172,9 +172,11 @@ Current migrations:
 - `routing.agentToAgent` → `tools.agentToAgent`
 - `routing.transcribeAudio` → `tools.media.audio.models`
 - `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `messages.tts.providers.<provider>`
+- `messages.tts.provider: "edge"` and `messages.tts.providers.edge` → `messages.tts.provider: "microsoft"` and `messages.tts.providers.microsoft`
 - `channels.discord.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.voice.tts.providers.<provider>`
 - `channels.discord.accounts.<id>.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.accounts.<id>.voice.tts.providers.<provider>`
 - `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `plugins.entries.voice-call.config.tts.providers.<provider>`
+- `plugins.entries.voice-call.config.tts.provider: "edge"` and `plugins.entries.voice-call.config.tts.providers.edge` → `provider: "microsoft"` and `providers.microsoft`
 - `plugins.entries.voice-call.config.provider: "log"` → `"mock"`
 - `plugins.entries.voice-call.config.twilio.from` → `plugins.entries.voice-call.config.fromNumber`
 - `plugins.entries.voice-call.config.streaming.sttProvider` → `plugins.entries.voice-call.config.streaming.provider`
@@ -386,6 +388,12 @@ are missing, doctor reports the packages and installs them in
 `openclaw doctor --fix` / `openclaw doctor --repair` mode. External plugins still
 use `openclaw plugins install` / `openclaw plugins update`; doctor does not
 install dependencies for arbitrary plugin paths.
+
+The Gateway and local CLI can also repair active bundled plugin runtime
+dependencies on demand before importing a bundled plugin. These installs are
+scoped to the plugin runtime install root, run with scripts disabled, do not
+write a package lock, and are guarded by an install-root lock so concurrent CLI
+or Gateway starts do not mutate the same `node_modules` tree at the same time.
 
 ### 8) Gateway service migrations and cleanup hints
 

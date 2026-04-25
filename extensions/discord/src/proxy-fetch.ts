@@ -8,7 +8,7 @@ import type { ResolvedDiscordAccount } from "./accounts.js";
 
 export function resolveDiscordProxyUrl(
   account: Pick<ResolvedDiscordAccount, "config">,
-  cfg?: OpenClawConfig,
+  cfg: OpenClawConfig,
 ): string | undefined {
   const accountProxy = account.config.proxy?.trim();
   if (accountProxy) {
@@ -31,7 +31,7 @@ export function resolveDiscordProxyFetchByUrl(
 
 export function resolveDiscordProxyFetchForAccount(
   account: Pick<ResolvedDiscordAccount, "config">,
-  cfg?: OpenClawConfig,
+  cfg: OpenClawConfig,
   runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
   return resolveDiscordProxyFetchByUrl(resolveDiscordProxyUrl(account, cfg), runtime);

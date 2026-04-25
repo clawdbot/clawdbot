@@ -282,6 +282,8 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         api: "responses",
       }),
       "/tmp/workspace",
+      undefined,
+      undefined,
     );
   });
 

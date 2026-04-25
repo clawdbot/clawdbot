@@ -101,17 +101,84 @@ function parseGoogleChatInboundPayload(
   return { ok: true, event, addOnBearerToken };
 }
 
-async function isAuthorizedGoogleChatTarget(
+type GoogleChatWebhookAuthRejection = {
+  target: WebhookTarget;
+  reason: string;
+};
+
+async function verifyGoogleChatTargetAuth(
   target: WebhookTarget,
   bearer: string,
-): Promise<boolean> {
+): Promise<{ ok: true } | { ok: false; reason: string }> {
   const verification = await verifyGoogleChatRequest({
     bearer,
     audienceType: target.audienceType,
     audience: target.audience,
     expectedAddOnPrincipal: target.account.config.appPrincipal,
   });
-  return verification.ok;
+  return verification.ok ? { ok: true } : { ok: false, reason: verification.reason ?? "unknown" };
+}
+
+function logGoogleChatWebhookAuthRejections(rejections: GoogleChatWebhookAuthRejection[]): void {
+  for (const rejection of rejections) {
+    rejection.target.runtime.log?.(
+      `[${rejection.target.account.accountId}] Google Chat webhook auth rejected: ${rejection.reason}`,
+    );
+  }
+}
+
+function logGoogleChatWebhookAuthRejectedForTargets(
+  targets: readonly WebhookTarget[],
+  reason: string,
+): void {
+  logGoogleChatWebhookAuthRejections(targets.map((target) => ({ target, reason })));
+}
+
+async function resolveGoogleChatWebhookTargetWithAuthOrReject(params: {
+  targets: readonly WebhookTarget[];
+  res: ServerResponse;
+  bearer: string;
+}): Promise<WebhookTarget | null> {
+  const rejections: GoogleChatWebhookAuthRejection[] = [];
+  let verifiedTargetCount = 0;
+  const selectedTarget = await resolveWebhookTargetWithAuthOrReject({
+    targets: params.targets,
+    res: params.res,
+    isMatch: async (target) => {
+      const verification = await verifyGoogleChatTargetAuth(target, params.bearer);
+      if (verification.ok) {
+        verifiedTargetCount += 1;
+        return true;
+      }
+      rejections.push({ target, reason: verification.reason });
+      return false;
+    },
+  });
+  if (!selectedTarget && verifiedTargetCount === 0) {
+    logGoogleChatWebhookAuthRejections(rejections);
+  }
+  return selectedTarget;
+}
+
+export function warnAppPrincipalMisconfiguration(params: {
+  accountId: string;
+  audienceType?: string;
+  appPrincipal?: string | null;
+  log?: (message: string) => void;
+}): void {
+  if (params.audienceType !== "app-url") {
+    return;
+  }
+  const principal = params.appPrincipal?.trim();
+  if (!principal) {
+    params.log?.(
+      `[${params.accountId}] appPrincipal is missing for audienceType "app-url"; add-on token verification will fail. Set appPrincipal to the numeric OAuth 2.0 client ID (uniqueId, 21 digits), not an email.`,
+    );
+  } else if (principal.includes("@")) {
+    params.log?.(
+      `[${params.accountId}] appPrincipal "${principal}" looks like an email address. Set appPrincipal to the numeric OAuth 2.0 client ID (uniqueId, 21 digits), not an email.`,
+    );
+  }
 }
 
 export function createGoogleChatWebhookRequestHandler(params: {
@@ -156,10 +223,10 @@ export function createGoogleChatWebhookRequestHandler(params: {
         };
 
         if (headerBearer) {
-          selectedTarget = await resolveWebhookTargetWithAuthOrReject({
+          selectedTarget = await resolveGoogleChatWebhookTargetWithAuthOrReject({
             targets,
             res,
-            isMatch: (target) => isAuthorizedGoogleChatTarget(target, headerBearer),
+            bearer: headerBearer,
           });
           if (!selectedTarget) {
             return true;
@@ -178,15 +245,16 @@ export function createGoogleChatWebhookRequestHandler(params: {
           parsedEvent = parsed.event;
 
           if (!parsed.addOnBearerToken) {
+            logGoogleChatWebhookAuthRejectedForTargets(targets, "missing token");
             res.statusCode = 401;
             res.end("unauthorized");
             return true;
           }
 
-          selectedTarget = await resolveWebhookTargetWithAuthOrReject({
+          selectedTarget = await resolveGoogleChatWebhookTargetWithAuthOrReject({
             targets,
             res,
-            isMatch: (target) => isAuthorizedGoogleChatTarget(target, parsed.addOnBearerToken),
+            bearer: parsed.addOnBearerToken,
           });
           if (!selectedTarget) {
             return true;

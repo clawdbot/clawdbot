@@ -1292,7 +1292,11 @@ async function processOpenAICompletionsStream(
     flushPendingPostToolCallDeltas();
     appendTextDeltaInternal(text);
   };
-  for await (const chunk of responseStream) {
+  for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
+    if (!rawChunk || typeof rawChunk !== "object") {
+      continue;
+    }
+    const chunk = rawChunk as ChatCompletionChunk;
     output.responseId ||= chunk.id;
     if (chunk.usage) {
       output.usage = parseTransportChunkUsage(chunk.usage, model);
@@ -1522,6 +1526,7 @@ function getCompat(model: OpenAIModeModel): {
   openRouterRouting: Record<string, unknown>;
   vercelGatewayRouting: Record<string, unknown>;
   supportsStrictMode: boolean;
+  supportsPromptCacheKey: boolean;
   requiresStringContent: boolean;
   visibleReasoningDetailTypes: string[];
 } {
@@ -1550,6 +1555,7 @@ function getCompat(model: OpenAIModeModel): {
       (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
       detected.vercelGatewayRouting,
     supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
+    supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
     requiresStringContent: compat.requiresStringContent ?? false,
     visibleReasoningDetailTypes:
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
@@ -1716,6 +1722,7 @@ export function buildOpenAICompletionsParams(
     : context;
   const messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
+  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: compat.requiresStringContent
@@ -1726,6 +1733,9 @@ export function buildOpenAICompletionsParams(
   };
   if (compat.supportsStore) {
     params.store = false;
+  }
+  if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) {
+    params.prompt_cache_key = options.sessionId;
   }
   if (options?.maxTokens) {
     if (compat.maxTokensField === "max_tokens") {
@@ -1802,6 +1812,7 @@ function mapStopReason(reason: string | null) {
     case "length":
       return { stopReason: "length" };
     case "function_call":
+    case "tool_call":
     case "tool_calls":
       return { stopReason: "toolUse" };
     case "content_filter":

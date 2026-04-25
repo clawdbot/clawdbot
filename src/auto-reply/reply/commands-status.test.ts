@@ -515,7 +515,10 @@ describe("buildStatusReply subagent summary", () => {
       activeModelAuthOverride: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("Fast · codex");
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Runtime: OpenAI Codex");
+    expect(normalized).toContain("Fast");
+    expect(normalized).not.toContain("Fast · codex");
   });
 
   it("keeps /status on a session-pinned PI harness after config changes", async () => {

@@ -176,9 +176,10 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            model: { primary: "claude-cli/claude-opus-4-7" },
+            embeddedHarness: { runtime: "claude-cli" },
+            model: { primary: "anthropic/claude-opus-4-7" },
             models: {
-              "claude-cli/claude-opus-4-7": {},
+              "anthropic/claude-opus-4-7": {},
             },
           },
         },
@@ -189,12 +190,12 @@ describe("anthropic provider replay hooks", () => {
       every: "1h",
     });
     expect(next?.agents?.defaults?.models).toMatchObject({
-      "claude-cli/claude-opus-4-7": {},
-      "claude-cli/claude-sonnet-4-6": {},
-      "claude-cli/claude-opus-4-6": {},
-      "claude-cli/claude-opus-4-5": {},
-      "claude-cli/claude-sonnet-4-5": {},
-      "claude-cli/claude-haiku-4-5": {},
+      "anthropic/claude-opus-4-7": {},
+      "anthropic/claude-sonnet-4-6": {},
+      "anthropic/claude-opus-4-6": {},
+      "anthropic/claude-opus-4-5": {},
+      "anthropic/claude-sonnet-4-5": {},
+      "anthropic/claude-haiku-4-5": {},
     });
   });
 

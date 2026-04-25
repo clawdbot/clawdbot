@@ -1,10 +1,9 @@
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/testing";
+import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import { describe, it } from "vitest";
 
 describe("WhatsApp inbound context contract", () => {
   it("keeps inbound context finalized", () => {
-    const ctx = finalizeInboundContext({
+    const ctx = {
       Body: "Alice: hi",
       BodyForAgent: "hi",
       RawBody: "hi",
@@ -26,7 +25,7 @@ describe("WhatsApp inbound context contract", () => {
       OriginatingChannel: "whatsapp",
       OriginatingTo: "123@g.us",
       CommandAuthorized: true,
-    });
+    };
 
     expectChannelInboundContextContract(ctx);
   });

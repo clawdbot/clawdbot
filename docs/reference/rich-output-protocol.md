@@ -15,6 +15,11 @@ Assistant output can carry a small set of delivery/render directives:
 
 These directives are separate. `MEDIA:` and reply/voice tags remain delivery metadata; `[embed ...]` is the web-only rich render path.
 
+When block streaming is enabled, `MEDIA:` remains single-delivery metadata for a
+turn. If the same media URL is sent in a streamed block and repeated in the final
+assistant payload, OpenClaw delivers the attachment once and strips the duplicate
+from the final payload.
+
 ## `[embed ...]`
 
 `[embed ...]` is the only agent-facing rich render syntax for the Control UI.
@@ -34,7 +39,7 @@ Rules:
 - The web UI strips the shortcode from visible text and renders the embed inline.
 - `MEDIA:` is not an embed alias and should not be used for rich embed rendering.
 
-## Stored Rendering Shape
+## Stored rendering shape
 
 The normalized/stored assistant content block is a structured `canvas` item:
 

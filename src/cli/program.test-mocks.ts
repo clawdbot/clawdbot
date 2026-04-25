@@ -29,6 +29,7 @@ const programMocks = vi.hoisted(() => {
     runChannelLogin: vi.fn(),
     runChannelLogout: vi.fn(),
     runTui: vi.fn(),
+    runCrestodian: vi.fn(),
     loadAndMaybeMigrateDoctorConfig: vi.fn(),
     ensureConfigReady: vi.fn(),
     ensurePluginRegistryLoaded: vi.fn(),
@@ -47,6 +48,7 @@ export const callGateway = programMocks.callGateway as AnyMock;
 export const runChannelLogin = programMocks.runChannelLogin as AnyMock;
 export const runChannelLogout = programMocks.runChannelLogout as AnyMock;
 export const runTui = programMocks.runTui as AnyMock;
+export const runCrestodian = programMocks.runCrestodian as AnyMock;
 export const loadAndMaybeMigrateDoctorConfig =
   programMocks.loadAndMaybeMigrateDoctorConfig as AnyMock;
 export const ensureConfigReady = programMocks.ensureConfigReady as AnyMock;
@@ -95,6 +97,7 @@ vi.mock("./channel-auth.js", () => ({
   runChannelLogout: programMocks.runChannelLogout,
 }));
 vi.mock("../tui/tui.js", () => ({ runTui: programMocks.runTui }));
+vi.mock("../crestodian/crestodian.js", () => ({ runCrestodian: programMocks.runCrestodian }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: programMocks.callGateway,
   randomIdempotencyKey: () => "idem-test",

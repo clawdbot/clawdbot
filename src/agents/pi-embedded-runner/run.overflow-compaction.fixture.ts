@@ -31,6 +31,8 @@ export function makeAttemptResult(
 ): EmbeddedRunAttemptResult {
   const toolMetas = overrides.toolMetas ?? [];
   const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
+  const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
+  const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
@@ -50,6 +52,8 @@ export function makeAttemptResult(
       buildAttemptReplayMetadata({
         toolMetas,
         didSendViaMessagingTool,
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
         successfulCronAdds,
       }),
     itemLifecycle: {
@@ -58,8 +62,8 @@ export function makeAttemptResult(
       activeCount: 0,
     },
     didSendViaMessagingTool,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
+    messagingToolSentTexts,
+    messagingToolSentMediaUrls,
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
     ...overrides,

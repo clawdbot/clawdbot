@@ -45,7 +45,7 @@ execution:
   config:
     baselineConversationId: qa-active-memory-off
     activeConversationId: qa-active-memory-on
-    memoryFact: "Stable QA movie night snack preference: lemon pepper wings with blue cheese."
+    memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper wings with blue cheese."
     memoryQuery: "QA movie night snack lemon pepper wings blue cheese"
     expectedNeedle: lemon pepper wings
     prompt: "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence."
