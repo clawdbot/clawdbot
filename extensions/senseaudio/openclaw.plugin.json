@@ -1,0 +1,15 @@
+{
+  "id": "senseaudio",
+  "enabledByDefault": true,
+  "providerAuthEnvVars": {
+    "senseaudio": ["SENSEAUDIO_API_KEY"]
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["senseaudio"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

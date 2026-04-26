@@ -21,7 +21,9 @@ describe("crypto-node runtime bundling", () => {
 
     expect(bundled).toContain('from "node:module"');
     expect(bundled).toContain("createRequire(import.meta.url)");
-    expect(bundled).toMatch(/require\d*\("@matrix-org\/matrix-sdk-crypto-nodejs"\)/);
+    expect(bundled).toMatch(
+      /function loadMatrixCryptoNodeBindings\(\) \{[\s\S]*require\d*\("@matrix-org\/matrix-sdk-crypto-nodejs"\)/,
+    );
     expect(bundled).not.toContain('from "@matrix-org/matrix-sdk-crypto-nodejs"');
   });
 });

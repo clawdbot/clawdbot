@@ -7,7 +7,7 @@ export default definePluginEntry({
   register(api) {
     api.registerCli(
       async ({ program }) => {
-        const { registerBrowserCli } = await import("./runtime-api.js");
+        const { registerBrowserCli } = await import("./src/cli/browser-cli.js");
         registerBrowserCli(program);
       },
       { commands: ["browser"] },

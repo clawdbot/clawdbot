@@ -16,6 +16,8 @@ const loadConfig = vi.fn<() => OpenClawConfig>(() => ({
     },
   },
 }));
+const writeGatewayRestartIntentSync = vi.fn();
+const clearGatewayRestartIntentSync = vi.fn();
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -24,6 +26,11 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime,
+}));
+
+vi.mock("../../infra/restart.js", () => ({
+  clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),
+  writeGatewayRestartIntentSync: (opts: unknown) => writeGatewayRestartIntentSync(opts),
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
@@ -92,6 +99,8 @@ describe("runServiceRestart token drift", () => {
       },
     });
     resetLifecycleServiceMocks();
+    writeGatewayRestartIntentSync.mockClear();
+    clearGatewayRestartIntentSync.mockClear();
     service.readCommand.mockResolvedValue({
       programArguments: [],
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
@@ -182,6 +191,7 @@ describe("runServiceRestart token drift", () => {
 
     expect(loadConfig).not.toHaveBeenCalled();
     expect(service.readCommand).not.toHaveBeenCalled();
+    expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
     const payload = readJsonLog<{ warnings?: string[] }>();
     expect(payload.warnings).toBeUndefined();
   });
@@ -303,6 +313,27 @@ describe("runServiceRestart token drift", () => {
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("writes a restart intent before service-manager restart", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+
+    await runServiceRestart(createServiceRunArgs());
+
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({ targetPid: 1234 });
+    expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
+    expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears restart intent when service-manager restart fails before signaling", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+    writeGatewayRestartIntentSync.mockReturnValueOnce(true);
+    service.restart.mockRejectedValueOnce(new Error("launchctl failed before signaling"));
+
+    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({ targetPid: 1234 });
+    expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
   });
 
   it("emits scheduled when service start routes through a scheduled restart", async () => {

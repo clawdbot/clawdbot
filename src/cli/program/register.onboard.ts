@@ -47,10 +47,39 @@ const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
   includeSkip: true,
 });
 
-const ONBOARD_AUTH_FLAGS = [
-  ...CORE_ONBOARD_AUTH_FLAGS,
-  ...resolveManifestProviderOnboardAuthFlags(),
-] as const;
+type OnboardAuthFlag = {
+  readonly cliOption: string;
+  readonly description: string;
+  readonly optionKey: string;
+};
+
+function extractCliFlags(cliOption: string): string[] {
+  return cliOption
+    .split(/[ ,|]+/)
+    .filter((part) => part.startsWith("-"))
+    .map((part) => {
+      const equalsIndex = part.indexOf("=");
+      return equalsIndex === -1 ? part : part.slice(0, equalsIndex);
+    });
+}
+
+function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
+  const seenCliFlags = new Set<string>();
+  const flags: OnboardAuthFlag[] = [];
+  for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveManifestProviderOnboardAuthFlags()]) {
+    const cliFlags = extractCliFlags(flag.cliOption);
+    if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
+      continue;
+    }
+    for (const cliFlag of cliFlags) {
+      seenCliFlags.add(cliFlag);
+    }
+    flags.push(flag);
+  }
+  return flags;
+}
+
+const ONBOARD_AUTH_FLAGS = resolveOnboardAuthFlags();
 
 function pickOnboardProviderAuthOptionValues(
   opts: Record<string, unknown>,

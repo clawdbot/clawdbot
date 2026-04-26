@@ -317,6 +317,32 @@ describe("doctor bundled plugin runtime deps", () => {
     expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
   });
 
+  it("throws when bundled runtime dependency repair fails", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    const errors: string[] = [];
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "telegram", { grammy: "1.37.0" });
+
+    await expect(
+      maybeRepairBundledPluginRuntimeDeps({
+        runtime: { error: (message: string) => errors.push(message) } as never,
+        prompter: createNonInteractivePrompter(),
+        packageRoot: root,
+        config: {
+          plugins: { enabled: true },
+          channels: { telegram: { enabled: true } },
+        },
+        installDeps: () => {
+          throw new Error("ENOSPC");
+        },
+      }),
+    ).rejects.toThrow("ENOSPC");
+
+    expect(errors.join("\n")).toContain(
+      "Failed to install bundled plugin runtime deps: Error: ENOSPC",
+    );
+  });
+
   it("repairs Feishu runtime deps from preserved source config", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });

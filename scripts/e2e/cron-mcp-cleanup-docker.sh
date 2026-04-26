@@ -21,10 +21,12 @@ echo "Running in-container cron/subagent MCP cleanup smoke..."
 set +e
 docker run --rm \
   --name "$CONTAINER_NAME" \
+  -e "OPENCLAW_TEST_FAST=1" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
   -e "OPENCLAW_SKIP_CHANNELS=1" \
   -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
+  -e "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=1" \
   -e "OPENCLAW_STATE_DIR=/tmp/openclaw-state" \
   -e "OPENCLAW_CONFIG_PATH=/tmp/openclaw-state/openclaw.json" \
   -e "GW_URL=ws://127.0.0.1:$PORT" \

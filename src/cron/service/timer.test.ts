@@ -5,7 +5,7 @@ import { onTimer } from "../../cron/service/timer.js";
 import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",
@@ -74,6 +74,12 @@ describe("cron service timer seam coverage", () => {
     expect(job?.state.lastStatus).toBe("ok");
     expect(job?.state.runningAtMs).toBeUndefined();
     expect(job?.state.nextRunAtMs).toBe(now + 60_000);
+    expect(findTaskByRunId(`cron:main-heartbeat-job:${now}`)).toMatchObject({
+      runtime: "cron",
+      status: "succeeded",
+      endedAt: now,
+      cleanupAfter: expect.any(Number),
+    });
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)

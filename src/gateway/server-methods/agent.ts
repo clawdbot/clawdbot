@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveDefaultAgentId,
+  resolveAgentWorkspaceDir,
+} from "../../agents/agent-scope.js";
+import { isTimeoutError } from "../../agents/failover-error.js";
+import {
+  resolveAgentAvatar,
+  resolvePublicAgentAvatarSource,
+} from "../../agents/identity-avatar.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -17,10 +26,15 @@ import {
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  evaluateSessionFreshness,
   mergeSessionEntry,
+  resolveChannelResetConfig,
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
   resolveAgentMainSessionKey,
+  resolveSessionLifecycleTimestamps,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -32,6 +46,11 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { isAbortError } from "../../infra/unhandled-rejections.js";
+import {
+  loadVoiceWakeRoutingConfig,
+  resolveVoiceWakeRouteByTrigger,
+} from "../../infra/voicewake-routing.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   classifySessionKeyShape,
@@ -46,7 +65,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
+import { createRunningTaskRun, finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
+import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -228,6 +248,35 @@ function emitSessionsChanged(
   );
 }
 
+type GatewayAgentTaskTerminalStatus = Extract<
+  TaskStatus,
+  "succeeded" | "failed" | "timed_out" | "cancelled"
+>;
+
+function resolveFailedTrackedAgentTaskStatus(error: unknown): GatewayAgentTaskTerminalStatus {
+  return isAbortError(error) || isTimeoutError(error) ? "timed_out" : "failed";
+}
+
+function tryFinalizeTrackedAgentTask(params: {
+  runId: string;
+  status: GatewayAgentTaskTerminalStatus;
+  error?: string;
+  terminalSummary?: string;
+}): void {
+  try {
+    finalizeTaskRunByRunId({
+      runId: params.runId,
+      runtime: "cli",
+      status: params.status,
+      endedAt: Date.now(),
+      ...(params.error !== undefined ? { error: params.error } : {}),
+      ...(params.terminalSummary !== undefined ? { terminalSummary: params.terminalSummary } : {}),
+    });
+  } catch {
+    // Best-effort only: background task tracking must not block agent runs.
+  }
+}
+
 function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
@@ -269,6 +318,14 @@ function dispatchAgentRunFromGateway(params: {
   }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
+      if (shouldTrackTask) {
+        const aborted = result?.meta?.aborted === true;
+        tryFinalizeTrackedAgentTask({
+          runId: params.runId,
+          status: aborted ? "timed_out" : "succeeded",
+          terminalSummary: aborted ? "aborted" : "completed",
+        });
+      }
       const payload = {
         runId: params.runId,
         status: "ok" as const,
@@ -289,6 +346,15 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
+      if (shouldTrackTask) {
+        const error = String(err);
+        tryFinalizeTrackedAgentTask({
+          runId: params.runId,
+          status: resolveFailedTrackedAgentTaskStatus(err),
+          error,
+          terminalSummary: error,
+        });
+      }
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: params.runId,
@@ -359,6 +425,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       groupSpace?: string;
       lane?: string;
       extraSystemPrompt?: string;
+      modelRun?: boolean;
+      promptMode?: "full" | "minimal" | "none";
       bootstrapContextMode?: "full" | "lightweight";
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       internalEvents?: AgentInternalEvent[];
@@ -368,6 +436,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       cleanupBundleMcpOnRunEnd?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
+      workspaceDir?: string;
+      voiceWakeTrigger?: string;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
@@ -482,21 +552,19 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
+    const knownAgents = listAgentIds(cfg);
     const agentIdRaw = normalizeOptionalString(request.agentId) ?? "";
-    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
-    if (agentId) {
-      const knownAgents = listAgentIds(cfg);
-      if (!knownAgents.includes(agentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid agent params: unknown agent id "${request.agentId}"`,
-          ),
-        );
-        return;
-      }
+    let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
+    if (agentId && !knownAgents.includes(agentId)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent params: unknown agent id "${request.agentId}"`,
+        ),
+      );
+      return;
     }
 
     const requestedSessionKeyRaw = normalizeOptionalString(request.sessionKey);
@@ -535,6 +603,72 @@ export const agentHandlers: GatewayRequestHandlers = {
           ),
         );
         return;
+      }
+    }
+    const voiceWakeTrigger = normalizeOptionalString(request.voiceWakeTrigger) ?? "";
+    const replyTo = normalizeOptionalString(request.replyTo) ?? "";
+    const to = normalizeOptionalString(request.to) ?? "";
+    const explicitVoiceWakeSessionTarget =
+      !agentId && requestedSessionKeyRaw
+        ? (() => {
+            const { cfg: sessionCfg, canonicalKey } = loadSessionEntry(requestedSessionKeyRaw);
+            const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
+            const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(sessionCfg));
+            if (routedAgentId !== defaultAgentId) {
+              return true;
+            }
+            const mainSessionKey = resolveAgentMainSessionKey({
+              cfg: sessionCfg,
+              agentId: routedAgentId,
+            });
+            return canonicalKey !== mainSessionKey;
+          })()
+        : false;
+    const canAutoRouteVoiceWake =
+      !agentId && !explicitVoiceWakeSessionTarget && !requestedSessionId && !replyTo && !to;
+    const hasVoiceWakeTriggerField = Object.prototype.hasOwnProperty.call(
+      request,
+      "voiceWakeTrigger",
+    );
+    if (hasVoiceWakeTriggerField && canAutoRouteVoiceWake) {
+      try {
+        const routingConfig = await loadVoiceWakeRoutingConfig();
+        const route = resolveVoiceWakeRouteByTrigger({
+          trigger: voiceWakeTrigger || undefined,
+          config: routingConfig,
+        });
+        if ("agentId" in route) {
+          if (knownAgents.includes(route.agentId)) {
+            agentId = route.agentId;
+            requestedSessionKey = resolveExplicitAgentSessionKey({
+              cfg,
+              agentId,
+            });
+          } else {
+            context.logGateway.warn(
+              `voicewake routing ignored unknown agentId="${route.agentId}" trigger="${voiceWakeTrigger}"`,
+            );
+          }
+        } else if ("sessionKey" in route) {
+          if (classifySessionKeyShape(route.sessionKey) !== "malformed_agent") {
+            const canonicalRouteSession = loadSessionEntry(route.sessionKey).canonicalKey;
+            const routedAgentId = resolveAgentIdFromSessionKey(canonicalRouteSession);
+            if (knownAgents.includes(routedAgentId)) {
+              requestedSessionKey = canonicalRouteSession;
+              agentId = routedAgentId;
+            } else {
+              context.logGateway.warn(
+                `voicewake routing ignored unknown session agent="${routedAgentId}" sessionKey="${canonicalRouteSession}" trigger="${voiceWakeTrigger}"`,
+              );
+            }
+          } else {
+            context.logGateway.warn(
+              `voicewake routing ignored malformed sessionKey="${route.sessionKey}" trigger="${voiceWakeTrigger}"`,
+            );
+          }
+        }
+      } catch (err) {
+        context.logGateway.warn(`voicewake routing load failed: ${formatForLog(err)}`);
       }
     }
     let resolvedSessionId = requestedSessionId;
@@ -634,9 +768,43 @@ export const agentHandlers: GatewayRequestHandlers = {
     if (requestedSessionKey) {
       const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
-      isNewSession = !entry;
       const now = Date.now();
-      const sessionId = entry?.sessionId ?? randomUUID();
+      const resetPolicy = resolveSessionResetPolicy({
+        sessionCfg: cfg.session,
+        resetType: resolveSessionResetType({ sessionKey: canonicalKey }),
+        resetOverride: resolveChannelResetConfig({
+          sessionCfg: cfg.session,
+          channel: entry?.lastChannel ?? entry?.channel ?? request.channel,
+        }),
+      });
+      const freshness = entry
+        ? evaluateSessionFreshness({
+            updatedAt: entry.updatedAt,
+            ...resolveSessionLifecycleTimestamps({
+              entry,
+              storePath,
+              agentId: resolveAgentIdFromSessionKey(canonicalKey),
+            }),
+            now,
+            policy: resetPolicy,
+          })
+        : undefined;
+      const canReuseSession = Boolean(entry?.sessionId) && (freshness?.fresh ?? false);
+      const usableRequestedSessionId =
+        requestedSessionId && (!entry?.sessionId || canReuseSession)
+          ? requestedSessionId
+          : undefined;
+      const sessionId = usableRequestedSessionId
+        ? usableRequestedSessionId
+        : ((canReuseSession ? entry?.sessionId : undefined) ?? randomUUID());
+      isNewSession =
+        !entry ||
+        (!canReuseSession && !usableRequestedSessionId) ||
+        Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
+      const touchInteraction =
+        request.bootstrapContextRunKind !== "cron" &&
+        request.bootstrapContextRunKind !== "heartbeat" &&
+        !request.internalEvents?.length;
       const labelValue = normalizeOptionalString(request.label) || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
@@ -682,6 +850,15 @@ export const agentHandlers: GatewayRequestHandlers = {
       const nextEntryPatch: SessionEntry = {
         sessionId,
         updatedAt: now,
+        sessionStartedAt: isNewSession
+          ? now
+          : (entry?.sessionStartedAt ??
+            resolveSessionLifecycleTimestamps({
+              entry,
+              storePath,
+              agentId: resolveAgentIdFromSessionKey(canonicalKey),
+            }).sessionStartedAt),
+        lastInteractionAt: touchInteraction ? now : entry?.lastInteractionAt,
         thinkingLevel: entry?.thinkingLevel,
         fastMode: entry?.fastMode,
         verboseLevel: entry?.verboseLevel,
@@ -995,6 +1172,8 @@ export const agentHandlers: GatewayRequestHandlers = {
           runId,
           lane: request.lane,
           cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd === true,
+          modelRun: request.modelRun === true,
+          promptMode: request.promptMode,
           extraSystemPrompt: request.extraSystemPrompt,
           bootstrapContextMode: request.bootstrapContextMode,
           bootstrapContextRunKind: request.bootstrapContextRunKind,
@@ -1074,7 +1253,18 @@ export const agentHandlers: GatewayRequestHandlers = {
         agentId: identity.agentId,
         basePath: cfg.gateway?.controlUi?.basePath,
       }) ?? identity.avatar;
-    respond(true, { ...identity, avatar: avatarValue }, undefined);
+    const avatarResolution = resolveAgentAvatar(cfg, identity.agentId, { includeUiOverride: true });
+    respond(
+      true,
+      {
+        ...identity,
+        avatar: avatarValue,
+        avatarSource: resolvePublicAgentAvatarSource(avatarResolution),
+        avatarStatus: avatarResolution.kind,
+        avatarReason: avatarResolution.kind === "none" ? avatarResolution.reason : undefined,
+      },
+      undefined,
+    );
   },
   "agent.wait": async ({ params, respond, context }) => {
     if (!validateAgentWaitParams(params)) {

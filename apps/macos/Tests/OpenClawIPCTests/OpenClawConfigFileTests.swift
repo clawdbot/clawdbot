@@ -35,8 +35,30 @@ struct OpenClawConfigFileTests {
             ])
             #expect(OpenClawConfigFile.remoteGatewayPort() == 19999)
             #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "gateway.ts.net") == 19999)
-            #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "gateway") == 19999)
+            #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "GATEWAY.ts.net.") == 19999)
+            #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "gateway") == nil)
             #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "other.ts.net") == nil)
+            #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "gateway.attacker.tld") == nil)
+        }
+    }
+
+    @MainActor
+    @Test
+    func `set remote gateway url string replaces scheme`() async {
+        let override = self.makeConfigOverridePath()
+
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "remote": [
+                        "url": "wss://old-host:111",
+                    ],
+                ],
+            ])
+            OpenClawConfigFile.setRemoteGatewayUrlString("ws://127.0.0.1:18789")
+            let root = OpenClawConfigFile.loadDict()
+            let url = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any])?["url"] as? String
+            #expect(url == "ws://127.0.0.1:18789")
         }
     }
 

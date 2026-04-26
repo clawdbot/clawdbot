@@ -42,6 +42,55 @@ import {
   wake,
 } from "./timer.js";
 
+const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
+
+type InterruptedStartupRun = {
+  jobId: string;
+  runAtMs: number;
+  durationMs: number;
+};
+
+function markInterruptedStartupRun(params: {
+  state: CronServiceState;
+  job: CronJob;
+  runningAtMs: number;
+  nowMs: number;
+}): InterruptedStartupRun {
+  const { job, runningAtMs, nowMs } = params;
+  const previousErrors =
+    typeof job.state.consecutiveErrors === "number" && Number.isFinite(job.state.consecutiveErrors)
+      ? Math.max(0, Math.floor(job.state.consecutiveErrors))
+      : 0;
+
+  params.state.deps.log.warn(
+    { jobId: job.id, runningAtMs },
+    "cron: marking interrupted running job failed on startup",
+  );
+
+  job.state.runningAtMs = undefined;
+  job.state.lastRunAtMs = runningAtMs;
+  job.state.lastRunStatus = "error";
+  job.state.lastStatus = "error";
+  job.state.lastError = STARTUP_INTERRUPTED_ERROR;
+  job.state.lastDurationMs = Math.max(0, nowMs - runningAtMs);
+  job.state.consecutiveErrors = previousErrors + 1;
+  job.state.lastDelivered = false;
+  job.state.lastDeliveryStatus = "unknown";
+  job.state.lastDeliveryError = STARTUP_INTERRUPTED_ERROR;
+  job.state.nextRunAtMs = undefined;
+  job.updatedAtMs = nowMs;
+
+  if (job.schedule.kind === "at") {
+    job.enabled = false;
+  }
+
+  return {
+    jobId: job.id,
+    runAtMs: runningAtMs,
+    durationMs: job.state.lastDurationMs,
+  };
+}
+
 function mergeManualRunSnapshotAfterReload(params: {
   state: CronServiceState;
   jobId: string;
@@ -90,34 +139,34 @@ export async function start(state: CronServiceState) {
     return;
   }
 
-  const interruptedOneShotIds = new Set<string>();
-  let clearedAnyRunningMarker = false;
+  const interruptedJobIds = new Set<string>();
+  const interruptedRuns: InterruptedStartupRun[] = [];
+  let markedAnyInterruptedRun = false;
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     const jobs = state.store?.jobs ?? [];
     for (const job of jobs) {
+      job.state ??= {};
       if (typeof job.state.runningAtMs === "number") {
-        state.deps.log.warn(
-          { jobId: job.id, runningAtMs: job.state.runningAtMs },
-          "cron: clearing stale running marker on startup",
-        );
-        job.state.runningAtMs = undefined;
-        clearedAnyRunningMarker = true;
-        // One-shot jobs are not retried after interruption; recurring jobs
-        // (cron/every) are eligible for startup catch-up so they don't
-        // require a second restart to recover (#60495).
-        if (job.schedule.kind === "at") {
-          interruptedOneShotIds.add(job.id);
-        }
+        const nowMs = state.deps.nowMs();
+        const interrupted = markInterruptedStartupRun({
+          state,
+          job,
+          runningAtMs: job.state.runningAtMs,
+          nowMs,
+        });
+        interruptedJobIds.add(job.id);
+        interruptedRuns.push(interrupted);
+        markedAnyInterruptedRun = true;
       }
     }
-    if (clearedAnyRunningMarker) {
+    if (markedAnyInterruptedRun) {
       await persist(state);
     }
   });
 
   await runMissedJobs(state, {
-    skipJobIds: interruptedOneShotIds.size > 0 ? interruptedOneShotIds : undefined,
+    skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
   });
 
   await locked(state, async () => {
@@ -128,6 +177,21 @@ export async function start(state: CronServiceState) {
     const changed = recomputeNextRuns(state);
     if (changed) {
       await persist(state);
+    }
+    for (const interrupted of interruptedRuns) {
+      const job = state.store?.jobs.find((entry) => entry.id === interrupted.jobId);
+      emit(state, {
+        jobId: interrupted.jobId,
+        action: "finished",
+        status: "error",
+        error: STARTUP_INTERRUPTED_ERROR,
+        delivered: false,
+        deliveryStatus: "unknown",
+        deliveryError: STARTUP_INTERRUPTED_ERROR,
+        runAtMs: interrupted.runAtMs,
+        durationMs: interrupted.durationMs,
+        nextRunAtMs: job?.state.nextRunAtMs,
+      });
     }
     armTimer(state);
     state.deps.log.info(

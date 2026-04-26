@@ -709,6 +709,57 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
+  it("uses top-level instructions for Codex responses without dropping parity fields", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        cacheRetention: "long",
+        maxTokens: 1024,
+        serviceTier: "auto",
+        sessionId: "session-123",
+        temperature: 0.2,
+      },
+      {
+        openclaw_session_id: "session-123",
+        openclaw_turn_id: "turn-123",
+      },
+    ) as Record<string, unknown> & {
+      input?: Array<{ role?: string }>;
+      instructions?: string;
+    };
+
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(params.input?.some((item) => item.role === "system" || item.role === "developer")).toBe(
+      false,
+    );
+    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params.prompt_cache_retention).toBeUndefined();
+    expect(params.metadata).toEqual({
+      openclaw_session_id: "session-123",
+      openclaw_turn_id: "turn-123",
+    });
+    expect(params.store).toBe(false);
+    expect(params.max_output_tokens).toBe(1024);
+    expect(params.temperature).toBe(0.2);
+    expect(params.service_tier).toBe("auto");
+  });
+
   it("does not infer high reasoning when Pi passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -2267,7 +2318,7 @@ describe("openai transport stream", () => {
     expect(functionCall?.arguments).toBe("not valid json");
   });
 
-  it("does not send tool_choice when tools are provided but toolChoice option is not set", () => {
+  it("defaults tool_choice to auto for proxy-like openai-completions endpoints", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "test-model",
@@ -2275,6 +2326,38 @@ describe("openai transport stream", () => {
         api: "openai-completions",
         provider: "vllm",
         baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 2048,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "You are a helpful assistant",
+        messages: [],
+        tools: [
+          {
+            name: "get_weather",
+            description: "Get weather information",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    );
+
+    expect(params).toHaveProperty("tools");
+    expect(params).toHaveProperty("tool_choice", "auto");
+  });
+
+  it("does not send tool_choice by default for native openai-completions endpoints", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

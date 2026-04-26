@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
@@ -16,6 +14,7 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import {
   clearPluginManifestRegistryCache,
@@ -33,6 +32,7 @@ import {
   type PluginManifestActivation,
   type PluginManifestConfigContracts,
   type PluginManifest,
+  type PluginManifestChannelCommandDefaults,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
   type PluginManifestMediaUnderstandingProviderMetadata,
@@ -66,7 +66,7 @@ function resolvePluginSourcePath(sourcePath: string): string {
   return sourcePath;
 }
 
-type PluginManifestContractListKey =
+export type PluginManifestContractListKey =
   | "speechProviders"
   | "externalAuthProviders"
   | "mediaUnderstandingProviders"
@@ -149,6 +149,7 @@ export type PluginManifestRecord = {
     label?: string;
     blurb?: string;
     preferOver?: readonly string[];
+    commands?: PluginManifestChannelCommandDefaults;
   };
 };
 
@@ -166,90 +167,6 @@ const registryCache = pluginManifestRegistryCache as Map<
 const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
 export { clearPluginManifestRegistryCache } from "./manifest-registry-state.js";
-
-function listContractValues(
-  plugin: PluginManifestRecord,
-  contract: PluginManifestContractListKey,
-): readonly string[] {
-  return plugin.contracts?.[contract] ?? [];
-}
-
-export function resolveManifestContractPluginIds(params: {
-  contract: PluginManifestContractListKey;
-  origin?: PluginOrigin;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  onlyPluginIds?: readonly string[];
-}): string[] {
-  const onlyPluginIdSet =
-    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })
-    .plugins.filter(
-      (plugin) =>
-        (!params.origin || plugin.origin === params.origin) &&
-        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
-        listContractValues(plugin, params.contract).length > 0,
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function resolveManifestContractPluginIdsByCompatibilityRuntimePath(params: {
-  contract: PluginManifestContractListKey;
-  path: string | undefined;
-  origin?: PluginOrigin;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
-  const normalizedPath = params.path?.trim();
-  if (!normalizedPath) {
-    return [];
-  }
-  return loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })
-    .plugins.filter(
-      (plugin) =>
-        (!params.origin || plugin.origin === params.origin) &&
-        listContractValues(plugin, params.contract).length > 0 &&
-        (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(normalizedPath),
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function resolveManifestContractOwnerPluginId(params: {
-  contract: PluginManifestContractListKey;
-  value: string | undefined;
-  origin?: PluginOrigin;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string | undefined {
-  const normalizedValue = normalizeOptionalLowercaseString(params.value);
-  if (!normalizedValue) {
-    return undefined;
-  }
-  return loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  }).plugins.find(
-    (plugin) =>
-      (!params.origin || plugin.origin === params.origin) &&
-      listContractValues(plugin, params.contract).some(
-        (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedValue,
-      ),
-  )?.id;
-}
 
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
@@ -305,6 +222,29 @@ function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(raw);
 }
 
+function normalizePackageChannelCommands(
+  commands: unknown,
+): PluginManifestChannelCommandDefaults | undefined {
+  if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
+    return undefined;
+  }
+  const record = commands as Record<string, unknown>;
+  const nativeCommandsAutoEnabled =
+    typeof record.nativeCommandsAutoEnabled === "boolean"
+      ? record.nativeCommandsAutoEnabled
+      : undefined;
+  const nativeSkillsAutoEnabled =
+    typeof record.nativeSkillsAutoEnabled === "boolean"
+      ? record.nativeSkillsAutoEnabled
+      : undefined;
+  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
+    ? {
+        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
+        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
+      }
+    : undefined;
+}
+
 function mergePackageChannelMetaIntoChannelConfigs(params: {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   packageChannel?: OpenClawPackageManifest["channel"];
@@ -328,6 +268,8 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
     existing.description ?? normalizeOptionalString(params.packageChannel?.blurb) ?? "";
   const preferOver =
     existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
+  const commands =
+    existing.commands ?? normalizePackageChannelCommands(params.packageChannel?.commands);
 
   const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
   for (const [key, value] of Object.entries(params.channelConfigs)) {
@@ -340,6 +282,7 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
     ...(label ? { label } : {}),
     ...(description ? { description } : {}),
     ...(preferOver?.length ? { preferOver } : {}),
+    ...(commands ? { commands } : {}),
   };
   return merged;
 }
@@ -355,6 +298,9 @@ function buildRecord(params: {
     channelConfigs: params.manifest.channelConfigs,
     packageChannel: params.candidate.packageManifest?.channel,
   });
+  const packageChannelCommands = normalizePackageChannelCommands(
+    params.candidate.packageManifest?.channel?.commands,
+  );
   return {
     id: params.manifest.id,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
@@ -420,6 +366,7 @@ function buildRecord(params: {
             ...(params.candidate.packageManifest.channel.preferOver
               ? { preferOver: params.candidate.packageManifest.channel.preferOver }
               : {}),
+            ...(packageChannelCommands ? { commands: packageChannelCommands } : {}),
           },
         }
       : {}),
@@ -533,11 +480,12 @@ function matchesInstalledPluginRecord(params: {
   candidate: PluginCandidate;
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  installRecords: Record<string, PluginInstallRecord>;
 }): boolean {
   if (params.candidate.origin !== "global") {
     return false;
   }
-  const record = params.config?.plugins?.installs?.[params.pluginId];
+  const record = params.installRecords[params.pluginId];
   if (!record) {
     return false;
   }
@@ -558,6 +506,7 @@ function resolveDuplicatePrecedenceRank(params: {
   candidate: PluginCandidate;
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  installRecords: Record<string, PluginInstallRecord>;
 }): number {
   if (params.candidate.origin === "config") {
     return 0;
@@ -569,6 +518,7 @@ function resolveDuplicatePrecedenceRank(params: {
       candidate: params.candidate,
       config: params.config,
       env: params.env,
+      installRecords: params.installRecords,
     })
   ) {
     return 1;
@@ -591,13 +541,15 @@ export function loadPluginManifestRegistry(
     env?: NodeJS.ProcessEnv;
     candidates?: PluginCandidate[];
     diagnostics?: PluginDiagnostic[];
+    installRecords?: Record<string, PluginInstallRecord>;
   } = {},
 ): PluginManifestRegistry {
   const config = params.config ?? {};
   const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;
   const cacheKey = buildCacheKey({ workspaceDir: params.workspaceDir, plugins: normalized, env });
-  const cacheEnabled = params.cache !== false && shouldUseManifestCache(env);
+  const cacheEnabled =
+    params.cache !== false && !params.installRecords && shouldUseManifestCache(env);
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
@@ -622,6 +574,15 @@ export function loadPluginManifestRegistry(
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
+  let installRecords = params.installRecords;
+  let installRecordsLoaded = Boolean(params.installRecords);
+  const getInstallRecords = (): Record<string, PluginInstallRecord> => {
+    if (!installRecordsLoaded) {
+      installRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
+      installRecordsLoaded = true;
+    }
+    return installRecords ?? {};
+  };
 
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";
@@ -730,12 +691,14 @@ export function loadPluginManifestRegistry(
         candidate,
         config,
         env,
+        installRecords: getInstallRecords(),
       });
       const existingRank = resolveDuplicatePrecedenceRank({
         pluginId: manifest.id,
         candidate: existing.candidate,
         config,
         env,
+        installRecords: getInstallRecords(),
       });
       const candidateWins = candidateRank < existingRank;
       const winnerCandidate = candidateWins ? candidate : existing.candidate;

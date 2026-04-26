@@ -611,6 +611,12 @@ export default definePluginEntry({
         if (!config.enabled) {
           return;
         }
+        if (!validation.valid) {
+          api.logger.warn(
+            `[voice-call] Runtime not started; setup incomplete: ${validation.errors.join("; ")}`,
+          );
+          return;
+        }
         try {
           await ensureRuntime();
         } catch (err) {

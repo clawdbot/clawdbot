@@ -97,6 +97,36 @@ USER.md
 # local tooling
 .serena/
 
+# Local project-agent skill installs. Only repo-owned skills are visible by
+# default; promoting a new repo skill should require an intentional `git add -f`.
+.agents/skills/*
+!.agents/skills/blacksmith-testbox/
+!.agents/skills/blacksmith-testbox/**
+!.agents/skills/openclaw-ghsa-maintainer/
+!.agents/skills/openclaw-ghsa-maintainer/**
+!.agents/skills/openclaw-parallels-smoke/
+!.agents/skills/openclaw-parallels-smoke/**
+!.agents/skills/openclaw-pr-maintainer/
+!.agents/skills/openclaw-pr-maintainer/**
+!.agents/skills/openclaw-qa-testing/
+!.agents/skills/openclaw-qa-testing/**
+!.agents/skills/openclaw-release-maintainer/
+!.agents/skills/openclaw-release-maintainer/**
+!.agents/skills/openclaw-secret-scanning-maintainer/
+!.agents/skills/openclaw-secret-scanning-maintainer/**
+!.agents/skills/openclaw-test-heap-leaks/
+!.agents/skills/openclaw-test-heap-leaks/**
+!.agents/skills/openclaw-test-performance/
+!.agents/skills/openclaw-test-performance/**
+!.agents/skills/optimizetests/
+!.agents/skills/optimizetests/**
+!.agents/skills/parallels-discord-roundtrip/
+!.agents/skills/parallels-discord-roundtrip/**
+!.agents/skills/security-triage/
+!.agents/skills/security-triage/**
+!.agents/skills/tag-duplicate-prs-issues/
+!.agents/skills/tag-duplicate-prs-issues/**
+
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
 .agent/*.json
@@ -128,15 +158,14 @@ dist/protocol.schema.json
 # Synthing
 **/.stfolder/
 .dev-state
-docs/superpowers/plans/2026-03-10-collapsed-side-nav.md
-docs/superpowers/specs/2026-03-10-collapsed-side-nav-design.md
+docs/superpowers
+.superpowers/
 .gitignore
 test/config-form.analyze.telegram.test.ts
 ui/src/ui/theme-variants.browser.test.ts
 ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
-docs/superpowers
 
 # Generated docs baseline artifacts (locally generated, only hashes tracked)
 docs/.generated/*.json
@@ -147,6 +176,7 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+.vmux*
 .artifacts/
 test/fixtures/openclaw-vitest-unit-report.json
 analysis/

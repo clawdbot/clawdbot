@@ -176,7 +176,7 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "claude-cli" },
+            agentRuntime: { id: "claude-cli" },
             model: { primary: "anthropic/claude-opus-4-7" },
             models: {
               "anthropic/claude-opus-4-7": {},
@@ -306,6 +306,7 @@ describe("anthropic provider replay hooks", () => {
       apiKey: "access-token",
       source: "Claude CLI native auth",
       mode: "oauth",
+      expiresAt: 123,
     });
     expect(readClaudeCliCredentialsForRuntimeMock).toHaveBeenCalledTimes(1);
   });
@@ -329,6 +330,7 @@ describe("anthropic provider replay hooks", () => {
       apiKey: "bearer-token",
       source: "Claude CLI native auth",
       mode: "token",
+      expiresAt: 123,
     });
   });
 

@@ -57,7 +57,12 @@ export interface GatewayPluginRuntime {
     };
   };
   tts: {
-    textToSpeech: (params: { text: string; cfg: unknown; channel: string }) => Promise<{
+    textToSpeech: (params: {
+      text: string;
+      cfg: unknown;
+      channel: string;
+      accountId?: string;
+    }) => Promise<{
       success: boolean;
       audioPath?: string;
       provider?: string;

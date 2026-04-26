@@ -330,7 +330,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
         },
         sendMedia: async (ctx) => {
           const runtime = await loadBlueBubblesChannelRuntime();
-          const { cfg, to, text, mediaUrl, accountId, replyToId } = ctx;
+          const { cfg, to, text, mediaUrl, accountId, replyToId, audioAsVoice } = ctx;
           const { mediaPath, mediaBuffer, contentType, filename, caption } = ctx as {
             mediaPath?: string;
             mediaBuffer?: Uint8Array;
@@ -349,6 +349,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
             caption: caption ?? text ?? undefined,
             replyToId: replyToId ?? null,
             accountId: accountId ?? undefined,
+            asVoice: audioAsVoice === true,
           });
         },
       },

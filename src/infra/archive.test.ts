@@ -6,7 +6,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import type { ArchiveSecurityError } from "./archive.js";
-import { extractArchive, resolvePackedRootDir } from "./archive.js";
+import {
+  extractArchive,
+  readZipCentralDirectoryEntryCount,
+  resolvePackedRootDir,
+} from "./archive.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-archive-" });
 const directorySymlinkType = process.platform === "win32" ? "junction" : undefined;
@@ -69,6 +73,31 @@ async function expectExtractedSizeBudgetExceeded(params: {
       limits: { maxExtractedBytes: params.maxExtractedBytes },
     }),
   ).rejects.toThrow("archive extracted size exceeds limit");
+}
+
+function createZipCentralDirectoryArchive(params: {
+  actualEntryCount: number;
+  declaredEntryCount?: number;
+  declaredCentralDirectorySize?: number;
+}): Buffer {
+  const centralDirectory = Buffer.concat(
+    Array.from({ length: params.actualEntryCount }, (_, index) => {
+      const name = Buffer.from(`file-${index}.txt`);
+      const header = Buffer.alloc(46 + name.byteLength);
+      header.writeUInt32LE(0x02014b50, 0);
+      header.writeUInt16LE(name.byteLength, 28);
+      name.copy(header, 46);
+      return header;
+    }),
+  );
+  const declaredEntryCount = params.declaredEntryCount ?? params.actualEntryCount;
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 8);
+  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 10);
+  eocd.writeUInt32LE(params.declaredCentralDirectorySize ?? centralDirectory.byteLength, 12);
+  eocd.writeUInt32LE(0, 16);
+  return Buffer.concat([centralDirectory, eocd]);
 }
 
 beforeAll(async () => {
@@ -345,6 +374,27 @@ describe("archive utils", () => {
       });
     },
   );
+
+  it("rejects zip archives whose actual central directory exceeds the entry limit before parsing", async () => {
+    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
+      const archiveBytes = createZipCentralDirectoryArchive({
+        actualEntryCount: 2,
+        declaredEntryCount: 1,
+        declaredCentralDirectorySize: 0,
+      });
+      await fs.writeFile(archivePath, archiveBytes);
+
+      expect(readZipCentralDirectoryEntryCount(archiveBytes)).toBe(2);
+      await expect(
+        extractArchive({
+          archivePath,
+          destDir: extractDir,
+          timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+          limits: { maxEntries: 1 },
+        }),
+      ).rejects.toThrow("archive entry count exceeds limit");
+    });
+  });
 
   it("rejects tar entries with absolute extraction paths", async () => {
     await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {

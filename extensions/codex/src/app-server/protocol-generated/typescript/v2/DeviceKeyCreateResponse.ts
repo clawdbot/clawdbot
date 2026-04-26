@@ -7,8 +7,12 @@ import type { DeviceKeyProtectionClass } from "./DeviceKeyProtectionClass.js";
 /**
  * Device-key metadata and public key returned by create/public APIs.
  */
-export type DeviceKeyCreateResponse = { keyId: string,
-/**
- * SubjectPublicKeyInfo DER encoded as base64.
- */
-publicKeySpkiDerBase64: string, algorithm: DeviceKeyAlgorithm, protectionClass: DeviceKeyProtectionClass, };
+export type DeviceKeyCreateResponse = {
+  keyId: string;
+  /**
+   * SubjectPublicKeyInfo DER encoded as base64.
+   */
+  publicKeySpkiDerBase64: string;
+  algorithm: DeviceKeyAlgorithm;
+  protectionClass: DeviceKeyProtectionClass;
+};

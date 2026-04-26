@@ -149,6 +149,7 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  resolveProviderOwners?: (provider: string) => readonly string[] | undefined;
 }): boolean {
   const provider = normalizeProviderId(params.provider ?? "");
   if (!provider || params.useExplicitModels) {
@@ -163,16 +164,20 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
     if (requestedProvider === provider) {
       return false;
     }
-    if (
-      requestedProvider &&
-      liveProvidersShareOwningPlugin(requestedProvider, provider, {
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-        ownerCache,
-      })
-    ) {
-      return false;
+    if (requestedProvider) {
+      const sharesOwner = params.resolveProviderOwners
+        ? (params.resolveProviderOwners(requestedProvider) ?? []).some((owner) =>
+            (params.resolveProviderOwners?.(provider) ?? []).includes(owner),
+          )
+        : liveProvidersShareOwningPlugin(requestedProvider, provider, {
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+            ownerCache,
+          });
+      if (sharesOwner) {
+        return false;
+      }
     }
     if (requestedProvider && DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS.has(requestedProvider)) {
       return false;

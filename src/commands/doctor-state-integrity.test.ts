@@ -302,6 +302,50 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "does not archive referenced transcripts when the state dir path resolves through a symlink",
+    async () => {
+      const cfg: OpenClawConfig = {};
+      const originalHome = tempHome;
+      const symlinkHome = path.join(
+        path.dirname(originalHome),
+        `${path.basename(originalHome)}-link`,
+      );
+      fs.symlinkSync(originalHome, symlinkHome, "dir");
+      try {
+        process.env.HOME = symlinkHome;
+        process.env.OPENCLAW_HOME = symlinkHome;
+        process.env.OPENCLAW_STATE_DIR = path.join(symlinkHome, ".openclaw");
+
+        setupSessionState(cfg, process.env, symlinkHome);
+        const sessionsDir = resolveSessionTranscriptsDirForAgent(
+          "main",
+          process.env,
+          () => symlinkHome,
+        );
+        const transcriptPath = path.join(sessionsDir, "linked-session.jsonl");
+        fs.writeFileSync(transcriptPath, '{"type":"session"}\n');
+        writeSessionStore(cfg, {
+          "agent:main:main": {
+            sessionId: "linked-session",
+            updatedAt: Date.now(),
+          },
+        });
+
+        const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
+          params.message.includes("This only renames them to *.deleted.<timestamp>."),
+        );
+        await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+        expect(fs.existsSync(transcriptPath)).toBe(true);
+        expect(fs.readdirSync(sessionsDir).some((name) => name.includes(".deleted."))).toBe(false);
+        expect(stateIntegrityText()).not.toContain("These .jsonl files are no longer referenced");
+      } finally {
+        fs.rmSync(symlinkHome, { force: true, recursive: true });
+      }
+    },
+  );
+
   it("suppresses orphan transcript warnings when QMD sessions are enabled", async () => {
     const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(true, tempHome);
 

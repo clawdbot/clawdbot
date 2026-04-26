@@ -13,6 +13,7 @@ import {
   writeConfigFile,
   type ConfigWriteOptions,
 } from "./io.js";
+import { applyUnsetPathsForWrite, resolveManagedUnsetPathsForWrite } from "./io.write-prepare.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -111,20 +112,25 @@ async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<vo
 async function tryWriteSingleTopLevelIncludeMutation(params: {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
+  writeOptions?: ConfigWriteOptions;
 }): Promise<boolean> {
-  const changedKeys = getChangedTopLevelKeys(params.snapshot.sourceConfig, params.nextConfig);
+  const nextConfig = applyUnsetPathsForWrite(
+    params.nextConfig,
+    resolveManagedUnsetPathsForWrite(params.writeOptions?.unsetPaths),
+  );
+  const changedKeys = getChangedTopLevelKeys(params.snapshot.sourceConfig, nextConfig);
   if (changedKeys.length !== 1 || changedKeys[0] === "<root>") {
     return false;
   }
 
   const key = changedKeys[0];
   const includePath = getSingleTopLevelIncludeTarget({ snapshot: params.snapshot, key });
-  if (!includePath || !isRecord(params.nextConfig) || !(key in params.nextConfig)) {
+  if (!includePath || !isRecord(nextConfig) || !(key in nextConfig)) {
     return false;
   }
-  const nextConfigRecord = params.nextConfig as Record<string, unknown>;
+  const nextConfigRecord = nextConfig as Record<string, unknown>;
 
-  const validated = validateConfigObjectWithPlugins(params.nextConfig);
+  const validated = validateConfigObjectWithPlugins(nextConfig);
   if (!validated.ok) {
     throw createInvalidConfigError(
       params.snapshot.path,
@@ -151,6 +157,7 @@ export async function replaceConfigFile(params: {
   const wroteInclude = await tryWriteSingleTopLevelIncludeMutation({
     snapshot,
     nextConfig: params.nextConfig,
+    writeOptions: params.writeOptions ?? writeOptions,
   });
   if (!wroteInclude) {
     await writeConfigFile(params.nextConfig, {
@@ -184,6 +191,10 @@ export async function mutateConfigFile<T = void>(params: {
   const wroteInclude = await tryWriteSingleTopLevelIncludeMutation({
     snapshot,
     nextConfig: draft,
+    writeOptions: {
+      ...writeOptions,
+      ...params.writeOptions,
+    },
   });
   if (!wroteInclude) {
     await writeConfigFile(draft, {

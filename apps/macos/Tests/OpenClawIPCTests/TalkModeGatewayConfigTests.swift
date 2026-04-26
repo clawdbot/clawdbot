@@ -25,10 +25,10 @@ struct TalkModeGatewayConfigTests {
                             "voiceId": "unused-voice",
                         ],
                     ],
+                    "speechLocale": "ru-RU",
                 ]),
             ],
-            issues: nil
-        )
+            issues: nil)
 
         let parsed = TalkModeGatewayConfigParser.parse(
             snapshot: snapshot,
@@ -37,12 +37,12 @@ struct TalkModeGatewayConfigTests {
             defaultSilenceTimeoutMs: TalkDefaults.silenceTimeoutMs,
             envVoice: "env-voice",
             sagVoice: "sag-voice",
-            envApiKey: "env-key"
-        )
+            envApiKey: "env-key")
 
         #expect(parsed.activeProvider == "mlx")
         #expect(parsed.modelId == nil)
         #expect(parsed.apiKey == nil)
         #expect(parsed.voiceId == "unused-voice")
+        #expect(parsed.speechLocaleID == "ru-RU")
     }
 }

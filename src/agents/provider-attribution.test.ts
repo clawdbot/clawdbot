@@ -1,4 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const providerEndpointPlugins = vi.hoisted(() => [
+  {
+    providerEndpoints: [
+      {
+        endpointClass: "xai-native",
+        hosts: ["api.x.ai", "api.grok.x.ai"],
+      },
+    ],
+  },
+]);
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({
+    plugins: providerEndpointPlugins,
+    diagnostics: [],
+  }),
+}));
+
 import {
   listProviderAttributionPolicies,
   resolveProviderAttributionHeaders,

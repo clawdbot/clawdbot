@@ -6,4 +6,10 @@ import type { AskForApproval } from "./AskForApproval.js";
 import type { ResidencyRequirement } from "./ResidencyRequirement.js";
 import type { SandboxMode } from "./SandboxMode.js";
 
-export type ConfigRequirements = {allowedApprovalPolicies: Array<AskForApproval> | null, allowedSandboxModes: Array<SandboxMode> | null, allowedWebSearchModes: Array<WebSearchMode> | null, featureRequirements: { [key in string]?: boolean } | null, enforceResidency: ResidencyRequirement | null};
+export type ConfigRequirements = {
+  allowedApprovalPolicies: Array<AskForApproval> | null;
+  allowedSandboxModes: Array<SandboxMode> | null;
+  allowedWebSearchModes: Array<WebSearchMode> | null;
+  featureRequirements: { [key in string]?: boolean } | null;
+  enforceResidency: ResidencyRequirement | null;
+};

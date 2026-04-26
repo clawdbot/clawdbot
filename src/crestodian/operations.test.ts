@@ -1,29 +1,159 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../runtime.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
 import {
   executeCrestodianOperation,
   parseCrestodianOperation,
   type CrestodianOperationResult,
 } from "./operations.js";
 
-function createRuntime(): { runtime: RuntimeEnv; lines: string[] } {
-  const lines: string[] = [];
+type TestConfig = Record<string, unknown>;
+
+const mockConfig = vi.hoisted(() => {
+  const initial = {};
+  const state = {
+    path: "/tmp/openclaw.json",
+    exists: true,
+    config: initial as TestConfig,
+    hash: "mock-hash-0" as string | undefined,
+  };
+  const cloneConfig = () => structuredClone(state.config);
+  const snapshot = () => {
+    const config = cloneConfig();
+    return {
+      path: state.path,
+      exists: state.exists,
+      raw: state.exists ? `${JSON.stringify(config)}\n` : null,
+      parsed: state.exists ? config : undefined,
+      sourceConfig: config,
+      resolved: config,
+      valid: state.exists,
+      runtimeConfig: config,
+      config,
+      hash: state.hash,
+      issues: state.exists ? [] : [{ path: "", message: "missing config" }],
+      warnings: [],
+      legacyIssues: [],
+    };
+  };
   return {
-    lines,
-    runtime: {
-      log: (...args) => lines.push(args.join(" ")),
-      error: (...args) => lines.push(args.join(" ")),
-      exit: (code) => {
-        throw new Error(`exit ${code}`);
+    reset() {
+      state.path = "/tmp/openclaw.json";
+      state.exists = true;
+      state.config = {};
+      state.hash = "mock-hash-0";
+    },
+    missing(path: string) {
+      state.path = path;
+      state.exists = false;
+      state.config = {};
+      state.hash = undefined;
+    },
+    currentConfig() {
+      return cloneConfig();
+    },
+    readConfigFileSnapshot: vi.fn(async () => snapshot()),
+    mutateConfigFile: vi.fn(
+      async (params: {
+        mutate: (
+          draft: TestConfig,
+          context: { snapshot: ReturnType<typeof snapshot> },
+        ) => Promise<void> | void;
+      }) => {
+        const before = snapshot();
+        const draft = cloneConfig();
+        await params.mutate(draft, { snapshot: before });
+        state.exists = true;
+        state.config = draft;
+        state.hash = "mock-hash-1";
+        return {
+          path: state.path,
+          previousHash: before.hash ?? null,
+          snapshot: before,
+          nextConfig: cloneConfig(),
+          result: undefined,
+        };
+      },
+    ),
+  };
+});
+
+vi.mock("./probes.js", () => ({
+  probeLocalCommand: vi.fn(async (command: string) => ({
+    command,
+    found: false,
+    error: "not found",
+  })),
+  probeGatewayUrl: vi.fn(async (url: string) => ({ reachable: false, url, error: "offline" })),
+}));
+
+vi.mock("./overview.js", () => ({
+  formatCrestodianOverview: () => "Default model: openai/gpt-5.5",
+  loadCrestodianOverview: vi.fn(async () => ({
+    defaultAgentId: "main",
+    defaultModel: undefined,
+    agents: [
+      { id: "main", isDefault: true },
+      { id: "work", isDefault: false, model: "openai/gpt-5.2" },
+    ],
+    config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
+    tools: {
+      codex: { command: "codex", found: false, error: "not found" },
+      claude: { command: "claude", found: false, error: "not found" },
+      apiKeys: { openai: true, anthropic: false },
+    },
+    gateway: {
+      url: "ws://127.0.0.1:18789",
+      source: "local loopback",
+      reachable: false,
+      error: "offline",
+    },
+    references: {
+      docsUrl: "https://docs.openclaw.ai",
+      sourceUrl: "https://github.com/openclaw/openclaw",
+    },
+  })),
+}));
+
+vi.mock("../config/config.js", () => ({
+  mutateConfigFile: mockConfig.mutateConfigFile,
+  readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
+}));
+
+vi.mock("../commands/models/shared.js", () => ({
+  applyDefaultModelPrimaryUpdate: ({
+    cfg,
+    modelRaw,
+    field,
+  }: {
+    cfg: TestConfig;
+    modelRaw: string;
+    field: "model" | "imageModel";
+  }) => ({
+    ...cfg,
+    agents: {
+      ...(cfg.agents as TestConfig | undefined),
+      defaults: {
+        ...(cfg.agents as { defaults?: TestConfig } | undefined)?.defaults,
+        [field]: { primary: modelRaw },
       },
     },
-  };
-}
+  }),
+}));
+
+vi.mock("../config/model-input.js", () => ({
+  resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
+    typeof model === "string" ? model : model?.primary,
+}));
 
 describe("parseCrestodianOperation", () => {
+  beforeEach(() => {
+    mockConfig.reset();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -100,7 +230,7 @@ describe("parseCrestodianOperation", () => {
   });
 
   it("requires approval before restarting gateway", async () => {
-    const { runtime, lines } = createRuntime();
+    const { runtime, lines } = createCrestodianTestRuntime();
     const runGatewayRestart = vi.fn(async () => {});
 
     const result = await executeCrestodianOperation({ kind: "gateway-restart" }, runtime, {
@@ -115,84 +245,9 @@ describe("parseCrestodianOperation", () => {
     expect(runGatewayRestart).not.toHaveBeenCalled();
   });
 
-  it("restarts gateway through typed deps and writes an audit entry", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-gateway-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createRuntime();
-    const runGatewayRestart = vi.fn(async () => {});
-
-    await expect(
-      executeCrestodianOperation({ kind: "gateway-restart" }, runtime, {
-        approved: true,
-        deps: { runGatewayRestart },
-        auditDetails: { rescue: true, channel: "whatsapp" },
-      }),
-    ).resolves.toMatchObject({ applied: true });
-
-    expect(runGatewayRestart).toHaveBeenCalledTimes(1);
-    expect(lines.join("\n")).toContain("[crestodian] done: gateway.restart");
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
-    expect(audit).toMatchObject({
-      operation: "gateway.restart",
-      summary: "Restarted Gateway",
-      details: { rescue: true, channel: "whatsapp" },
-    });
-  });
-
-  it("creates agents through typed deps and writes an audit entry", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-agent-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createRuntime();
-    const runAgentsAdd = vi.fn(async () => {});
-
-    await expect(
-      executeCrestodianOperation(
-        {
-          kind: "create-agent",
-          agentId: "work",
-          workspace: "/tmp/work",
-          model: "openai/gpt-5.2",
-        },
-        runtime,
-        {
-          approved: true,
-          deps: { runAgentsAdd },
-          auditDetails: { rescue: true, channel: "whatsapp" },
-        },
-      ),
-    ).resolves.toMatchObject({ applied: true });
-
-    expect(runAgentsAdd).toHaveBeenCalledWith(
-      {
-        name: "work",
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.2",
-        nonInteractive: true,
-      },
-      runtime,
-      { hasFlags: true },
-    );
-    expect(lines.join("\n")).toContain("[crestodian] done: agents.create");
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
-    expect(audit).toMatchObject({
-      operation: "agents.create",
-      summary: "Created agent work",
-      details: {
-        rescue: true,
-        channel: "whatsapp",
-        agentId: "work",
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.2",
-      },
-    });
-  });
-
   it("validates missing config without exiting the process", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-validate-"));
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
-    const { runtime, lines } = createRuntime();
+    mockConfig.missing("/tmp/openclaw.json");
+    const { runtime, lines } = createCrestodianTestRuntime();
 
     await expect(
       executeCrestodianOperation({ kind: "config-validate" }, runtime),
@@ -204,8 +259,7 @@ describe("parseCrestodianOperation", () => {
   it("applies config set through typed deps and writes an audit entry", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-config-set-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
-    const { runtime, lines } = createRuntime();
+    const { runtime, lines } = createCrestodianTestRuntime();
     const runConfigSet = vi.fn(async () => {});
 
     await expect(
@@ -242,8 +296,7 @@ describe("parseCrestodianOperation", () => {
   it("applies SecretRef config set through typed deps and writes an audit entry", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-config-ref-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
-    const { runtime, lines } = createRuntime();
+    const { runtime, lines } = createCrestodianTestRuntime();
     const runConfigSet = vi.fn(async () => {});
 
     await expect(
@@ -290,9 +343,8 @@ describe("parseCrestodianOperation", () => {
   it("runs setup bootstrap only after approval and audits it", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-setup-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
     vi.stubEnv("OPENAI_API_KEY", "test-key");
-    const { runtime, lines } = createRuntime();
+    const { runtime, lines } = createCrestodianTestRuntime();
 
     const plan = await executeCrestodianOperation(
       { kind: "setup", workspace: "/tmp/work" },
@@ -311,10 +363,7 @@ describe("parseCrestodianOperation", () => {
     ).resolves.toMatchObject({ applied: true });
 
     expect(lines.join("\n")).toContain("[crestodian] done: crestodian.setup");
-    const config = JSON.parse(
-      await fs.readFile(path.join(tempDir, "openclaw.json"), "utf8"),
-    ) as Record<string, unknown>;
-    expect(config).toMatchObject({
+    expect(mockConfig.currentConfig()).toMatchObject({
       agents: {
         defaults: {
           workspace: "/tmp/work",
@@ -339,8 +388,7 @@ describe("parseCrestodianOperation", () => {
   it("runs doctor repairs only after approval and audits them", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-doctor-fix-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
-    const { runtime, lines } = createRuntime();
+    const { runtime, lines } = createCrestodianTestRuntime();
     const runDoctor = vi.fn(async () => {});
 
     const plan = await executeCrestodianOperation({ kind: "doctor-fix" }, runtime, {
@@ -376,23 +424,7 @@ describe("parseCrestodianOperation", () => {
   });
 
   it("returns from the agent TUI back to Crestodian", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-tui-return-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
-    await fs.writeFile(
-      path.join(tempDir, "openclaw.json"),
-      JSON.stringify(
-        {
-          agents: {
-            defaults: { model: { primary: "openai/gpt-5.2" } },
-            list: [{ id: "main", default: true }, { id: "work" }],
-          },
-        },
-        null,
-        2,
-      ),
-    );
-    const { runtime, lines } = createRuntime();
+    const { runtime, lines } = createCrestodianTestRuntime();
     const runTui = vi.fn(async () => ({
       exitReason: "return-to-crestodian" as const,
       crestodianMessage: "restart gateway",

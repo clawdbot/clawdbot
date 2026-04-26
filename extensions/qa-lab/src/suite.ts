@@ -286,7 +286,7 @@ export type QaSuiteSummaryJsonParams = {
 };
 
 /**
- * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.4 parity gate
+ * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.5 parity gate
  * (agentic-parity-report.ts, #64441) and any future parity wrapper can
  * import this type instead of re-declaring the shape, so changes to the
  * summary schema propagate through to every consumer at type-check time.
@@ -294,7 +294,7 @@ export type QaSuiteSummaryJsonParams = {
 export type { QaSuiteSummaryJson } from "./suite-summary.js";
 
 /**
- * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.4
+ * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.5
  * parity gate (agentic-parity-report.ts, #64441) and any future parity
  * runner can assert-and-trust the provider/model that produced a given
  * summary instead of blindly accepting the caller's candidateLabel /

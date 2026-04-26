@@ -14,7 +14,7 @@ import {
   formatErrorMessage,
   isActiveHarnessContextEngine,
   isSubagentSessionKey,
-  normalizeProviderToolSchemas,
+  normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveModelAuthMode,
@@ -906,23 +906,17 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     params.toolsAllow && params.toolsAllow.length > 0
       ? visionFilteredTools.filter((tool) => params.toolsAllow?.includes(tool.name))
       : visionFilteredTools;
-  return (
-    params.runtimePlan?.tools.normalize(filteredTools, {
-      workspaceDir: input.effectiveWorkspace,
-      modelApi: params.model.api,
-      model: params.model,
-    }) ??
-    normalizeProviderToolSchemas({
-      tools: filteredTools,
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: input.effectiveWorkspace,
-      env: process.env,
-      modelId: params.modelId,
-      modelApi: params.model.api,
-      model: params.model,
-    })
-  );
+  return normalizeAgentRuntimeTools({
+    runtimePlan: params.runtimePlan,
+    tools: filteredTools,
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: input.effectiveWorkspace,
+    env: process.env,
+    modelId: params.modelId,
+    modelApi: params.model.api,
+    model: params.model,
+  });
 }
 
 async function withCodexStartupTimeout<T>(params: {

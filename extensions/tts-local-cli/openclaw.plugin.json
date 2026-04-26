@@ -1,0 +1,12 @@
+{
+  "id": "tts-local-cli",
+  "enabledByDefault": true,
+  "contracts": {
+    "speechProviders": ["tts-local-cli", "cli"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

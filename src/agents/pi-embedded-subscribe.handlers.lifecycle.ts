@@ -167,9 +167,11 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   };
 
   const flushPendingMediaAndChannel = () => {
-    const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
-    if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
-      ctx.emitBlockReply(pendingToolMediaReply);
+    if (ctx.params.onBlockReply) {
+      const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
+      if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
+        ctx.emitBlockReply(pendingToolMediaReply);
+      }
     }
 
     const postMediaFlushResult = ctx.flushBlockReplyBuffer();

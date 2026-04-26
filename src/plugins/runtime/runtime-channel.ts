@@ -33,7 +33,12 @@ import {
 } from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
-import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
+import {
+  createAckReactionHandle,
+  removeAckReactionAfterReply,
+  removeAckReactionHandleAfterReply,
+  shouldAckReaction,
+} from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import {
   implicitMentionKindWhen,
@@ -232,8 +237,10 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       resolveInboundMentionDecision,
     },
     reactions: {
+      createAckReactionHandle,
       shouldAckReaction,
       removeAckReactionAfterReply,
+      removeAckReactionHandleAfterReply,
     },
     groups: {
       resolveGroupPolicy: resolveChannelGroupPolicy,

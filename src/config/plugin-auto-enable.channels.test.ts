@@ -207,6 +207,90 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.changes).toEqual([]);
     });
 
+    it("prefers an external plugin that declares preferOver for a bundled channel", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          { id: "qqbot", channels: ["qqbot"] },
+          {
+            id: "openclaw-qqbot",
+            channels: ["qqbot"],
+            channelConfigs: {
+              qqbot: {
+                schema: { type: "object" },
+                preferOver: ["qqbot"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(false);
+      expect(result.changes.join("\n")).toContain("QQ Bot configured, enabled automatically.");
+    });
+
+    it("falls back to the bundled channel when the preferred external plugin is disabled", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+          plugins: { entries: { "openclaw-qqbot": { enabled: false } } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          { id: "qqbot", channels: ["qqbot"] },
+          {
+            id: "openclaw-qqbot",
+            channels: ["qqbot"],
+            channelConfigs: {
+              qqbot: {
+                schema: { type: "object" },
+                preferOver: ["qqbot"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(false);
+      expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
+      expect(result.config.channels?.qqbot?.enabled).toBe(true);
+      expect(result.changes.join("\n")).toContain("QQ Bot configured, enabled automatically.");
+    });
+
+    it("does not auto-disable a lower-priority channel plugin that was explicitly selected", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+          plugins: {
+            entries: {
+              qqbot: { enabled: true },
+            },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          { id: "qqbot", channels: ["qqbot"] },
+          {
+            id: "openclaw-qqbot",
+            channels: ["qqbot"],
+            channelConfigs: {
+              qqbot: {
+                schema: { type: "object" },
+                preferOver: ["qqbot"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(true);
+    });
+
     it("falls back to channel key as plugin id when no installed manifest declares the channel", () => {
       const result = applyPluginAutoEnable({
         config: {
@@ -246,7 +330,7 @@ describe("applyPluginAutoEnable channels", () => {
       });
 
       expect(result.config.plugins?.entries?.primary?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.secondary?.enabled).toBeUndefined();
+      expect(result.config.plugins?.entries?.secondary?.enabled).toBe(false);
       expect(result.changes.join("\n")).toContain("primary configured, enabled automatically.");
       expect(result.changes.join("\n")).not.toContain(
         "secondary configured, enabled automatically.",
@@ -257,7 +341,7 @@ describe("applyPluginAutoEnable channels", () => {
       const result = applyWithBluebubblesImessageConfig();
 
       expect(result.config.channels?.bluebubbles?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.imessage?.enabled).toBeUndefined();
+      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(false);
       expect(result.changes.join("\n")).toContain("BlueBubbles configured, enabled automatically.");
       expect(result.changes.join("\n")).not.toContain(
         "iMessage configured, enabled automatically.",

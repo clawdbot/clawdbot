@@ -663,6 +663,12 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
 
 export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void {
   let resolveStartupCron: (() => CronServiceLike | null) | null = null;
+  // Hold a live reference to the gateway context so we can retry cron resolution at runtime.
+  // The startup capture may fail if the cron service isn't available yet (race condition in
+  // startGatewaySidecars — the startup event fires via setTimeout(250ms) before deps.cron is
+  // attached). By keeping the context, we can call getCron() again on later reconciliation
+  // attempts when the service is guaranteed to be ready.  Fixes #67362.
+  let gatewayContext: { getCron?: () => CronServiceLike | null } | null = null;
   let unavailableCronWarningEmitted = false;
   let lastRuntimeReconcileAtMs = 0;
   let lastRuntimeConfigKey: string | null = null;
@@ -707,7 +713,22 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     if (params.reason === "startup") {
       resolveStartupCron = params.startupCron ?? null;
     }
-    const cron = resolveStartupCron?.() ?? null;
+    let cron = resolveStartupCron?.() ?? null;
+    // Runtime fallback: retry resolving the cron service from the gateway context.
+    // This handles the case where the cron service was not yet available during
+    // gateway_start (250ms deferred init race in startGatewaySidecars) but is
+    // available now.  Fixes #67362.
+    if (!cron && params.reason === "runtime" && gatewayContext) {
+      try {
+        cron = resolveCronServiceFromGatewayContext(gatewayContext);
+        if (cron) {
+          // Refresh the startup capture so subsequent calls resolve immediately.
+          resolveStartupCron = () => cron;
+        }
+      } catch {
+        // Ignore — fall through with cron = null
+      }
+    }
     const configKey = runtimeConfigKey(config);
     if (!cron && config.enabled && !unavailableCronWarningEmitted) {
       // Avoid a noisy startup-path warning when the gateway has not exposed cron yet.
@@ -751,6 +772,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   };
 
   api.on("gateway_start", async (_event, ctx) => {
+    // Store the gateway context for runtime cron resolution retries.
+    gatewayContext = ctx as unknown as { getCron?: () => CronServiceLike | null };
     try {
       await reconcileManagedDreamingCron({
         reason: "startup",

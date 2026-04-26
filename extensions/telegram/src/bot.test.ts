@@ -1502,7 +1502,9 @@ describe("createTelegramBot", () => {
           from: { first_name: "Ada" },
         },
         quote: {
-          text: "summarize this",
+          text: " summarize this\n",
+          position: 8,
+          entities: [{ type: "bold", offset: 1, length: 9 }],
         },
       },
       me: { username: "openclaw_bot" },
@@ -1516,6 +1518,11 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+    const telegramPayload = payload as Record<string, unknown>;
+    expect(telegramPayload.ReplyToQuoteText).toBe(" summarize this\n");
+    expect(telegramPayload.ReplyToQuotePosition).toBe(8);
+    expect(telegramPayload.ReplyToQuoteEntities).toEqual([{ type: "bold", offset: 1, length: 9 }]);
+    expect(telegramPayload.ReplyToQuoteSourceText).toBe("Can you summarize this?");
   });
 
   it("keeps reply linkage while omitting filtered binary reply captions", async () => {
@@ -1782,7 +1789,7 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToSender).toBe("unknown sender");
   });
 
-  it("uses external_reply quote text for partial replies", async () => {
+  it("uses top-level quote text for external partial replies", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
     replySpy.mockClear();
@@ -1795,13 +1802,13 @@ describe("createTelegramBot", () => {
         chat: { id: 7, type: "private" },
         text: "Sure, see below",
         date: 1736380800,
+        quote: {
+          text: "summarize this",
+        },
         external_reply: {
           message_id: 9002,
           text: "Can you summarize this?",
           from: { first_name: "Ada" },
-          quote: {
-            text: "summarize this",
-          },
         },
       },
       me: { username: "openclaw_bot" },
@@ -1815,6 +1822,7 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9002");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+    expect((payload as Record<string, unknown>).ReplyToIsExternal).toBe(true);
   });
 
   it("propagates forwarded origin from external_reply targets", async () => {

@@ -22,6 +22,24 @@ describe("browser manage start timeout option", () => {
     expect(startCall?.[2]).toBeUndefined();
   });
 
+  it("passes headless=true for browser start --headless", async () => {
+    const program = createBrowserManageProgram({ withParentTimeout: true });
+    await program.parseAsync(["browser", "start", "--headless"], { from: "user" });
+
+    const startCall = findBrowserManageCall("/start");
+    expect(startCall?.[1]?.query).toEqual({ headless: true });
+  });
+
+  it("combines browser profile with browser start --headless", async () => {
+    const program = createBrowserManageProgram({ withParentTimeout: true });
+    await program.parseAsync(["browser", "--browser-profile", "work", "start", "--headless"], {
+      from: "user",
+    });
+
+    const startCall = findBrowserManageCall("/start");
+    expect(startCall?.[1]?.query).toEqual({ profile: "work", headless: true });
+  });
+
   it("uses a longer built-in timeout for browser status", async () => {
     const program = createBrowserManageProgram({ withParentTimeout: true });
     await program.parseAsync(["browser", "status"], { from: "user" });

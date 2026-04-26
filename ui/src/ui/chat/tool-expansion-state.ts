@@ -1,5 +1,5 @@
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
-import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { extractToolCards } from "./tool-cards.ts";
 

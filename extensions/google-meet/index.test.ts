@@ -858,19 +858,25 @@ describe("google-meet plugin", () => {
   });
 
   it("reports setup status through the tool", async () => {
-    const { tools } = setup({
-      chrome: {
-        audioInputCommand: ["openclaw-audio-bridge", "capture"],
-        audioOutputCommand: ["openclaw-audio-bridge", "play"],
-      },
-    });
-    const tool = tools[0] as {
-      execute: (id: string, params: unknown) => Promise<{ details: { ok?: boolean } }>;
-    };
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const { tools } = setup({
+        chrome: {
+          audioInputCommand: ["openclaw-audio-bridge", "capture"],
+          audioOutputCommand: ["openclaw-audio-bridge", "play"],
+        },
+      });
+      const tool = tools[0] as {
+        execute: (id: string, params: unknown) => Promise<{ details: { ok?: boolean } }>;
+      };
 
-    const result = await tool.execute("id", { action: "setup_status" });
+      const result = await tool.execute("id", { action: "setup_status" });
 
-    expect(result.details.ok).toBe(true);
+      expect(result.details.ok).toBe(true);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
   });
 
   it("reports attendance through the tool", async () => {
@@ -1045,7 +1051,20 @@ describe("google-meet plugin", () => {
         defaultTransport: "chrome-node",
         chromeNode: { node: "parallels-macos" },
       },
-      { nodesListResult: { nodes: [] } },
+      {
+        nodesListResult: {
+          nodes: [
+            {
+              nodeId: "node-1",
+              displayName: "parallels-macos",
+              connected: false,
+              caps: [],
+              commands: [],
+              remoteIp: "192.168.0.25",
+            },
+          ],
+        },
+      },
     );
     const tool = tools[0] as {
       execute: (
@@ -1062,10 +1081,97 @@ describe("google-meet plugin", () => {
         expect.objectContaining({
           id: "chrome-node-connected",
           ok: false,
-          message: expect.stringContaining("No connected Google Meet-capable node"),
+          message: expect.stringContaining("parallels-macos"),
         }),
       ]),
     );
+    const check = result.details.checks?.find(
+      (item) => (item as { id?: unknown }).id === "chrome-node-connected",
+    ) as { message?: string } | undefined;
+    expect(check?.message).toContain("offline");
+    expect(check?.message).toContain("missing googlemeet.chrome");
+    expect(check?.message).toContain("missing browser.proxy/browser capability");
+  });
+
+  it("reports missing local Chrome audio prerequisites in setup status", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const { tools } = setup(
+        { defaultTransport: "chrome" },
+        {
+          runCommandWithTimeoutHandler: async (argv) => {
+            if (argv[0] === "/usr/sbin/system_profiler") {
+              return { code: 0, stdout: "Built-in Output", stderr: "" };
+            }
+            return { code: 0, stdout: "", stderr: "" };
+          },
+        },
+      );
+      const tool = tools[0] as {
+        execute: (
+          id: string,
+          params: unknown,
+        ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+      };
+
+      const result = await tool.execute("id", { action: "setup_status", transport: "chrome" });
+
+      expect(result.details.ok).toBe(false);
+      expect(result.details.checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "chrome-local-audio-device",
+            ok: false,
+            message: expect.stringContaining("BlackHole 2ch audio device not found"),
+          }),
+        ]),
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("reports missing local Chrome audio commands in setup status", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const { tools } = setup(
+        { defaultTransport: "chrome" },
+        {
+          runCommandWithTimeoutHandler: async (argv) => {
+            if (argv[0] === "/usr/sbin/system_profiler") {
+              return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
+            }
+            if (argv[0] === "/bin/sh" && argv.at(-1) === "play") {
+              return { code: 1, stdout: "", stderr: "" };
+            }
+            return { code: 0, stdout: "", stderr: "" };
+          },
+        },
+      );
+      const tool = tools[0] as {
+        execute: (
+          id: string,
+          params: unknown,
+        ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+      };
+
+      const result = await tool.execute("id", { action: "setup_status", transport: "chrome" });
+
+      expect(result.details.ok).toBe(false);
+      expect(result.details.checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "chrome-local-audio-commands",
+            ok: false,
+            message: "Chrome audio command missing: play",
+          }),
+        ]),
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
   });
 
   it("reports Twilio delegation readiness when voice-call is enabled", async () => {
@@ -1217,7 +1323,7 @@ describe("google-meet plugin", () => {
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(nodesList).toHaveBeenCalledWith({ connected: true });
+    expect(nodesList.mock.calls[0]).toEqual([]);
     expect(nodesInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "node-1",

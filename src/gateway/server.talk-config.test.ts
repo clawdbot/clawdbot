@@ -34,6 +34,7 @@ type TalkConfigPayload = {
         provider?: string;
         config?: { voiceId?: string; apiKey?: string | SecretRef };
       };
+      speechLocale?: string;
       silenceTimeoutMs?: number;
     };
     session?: { mainKey?: string };
@@ -144,6 +145,7 @@ function expectTalkConfig(
     apiKey?: string | SecretRef;
     providerApiKey?: string | SecretRef;
     resolvedApiKey?: string | SecretRef;
+    speechLocale?: string;
     silenceTimeoutMs?: number;
   },
 ) {
@@ -162,6 +164,9 @@ function expectTalkConfig(
   if ("resolvedApiKey" in expected) {
     expect(talk?.resolved?.config?.apiKey).toEqual(expected.resolvedApiKey);
   }
+  if ("speechLocale" in expected) {
+    expect(talk?.speechLocale).toBe(expected.speechLocale);
+  }
   if ("silenceTimeoutMs" in expected) {
     expect(talk?.silenceTimeoutMs).toBe(expected.silenceTimeoutMs);
   }
@@ -179,6 +184,7 @@ describe("gateway talk.config", () => {
             apiKey: "secret-key-abc", // pragma: allowlist secret
           },
         },
+        speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
       },
       session: {
@@ -196,6 +202,7 @@ describe("gateway talk.config", () => {
         provider: GENERIC_TALK_PROVIDER_ID,
         voiceId: "voice-123",
         apiKey: "__OPENCLAW_REDACTED__",
+        speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
       });
       expect(res.payload?.config?.session?.mainKey).toBe("main-test");

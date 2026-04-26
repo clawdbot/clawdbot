@@ -894,6 +894,30 @@ describe("model-selection", () => {
       });
     });
 
+    it("preserves LM Studio @iq* quant suffixes", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "lmstudio/qwen3.6-27b@iq3_xxs",
+        defaultProvider: "anthropic",
+      });
+
+      expect(resolved?.ref).toEqual({
+        provider: "lmstudio",
+        model: "qwen3.6-27b@iq3_xxs",
+      });
+    });
+
+    it("splits trailing profile suffix after LM Studio @iq* quant suffixes", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "lmstudio/qwen3.6-27b@iq3_xxs@work",
+        defaultProvider: "anthropic",
+      });
+
+      expect(resolved?.ref).toEqual({
+        provider: "lmstudio",
+        model: "qwen3.6-27b@iq3_xxs",
+      });
+    });
+
     it("strips profile suffix before alias resolution", () => {
       const index = {
         byAlias: new Map([

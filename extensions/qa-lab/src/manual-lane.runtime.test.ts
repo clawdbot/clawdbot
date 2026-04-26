@@ -82,8 +82,8 @@ describe("runQaManualLane", () => {
     const result = await runQaManualLane({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.4",
-      alternateModel: "mock-openai/gpt-5.4-alt",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
       message: "check the kickoff file",
       timeoutMs: 5_000,
       replySettleMs: 0,
@@ -111,8 +111,8 @@ describe("runQaManualLane", () => {
     const result = await runQaManualLane({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       message: "check the kickoff file",
       timeoutMs: 5_000,
       replySettleMs: 0,

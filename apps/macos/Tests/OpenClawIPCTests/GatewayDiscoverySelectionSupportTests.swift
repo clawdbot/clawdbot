@@ -84,7 +84,35 @@ struct GatewayDiscoverySelectionSupportTests {
                 state: state)
 
             #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
             #expect(CommandResolver.parseSSHTarget(state.remoteTarget)?.host == "nearby-gateway.local")
+
+            let configRoot = OpenClawConfigFile.loadDict()
+            let remote = ((configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]) ?? [:]
+            #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
+        }
+    }
+
+    @Test func `selecting nearby lan gateway preserves existing ssh tunnel port`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            state.remoteTransport = .ssh
+            state.remoteUrl = "ws://localhost:29876"
+
+            GatewayDiscoverySelectionSupport.applyRemoteSelection(
+                gateway: self.makeGateway(
+                    serviceHost: "nearby-gateway.local",
+                    servicePort: 19999,
+                    stableID: "bonjour|nearby-gateway-custom"),
+                state: state)
+
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:29876")
+
+            let configRoot = OpenClawConfigFile.loadDict()
+            let remote = ((configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]) ?? [:]
+            #expect(remote["url"] as? String == "ws://127.0.0.1:29876")
         }
     }
 }

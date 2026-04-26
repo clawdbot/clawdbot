@@ -135,6 +135,10 @@ struct OpenClawOSLogHandler: AppLogLevelBackedHandler {
         self.osLogger = os.Logger(subsystem: subsystem, category: category)
     }
 
+    func log(event: LogEvent) {
+        self.writeLog(level: event.level, message: event.message, metadata: event.metadata)
+    }
+
     func log(
         level: Logger.Level,
         message: Logger.Message,
@@ -143,6 +147,14 @@ struct OpenClawOSLogHandler: AppLogLevelBackedHandler {
         file: String,
         function: String,
         line: UInt)
+    {
+        self.writeLog(level: level, message: message, metadata: metadata)
+    }
+
+    private func writeLog(
+        level: Logger.Level,
+        message: Logger.Message,
+        metadata: Logger.Metadata?)
     {
         let merged = Self.mergeMetadata(self.metadata, metadata)
         let rendered = Self.renderMessage(message, metadata: merged)
@@ -186,7 +198,37 @@ struct OpenClawFileLogHandler: AppLogLevelBackedHandler {
     let label: String
     var metadata: Logger.Metadata = [:]
 
+    func log(event: LogEvent) {
+        self.writeLog(
+            level: event.level,
+            message: event.message,
+            metadata: event.metadata,
+            source: event.source,
+            file: event.file,
+            function: event.function,
+            line: event.line)
+    }
+
     func log(
+        level: Logger.Level,
+        message: Logger.Message,
+        metadata: Logger.Metadata?,
+        source: String,
+        file: String,
+        function: String,
+        line: UInt)
+    {
+        self.writeLog(
+            level: level,
+            message: message,
+            metadata: metadata,
+            source: source,
+            file: file,
+            function: function,
+            line: line)
+    }
+
+    private func writeLog(
         level: Logger.Level,
         message: Logger.Message,
         metadata: Logger.Metadata?,

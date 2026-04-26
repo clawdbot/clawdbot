@@ -80,12 +80,16 @@ async function main() {
       },
       agents: {
         defaults: {
+          skipBootstrap: true,
+          contextInjection: "never",
+          skills: [],
           subagents: {
             runTimeoutSeconds: 8,
           },
         },
       },
       tools: {
+        profile: "coding",
         subagents: {
           tools: {
             alsoAllow: ["bundle-mcp"],

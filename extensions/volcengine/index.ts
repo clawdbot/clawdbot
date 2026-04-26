@@ -3,6 +3,7 @@ import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-aut
 import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
 import { DOUBAO_CODING_MODEL_CATALOG, DOUBAO_MODEL_CATALOG } from "./models.js";
 import { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";
+import { buildVolcengineSpeechProvider } from "./speech-provider.js";
 
 const PROVIDER_ID = "volcengine";
 const VOLCENGINE_DEFAULT_MODEL_REF = "volcengine-plan/ark-code-latest";
@@ -78,5 +79,6 @@ export default definePluginEntry({
         return [...volcengineModels, ...volcenginePlanModels];
       },
     });
+    api.registerSpeechProvider(buildVolcengineSpeechProvider());
   },
 });

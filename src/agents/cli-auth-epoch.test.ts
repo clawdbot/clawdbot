@@ -15,6 +15,7 @@ describe("resolveCliAuthEpoch", () => {
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => null,
       readCodexCliCredentialsCached: () => null,
+      readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => ({
         version: 1,
         profiles: {},
@@ -74,6 +75,70 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).not.toBe(first);
   });
 
+  it("keeps gemini cli oauth epochs stable through token rotation and flips on account change", async () => {
+    let access = "gemini-access-a";
+    let refresh = "gemini-refresh-a";
+    let expires = 1;
+    let accountId: string | undefined = "google-account-1";
+    let email: string | undefined = "user-a@example.com";
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access,
+        refresh,
+        expires,
+        ...(accountId ? { accountId } : {}),
+        ...(email ? { email } : {}),
+      }),
+    });
+
+    const first = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+    access = "gemini-access-b";
+    refresh = "gemini-refresh-b";
+    expires = 2;
+    const second = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+
+    expect(first).toBeDefined();
+    // Access and refresh rotation must not shift the epoch while the lifted
+    // Google-account identity is stable.
+    expect(second).toBe(first);
+
+    email = "user-b@example.com";
+    const third = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+
+    expect(third).toBeDefined();
+    expect(third).not.toBe(second);
+
+    accountId = "google-account-2";
+    const fourth = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+
+    expect(fourth).toBeDefined();
+    expect(fourth).not.toBe(third);
+  });
+
+  it("falls back to the identity-less oauth epoch when gemini id_token is absent", async () => {
+    let refresh = "gemini-refresh-a";
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "gemini-access",
+        refresh,
+        expires: 1,
+      }),
+    });
+
+    const first = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+    refresh = "gemini-refresh-b";
+    const second = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+
+    expect(first).toBeDefined();
+    // Without lifted identity, the epoch is a provider-keyed constant that
+    // survives token rotation — same fallback as the Claude CLI OAuth branch.
+    expect(second).toBe(first);
+  });
+
   it("keeps oauth auth-profile epochs stable across token refreshes", async () => {
     let store: AuthProfileStore = {
       version: 1,
@@ -89,6 +154,7 @@ describe("resolveCliAuthEpoch", () => {
       },
     };
     setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => store,
     });
 
@@ -133,6 +199,7 @@ describe("resolveCliAuthEpoch", () => {
       },
     };
     setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => store,
     });
 

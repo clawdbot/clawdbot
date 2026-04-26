@@ -1,9 +1,9 @@
 import { mergeMissing } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryForPluginRegistry,
   resolveManifestContractOwnerPluginId,
-} from "../../../plugins/manifest-registry.js";
+} from "../../../plugins/plugin-registry.js";
 import {
   cloneRecord,
   ensureRecord,
@@ -22,7 +22,9 @@ let legacyWebSearchProviderIdsCache: string[] | undefined;
 let legacyWebSearchProviderIdSetCache: Set<string> | undefined;
 
 function getLegacyWebSearchProviderIds(): string[] {
-  legacyWebSearchProviderIdsCache ??= loadPluginManifestRegistry({ cache: true })
+  legacyWebSearchProviderIdsCache ??= loadPluginManifestRegistryForPluginRegistry({
+    includeDisabled: true,
+  })
     .plugins.filter((plugin) => plugin.origin === "bundled")
     .flatMap((plugin) => plugin.contracts?.webSearchProviders ?? [])
     .filter((providerId) => !NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS.has(providerId))

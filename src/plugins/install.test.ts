@@ -117,10 +117,6 @@ async function packToArchive({
   return dest;
 }
 
-function readVoiceCallArchiveBuffer(version: string): Buffer {
-  return fs.readFileSync(path.join(pluginFixturesDir, `voice-call-${version}.tgz`));
-}
-
 function getArchiveFixturePath(params: {
   cacheKey: string;
   outName: string;
@@ -140,8 +136,6 @@ function readZipperArchiveBuffer(): Buffer {
   return fs.readFileSync(path.join(pluginFixturesDir, "zipper-0.0.1.zip"));
 }
 
-const VOICE_CALL_ARCHIVE_V1_BUFFER = readVoiceCallArchiveBuffer("0.0.1");
-const VOICE_CALL_ARCHIVE_V2_BUFFER = readVoiceCallArchiveBuffer("0.0.2");
 const ZIPPER_ARCHIVE_BUFFER = readZipperArchiveBuffer();
 
 function expectPluginFiles(result: { targetDir: string }, stateDir: string, pluginId: string) {
@@ -174,18 +168,32 @@ function setupPluginInstallDirs() {
   return { tmpDir, pluginDir, extensionsDir };
 }
 
-function setupInstallPluginFromDirFixture(params?: { devDependencies?: Record<string, string> }) {
+function setupInstallPluginFromDirFixture(params?: {
+  devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  omitDependencies?: boolean;
+}) {
   const caseDir = suiteTempRootTracker.makeTempDir();
   const stateDir = path.join(caseDir, "state");
   const pluginDir = path.join(caseDir, "plugin");
   fs.mkdirSync(stateDir, { recursive: true });
   fs.cpSync(installPluginFromDirTemplateDir, pluginDir, { recursive: true });
-  if (params?.devDependencies) {
+  if (params?.devDependencies || params?.optionalDependencies || params?.omitDependencies) {
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
+      optionalDependencies?: Record<string, string>;
     };
-    manifest.devDependencies = params.devDependencies;
+    if (params.omitDependencies) {
+      delete manifest.dependencies;
+    }
+    if (params.devDependencies) {
+      manifest.devDependencies = params.devDependencies;
+    }
+    if (params.optionalDependencies) {
+      manifest.optionalDependencies = params.optionalDependencies;
+    }
     fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
   }
   return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
@@ -430,6 +438,8 @@ async function installArchivePackageAndReturnResult(params: {
   outName: string;
   withDistIndex?: boolean;
   flatRoot?: boolean;
+  writePluginManifest?: boolean;
+  manifestId?: string;
 }) {
   const stateDir = suiteTempRootTracker.makeTempDir();
   const archivePath = await ensureDynamicArchiveTemplate({
@@ -437,6 +447,8 @@ async function installArchivePackageAndReturnResult(params: {
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex === true,
     flatRoot: params.flatRoot === true,
+    writePluginManifest: params.writePluginManifest,
+    manifestId: params.manifestId,
   });
 
   const extensionsDir = path.join(stateDir, "extensions");
@@ -452,12 +464,16 @@ function buildDynamicArchiveTemplateKey(params: {
   withDistIndex: boolean;
   distIndexJsContent?: string;
   flatRoot: boolean;
+  writePluginManifest?: boolean;
+  manifestId?: string;
 }): string {
   return JSON.stringify({
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex,
     distIndexJsContent: params.distIndexJsContent ?? null,
     flatRoot: params.flatRoot,
+    writePluginManifest: params.writePluginManifest ?? true,
+    manifestId: params.manifestId ?? null,
   });
 }
 
@@ -467,12 +483,16 @@ async function ensureDynamicArchiveTemplate(params: {
   withDistIndex: boolean;
   distIndexJsContent?: string;
   flatRoot?: boolean;
+  writePluginManifest?: boolean;
+  manifestId?: string;
 }): Promise<string> {
   const templateKey = buildDynamicArchiveTemplateKey({
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex,
     distIndexJsContent: params.distIndexJsContent,
     flatRoot: params.flatRoot === true,
+    writePluginManifest: params.writePluginManifest,
+    manifestId: params.manifestId,
   });
   const cachedPath = dynamicArchiveTemplatePathCache.get(templateKey);
   if (cachedPath) {
@@ -490,6 +510,18 @@ async function ensureDynamicArchiveTemplate(params: {
     );
   }
   fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify(params.packageJson), "utf-8");
+  if (params.writePluginManifest !== false) {
+    const packageName =
+      typeof params.packageJson.name === "string" ? params.packageJson.name : "fixture-plugin";
+    fs.writeFileSync(
+      path.join(pkgDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: params.manifestId ?? packageName,
+        configSchema: { type: "object", properties: {} },
+      }),
+      "utf-8",
+    );
+  }
   const archivePath = await packToArchive({
     pkgDir,
     outDir: ensureSuiteFixtureRoot(),
@@ -578,15 +610,23 @@ beforeEach(() => {
 describe("installPluginFromArchive", () => {
   it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
-    const archiveV1 = getArchiveFixturePath({
-      cacheKey: "voice-call:0.0.1",
+    const archiveV1 = await ensureDynamicArchiveTemplate({
       outName: "voice-call-0.0.1.tgz",
-      buffer: VOICE_CALL_ARCHIVE_V1_BUFFER,
+      packageJson: {
+        name: "@openclaw/voice-call",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
     });
-    const archiveV2 = getArchiveFixturePath({
-      cacheKey: "voice-call:0.0.2",
+    const archiveV2 = await ensureDynamicArchiveTemplate({
       outName: "voice-call-0.0.2.tgz",
-      buffer: VOICE_CALL_ARCHIVE_V2_BUFFER,
+      packageJson: {
+        name: "@openclaw/voice-call",
+        version: "0.0.2",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
     });
 
     const extensionsDir = path.join(stateDir, "extensions");
@@ -620,7 +660,7 @@ describe("installPluginFromArchive", () => {
     expect(manifest.version).toBe("0.0.2");
   });
 
-  it("installs from a zip archive", async () => {
+  it("rejects native plugin zip archives without openclaw.plugin.json", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const archivePath = getArchiveFixturePath({
       cacheKey: "zipper:0.0.1",
@@ -633,7 +673,12 @@ describe("installPluginFromArchive", () => {
       archivePath,
       extensionsDir,
     });
-    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/zipper" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("package missing valid openclaw.plugin.json");
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.MISSING_PLUGIN_MANIFEST);
+    }
+    expect(fs.existsSync(resolvePluginInstallDir("@openclaw/zipper", extensionsDir))).toBe(false);
   });
 
   it("allows archive installs with dangerous code patterns when forced unsafe install is set", async () => {
@@ -2069,6 +2114,32 @@ describe("installPluginFromDir", () => {
           dirPath: pluginDir,
           extensionsDir,
         }),
+    });
+  });
+
+  it("runs npm install for optional-only dependencies", async () => {
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture({
+      omitDependencies: true,
+      optionalDependencies: {
+        "left-pad": "1.3.0",
+      },
+    });
+
+    const run = vi.mocked(runCommandWithTimeout);
+    mockSuccessfulCommandRun(run);
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectSingleNpmInstallIgnoreScriptsCall({
+      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
+      expectedTargetDir: res.targetDir,
     });
   });
 

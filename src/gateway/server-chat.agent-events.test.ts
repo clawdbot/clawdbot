@@ -215,6 +215,34 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("strips internal runtime context from assistant chat events", () => {
+    const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
+      createHarness({ now: 1_000 }),
+      [
+        "Visible before.",
+        "",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "OpenClaw runtime context (internal):",
+        "[Internal task completion event]",
+        "secret child result",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "",
+        "Visible after.",
+      ].join("\n"),
+    );
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.content?.[0]?.text).toBe("Visible before.\n\nVisible after.");
+    expect(payload.message?.content?.[0]?.text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+    expect(payload.message?.content?.[0]?.text).not.toContain("secret child result");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
   it.each([" NO_REPLY  ", " ANNOUNCE_SKIP ", " REPLY_SKIP "])(
     "does not emit chat delta for suppressed control text %s",
     (replyText) => {

@@ -58,7 +58,7 @@ type TranslationBatchItem = {
 };
 
 const CONTROL_UI_I18N_WORKFLOW = 1;
-const DEFAULT_OPENAI_MODEL = "gpt-5.4";
+const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_PI_PACKAGE_VERSION = "0.58.3";

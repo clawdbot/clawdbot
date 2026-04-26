@@ -210,6 +210,19 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["channel config metadata fallback"],
     tests: ["src/plugins/contracts/config-footprint-guardrails.test.ts"],
   },
+  {
+    code: "disable-persisted-plugin-registry-env",
+    status: "deprecated",
+    owner: "config",
+    introduced: "2026-04-25",
+    deprecated: "2026-04-25",
+    warningStarts: "2026-04-25",
+    replacement: "`openclaw plugins registry --refresh` and `openclaw doctor --fix`",
+    docsPath: "/cli/plugins#registry",
+    surfaces: ["OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY", "plugin registry reads"],
+    diagnostics: ["persisted-registry-disabled"],
+    tests: ["src/plugins/plugin-registry.test.ts"],
+  },
 ] as const satisfies readonly PluginCompatRecord[];
 
 export type PluginCompatCode = (typeof PLUGIN_COMPAT_RECORDS)[number]["code"];

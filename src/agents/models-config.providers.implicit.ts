@@ -70,6 +70,7 @@ function resolveProviderDiscoveryFilter(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  resolveOwners?: (provider: string) => readonly string[] | undefined;
 }): string[] | undefined {
   const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
@@ -102,12 +103,14 @@ function resolveProviderDiscoveryFilter(params: {
   const pluginIds = new Set<string>();
   for (const id of ids) {
     const owners =
+      params.resolveOwners?.(id) ??
       resolveOwningPluginIdsForProvider({
         provider: id,
         config,
         workspaceDir,
         env,
-      }) ?? [];
+      }) ??
+      [];
     if (owners.length > 0) {
       for (const owner of owners) {
         pluginIds.add(owner);
@@ -125,6 +128,7 @@ export function resolveProviderDiscoveryFilterForTest(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  resolveOwners?: (provider: string) => readonly string[] | undefined;
 }): string[] | undefined {
   return resolveProviderDiscoveryFilter(params);
 }

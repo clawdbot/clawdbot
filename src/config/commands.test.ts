@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -96,6 +97,32 @@ describe("resolveNativeSkillsEnabled", () => {
       resolveNativeSkillsEnabled({
         providerId: "whatsapp",
         globalSetting: "auto",
+      }),
+    ).toBe(false);
+  });
+
+  it("uses package channel metadata for bundled auto defaults before runtime loads", () => {
+    setActivePluginRegistry(createTestRegistry([]));
+    const env = {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+      OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+    };
+
+    expect(
+      resolveNativeSkillsEnabled({
+        providerId: "discord",
+        globalSetting: "auto",
+        env,
+      }),
+    ).toBe(true);
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "slack",
+        globalSetting: "auto",
+        env,
       }),
     ).toBe(false);
   });

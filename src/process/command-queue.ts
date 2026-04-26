@@ -373,12 +373,13 @@ export function getActiveTaskCount(): number {
 /**
  * Wait for all currently active tasks across all lanes to finish.
  * Polls at a short interval; resolves when no tasks are active or
- * when `timeoutMs` elapses (whichever comes first).
+ * when `timeoutMs` elapses (whichever comes first). If no timeout is passed,
+ * waits indefinitely for the active set captured at call time.
  *
  * New tasks enqueued after this call are ignored — only tasks that are
  * already executing are waited on.
  */
-export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolean }> {
+export function waitForActiveTasks(timeoutMs?: number): Promise<{ drained: boolean }> {
   const queueState = getQueueState();
   const activeAtStart = new Set<number>();
   for (const state of queueState.lanes.values()) {
@@ -390,7 +391,7 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
   if (activeAtStart.size === 0) {
     return Promise.resolve({ drained: true });
   }
-  if (timeoutMs <= 0) {
+  if (timeoutMs !== undefined && timeoutMs <= 0) {
     return Promise.resolve({ drained: false });
   }
 
@@ -399,9 +400,11 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
       activeTaskIds: activeAtStart,
       resolve,
     };
-    waiter.timeout = setTimeout(() => {
-      resolveActiveTaskWaiter(waiter, { drained: false });
-    }, timeoutMs);
+    if (timeoutMs !== undefined) {
+      waiter.timeout = setTimeout(() => {
+        resolveActiveTaskWaiter(waiter, { drained: false });
+      }, timeoutMs);
+    }
     queueState.activeTaskWaiters.add(waiter);
     notifyActiveTaskWaiters();
   });

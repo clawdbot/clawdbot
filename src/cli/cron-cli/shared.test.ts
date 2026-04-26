@@ -78,6 +78,22 @@ describe("printCronList", () => {
     expect(logs.some((line) => line.includes("isolated"))).toBe(true);
   });
 
+  it("tolerates malformed rows in human-readable output", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const malformedJob = {
+      id: "malformed-job",
+      name: undefined,
+      enabled: true,
+      sessionTarget: undefined,
+      payload: undefined,
+      schedule: undefined,
+      state: undefined,
+    } as unknown as CronJob;
+
+    expect(() => printCronList([malformedJob], runtime)).not.toThrow();
+    expect(logs.some((line) => line.includes("malformed-job"))).toBe(true);
+  });
+
   it("shows stagger label for cron schedules", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({

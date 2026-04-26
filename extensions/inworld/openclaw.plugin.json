@@ -1,0 +1,40 @@
+{
+  "id": "inworld",
+  "enabledByDefault": true,
+  "name": "Inworld",
+  "description": "Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).",
+  "providerAuthEnvVars": {
+    "inworld": ["INWORLD_API_KEY"]
+  },
+  "contracts": {
+    "speechProviders": ["inworld"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "Inworld API key. Must be the Base64 credential string from the Inworld dashboard (used as Authorization: Basic <apiKey>). Falls back to INWORLD_API_KEY env var."
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Override Inworld API base URL (default https://api.inworld.ai)."
+      },
+      "voiceId": {
+        "type": "string",
+        "description": "Voice identifier (default Sarah)."
+      },
+      "modelId": {
+        "type": "string",
+        "description": "TTS model id (default inworld-tts-1.5-max)."
+      },
+      "temperature": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 2,
+        "description": "Sampling temperature 0..2."
+      }
+    }
+  }
+}

@@ -42,6 +42,9 @@ export type ChatHost = {
   password?: string | null;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
+  chatAvatarSource?: string | null;
+  chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  chatAvatarReason?: string | null;
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
@@ -596,6 +599,13 @@ function clearChatAvatarUrl(host: ChatHost) {
   host.chatAvatarUrl = null;
 }
 
+function clearChatAvatarState(host: ChatHost) {
+  clearChatAvatarUrl(host);
+  host.chatAvatarSource = null;
+  host.chatAvatarStatus = null;
+  host.chatAvatarReason = null;
+}
+
 function setChatAvatarUrl(host: ChatHost, nextUrl: string | null) {
   const key = host as object;
   const previousBlobUrl = chatAvatarObjectUrls.get(key);
@@ -609,6 +619,32 @@ function setChatAvatarUrl(host: ChatHost, nextUrl: string | null) {
   host.chatAvatarUrl = nextUrl;
 }
 
+function setChatAvatarMeta(
+  host: ChatHost,
+  data: {
+    avatarSource?: unknown;
+    avatarStatus?: unknown;
+    avatarReason?: unknown;
+  },
+) {
+  const status =
+    data.avatarStatus === "none" ||
+    data.avatarStatus === "local" ||
+    data.avatarStatus === "remote" ||
+    data.avatarStatus === "data"
+      ? data.avatarStatus
+      : null;
+  host.chatAvatarSource =
+    typeof data.avatarSource === "string" && data.avatarSource.trim()
+      ? data.avatarSource.trim()
+      : null;
+  host.chatAvatarStatus = status;
+  host.chatAvatarReason =
+    typeof data.avatarReason === "string" && data.avatarReason.trim()
+      ? data.avatarReason.trim()
+      : null;
+}
+
 function buildControlUiAuthHeaders(authHeader: string | null): Record<string, string> | undefined {
   return authHeader ? { Authorization: authHeader } : undefined;
 }
@@ -619,7 +655,7 @@ function isLocalControlUiAvatarUrl(avatarUrl: string): boolean {
 
 export async function refreshChatAvatar(host: ChatHost) {
   if (!host.connected) {
-    clearChatAvatarUrl(host);
+    clearChatAvatarState(host);
     return;
   }
   const sessionKey = host.sessionKey;
@@ -627,11 +663,11 @@ export async function refreshChatAvatar(host: ChatHost) {
   const agentId = resolveAgentIdForSession(host);
   if (!agentId) {
     if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
-      clearChatAvatarUrl(host);
+      clearChatAvatarState(host);
     }
     return;
   }
-  clearChatAvatarUrl(host);
+  clearChatAvatarState(host);
   const authHeader = resolveControlUiAuthHeader(host);
   const headers = buildControlUiAuthHeaders(authHeader);
   const url = buildAvatarMetaUrl(host.basePath, agentId);
@@ -641,25 +677,31 @@ export async function refreshChatAvatar(host: ChatHost) {
       return;
     }
     if (!res.ok) {
-      clearChatAvatarUrl(host);
+      clearChatAvatarState(host);
       return;
     }
-    const data = (await res.json()) as { avatarUrl?: unknown };
+    const data = (await res.json()) as {
+      avatarUrl?: unknown;
+      avatarSource?: unknown;
+      avatarStatus?: unknown;
+      avatarReason?: unknown;
+    };
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
       return;
     }
+    setChatAvatarMeta(host, data);
     const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
     if (!avatarUrl || !isRenderableControlUiAvatarUrl(avatarUrl)) {
       clearChatAvatarUrl(host);
       return;
     }
-    if (!authHeader || !isLocalControlUiAvatarUrl(avatarUrl)) {
+    if (!isLocalControlUiAvatarUrl(avatarUrl)) {
       setChatAvatarUrl(host, avatarUrl);
       return;
     }
     const avatarRes = await fetch(avatarUrl, {
       method: "GET",
-      headers: { Authorization: authHeader },
+      ...(headers ? { headers } : {}),
     });
     if (!avatarRes.ok) {
       if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
@@ -675,7 +717,7 @@ export async function refreshChatAvatar(host: ChatHost) {
     setChatAvatarUrl(host, blobUrl);
   } catch {
     if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
-      clearChatAvatarUrl(host);
+      clearChatAvatarState(host);
     }
   }
 }

@@ -38,7 +38,7 @@ TIMEOUT_BOOTSTRAP_S=600
 TIMEOUT_INSTALL_S=420
 TIMEOUT_VERIFY_S=90
 TIMEOUT_ONBOARD_S=180
-TIMEOUT_AGENT_S=180
+TIMEOUT_AGENT_S="${OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S:-300}"
 TIMEOUT_GATEWAY_S=240
 PHASE_STALE_WARN_S=60
 
@@ -200,7 +200,7 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    MODEL_ID="openai/gpt-5.4"
+    MODEL_ID="openai/gpt-5.5"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
@@ -750,6 +750,20 @@ show_gateway_status_compat() {
   guest_exec openclaw gateway status --deep
 }
 
+verify_gateway_status() {
+  local attempt
+  for attempt in 1 2 3 4 5 6 7 8; do
+    if guest_exec openclaw gateway status --deep --require-rpc --timeout 15000; then
+      return 0
+    fi
+    if (( attempt < 8 )); then
+      printf 'gateway-status retry %s\n' "$attempt" >&2
+      sleep 5
+    fi
+  done
+  return 1
+}
+
 verify_local_turn() {
   guest_exec openclaw models set "$MODEL_ID"
   guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" openclaw agent \
@@ -889,7 +903,7 @@ run_fresh_main_lane() {
   phase_run "fresh.inject-bad-plugin" "$TIMEOUT_VERIFY_S" inject_bad_plugin_fixture
   phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
   phase_run "fresh.bad-plugin-diagnostic" "$TIMEOUT_VERIFY_S" verify_bad_plugin_diagnostic
-  phase_run "fresh.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_status
   FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   FRESH_AGENT_STATUS="pass"
@@ -910,7 +924,7 @@ run_upgrade_lane() {
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
   phase_run "upgrade.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
   phase_run "upgrade.bad-plugin-diagnostic" "$TIMEOUT_VERIFY_S" verify_bad_plugin_diagnostic
-  phase_run "upgrade.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_status
   UPGRADE_GATEWAY_STATUS="pass"
   phase_run "upgrade.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   UPGRADE_AGENT_STATUS="pass"

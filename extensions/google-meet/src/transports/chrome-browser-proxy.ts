@@ -54,26 +54,77 @@ function isGoogleMeetNode(node: GoogleMeetNodeInfo) {
   );
 }
 
+function matchesRequestedNode(node: GoogleMeetNodeInfo, requested: string): boolean {
+  return [node.nodeId, node.displayName, node.remoteIp].some((value) => value === requested);
+}
+
+function formatNodeLabel(node: GoogleMeetNodeInfo): string {
+  const parts = [node.displayName, node.nodeId, node.remoteIp].filter(Boolean);
+  return parts.length > 0 ? parts.join(" / ") : "unknown node";
+}
+
+function describeNodeUsabilityIssues(node: GoogleMeetNodeInfo): string[] {
+  const commands = Array.isArray(node.commands) ? node.commands : [];
+  const caps = Array.isArray(node.caps) ? node.caps : [];
+  const issues: string[] = [];
+  if (node.connected !== true) {
+    issues.push("offline");
+  }
+  if (!commands.includes("googlemeet.chrome")) {
+    issues.push("missing googlemeet.chrome");
+  }
+  if (!commands.includes("browser.proxy") && !caps.includes("browser")) {
+    issues.push("missing browser.proxy/browser capability");
+  }
+  return issues;
+}
+
+async function listGoogleMeetNodes(
+  runtime: PluginRuntime,
+  params?: { connected?: boolean },
+): Promise<{ nodes: GoogleMeetNodeInfo[] }> {
+  try {
+    return params ? await runtime.nodes.list(params) : await runtime.nodes.list();
+  } catch (error) {
+    throw new Error("Google Meet node inventory unavailable", {
+      cause: error,
+    });
+  }
+}
+
 export async function resolveChromeNodeInfo(params: {
   runtime: PluginRuntime;
   requestedNode?: string;
 }): Promise<GoogleMeetNodeInfo> {
-  const list = await params.runtime.nodes.list({ connected: true });
+  const requested = params.requestedNode?.trim();
+  if (requested) {
+    const list = await listGoogleMeetNodes(params.runtime);
+    const matches = list.nodes.filter((node) => matchesRequestedNode(node, requested));
+    if (matches.length === 1) {
+      const [node] = matches;
+      if (isGoogleMeetNode(node)) {
+        return node;
+      }
+      throw new Error(
+        `Configured Google Meet node ${requested} is not usable (${formatNodeLabel(node)}): ${describeNodeUsabilityIssues(node).join("; ")}. Start or reinstall \`openclaw node run\` on that Chrome host, approve pairing, and allow googlemeet.chrome plus browser.proxy.`,
+      );
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Configured Google Meet node ${requested} is ambiguous (${matches.length} matches). Pin chromeNode.node to a unique node id, display name, or remote IP.`,
+      );
+    }
+    throw new Error(
+      `Configured Google Meet node ${requested} was not found. Run \`openclaw nodes status\` and start or approve the Chrome node.`,
+    );
+  }
+
+  const list = await listGoogleMeetNodes(params.runtime, { connected: true });
   const nodes = list.nodes.filter(isGoogleMeetNode);
   if (nodes.length === 0) {
     throw new Error(
       "No connected Google Meet-capable node with browser proxy. Run `openclaw node run` on the Chrome host with browser proxy enabled, approve pairing, and allow googlemeet.chrome plus browser.proxy.",
     );
-  }
-  const requested = params.requestedNode?.trim();
-  if (requested) {
-    const matches = nodes.filter((node) =>
-      [node.nodeId, node.displayName, node.remoteIp].some((value) => value === requested),
-    );
-    if (matches.length === 1) {
-      return matches[0];
-    }
-    throw new Error(`Google Meet node not found or ambiguous: ${requested}`);
   }
   if (nodes.length === 1) {
     return nodes[0];

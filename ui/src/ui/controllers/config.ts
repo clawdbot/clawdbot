@@ -1,3 +1,4 @@
+import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
@@ -165,6 +166,17 @@ async function submitConfigChange(
   }
 }
 
+function syncConfigDraft(state: ConfigState, nextForm: Record<string, unknown>) {
+  const original = cloneConfigObject(
+    state.configFormOriginal ?? state.configSnapshot?.config ?? {},
+  );
+  const nextRaw = serializeConfigForm(nextForm);
+  const originalRaw = serializeConfigForm(original);
+  state.configForm = nextForm;
+  state.configRaw = nextRaw;
+  state.configFormDirty = nextRaw !== originalRaw;
+}
+
 export async function saveConfig(state: ConfigState) {
   await submitConfigChange(state, "config.set", "configSaving");
 }
@@ -203,11 +215,7 @@ export async function runUpdate(state: ConfigState) {
 function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unknown>) => void) {
   const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
   mutate(base);
-  state.configForm = base;
-  state.configFormDirty = true;
-  if (state.configFormMode === "form") {
-    state.configRaw = serializeConfigForm(base);
-  }
+  syncConfigDraft(state, base);
 }
 
 export function updateConfigFormValue(
@@ -216,6 +224,25 @@ export function updateConfigFormValue(
   value: unknown,
 ) {
   mutateConfigForm(state, (draft) => setPathValue(draft, path, value));
+}
+
+export function stageConfigPreset(state: ConfigState, patch: Record<string, unknown>) {
+  const snapshotConfig =
+    state.configSnapshot?.config &&
+    typeof state.configSnapshot.config === "object" &&
+    !Array.isArray(state.configSnapshot.config)
+      ? state.configSnapshot.config
+      : null;
+  const baseSource = state.configForm ?? snapshotConfig;
+  if (!baseSource || (!state.configForm && !state.configSnapshot?.hash)) {
+    return;
+  }
+  const base = cloneConfigObject(baseSource);
+  const merged = applyMergePatch(base, patch);
+  if (!merged || typeof merged !== "object" || Array.isArray(merged)) {
+    return;
+  }
+  syncConfigDraft(state, cloneConfigObject(merged as Record<string, unknown>));
 }
 
 export function resetConfigPendingChanges(state: ConfigState) {

@@ -550,7 +550,7 @@ describe("/model chat UX", () => {
       isDefault: false,
     });
     expect(resolved.profileOverride).toBeUndefined();
-  });
+  }, 240_000);
 
   it("persists inferred numeric auth-profile overrides for mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({

@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  getDebugProxyCaptureStore,
+  acquireDebugProxyCaptureStore,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { closeQaHttpServer, handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
@@ -168,7 +168,11 @@ export async function startQaLabServer(
 ): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const captureSettings = resolveDebugProxySettings();
-  const captureStore = getDebugProxyCaptureStore(captureSettings.dbPath, captureSettings.blobDir);
+  const captureStoreLease = acquireDebugProxyCaptureStore(
+    captureSettings.dbPath,
+    captureSettings.blobDir,
+  );
+  const captureStore = captureStoreLease.store;
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
@@ -639,6 +643,7 @@ export async function startQaLabServer(
       await runnerModelCatalogPromise?.catch(() => undefined);
       await gateway?.stop();
       await closeQaHttpServer(server);
+      captureStoreLease.release();
     },
   };
   labHandle = lab;

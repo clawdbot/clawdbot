@@ -48,6 +48,12 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   opts?: {
     defaultPort?: number;
     requireControlUiEnabled?: boolean;
+    /** Resolved runtime bind override. Mirrors Gateway runtime precedence:
+     *  explicit CLI/runtime bind wins over gateway.bind. */
+    runtimeBind?: unknown;
+    /** Resolved runtime port override. Mirrors Gateway runtime precedence:
+     *  explicit CLI/runtime port wins over gateway.port. */
+    runtimePort?: unknown;
     /** Optional container-detection callback.  When provided and `gateway.bind`
      *  is unset, the function is called to determine whether the runtime will
      *  default to `"auto"` (container) so that origins can be seeded
@@ -60,7 +66,7 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   seededOrigins: string[] | null;
   bind: GatewayNonLoopbackBindMode | null;
 } {
-  const bind = config.gateway?.bind;
+  const bind = opts?.runtimeBind ?? config.gateway?.bind;
   // When bind is unset (undefined) and we are inside a container, the runtime
   // will default to "auto" → 0.0.0.0 via defaultGatewayBindMode().  We must
   // seed origins *before* resolveGatewayRuntimeConfig runs, otherwise the
@@ -83,7 +89,10 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
     return { config, seededOrigins: null, bind: effectiveBind };
   }
 
-  const port = resolveGatewayPortWithDefault(config.gateway?.port, opts?.defaultPort);
+  const port = resolveGatewayPortWithDefault(
+    opts?.runtimePort ?? config.gateway?.port,
+    opts?.defaultPort,
+  );
   const seededOrigins = buildDefaultControlUiAllowedOrigins({
     port,
     bind: effectiveBind,

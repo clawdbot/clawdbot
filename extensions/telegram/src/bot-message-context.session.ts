@@ -111,6 +111,7 @@ export async function buildTelegramInboundContextPayload(params: {
   topicConfig?: TelegramTopicConfig;
   stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
+  audioTranscribedMediaIndex?: number;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
   options?: TelegramMessageContextOptions;
@@ -146,6 +147,7 @@ export async function buildTelegramInboundContextPayload(params: {
     topicConfig,
     stickerCacheHit,
     effectiveWasMentioned,
+    audioTranscribedMediaIndex,
     commandAuthorized,
     locationData,
     options,
@@ -344,6 +346,12 @@ export async function buildTelegramInboundContextPayload(params: {
     ReplyToBody: visibleReplyTarget?.body,
     ReplyToSender: visibleReplyTarget?.sender,
     ReplyToIsQuote: visibleReplyTarget?.kind === "quote" ? true : undefined,
+    ReplyToIsExternal: visibleReplyTarget?.source === "external_reply" ? true : undefined,
+    ReplyToQuoteText: visibleReplyTarget?.quoteText,
+    ReplyToQuotePosition: visibleReplyTarget?.quotePosition,
+    ReplyToQuoteEntities: visibleReplyTarget?.quoteEntities,
+    ReplyToQuoteSourceText: visibleReplyTarget?.quoteSourceText,
+    ReplyToQuoteSourceEntities: visibleReplyTarget?.quoteSourceEntities,
     ReplyToForwardedFrom: visibleReplyTarget?.forwardedFrom?.from,
     ReplyToForwardedFromType: visibleReplyTarget?.forwardedFrom?.fromType,
     ReplyToForwardedFromId: visibleReplyTarget?.forwardedFrom?.fromId,
@@ -372,6 +380,9 @@ export async function buildTelegramInboundContextPayload(params: {
       contextMedia.length > 0
         ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
+    ...(audioTranscribedMediaIndex !== undefined
+      ? { MediaTranscribedIndexes: [audioTranscribedMediaIndex] }
+      : {}),
     Sticker: allMedia[0]?.stickerMetadata,
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),

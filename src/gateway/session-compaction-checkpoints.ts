@@ -9,6 +9,7 @@ import type {
   SessionCompactionCheckpointReason,
   SessionEntry,
 } from "../config/sessions.js";
+import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
@@ -22,13 +23,18 @@ export type CapturedCompactionCheckpointSnapshot = {
   leafId: string;
 };
 
-function trimSessionCheckpoints(
-  checkpoints: SessionCompactionCheckpoint[] | undefined,
-): SessionCompactionCheckpoint[] | undefined {
+function trimSessionCheckpoints(checkpoints: SessionCompactionCheckpoint[] | undefined): {
+  kept: SessionCompactionCheckpoint[] | undefined;
+  removed: SessionCompactionCheckpoint[];
+} {
   if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
-    return undefined;
+    return { kept: undefined, removed: [] };
   }
-  return checkpoints.slice(-MAX_COMPACTION_CHECKPOINTS_PER_SESSION);
+  const kept = checkpoints.slice(-MAX_COMPACTION_CHECKPOINTS_PER_SESSION);
+  return {
+    kept,
+    removed: checkpoints.slice(0, Math.max(0, checkpoints.length - kept.length)),
+  };
 }
 
 function sessionStoreCheckpoints(
@@ -117,6 +123,40 @@ export async function cleanupCompactionCheckpointSnapshot(
   }
 }
 
+async function cleanupTrimmedCompactionCheckpointFiles(params: {
+  removed: SessionCompactionCheckpoint[];
+  retained: SessionCompactionCheckpoint[] | undefined;
+  currentSnapshotFile: string;
+}): Promise<void> {
+  if (params.removed.length === 0) {
+    return;
+  }
+  const retainedPaths = new Set(
+    (params.retained ?? [])
+      .map((checkpoint) => checkpoint.preCompaction.sessionFile?.trim())
+      .filter((filePath): filePath is string => Boolean(filePath)),
+  );
+  const snapshotDir = path.resolve(path.dirname(params.currentSnapshotFile));
+  for (const checkpoint of params.removed) {
+    const sessionFile = checkpoint.preCompaction.sessionFile?.trim();
+    if (!sessionFile || retainedPaths.has(sessionFile)) {
+      continue;
+    }
+    const resolvedSessionFile = path.resolve(sessionFile);
+    if (
+      path.dirname(resolvedSessionFile) !== snapshotDir ||
+      !isCompactionCheckpointTranscriptFileName(path.basename(resolvedSessionFile))
+    ) {
+      continue;
+    }
+    try {
+      await fs.unlink(resolvedSessionFile);
+    } catch {
+      // Best-effort cleanup; disk budget can still collect old checkpoint artifacts.
+    }
+  }
+}
+
 export async function persistSessionCompactionCheckpoint(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -163,6 +203,12 @@ export async function persistSessionCompactionCheckpoint(params: {
   };
 
   let stored = false;
+  let trimmedCheckpoints:
+    | {
+        kept: SessionCompactionCheckpoint[] | undefined;
+        removed: SessionCompactionCheckpoint[];
+      }
+    | undefined;
   await updateSessionStore(target.storePath, (store) => {
     const existing = store[target.canonicalKey];
     if (!existing?.sessionId) {
@@ -170,10 +216,11 @@ export async function persistSessionCompactionCheckpoint(params: {
     }
     const checkpoints = sessionStoreCheckpoints(existing);
     checkpoints.push(checkpoint);
+    trimmedCheckpoints = trimSessionCheckpoints(checkpoints);
     store[target.canonicalKey] = {
       ...existing,
       updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
-      compactionCheckpoints: trimSessionCheckpoints(checkpoints),
+      compactionCheckpoints: trimmedCheckpoints.kept,
     };
     stored = true;
   });
@@ -184,6 +231,11 @@ export async function persistSessionCompactionCheckpoint(params: {
     });
     return null;
   }
+  await cleanupTrimmedCompactionCheckpointFiles({
+    removed: trimmedCheckpoints?.removed ?? [],
+    retained: trimmedCheckpoints?.kept,
+    currentSnapshotFile: params.snapshot.sessionFile,
+  });
   return checkpoint;
 }
 

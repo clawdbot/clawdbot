@@ -58,6 +58,7 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  configureTaskRegistryMaintenance: vi.fn(),
   getInspectableTaskRegistrySummary: vi.fn(() => ({
     total: 0,
     active: 0,

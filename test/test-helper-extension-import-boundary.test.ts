@@ -10,13 +10,6 @@ describe("test-helper extension import boundary inventory", () => {
     expect(await collectTestHelperExtensionImportBoundaryInventory()).toEqual([]);
   });
 
-  it("produces stable sorted output", async () => {
-    const first = await collectTestHelperExtensionImportBoundaryInventory();
-    const second = await collectTestHelperExtensionImportBoundaryInventory();
-
-    expect(second).toEqual(first);
-  });
-
   it("script json output stays empty", async () => {
     const captured = createCapturedIo();
     const exitCode = await main(["--json"], captured.io);

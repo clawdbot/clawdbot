@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js";
 
-const loadInstalledPluginIndex = vi.hoisted(() => vi.fn());
+const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
+const listPluginContributionIds = vi.hoisted(() =>
+  vi.fn((_index?: unknown, _contribution?: unknown, _options?: unknown): string[] => []),
+);
 const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((): unknown[] => []));
 const listChatChannels = vi.hoisted(() => vi.fn((): Array<Record<string, string>> => []));
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -14,8 +17,10 @@ const applyPluginAutoEnable = vi.hoisted(() =>
   ),
 );
 
-vi.mock("../../plugins/installed-plugin-index.js", () => ({
-  loadInstalledPluginIndex: (...args: unknown[]) => loadInstalledPluginIndex(...args),
+vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
+  loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
+  listPluginContributionIds: (args: unknown) => listPluginContributionIds(args),
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -35,10 +40,11 @@ import { listManifestInstalledChannelIds, resolveChannelSetupEntries } from "./d
 
 describe("listManifestInstalledChannelIds", () => {
   beforeEach(() => {
-    loadInstalledPluginIndex.mockReset().mockReturnValue({
+    loadPluginRegistrySnapshot.mockReset().mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
+    listPluginContributionIds.mockReset().mockReturnValue([]);
     listChannelPluginCatalogEntries.mockReset().mockReturnValue([]);
     listChatChannels.mockReset().mockReturnValue([]);
     applyPluginAutoEnable.mockReset().mockImplementation(({ config }) => ({
@@ -61,10 +67,11 @@ describe("listManifestInstalledChannelIds", () => {
         slack: ["slack configured"],
       },
     });
-    loadInstalledPluginIndex.mockReturnValue({
-      plugins: [{ pluginId: "slack", contributions: { channels: ["slack"] } }],
+    loadPluginRegistrySnapshot.mockReturnValue({
+      plugins: [{ pluginId: "slack" }],
       diagnostics: [],
     });
+    listPluginContributionIds.mockReturnValue(["slack"]);
 
     const installedIds = listManifestInstalledChannelIds({
       cfg: {} as never,
@@ -76,7 +83,17 @@ describe("listManifestInstalledChannelIds", () => {
       config: {},
       env: { OPENCLAW_HOME: "/tmp/home" },
     });
-    expect(loadInstalledPluginIndex).toHaveBeenCalledWith({
+    expect(loadPluginRegistrySnapshot).toHaveBeenCalledWith({
+      config: autoEnabledConfig,
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/home" },
+    });
+    expect(listPluginContributionIds).toHaveBeenCalledWith({
+      index: {
+        plugins: [{ pluginId: "slack" }],
+        diagnostics: [],
+      },
+      contribution: "channels",
       config: autoEnabledConfig,
       workspaceDir: "/tmp/workspace",
       env: { OPENCLAW_HOME: "/tmp/home" },

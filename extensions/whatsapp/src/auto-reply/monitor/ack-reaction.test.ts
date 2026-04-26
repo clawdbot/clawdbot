@@ -71,7 +71,6 @@ const expectAckReactionSent = (accountId: string) => {
     expect.objectContaining({
       verbose: false,
       fromMe: false,
-      participant: undefined,
       accountId,
     }),
   );
@@ -85,24 +84,27 @@ describe("maybeSendAckReaction", () => {
   it.each(["ack", "minimal", "extensive"] as const)(
     "sends ack reactions when reactionLevel is %s",
     async (reactionLevel) => {
-      await runAckReaction({
+      const ackReaction = await runAckReaction({
         cfg: createConfig(reactionLevel),
       });
 
+      expect(ackReaction?.ackReactionValue).toBe("👀");
+      await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
       expectAckReactionSent("default");
     },
   );
 
   it("suppresses ack reactions when reactionLevel is off", async () => {
-    await runAckReaction({
+    const ackReaction = await runAckReaction({
       cfg: createConfig("off"),
     });
 
+    expect(ackReaction).toBeNull();
     expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
   });
 
   it("uses the active account reactionLevel override for ack gating", async () => {
-    await runAckReaction({
+    const ackReaction = await runAckReaction({
       cfg: createConfig("off", {
         accounts: {
           work: {
@@ -117,6 +119,41 @@ describe("maybeSendAckReaction", () => {
       accountId: "work",
     });
 
+    expect(ackReaction?.ackReactionValue).toBe("👀");
     expectAckReactionSent("work");
+  });
+
+  it("returns a handle that removes the ack with an empty reaction", async () => {
+    const ackReaction = await runAckReaction();
+
+    await ackReaction?.remove();
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      "15551234567@s.whatsapp.net",
+      "msg-1",
+      "",
+      expect.objectContaining({
+        verbose: false,
+        fromMe: false,
+        accountId: "default",
+      }),
+    );
+  });
+
+  it("records ack send failures on the handle", async () => {
+    const warn = vi.fn();
+    hoisted.sendReactionWhatsApp.mockRejectedValueOnce(new Error("session down"));
+
+    const ackReaction = await runAckReaction({ warn });
+
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "session down",
+        chatId: "15551234567@s.whatsapp.net",
+        messageId: "msg-1",
+      }),
+      "failed to send ack reaction",
+    );
   });
 });

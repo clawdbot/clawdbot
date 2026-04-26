@@ -24,12 +24,22 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
     diagnostics: [],
     plugins: [
       {
+        id: "test-channel-fixture",
+        channels: ["discord", "irc", "slack", "telegram"],
+        providers: [],
+        cliBackends: [],
         channelEnvVars: {
           discord: ["DISCORD_BOT_TOKEN"],
           irc: ["IRC_HOST", "IRC_NICK"],
           slack: ["SLACK_BOT_TOKEN"],
           telegram: ["TELEGRAM_BOT_TOKEN"],
         },
+        skills: [],
+        hooks: [],
+        origin: "bundled",
+        rootDir: "/tmp/openclaw-test-channel-fixture",
+        source: "bundled",
+        manifestPath: "/tmp/openclaw-test-channel-fixture/openclaw.plugin.json",
       },
     ],
   })),
@@ -56,6 +66,18 @@ const facadeMockHelpers = vi.hoisted(() => {
 
 vi.mock("./plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry,
+}));
+
+vi.mock("./secrets/channel-env-vars.js", () => ({
+  getChannelEnvVars: (channelId: string) => {
+    const varsByChannel: Record<string, string[]> = {
+      discord: ["DISCORD_BOT_TOKEN"],
+      irc: ["IRC_HOST", "IRC_NICK"],
+      slack: ["SLACK_BOT_TOKEN"],
+      telegram: ["TELEGRAM_BOT_TOKEN"],
+    };
+    return varsByChannel[channelId] ?? [];
+  },
 }));
 
 vi.mock("./plugin-sdk/facade-loader.js", () => ({
@@ -104,7 +126,6 @@ describe("plugin activation boundary", () => {
     });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
 
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
     expect(parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
     expect(
       loadBundledPluginPublicSurfaceModuleSync.mock.calls.map(

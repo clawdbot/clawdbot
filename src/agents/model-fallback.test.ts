@@ -582,6 +582,28 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("classifies non-GPT incomplete terminal errors for configured fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [
+        { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
+      ],
+      meta: {
+        durationMs: 1,
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "anthropic",
+        model: "claude-opus-4.7",
+        result: runResult,
+      }),
+    ).toMatchObject({
+      code: "incomplete_result",
+      reason: "format",
+    });
+  });
+
   it("keeps aborted harness-classified GPT-5 runs out of fallback", () => {
     const runResult: EmbeddedPiRunResult = {
       payloads: [],

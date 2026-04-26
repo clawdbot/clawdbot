@@ -5,12 +5,7 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import {
-  loadConfig,
-  readConfigFileSnapshot,
-  replaceConfigFile,
-  type OpenClawConfig,
-} from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
 import { setVerbose } from "../globals.js";
@@ -20,6 +15,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
 type ChannelAuthOptions = {
   channel?: string;
@@ -182,17 +178,15 @@ export async function runChannelLogin(
     env: process.env,
   });
   const loadedCfg = autoEnabled.config;
-  const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
-    opts,
-    "login",
-    loadedCfg,
-    runtime,
-  );
+  const resolvedChannel = await resolveChannelPluginForMode(opts, "login", loadedCfg, runtime);
+  let cfg = resolvedChannel.cfg;
+  const { configChanged, channelInput, plugin } = resolvedChannel;
   if (autoEnabled.changes.length > 0 || configChanged) {
-    await replaceConfigFile({
+    const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: cfg,
       baseHash: (await sourceSnapshotPromise)?.hash,
     });
+    cfg = committed.config;
   }
   const login = plugin.auth?.login;
   if (!login) {
@@ -227,17 +221,15 @@ export async function runChannelLogout(
     env: process.env,
   });
   const loadedCfg = autoEnabled.config;
-  const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
-    opts,
-    "logout",
-    loadedCfg,
-    runtime,
-  );
+  const resolvedChannel = await resolveChannelPluginForMode(opts, "logout", loadedCfg, runtime);
+  let cfg = resolvedChannel.cfg;
+  const { configChanged, channelInput, plugin } = resolvedChannel;
   if (autoEnabled.changes.length > 0 || configChanged) {
-    await replaceConfigFile({
+    const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: cfg,
       baseHash: (await sourceSnapshotPromise)?.hash,
     });
+    cfg = committed.config;
   }
   const logoutAccount = plugin.gateway?.logoutAccount;
   if (!logoutAccount) {

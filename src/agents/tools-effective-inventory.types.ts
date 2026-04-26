@@ -19,10 +19,17 @@ export type EffectiveToolInventoryGroup = {
   tools: EffectiveToolInventoryEntry[];
 };
 
+export type EffectiveToolInventoryNotice = {
+  id: string;
+  severity: "info" | "warning";
+  message: string;
+};
+
 export type EffectiveToolInventoryResult = {
   agentId: string;
   profile: string;
   groups: EffectiveToolInventoryGroup[];
+  notices?: EffectiveToolInventoryNotice[];
 };
 
 export type ResolveEffectiveToolInventoryParams = {

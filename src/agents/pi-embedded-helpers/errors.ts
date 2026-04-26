@@ -753,11 +753,13 @@ function isProvider(provider: string | undefined, match: string): boolean {
   return Boolean(normalized && normalized.includes(match));
 }
 
-function isAnthropicGenericUnknownError(raw: string, provider?: string): boolean {
-  return (
-    isProvider(provider, "anthropic") &&
-    (normalizeOptionalLowercaseString(raw)?.includes("an unknown error occurred") ?? false)
-  );
+// pi-ai providers throw `Error("An unknown error occurred")` provider-agnostically
+// (anthropic, google, vertex, openai-completions, mistral, bedrock, etc.) when a
+// stream ends with stopReason === "aborted" | "error" without specific info. Treat
+// it as a transient transport failure so the configured fallback chain rotates
+// instead of returning the bare string to the user (#71620).
+function isGenericUnknownStreamError(raw: string): boolean {
+  return /^\s*an unknown error occurred\.?\s*$/i.test(raw);
 }
 
 function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
@@ -833,7 +835,7 @@ function classifyFailoverClassificationFromMessage(
   if (isAuthErrorMessage(raw)) {
     return toReasonClassification("auth");
   }
-  if (isAnthropicGenericUnknownError(raw, provider)) {
+  if (isGenericUnknownStreamError(raw)) {
     return toReasonClassification("timeout");
   }
   if (isOpenRouterProviderReturnedError(raw, provider)) {

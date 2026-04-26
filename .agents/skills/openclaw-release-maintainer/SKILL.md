@@ -97,6 +97,11 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 
 ## Build changelog-backed release notes
 
+- Before release branching or tagging, rewrite the target `CHANGELOG.md`
+  section from commit history, not just from existing notes: scan commits since
+  the last reachable release tag, add missed user-facing changes, dedupe
+  overlapping entries, and sort each section from most to least interesting for
+  users.
 - Changelog entries should be user-facing, not internal release-process notes.
 - GitHub release and prerelease bodies must use the full matching
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating
@@ -197,9 +202,15 @@ Before tagging or publishing, run:
 pnpm check:architecture
 pnpm build
 pnpm ui:build
+pnpm qa:otel:smoke
 pnpm release:check
 pnpm test:install:smoke
 ```
+
+- Use `pnpm qa:otel:smoke` when release validation needs telemetry coverage.
+  It starts a local OTLP/HTTP trace receiver, runs QA-lab's
+  `otel-trace-smoke`, and checks span names plus content/identifier redaction
+  without external Opik or Langfuse credentials.
 
 For a non-root smoke path:
 

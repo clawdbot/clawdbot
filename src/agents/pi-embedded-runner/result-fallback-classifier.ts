@@ -83,7 +83,7 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
   hasDirectlySentBlockReply?: boolean;
   hasBlockReplyPipelineOutput?: boolean;
 }): ModelFallbackResultClassification {
-  if (!isGpt5ModelId(params.model) || !isEmbeddedPiRunResult(params.result)) {
+  if (!isEmbeddedPiRunResult(params.result)) {
     return null;
   }
   if (
@@ -108,6 +108,22 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
   }
 
   const payloads = params.result.payloads ?? [];
+  const errorText = payloads
+    .filter((payload) => payload?.isError === true)
+    .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
+    .join("\n");
+  if (EMPTY_TERMINAL_REPLY_RE.test(errorText)) {
+    return {
+      message: `${params.provider}/${params.model} ended with an incomplete terminal response`,
+      reason: "format",
+      code: "incomplete_result",
+    };
+  }
+
+  if (!isGpt5ModelId(params.model)) {
+    return null;
+  }
+
   if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
     return null;
   }
@@ -126,10 +142,6 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
     };
   }
 
-  const errorText = payloads
-    .filter((payload) => payload?.isError === true)
-    .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
-    .join("\n");
   if (PLAN_ONLY_TERMINAL_REPLY_RE.test(errorText)) {
     return {
       message: `${params.provider}/${params.model} exhausted plan-only retries without taking action`,

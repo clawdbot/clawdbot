@@ -1,4 +1,6 @@
+import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
@@ -9,6 +11,13 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { installPluginFromClawHub } from "./clawhub.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import {
+  getExternalizedBundledPluginLegacyPathSuffix,
+  getExternalizedBundledPluginLookupIds,
+  getExternalizedBundledPluginTargetId,
+  type ExternalizedBundledPluginBridge,
+} from "./externalized-bundled-plugins.js";
 import {
   installPluginFromNpmSpec,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -106,10 +115,6 @@ type InstallIntegrityDrift = {
   };
 };
 
-function stringFieldMatches(recorded: string | undefined, resolved: string | undefined): boolean {
-  return !recorded || (resolved !== undefined && recorded === resolved);
-}
-
 function shouldSkipUnchangedNpmInstall(params: {
   currentVersion?: string;
   record: {
@@ -127,12 +132,28 @@ function shouldSkipUnchangedNpmInstall(params: {
   if (params.currentVersion !== params.metadata.version) {
     return false;
   }
+  if (
+    !params.record.resolvedName ||
+    !params.record.resolvedSpec ||
+    !params.record.resolvedVersion
+  ) {
+    return false;
+  }
+  if (!params.metadata.name || !params.metadata.resolvedSpec) {
+    return false;
+  }
+  if (params.metadata.integrity && !params.record.integrity) {
+    return false;
+  }
+  if (params.metadata.shasum && !params.record.shasum) {
+    return false;
+  }
   return (
-    stringFieldMatches(params.record.integrity, params.metadata.integrity) &&
-    stringFieldMatches(params.record.shasum, params.metadata.shasum) &&
-    stringFieldMatches(params.record.resolvedName, params.metadata.name) &&
-    stringFieldMatches(params.record.resolvedSpec, params.metadata.resolvedSpec) &&
-    stringFieldMatches(params.record.resolvedVersion, params.metadata.version)
+    (!params.metadata.integrity || params.record.integrity === params.metadata.integrity) &&
+    (!params.metadata.shasum || params.record.shasum === params.metadata.shasum) &&
+    params.record.resolvedName === params.metadata.name &&
+    params.record.resolvedSpec === params.metadata.resolvedSpec &&
+    params.record.resolvedVersion === params.metadata.version
   );
 }
 
@@ -145,6 +166,19 @@ function pathsEqual(
     return false;
   }
   return resolveUserPath(left, env) === resolveUserPath(right, env);
+}
+
+function resolveRecordedExtensionsDir(params: {
+  pluginId: string;
+  installPath: string;
+}): string | undefined {
+  const parentDir = path.dirname(params.installPath);
+  try {
+    const canonicalInstallPath = resolvePluginInstallDir(params.pluginId, parentDir);
+    return canonicalInstallPath === params.installPath ? parentDir : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv = process.env) {
@@ -173,9 +207,20 @@ function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv = proce
     changed = true;
   };
 
+  const removeMatching = (predicate: (value: string) => boolean) => {
+    const next = paths.filter((entry) => !predicate(entry));
+    if (next.length === paths.length) {
+      return;
+    }
+    paths = next;
+    resolved = resolveSet();
+    changed = true;
+  };
+
   return {
     addPath,
     removePath,
+    removeMatching,
     get changed() {
       return changed;
     },
@@ -183,6 +228,141 @@ function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv = proce
       return paths;
     },
   };
+}
+
+function normalizePathSegment(value: string | undefined): string {
+  return (
+    value
+      ?.trim()
+      .replaceAll("\\", "/")
+      .replace(/^\/+|\/+$/g, "") ?? ""
+  );
+}
+
+function pathEndsWithSegment(params: {
+  value: string | undefined;
+  segment: string | undefined;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const value = normalizePathSegment(params.value ? resolveUserPath(params.value, params.env) : "");
+  const segment = normalizePathSegment(params.segment);
+  return Boolean(value && segment && (value === segment || value.endsWith(`/${segment}`)));
+}
+
+function isBridgeBundledPathRecord(params: {
+  bridge: ExternalizedBundledPluginBridge;
+  bundledLocalPath?: string;
+  record: PluginInstallRecord;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  if (params.record.source !== "path") {
+    return false;
+  }
+  if (
+    params.bundledLocalPath &&
+    (pathsEqual(params.record.sourcePath, params.bundledLocalPath, params.env) ||
+      pathsEqual(params.record.installPath, params.bundledLocalPath, params.env))
+  ) {
+    return true;
+  }
+  const bundledPathSuffix = getExternalizedBundledPluginLegacyPathSuffix(params.bridge);
+  return (
+    pathEndsWithSegment({
+      value: params.record.sourcePath,
+      segment: bundledPathSuffix,
+      env: params.env,
+    }) ||
+    pathEndsWithSegment({
+      value: params.record.installPath,
+      segment: bundledPathSuffix,
+      env: params.env,
+    })
+  );
+}
+
+function removeBridgeBundledLoadPaths(params: {
+  bridge: ExternalizedBundledPluginBridge;
+  loadPaths: ReturnType<typeof buildLoadPathHelpers>;
+  env: NodeJS.ProcessEnv;
+}) {
+  const bundledPathSuffix = getExternalizedBundledPluginLegacyPathSuffix(params.bridge);
+  params.loadPaths.removeMatching((entry) =>
+    pathEndsWithSegment({
+      value: entry,
+      segment: bundledPathSuffix,
+      env: params.env,
+    }),
+  );
+}
+
+function resolveBridgeInstallRecord(params: {
+  installs: Record<string, PluginInstallRecord>;
+  bridge: ExternalizedBundledPluginBridge;
+}): { pluginId: string; record: PluginInstallRecord } | undefined {
+  for (const pluginId of getExternalizedBundledPluginLookupIds(params.bridge)) {
+    const record = params.installs[pluginId];
+    if (record) {
+      return { pluginId, record };
+    }
+  }
+  return undefined;
+}
+
+function isBridgeChannelEnabledByConfig(params: {
+  config: OpenClawConfig;
+  bridge: ExternalizedBundledPluginBridge;
+}): boolean {
+  const channels = params.config.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return false;
+  }
+  for (const channelId of params.bridge.channelIds ?? []) {
+    const entry = (channels as Record<string, unknown>)[channelId];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    if (Object.is((entry as Record<string, unknown>).enabled, true)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isExternalizedBundledPluginEnabled(params: {
+  config: OpenClawConfig;
+  bridge: ExternalizedBundledPluginBridge;
+}): boolean {
+  const normalized = normalizePluginsConfig(params.config.plugins);
+  if (!normalized.enabled) {
+    return false;
+  }
+  const pluginIds = getExternalizedBundledPluginLookupIds(params.bridge);
+  if (
+    pluginIds.some(
+      (pluginId) =>
+        normalized.deny.includes(pluginId) ||
+        Object.is(normalized.entries[pluginId]?.enabled, false),
+    )
+  ) {
+    return false;
+  }
+  for (const pluginId of pluginIds) {
+    if (
+      resolveEffectiveEnableState({
+        id: pluginId,
+        origin: "bundled",
+        config: normalized,
+        rootConfig: params.config,
+        enabledByDefault: params.bridge.enabledByDefault,
+      }).enabled
+    ) {
+      return true;
+    }
+  }
+  if (isBridgeChannelEnabledByConfig(params)) {
+    return true;
+  }
+  return false;
 }
 
 function replacePluginIdInList(
@@ -369,7 +549,9 @@ export async function updateNpmInstalledPlugins(params: {
 
     let installPath: string;
     try {
-      installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
+      installPath = resolveUserPath(
+        record.installPath?.trim() || resolvePluginInstallDir(pluginId),
+      );
     } catch (err) {
       outcomes.push({
         pluginId,
@@ -379,6 +561,10 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
+    const extensionsDir = resolveRecordedExtensionsDir({
+      pluginId,
+      installPath,
+    });
 
     if (!params.dryRun && record.source === "npm" && currentVersion) {
       const metadataResult = await resolveNpmSpecMetadata({ spec: effectiveSpec! });
@@ -417,6 +603,7 @@ export async function updateNpmInstalledPlugins(params: {
             ? await installPluginFromNpmSpec({
                 spec: effectiveSpec!,
                 mode: "update",
+                extensionsDir,
                 dryRun: true,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
@@ -434,6 +621,7 @@ export async function updateNpmInstalledPlugins(params: {
                   spec: effectiveSpec ?? `clawhub:${record.clawhubPackage!}`,
                   baseUrl: record.clawhubUrl,
                   mode: "update",
+                  extensionsDir,
                   dryRun: true,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   expectedPluginId: pluginId,
@@ -443,6 +631,7 @@ export async function updateNpmInstalledPlugins(params: {
                   marketplace: record.marketplaceSource!,
                   plugin: record.marketplacePlugin!,
                   mode: "update",
+                  extensionsDir,
                   dryRun: true,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   expectedPluginId: pluginId,
@@ -518,6 +707,7 @@ export async function updateNpmInstalledPlugins(params: {
           ? await installPluginFromNpmSpec({
               spec: effectiveSpec!,
               mode: "update",
+              extensionsDir,
               dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
               expectedPluginId: pluginId,
               expectedIntegrity,
@@ -534,6 +724,7 @@ export async function updateNpmInstalledPlugins(params: {
                 spec: effectiveSpec ?? `clawhub:${record.clawhubPackage!}`,
                 baseUrl: record.clawhubUrl,
                 mode: "update",
+                extensionsDir,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
                 logger,
@@ -542,6 +733,7 @@ export async function updateNpmInstalledPlugins(params: {
                 marketplace: record.marketplaceSource!,
                 plugin: record.marketplacePlugin!,
                 mode: "update",
+                extensionsDir,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
                 logger,
@@ -664,8 +856,10 @@ export async function syncPluginsForUpdateChannel(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
+  externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
 }): Promise<PluginChannelSyncResult> {
   const env = params.env ?? process.env;
+  const logger = params.logger ?? {};
   const summary: PluginChannelSyncSummary = {
     switchedToBundled: [],
     switchedToNpm: [],
@@ -676,13 +870,10 @@ export async function syncPluginsForUpdateChannel(params: {
     workspaceDir: params.workspaceDir,
     env,
   });
-  if (bundled.size === 0) {
-    return { config: params.config, changed: false, summary };
-  }
 
   let next = params.config;
   const loadHelpers = buildLoadPathHelpers(next.plugins?.load?.paths ?? [], env);
-  const installs = next.plugins?.installs ?? {};
+  let installs = next.plugins?.installs ?? {};
   let changed = false;
 
   if (params.channel === "dev") {
@@ -712,6 +903,97 @@ export async function syncPluginsForUpdateChannel(params: {
       changed = true;
     }
   } else {
+    const bridges = params.externalizedBundledPluginBridges ?? [];
+    for (const bridge of bridges) {
+      const targetPluginId = getExternalizedBundledPluginTargetId(bridge);
+      const bundledInfo = bundled.get(bridge.bundledPluginId);
+      if (bundledInfo) {
+        continue;
+      }
+      const existing = resolveBridgeInstallRecord({ installs, bridge });
+      if (
+        !existing &&
+        !isExternalizedBundledPluginEnabled({
+          config: next,
+          bridge,
+        })
+      ) {
+        continue;
+      }
+      if (
+        existing &&
+        !isExternalizedBundledPluginEnabled({
+          config: next,
+          bridge,
+        })
+      ) {
+        continue;
+      }
+
+      if (existing?.record.source === "npm" && existing.record.spec === bridge.npmSpec) {
+        if (existing.pluginId !== targetPluginId) {
+          next = migratePluginConfigId(next, existing.pluginId, targetPluginId);
+          installs = next.plugins?.installs ?? {};
+          changed = true;
+        }
+        removeBridgeBundledLoadPaths({ bridge, loadPaths: loadHelpers, env });
+        continue;
+      }
+
+      if (
+        existing &&
+        !isBridgeBundledPathRecord({
+          bridge,
+          record: existing.record,
+          env,
+        })
+      ) {
+        continue;
+      }
+
+      const result = await installPluginFromNpmSpec({
+        spec: bridge.npmSpec,
+        mode: "update",
+        expectedPluginId: targetPluginId,
+        logger,
+      });
+      if (!result.ok) {
+        const message = formatNpmInstallFailure({
+          pluginId: targetPluginId,
+          spec: bridge.npmSpec,
+          phase: "update",
+          result,
+        });
+        summary.errors.push(message);
+        logger.error?.(message);
+        continue;
+      }
+
+      const resolvedPluginId = result.pluginId;
+      if (existing && existing.pluginId !== resolvedPluginId) {
+        next = migratePluginConfigId(next, existing.pluginId, resolvedPluginId);
+      }
+      const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
+      next = recordPluginInstall(next, {
+        pluginId: resolvedPluginId,
+        source: "npm",
+        spec: bridge.npmSpec,
+        installPath: result.targetDir,
+        version: nextVersion,
+        ...buildNpmResolutionInstallFields(result.npmResolution),
+      });
+      installs = next.plugins?.installs ?? {};
+      if (existing?.record.sourcePath) {
+        loadHelpers.removePath(existing.record.sourcePath);
+      }
+      if (existing?.record.installPath) {
+        loadHelpers.removePath(existing.record.installPath);
+      }
+      removeBridgeBundledLoadPaths({ bridge, loadPaths: loadHelpers, env });
+      summary.switchedToNpm.push(resolvedPluginId);
+      changed = true;
+    }
+
     for (const [pluginId, record] of Object.entries(installs)) {
       const bundledInfo = bundled.get(pluginId);
       if (!bundledInfo) {

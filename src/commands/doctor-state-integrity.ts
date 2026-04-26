@@ -74,6 +74,10 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   }
 }
 
+function resolveComparableTranscriptPath(filePath: string): string {
+  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
+}
+
 function isReachableConfiguredAgentDir(params: {
   agentsRoot: string;
   dirName: string;
@@ -888,7 +892,9 @@ export async function noteStateIntegrity(
       }
       try {
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+          resolveComparableTranscriptPath(
+            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+          ),
         );
       } catch {
         // ignore invalid legacy paths
@@ -897,8 +903,10 @@ export async function noteStateIntegrity(
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
-      .filter((filePath) => !referencedTranscriptPaths.has(filePath));
+      .map((entry) => path.join(sessionsDir, entry.name))
+      .filter(
+        (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
+      );
     if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);

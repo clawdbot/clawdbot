@@ -751,6 +751,7 @@ export async function runMatrixQaLive(params: {
                 observerDeviceId: provisioning.observer.deviceId,
                 observerPassword: provisioning.observer.password,
                 observerUserId: provisioning.observer.userId,
+                gatewayRuntimeEnv: scenarioGateway.harness.gateway.runtimeEnv,
                 gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
                 outputDir,
                 restartGateway: async () => {

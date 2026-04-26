@@ -193,7 +193,14 @@ read_when:
       },
       "gateway": {
         "mode": "local",
-        "bind": "auto"
+        "bind": "auto",
+        "controlUi": {
+          "allowedOrigins": [
+            "https://my-openclaw.fly.dev",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000"
+          ]
+        }
       },
       "meta": {}
     }
@@ -201,6 +208,12 @@ read_when:
     ```
 
     **Note:** With `OPENCLAW_STATE_DIR=/data`, the config path is `/data/openclaw.json`.
+
+    **Note:** Replace `https://my-openclaw.fly.dev` with your real Fly app
+    origin. Gateway startup seeds local Control UI origins from the runtime
+    `--bind` and `--port` values so first boot can proceed before config exists,
+    but browser access through Fly still needs the exact HTTPS origin listed in
+    `gateway.controlUi.allowedOrigins`.
 
     **Note:** The Discord token can come from either:
 

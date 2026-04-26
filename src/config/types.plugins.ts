@@ -50,6 +50,11 @@ export type PluginsConfig = {
   load?: PluginsLoadConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;
+  /**
+   * Internal transient carrier for plugin install records during command flows.
+   * This is intentionally omitted from the config schema and must not be
+   * persisted to openclaw.json.
+   */
   installs?: Record<string, PluginInstallRecord>;
 };
 import type { InstallRecordBase } from "./types.installs.js";

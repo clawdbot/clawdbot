@@ -71,6 +71,11 @@ export type AppViewState = {
   eventLog: EventLogEntry[];
   assistantName: string;
   assistantAvatar: string | null;
+  assistantAvatarSource?: string | null;
+  assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  assistantAvatarReason?: string | null;
+  assistantAvatarUploadBusy: boolean;
+  assistantAvatarUploadError: string | null;
   assistantAgentId: string | null;
   userName?: string | null;
   userAvatar?: string | null;
@@ -93,6 +98,9 @@ export type AppViewState = {
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
   chatAvatarUrl: string | null;
+  chatAvatarSource?: string | null;
+  chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
@@ -451,4 +459,11 @@ export type AppViewState = {
     handleOpenSidebar: (content: SidebarContent) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
+    webPushSupported: boolean;
+    webPushPermission: NotificationPermission | "unsupported";
+    webPushSubscribed: boolean;
+    webPushLoading: boolean;
+    handleWebPushSubscribe: () => Promise<void>;
+    handleWebPushUnsubscribe: () => Promise<void>;
+    handleWebPushTest: () => Promise<void>;
   };

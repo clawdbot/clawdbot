@@ -23,6 +23,7 @@ import {
   resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
   type TelegramForwardedContext,
+  type TelegramTextEntity,
 } from "./body-helpers.js";
 import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
 
@@ -375,16 +376,22 @@ export type TelegramReplyTarget = {
   senderUsername?: string;
   body?: string;
   kind: "reply" | "quote";
+  source: "reply_to_message" | "external_reply";
+  quoteText?: string;
+  quotePosition?: number;
+  quoteEntities?: TelegramTextEntity[];
   /** Forward context if the reply target was itself a forwarded message (issue #9619). */
   forwardedFrom?: TelegramForwardedContext;
+  quoteSourceText?: string;
+  quoteSourceEntities?: TelegramTextEntity[];
 };
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const reply = msg.reply_to_message;
   const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
-  const rawQuoteText =
-    msg.quote?.text ??
-    (externalReply as (Message & { quote?: { text?: string } }) | undefined)?.quote?.text;
+  const quote =
+    msg.quote ?? (externalReply as (Message & { quote?: Message["quote"] }) | undefined)?.quote;
+  const rawQuoteText = quote?.text;
   const quoteText = resolveTelegramTextContent(rawQuoteText);
   let body = "";
   let kind: TelegramReplyTarget["kind"] = "reply";
@@ -396,15 +403,17 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   }
 
   const replyLike = reply ?? externalReply;
+  const rawReplyText =
+    replyLike && typeof replyLike.text === "string"
+      ? replyLike.text
+      : replyLike && typeof replyLike.caption === "string"
+        ? replyLike.caption
+        : undefined;
+  const safeReplyText = resolveTelegramTextContent(rawReplyText);
+  const replyTextParts = replyLike && safeReplyText ? getTelegramTextParts(replyLike) : undefined;
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const rawReplyText =
-      typeof replyLike.text === "string"
-        ? replyLike.text
-        : typeof replyLike.caption === "string"
-          ? replyLike.caption
-          : undefined;
-    const replyBody = resolveTelegramTextContent(rawReplyText).trim();
+    const replyBody = safeReplyText.trim();
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
@@ -425,6 +434,13 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   }
   const sender = replyLike ? buildSenderName(replyLike) : undefined;
   const senderLabel = sender ?? "unknown sender";
+  const source = reply ? "reply_to_message" : "external_reply";
+  const quotePosition =
+    kind === "quote" && typeof quote?.position === "number" && Number.isFinite(quote.position)
+      ? Math.trunc(quote.position)
+      : undefined;
+  const quoteEntities =
+    kind === "quote" && Array.isArray(quote?.entities) ? quote.entities : undefined;
 
   // Extract forward context from the resolved reply target (reply_to_message or external_reply).
   const forwardedFrom = replyLike ? (normalizeForwardedContext(replyLike) ?? undefined) : undefined;
@@ -436,6 +452,12 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     senderUsername: replyLike?.from?.username ?? undefined,
     body: body || undefined,
     kind,
+    source,
+    quoteText: kind === "quote" ? quoteText : undefined,
+    quotePosition,
+    quoteEntities,
     forwardedFrom,
+    quoteSourceText: replyTextParts?.text || undefined,
+    quoteSourceEntities: replyTextParts?.entities,
   };
 }

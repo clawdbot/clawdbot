@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 import { applyLitellmConfig, LITELLM_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildLitellmProvider } from "./provider-catalog.js";
 
@@ -37,5 +38,8 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildLitellmProvider,
       allowExplicitBaseUrl: true,
     },
+  },
+  register(api) {
+    api.registerImageGenerationProvider(buildLitellmImageGenerationProvider());
   },
 });

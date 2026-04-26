@@ -6,7 +6,6 @@ import {
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
-  getPluginCommandSpecs,
   isPluginCommandRegistryLocked,
   listProviderPluginCommandSpecs,
   pluginCommands,
@@ -197,10 +196,5 @@ export function registerPluginCommand(
   return { ok: true };
 }
 
-export {
-  clearPluginCommands,
-  clearPluginCommandsForPlugin,
-  getPluginCommandSpecs,
-  listProviderPluginCommandSpecs,
-};
+export { clearPluginCommands, clearPluginCommandsForPlugin, listProviderPluginCommandSpecs };
 export type { RegisteredPluginCommand };

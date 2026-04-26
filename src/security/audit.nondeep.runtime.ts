@@ -23,7 +23,7 @@ export {
   collectSandboxBrowserHashLabelFindings,
   collectIncludeFilePermFindings,
   collectStateDeepFilesystemFindings,
-  collectWorkspaceSkillSymlinkEscapeFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.async.js";
+export { collectWorkspaceSkillSymlinkEscapeFindings } from "./audit-workspace-skills.js";
 export { collectPluginsTrustFindings } from "./audit-plugins-trust.js";

@@ -17,6 +17,10 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import {
+  formatFutureConfigActionBlock,
+  resolveFutureConfigActionBlock,
+} from "../../config/future-version-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
@@ -423,6 +427,26 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   if (!Number.isFinite(port) || port <= 0) {
     defaultRuntime.error("Invalid port");
     defaultRuntime.exit(1);
+  }
+  const futureStartupBlock = resolveFutureConfigActionBlock({
+    action: "start the gateway service",
+    snapshot,
+  });
+  if (futureStartupBlock && process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    defaultRuntime.error(formatFutureConfigActionBlock(futureStartupBlock));
+    defaultRuntime.exit(78);
+    return;
+  }
+  const futureForceBlock = opts.force
+    ? resolveFutureConfigActionBlock({
+        action: "force-kill gateway port listeners",
+        snapshot,
+      })
+    : null;
+  if (futureForceBlock) {
+    defaultRuntime.error(formatFutureConfigActionBlock(futureForceBlock));
+    defaultRuntime.exit(1);
+    return;
   }
   // Only capture the *explicit* bind value here.  The container-aware
   // default is deferred until after Tailscale mode is known (see below)

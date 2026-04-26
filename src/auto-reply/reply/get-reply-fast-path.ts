@@ -243,6 +243,8 @@ export function initFastReplySessionState(params: {
     sessionId,
     sessionFile,
     updatedAt: now,
+    sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
+    lastInteractionAt: now,
     thinkingLevel: resetTriggered ? existingEntry?.thinkingLevel : existingEntry?.thinkingLevel,
     verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
     reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,

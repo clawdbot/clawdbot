@@ -99,6 +99,7 @@ import {
   maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
+import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
 
 const originalStdinIsTTY = process.stdin.isTTY;
 const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
@@ -593,6 +594,31 @@ describe("maybeRepairGatewayServiceConfig", () => {
       },
     );
   });
+
+  it("reports service config drift but skips service rewrite when service repair policy is external", async () => {
+    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
+      setupGatewayEntrypointRepairScenario({
+        currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+        installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+        installWorkingDirectory: "/tmp",
+      });
+
+      await runRepair({ gateway: {} });
+
+      expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledTimes(1);
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining("Gateway service entrypoint does not match the current install."),
+        "Gateway service config",
+      );
+      expect(mocks.note).toHaveBeenCalledWith(
+        EXTERNAL_SERVICE_REPAIR_NOTE,
+        "Gateway service config",
+      );
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(mocks.stage).not.toHaveBeenCalled();
+      expect(mocks.install).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("maybeScanExtraGatewayServices", () => {
@@ -654,5 +680,35 @@ describe("maybeScanExtraGatewayServices", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Legacy gateway services removed. Installing OpenClaw gateway next.",
     );
+  });
+
+  it("reports legacy services but skips cleanup when service repair policy is external", async () => {
+    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
+      mocks.findExtraGatewayServices.mockResolvedValue([
+        {
+          platform: "linux",
+          label: "clawdbot-gateway.service",
+          detail: "unit: /home/test/.config/systemd/user/clawdbot-gateway.service",
+          scope: "user",
+          legacy: true,
+        },
+      ]);
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
+
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining("clawdbot-gateway.service"),
+        "Other gateway-like services detected",
+      );
+      expect(mocks.note).toHaveBeenCalledWith(
+        EXTERNAL_SERVICE_REPAIR_NOTE,
+        "Legacy gateway cleanup skipped",
+      );
+      expect(mocks.uninstallLegacySystemdUnits).not.toHaveBeenCalled();
+      expect(runtime.log).not.toHaveBeenCalledWith(
+        "Legacy gateway services removed. Installing OpenClaw gateway next.",
+      );
+    });
   });
 });

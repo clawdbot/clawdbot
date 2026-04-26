@@ -179,11 +179,13 @@ bootstrap_gum_temp() {
     gum_tmpdir="$(mktemp -d)"
     TMPFILES+=("$gum_tmpdir")
 
+    ui_info "Preparing spinner support"
     if ! download_file "${base}/${asset}" "$gum_tmpdir/$asset"; then
         GUM_REASON="download failed"
         return 1
     fi
 
+    ui_info "Verifying spinner support download"
     if ! download_file "${base}/checksums.txt" "$gum_tmpdir/checksums.txt"; then
         GUM_REASON="checksum unavailable or failed"
         return 1
@@ -402,7 +404,7 @@ is_shell_function() {
 is_gum_raw_mode_failure() {
     local err_log="$1"
     [[ -s "$err_log" ]] || return 1
-    grep -Eiq 'setrawmode' "$err_log"
+    grep -Eiq 'setrawmode|inappropriate ioctl' "$err_log"
 }
 
 run_with_spinner() {
@@ -410,13 +412,25 @@ run_with_spinner() {
     shift
 
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
-        local gum_err
+        local gum_err gum_out
         gum_err="$(mktempfile)"
-        if "$GUM" spin --spinner dot --title "$title" -- "$@" 2>"$gum_err"; then
+        gum_out="$(mktempfile)"
+        if "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err"; then
+            if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then
+                GUM=""
+                GUM_STATUS="skipped"
+                GUM_REASON="gum raw mode unavailable"
+                ui_warn "Spinner unavailable in this terminal; continuing without spinner"
+                "$@"
+                return $?
+            fi
+            if [[ -s "$gum_out" ]]; then
+                cat "$gum_out"
+            fi
             return 0
         fi
         local gum_status=$?
-        if is_gum_raw_mode_failure "$gum_err"; then
+        if is_gum_raw_mode_failure "$gum_err" || is_gum_raw_mode_failure "$gum_out"; then
             GUM=""
             GUM_STATUS="skipped"
             GUM_REASON="gum raw mode unavailable"
@@ -444,6 +458,7 @@ run_quiet_step() {
 
     local log
     log="$(mktempfile)"
+    local showed_progress=false
 
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
         local cmd_quoted=""
@@ -453,10 +468,18 @@ run_quiet_step() {
         if run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1"; then
             return 0
         fi
+        showed_progress=true
     else
+        # Keep users informed even when gum spinner cannot run (for example shell functions).
+        ui_info "${title}"
+        showed_progress=true
         if "$@" >"$log" 2>&1; then
             return 0
         fi
+    fi
+
+    if [[ "$showed_progress" == "false" ]]; then
+        ui_info "${title}"
     fi
 
     ui_error "${title} failed — re-run with --verbose for details"
@@ -566,17 +589,31 @@ is_arch_linux() {
     return 1
 }
 
+apt_get() {
+    if is_root; then
+        env DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}" NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}" apt-get "$@"
+    else
+        sudo env DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}" NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}" apt-get "$@"
+    fi
+}
+
+apt_get_update() {
+    apt_get update -qq
+}
+
+apt_get_install() {
+    apt_get install -y -qq \
+        -o Dpkg::Options::=--force-confdef \
+        -o Dpkg::Options::=--force-confold \
+        "$@"
+}
+
 install_build_tools_linux() {
     require_sudo
 
     if command -v apt-get &> /dev/null; then
-        if is_root; then
-            run_quiet_step "Updating package index" apt-get update -qq
-            run_quiet_step "Installing build tools" apt-get install -y -qq build-essential python3 make g++ cmake
-        else
-            run_quiet_step "Updating package index" sudo apt-get update -qq
-            run_quiet_step "Installing build tools" sudo apt-get install -y -qq build-essential python3 make g++ cmake
-        fi
+        run_quiet_step "Updating package index" apt_get_update
+        run_quiet_step "Installing build tools" apt_get_install build-essential python3 make g++ cmake
         return 0
     fi
 
@@ -1328,13 +1365,16 @@ ensure_macos_default_node_active() {
     active_path="$(command -v node 2>/dev/null || echo "not found")"
     active_version="$(node -v 2>/dev/null || echo "missing")"
 
-    ui_error "Node.js v${NODE_DEFAULT_MAJOR} was installed but this shell is using ${active_version} (${active_path})"
-    if [[ -n "$brew_node_prefix" ]]; then
-        echo "Add this to your shell profile and restart shell:"
-        echo "  export PATH=\"${brew_node_prefix}/bin:\$PATH\""
-    else
-        echo "Ensure Homebrew node@${NODE_DEFAULT_MAJOR} is first on PATH, then rerun installer."
+    if [[ -z "$brew_node_prefix" || ! -x "${brew_node_prefix}/bin/node" ]]; then
+        ui_error "Homebrew node@${NODE_DEFAULT_MAJOR} is not installed on disk"
+        echo "The previous 'brew install' step appears to have failed."
+        echo "Re-run 'brew install node@${NODE_DEFAULT_MAJOR}' directly or rerun the installer with --verbose to see the underlying error."
+        return 1
     fi
+
+    ui_error "Node.js v${NODE_DEFAULT_MAJOR} was installed but this shell is using ${active_version} (${active_path})"
+    echo "Add this to your shell profile and restart shell:"
+    echo "  export PATH=\"${brew_node_prefix}/bin:\$PATH\""
     return 1
 }
 
@@ -1373,6 +1413,27 @@ ensure_default_node_active_shell() {
     return 1
 }
 
+load_nvm_for_node_detection() {
+    local nvm_dir="${NVM_DIR:-}"
+    if [[ -n "$nvm_dir" && ! -s "$nvm_dir/nvm.sh" ]]; then
+        nvm_dir=""
+    fi
+    if [[ -z "$nvm_dir" && -s "$HOME/.nvm/nvm.sh" ]]; then
+        nvm_dir="$HOME/.nvm"
+    fi
+    if [[ -z "$nvm_dir" || ! -s "$nvm_dir/nvm.sh" ]]; then
+        return 0
+    fi
+
+    export NVM_DIR="$nvm_dir"
+    # shellcheck disable=SC1090
+    . "$NVM_DIR/nvm.sh" --no-use >/dev/null 2>&1 || . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
+    if command -v nvm >/dev/null 2>&1; then
+        nvm use default --silent >/dev/null 2>&1 || nvm use node --silent >/dev/null 2>&1 || true
+    fi
+    refresh_shell_command_cache
+}
+
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
@@ -1398,7 +1459,10 @@ check_node() {
 install_node() {
     if [[ "$OS" == "macos" ]]; then
         ui_info "Installing Node.js via Homebrew"
-        run_quiet_step "Installing node@${NODE_DEFAULT_MAJOR}" brew install "node@${NODE_DEFAULT_MAJOR}"
+        if ! run_quiet_step "Installing node@${NODE_DEFAULT_MAJOR}" brew install "node@${NODE_DEFAULT_MAJOR}"; then
+            echo "Re-run with --verbose or run 'brew install node@${NODE_DEFAULT_MAJOR}' directly, then rerun the installer."
+            exit 1
+        fi
         brew link "node@${NODE_DEFAULT_MAJOR}" --overwrite --force 2>/dev/null || true
         if ! ensure_macos_default_node_active; then
             exit 1
@@ -1432,18 +1496,18 @@ install_node() {
         if command -v apt-get &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" apt-get install -y -qq nodejs
+                run_quiet_step "Installing Node.js" apt_get_install nodejs
             else
                 run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"
-                run_quiet_step "Installing Node.js" sudo apt-get install -y -qq nodejs
+                run_quiet_step "Installing Node.js" apt_get_install nodejs
             fi
         elif command -v dnf &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" dnf install -y -q nodejs
@@ -1454,7 +1518,7 @@ install_node() {
         elif command -v yum &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" yum install -y -q nodejs
@@ -1525,13 +1589,8 @@ install_git() {
     elif [[ "$OS" == "linux" ]]; then
         require_sudo
         if command -v apt-get &> /dev/null; then
-            if is_root; then
-                run_quiet_step "Updating package index" apt-get update -qq
-                run_quiet_step "Installing Git" apt-get install -y -qq git
-            else
-                run_quiet_step "Updating package index" sudo apt-get update -qq
-                run_quiet_step "Installing Git" sudo apt-get install -y -qq git
-            fi
+            run_quiet_step "Updating package index" apt_get_update
+            run_quiet_step "Installing Git" apt_get_install git
         elif command -v pacman &> /dev/null || is_arch_linux; then
             if is_root; then
                 run_quiet_step "Installing Git" pacman -Sy --noconfirm git
@@ -1767,6 +1826,148 @@ npm_global_bin_dir() {
 
     echo ""
     return 1
+}
+
+canonicalize_dir() {
+    local dir="$1"
+    if [[ -z "$dir" || ! -d "$dir" ]]; then
+        return 1
+    fi
+    (cd "$dir" 2>/dev/null && pwd -P) || return 1
+}
+
+openclaw_package_version() {
+    local package_json="$1"
+    if [[ ! -f "$package_json" ]]; then
+        echo "unknown"
+        return 0
+    fi
+
+    local version=""
+    if command -v node >/dev/null 2>&1; then
+        version="$(node -e 'const fs = require("fs"); const pkg = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(String(pkg.version || "unknown"));' "$package_json" 2>/dev/null || true)"
+    fi
+    if [[ -z "$version" ]]; then
+        version="$(sed -n -E 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$package_json" | head -n1)"
+    fi
+    echo "${version:-unknown}"
+}
+
+emit_npm_root_candidate() {
+    local root="${1%/}"
+    if [[ -n "$root" && "$root" == /* ]]; then
+        echo "$root"
+    fi
+}
+
+collect_openclaw_npm_root_candidates() {
+    local root=""
+    root="$(npm root -g 2>/dev/null || true)"
+    emit_npm_root_candidate "$root"
+
+    local npm_cmd=""
+    while IFS= read -r npm_cmd; do
+        [[ -n "$npm_cmd" ]] || continue
+        root="$("$npm_cmd" root -g 2>/dev/null || true)"
+        emit_npm_root_candidate "$root"
+    done < <(type -aP npm 2>/dev/null | awk '!seen[$0]++' || true)
+
+    local extra_root=""
+    local old_ifs="$IFS"
+    IFS=":"
+    for extra_root in ${OPENCLAW_INSTALL_EXTRA_NPM_ROOTS:-}; do
+        emit_npm_root_candidate "$extra_root"
+    done
+    IFS="$old_ifs"
+
+    emit_npm_root_candidate "/opt/homebrew/lib/node_modules"
+    emit_npm_root_candidate "/usr/local/lib/node_modules"
+    emit_npm_root_candidate "/usr/lib/node_modules"
+
+    local manager_dir=""
+    local candidate=""
+    for manager_dir in "${NVM_DIR:-}" "$HOME/.nvm"; do
+        [[ -n "$manager_dir" && -d "$manager_dir" ]] || continue
+        for candidate in "$manager_dir"/versions/node/*/lib/node_modules; do
+            [[ -d "$candidate" ]] && emit_npm_root_candidate "$candidate"
+        done
+    done
+
+    for manager_dir in "${FNM_DIR:-}" "$HOME/.fnm" "$HOME/.local/share/fnm"; do
+        [[ -n "$manager_dir" && -d "$manager_dir" ]] || continue
+        for candidate in "$manager_dir"/node-versions/*/installation/lib/node_modules; do
+            [[ -d "$candidate" ]] && emit_npm_root_candidate "$candidate"
+        done
+    done
+
+    for manager_dir in "${VOLTA_HOME:-}" "$HOME/.volta"; do
+        [[ -n "$manager_dir" && -d "$manager_dir" ]] || continue
+        for candidate in "$manager_dir"/tools/image/node/*/lib/node_modules; do
+            [[ -d "$candidate" ]] && emit_npm_root_candidate "$candidate"
+        done
+    done
+}
+
+find_openclaw_global_installs() {
+    local seen="|"
+    local npm_root=""
+    while IFS= read -r npm_root; do
+        [[ -n "$npm_root" ]] || continue
+        local package_dir="${npm_root%/}/openclaw"
+        local package_json="${package_dir}/package.json"
+        [[ -f "$package_json" ]] || continue
+
+        local real_package_dir=""
+        real_package_dir="$(canonicalize_dir "$package_dir" || true)"
+        [[ -n "$real_package_dir" ]] || real_package_dir="$package_dir"
+        case "$seen" in
+            *"|${real_package_dir}|"*) continue ;;
+        esac
+        seen="${seen}${real_package_dir}|"
+
+        local version=""
+        version="$(openclaw_package_version "$package_json")"
+        printf '%s\t%s\t%s\n' "$version" "$real_package_dir" "$npm_root"
+    done < <(collect_openclaw_npm_root_candidates)
+}
+
+warn_duplicate_openclaw_global_installs() {
+    local installs=()
+    local line=""
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && installs+=("$line")
+    done < <(find_openclaw_global_installs)
+
+    if [[ "${#installs[@]}" -le 1 ]]; then
+        return 0
+    fi
+
+    ui_warn "Multiple OpenClaw global installs detected"
+    echo "  Different Node/npm environments can run different OpenClaw versions."
+
+    local active_node active_npm active_openclaw
+    active_node="$(command -v node 2>/dev/null || true)"
+    active_npm="$(command -v npm 2>/dev/null || true)"
+    active_openclaw="${OPENCLAW_BIN:-}"
+    if [[ -z "$active_openclaw" ]]; then
+        active_openclaw="$(type -P openclaw 2>/dev/null || true)"
+    fi
+    echo -e "  Active node: ${INFO}${active_node:-none}${NC}"
+    echo -e "  Active npm: ${INFO}${active_npm:-none}${NC}"
+    echo -e "  Active openclaw: ${INFO}${active_openclaw:-none}${NC}"
+    echo ""
+    echo "  Found installs:"
+
+    local install version package_dir npm_root
+    for install in "${installs[@]}"; do
+        IFS=$'\t' read -r version package_dir npm_root <<< "$install"
+        echo -e "    - ${INFO}${version:-unknown}${NC}  ${package_dir}"
+        echo -e "      npm root: ${MUTED}${npm_root}${NC}"
+    done
+
+    echo ""
+    echo "  Keep one install source, then remove stale installs with that environment's npm:"
+    echo "    npm uninstall -g openclaw"
 }
 
 refresh_shell_command_cache() {
@@ -2265,10 +2466,17 @@ main() {
         return 0
     fi
 
+    # bootstrap_gum_temp may perform network downloads before any spinner is available.
+    echo -e "${INFO}Preparing installer interface...${NC}"
     bootstrap_gum_temp || true
     print_installer_banner
     print_gum_status
     detect_os_or_die
+
+    if [[ "$OS" == "linux" ]]; then
+        export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+        export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
+    fi
 
     local detected_checkout=""
     detected_checkout="$(detect_openclaw_checkout "$PWD" || true)"
@@ -2324,6 +2532,7 @@ main() {
     install_homebrew
 
     # Step 2: Node.js
+    load_nvm_for_node_detection
     if ! check_node; then
         install_node
     fi
@@ -2371,6 +2580,7 @@ main() {
     ui_stage "Finalizing setup"
 
     OPENCLAW_BIN="$(resolve_openclaw_bin || true)"
+    warn_duplicate_openclaw_global_installs || true
 
     # PATH warning: installs can succeed while the user's login shell still lacks npm's global bin dir.
     local npm_bin=""

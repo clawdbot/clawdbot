@@ -153,10 +153,50 @@ export NPM_CONFIG_PREFIX="/npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENCLAW_NPM_TELEGRAM_REPO_ROOT="/app"
 
+dump_hotpath_logs() {
+  local status="$1"
+  echo "installed npm onboarding recovery hot path failed with exit code $status" >&2
+  for file in \
+    /tmp/openclaw-npm-telegram-onboard.json \
+    /tmp/openclaw-npm-telegram-channel-add.log \
+    /tmp/openclaw-npm-telegram-doctor-fix.log \
+    /tmp/openclaw-npm-telegram-doctor-check.log; do
+    if [ -f "$file" ]; then
+      echo "--- $file ---" >&2
+      sed -n '1,220p' "$file" >&2 || true
+    fi
+  done
+}
+trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
+
 command -v openclaw
 openclaw --version
 
+echo "Running installed npm onboarding recovery hot path..."
+OPENAI_API_KEY="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}" openclaw onboard --non-interactive --accept-risk \
+  --mode local \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
+  --gateway-port 18789 \
+  --gateway-bind loopback \
+  --skip-daemon \
+  --skip-ui \
+  --skip-skills \
+  --skip-health \
+  --json >/tmp/openclaw-npm-telegram-onboard.json </dev/null
+
+openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
+openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
+openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
+if grep -F -q "Bundled plugin runtime deps are missing." /tmp/openclaw-npm-telegram-doctor-check.log; then
+  exit 1
+fi
+if grep -F -q "Failed to install bundled plugin runtime deps" /tmp/openclaw-npm-telegram-doctor-fix.log; then
+  exit 1
+fi
+
 export OPENCLAW_NPM_TELEGRAM_SUT_COMMAND="$(command -v openclaw)"
+trap - ERR
 node --import tsx scripts/e2e/npm-telegram-live-runner.ts
 EOF
 

@@ -134,6 +134,7 @@ function createLiveTtsConfig(): ResolvedTtsConfig {
         voice: "alloy",
       },
     },
+    personas: {},
     maxTextLength: 4_000,
     timeoutMs: 30_000,
   };

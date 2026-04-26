@@ -828,12 +828,24 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
   return params.effort;
 }
 
+function isOpenAICodexResponsesModel(model: Model<Api>): boolean {
+  return model.provider === "openai-codex" && model.api === "openai-codex-responses";
+}
+
+function buildOpenAICodexResponsesInstructions(context: Context): string | undefined {
+  if (!context.systemPrompt) {
+    return undefined;
+  }
+  return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
   options: OpenAIResponsesOptions | undefined,
   metadata?: Record<string, string>,
 ) {
+  const isCodexResponses = isOpenAICodexResponsesModel(model);
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
@@ -841,7 +853,7 @@ export function buildOpenAIResponsesParams(
     model,
     context,
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
-    { supportsDeveloperRole },
+    { includeSystemPrompt: !isCodexResponses, supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
@@ -853,6 +865,7 @@ export function buildOpenAIResponsesParams(
     stream: true,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
+    ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
     ...(metadata ? { metadata } : {}),
   };
   if (options?.maxTokens) {
@@ -1566,6 +1579,7 @@ type OpenAIResponsesRequestParams = {
   model: string;
   input: ResponseInput;
   stream: true;
+  instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
   metadata?: Record<string, string>;
@@ -1714,6 +1728,7 @@ export function buildOpenAICompletionsParams(
   options: OpenAICompletionsOptions | undefined,
 ) {
   const compat = getCompat(model);
+  const compatDetection = detectOpenAICompletionsCompat(model);
   const completionsContext = context.systemPrompt
     ? {
         ...context,
@@ -1751,6 +1766,12 @@ export function buildOpenAICompletionsParams(
     params.tools = convertTools(context.tools, compat, model);
     if (options?.toolChoice) {
       params.tool_choice = options.toolChoice;
+    } else if (
+      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+      Array.isArray(params.tools) &&
+      params.tools.length > 0
+    ) {
+      params.tool_choice = "auto";
     }
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];

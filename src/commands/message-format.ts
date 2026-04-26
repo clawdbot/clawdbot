@@ -1,4 +1,4 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
@@ -11,7 +11,7 @@ import { isRich, theme } from "../terminal/theme.js";
 import { shortenText } from "./text-format.js";
 
 const resolveChannelLabel = (channel: ChannelId) =>
-  getChannelPlugin(channel)?.meta.label ?? channel;
+  getLoadedChannelPlugin(channel)?.meta.label ?? channel;
 
 function extractMessageId(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {

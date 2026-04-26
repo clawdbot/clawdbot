@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
+import {
+  listPluginContributionIds,
+  loadPluginRegistrySnapshot,
+} from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
@@ -17,15 +21,29 @@ type LogLine = ReturnType<typeof parseLogLine>;
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
 
-const getChannelSet = () =>
-  new Set<string>([...listChannelPlugins().map((plugin) => plugin.id), "all"]);
+function listManifestChannelIds(): Set<string> {
+  const index = loadPluginRegistrySnapshot({
+    env: process.env,
+  });
+  return new Set(
+    listPluginContributionIds({
+      index,
+      contribution: "channels",
+      includeDisabled: true,
+    }),
+  );
+}
 
 function parseChannelFilter(raw?: string) {
   const trimmed = normalizeLowercaseStringOrEmpty(raw);
-  if (!trimmed) {
+  if (!trimmed || trimmed === "all") {
     return "all";
   }
-  return getChannelSet().has(trimmed) ? trimmed : "all";
+  const bundled = normalizeBundledChannelId(trimmed);
+  if (bundled) {
+    return bundled;
+  }
+  return listManifestChannelIds().has(trimmed) ? trimmed : "all";
 }
 
 function matchesChannel(line: NonNullable<LogLine>, channel: string) {

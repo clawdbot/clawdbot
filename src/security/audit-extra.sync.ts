@@ -1,14 +1,5 @@
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
-/**
- * Synchronous security audit collector functions.
- *
- * These functions analyze config-based security properties without I/O.
- */
-export {
-  collectAttackSurfaceSummaryFindings,
-  collectSmallModelRiskFindings,
-} from "./audit-extra.summary.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
@@ -33,6 +24,12 @@ import {
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
+
+/**
+ * Synchronous security audit collector functions.
+ *
+ * These functions analyze config-based security properties without I/O.
+ */
 
 export type SecurityAuditFinding = {
   checkId: string;

@@ -262,6 +262,50 @@ describe("resolveEffectiveToolInventory", () => {
     expect(result.profile).toBe("coding");
   });
 
+  it("adds an actionable notice when configured browser is filtered by the tool profile", async () => {
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [
+        mockTool({ name: "web_fetch", label: "Web Fetch", description: "Fetch web content" }),
+      ],
+      effectivePolicy: { profile: "coding" },
+    });
+
+    const result = resolveEffectiveToolInventory({
+      cfg: {
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as never,
+    });
+
+    expect(result.notices).toEqual([
+      {
+        id: "browser-filtered-by-profile",
+        severity: "info",
+        message:
+          'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"] or agents.list[].tools.alsoAllow: ["browser"]; tools.subagents.tools.allow alone cannot add it back after profile filtering.',
+      },
+    ]);
+  });
+
+  it("does not add a browser profile notice when browser is already available", async () => {
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [
+        mockTool({ name: "browser", label: "Browser", description: "Control browser" }),
+        mockTool({ name: "web_fetch", label: "Web Fetch", description: "Fetch web content" }),
+      ],
+      effectivePolicy: { profile: "coding" },
+    });
+
+    const result = resolveEffectiveToolInventory({
+      cfg: {
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as never,
+    });
+
+    expect(result.notices).toBeUndefined();
+  });
+
   it("passes resolved model compat into effective tool creation", async () => {
     const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
       mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),

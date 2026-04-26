@@ -462,6 +462,7 @@ export interface PlainReplyPayload {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
+  audioAsVoice?: boolean;
 }
 
 /**

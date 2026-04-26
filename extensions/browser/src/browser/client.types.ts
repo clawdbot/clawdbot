@@ -1,4 +1,11 @@
 export type BrowserTransport = "cdp" | "chrome-mcp";
+export type BrowserHeadlessSource =
+  | "request"
+  | "env"
+  | "profile"
+  | "config"
+  | "linux-display-fallback"
+  | "default";
 
 export type BrowserStatus = {
   enabled: boolean;
@@ -18,6 +25,7 @@ export type BrowserStatus = {
   userDataDir: string | null;
   color: string;
   headless: boolean;
+  headlessSource?: BrowserHeadlessSource;
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;

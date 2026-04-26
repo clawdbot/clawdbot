@@ -13,7 +13,7 @@ Quick provider overview + examples: [/concepts/model-providers](/concepts/model-
 Model refs choose a provider and model. They do not usually choose the
 low-level agent runtime. For example, `openai/gpt-5.5` can run through the
 normal OpenAI provider path or through the Codex app-server runtime, depending
-on `agents.defaults.embeddedHarness.runtime`. See
+on `agents.defaults.agentRuntime.id`. See
 [/concepts/agent-runtimes](/concepts/agent-runtimes).
 
 ## How model selection works
@@ -242,8 +242,11 @@ Key flags:
 - `--set-default`: set `agents.defaults.model.primary` to the first selection
 - `--set-image`: set `agents.defaults.imageModel.primary` to the first image selection
 
-Probing requires an OpenRouter API key (from auth profiles or
-`OPENROUTER_API_KEY`). Without a key, use `--no-probe` to list candidates only.
+The OpenRouter `/models` catalog is public, so metadata-only scans can list
+free candidates without a key. Probing and inference still require an
+OpenRouter API key (from auth profiles or `OPENROUTER_API_KEY`). If no key is
+available, `openclaw models scan` falls back to metadata-only output and leaves
+config unchanged. Use `--no-probe` to request metadata-only mode explicitly.
 
 Scan results are ranked by:
 
@@ -255,12 +258,14 @@ Scan results are ranked by:
 Input
 
 - OpenRouter `/models` list (filter `:free`)
-- Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/help/environment))
+- Live probes require OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/help/environment))
 - Optional filters: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
-- Probe controls: `--timeout`, `--concurrency`
+- Request/probe controls: `--timeout`, `--concurrency`
 
-When run in a TTY, you can select fallbacks interactively. In non‑interactive
-mode, pass `--yes` to accept defaults.
+When live probes run in a TTY, you can select fallbacks interactively. In
+non‑interactive mode, pass `--yes` to accept defaults. Metadata-only results are
+informational; `--set-default` and `--set-image` require live probes so
+OpenClaw does not configure an unusable keyless OpenRouter model.
 
 ## Models registry (`models.json`)
 

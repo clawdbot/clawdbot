@@ -5,19 +5,33 @@
 
 export type ConfigPresetId = "personal" | "codeAgent" | "teamBot" | "minimal";
 
+export type ConfigPresetPatch = {
+  agents: {
+    defaults: {
+      bootstrapMaxChars: number;
+      bootstrapTotalMaxChars: number;
+      contextInjection: "always" | "continuation-skip";
+    };
+  };
+};
+
 export type ConfigPreset = {
   id: ConfigPresetId;
   label: string;
   description: string;
+  detail: string;
+  impact: string;
   icon: string;
-  patch: Record<string, unknown>;
+  patch: ConfigPresetPatch;
 };
 
 export const CONFIG_PRESETS: ConfigPreset[] = [
   {
     id: "personal",
     label: "Personal Assistant",
-    description: "Balanced context and cost. Best for daily use.",
+    description: "Balanced default for daily use.",
+    detail: "Good fit for chat, docs, and light edits without a large coding budget.",
+    impact: "Injects bootstrap context every turn with a moderate prompt budget.",
     icon: "✨",
     patch: {
       agents: {
@@ -32,7 +46,9 @@ export const CONFIG_PRESETS: ConfigPreset[] = [
   {
     id: "codeAgent",
     label: "Code Agent",
-    description: "Higher context for coding tasks. More tokens per turn.",
+    description: "Highest context budget for repo work.",
+    detail: "Best for multi-file changes, long bootstrap docs, and code-heavy sessions.",
+    impact: "Uses the largest prompt budget and reinjects context every turn.",
     icon: "🛠️",
     patch: {
       agents: {
@@ -47,7 +63,10 @@ export const CONFIG_PRESETS: ConfigPreset[] = [
   {
     id: "teamBot",
     label: "Team Bot",
-    description: "Multi-channel, group-aware. Leaner per-turn context.",
+    description: "Lean follow-ups for shared bots.",
+    detail:
+      "Best for multi-channel workflows where continuity matters more than large bootstrap payloads.",
+    impact: "Keeps follow-up turns smaller by skipping safe continuation reinjection.",
     icon: "👥",
     patch: {
       agents: {
@@ -62,7 +81,9 @@ export const CONFIG_PRESETS: ConfigPreset[] = [
   {
     id: "minimal",
     label: "Minimal",
-    description: "Lowest cost per turn. Fast and lean.",
+    description: "Smallest context budget and lowest cost.",
+    detail: "Best for quick utility turns, automations, and cost-sensitive workflows.",
+    impact: "Uses the smallest bootstrap budget and the leanest follow-up behavior.",
     icon: "⚡",
     patch: {
       agents: {
@@ -87,10 +108,11 @@ export function detectActivePreset(config: Record<string, unknown>): ConfigPrese
   const agents = config.agents as Record<string, unknown> | undefined;
   const defaults = agents?.defaults as Record<string, unknown> | undefined;
   if (!defaults) {
-    return "personal"; // treat unset as default
+    return null;
   }
   const maxChars = defaults.bootstrapMaxChars;
   const totalMax = defaults.bootstrapTotalMaxChars;
+  const contextInjection = defaults.contextInjection;
   for (const preset of CONFIG_PRESETS) {
     const presetDefaults = (preset.patch.agents as Record<string, unknown>)?.defaults as
       | Record<string, unknown>
@@ -100,7 +122,8 @@ export function detectActivePreset(config: Record<string, unknown>): ConfigPrese
     }
     if (
       maxChars === presetDefaults.bootstrapMaxChars &&
-      totalMax === presetDefaults.bootstrapTotalMaxChars
+      totalMax === presetDefaults.bootstrapTotalMaxChars &&
+      contextInjection === presetDefaults.contextInjection
     ) {
       return preset.id;
     }

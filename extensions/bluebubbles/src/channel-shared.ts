@@ -31,6 +31,12 @@ export const bluebubblesMeta = {
 export const bluebubblesCapabilities: ChannelPlugin<ResolvedBlueBubblesAccount>["capabilities"] = {
   chatTypes: ["direct", "group"],
   media: true,
+  tts: {
+    voice: {
+      synthesisTarget: "audio-file",
+      audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+    },
+  },
   reactions: true,
   edit: true,
   unsend: true,

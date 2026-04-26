@@ -83,6 +83,7 @@ export type MatrixOwnDeviceVerificationStatus = {
   recoveryKeyId: string | null;
   backupVersion: string | null;
   backup: MatrixRoomKeyBackupStatus;
+  serverDeviceKnown: boolean | null;
 };
 
 export type MatrixDeviceVerificationStatus = {
@@ -181,6 +182,10 @@ export type MatrixOwnDeviceInfo = {
   lastSeenIp: string | null;
   lastSeenTs: number | null;
   current: boolean;
+};
+
+export type MatrixRoomKeyBackupResetOptions = {
+  rotateRecoveryKey?: boolean;
 };
 
 export type MatrixOwnDeviceDeleteResult = {
@@ -1122,8 +1127,14 @@ export class MatrixClient {
     const recoveryKey = this.recoveryKeyStore.getRecoveryKeySummary();
     const userId = this.client.getUserId() ?? this.selfUserId ?? null;
     const deviceId = this.client.getDeviceId()?.trim() || null;
-    const backup = await this.getRoomKeyBackupStatus();
-    const deviceVerification = await this.getDeviceVerificationStatus(userId, deviceId);
+    const [backup, deviceVerification, ownDevices] = await Promise.all([
+      this.getRoomKeyBackupStatus(),
+      this.getDeviceVerificationStatus(userId, deviceId),
+      this.listOwnDevices().catch(() => null),
+    ]);
+    const serverDeviceKnown = deviceId
+      ? (ownDevices?.some((device) => device.deviceId === deviceId) ?? null)
+      : null;
 
     return {
       ...deviceVerification,
@@ -1133,6 +1144,7 @@ export class MatrixClient {
       recoveryKeyId: recoveryKey?.keyId ?? null,
       backupVersion: backup.serverVersion,
       backup,
+      serverDeviceKnown,
     };
   }
 
@@ -1263,9 +1275,13 @@ export class MatrixClient {
         !stagedRecoveryKeyConfirmedBySecretStorage &&
         !backupUsableBeforeStagedRecovery &&
         backupUsable;
+      const storedRecoveryKeyMatches =
+        this.recoveryKeyStore.getRecoveryKeySummary()?.encodedPrivateKey?.trim() ===
+        trimmedRecoveryKey;
       const stagedRecoveryKeyValidated =
-        stagedRecoveryKeyUsed &&
-        (stagedRecoveryKeyConfirmedBySecretStorage || stagedRecoveryKeyUnlockedBackup);
+        (stagedRecoveryKeyUsed &&
+          (stagedRecoveryKeyConfirmedBySecretStorage || stagedRecoveryKeyUnlockedBackup)) ||
+        (storedRecoveryKeyMatches && backupUsable);
       const recoveryKeyAccepted = stagedRecoveryKeyValidated && (status.verified || backupUsable);
       if (!status.verified) {
         if (backupUsable && stagedRecoveryKeyValidated) {
@@ -1405,7 +1421,9 @@ export class MatrixClient {
     }
   }
 
-  async resetRoomKeyBackup(): Promise<MatrixRoomKeyBackupResetResult> {
+  async resetRoomKeyBackup(
+    options: MatrixRoomKeyBackupResetOptions = {},
+  ): Promise<MatrixRoomKeyBackupResetResult> {
     let previousVersion: string | null = null;
     let deletedVersion: string | null = null;
     const fail = async (error: string): Promise<MatrixRoomKeyBackupResetResult> => {
@@ -1436,7 +1454,8 @@ export class MatrixClient {
     // focused on durable secret-storage health instead of the broader backup status flow,
     // and still catches stale SSSS/recovery-key state even when the server backup is gone.
     const forceNewSecretStorage =
-      await this.shouldForceSecretStorageRecreationForBackupReset(crypto);
+      options.rotateRecoveryKey === true ||
+      (await this.shouldForceSecretStorageRecreationForBackupReset(crypto));
 
     try {
       if (previousVersion) {
@@ -1458,6 +1477,7 @@ export class MatrixClient {
         // Force SSSS recreation when the existing SSSS key is broken (bad MAC), so
         // the new backup key is written into a fresh SSSS consistent with recovery_key.json.
         forceNewSecretStorage,
+        forceNewRecoveryKey: options.rotateRecoveryKey === true,
         // Also allow recreation if bootstrapSecretStorage itself surfaces a repairable
         // error (e.g. bad MAC from a different SSSS entry).
         allowSecretStorageRecreateWithoutRecoveryKey: true,

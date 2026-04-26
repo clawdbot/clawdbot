@@ -75,6 +75,7 @@ type ConfigSetOperation = {
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
+const PLUGIN_INSTALL_RECORD_PATH_PREFIX: PathSegment[] = ["plugins", "installs"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
   "openclaw config set gateway.port 19001 --strict-json",
 );
@@ -1088,6 +1089,21 @@ function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInD
   return { refsToResolve, skippedExecRefs };
 }
 
+function pathStartsWith(path: readonly PathSegment[], prefix: readonly PathSegment[]): boolean {
+  return prefix.every((segment, index) => path[index] === segment);
+}
+
+function formatPluginInstallConfigSetError(): string {
+  return [
+    "plugins.installs is managed by the plugin index and cannot be edited with config set.",
+    "",
+    "Use plugin commands instead:",
+    `  ${formatCliCommand("openclaw plugins install <spec>")}`,
+    `  ${formatCliCommand("openclaw plugins update <plugin-id>")}`,
+    `  ${formatCliCommand("openclaw plugins uninstall <plugin-id>")}`,
+  ].join("\n");
+}
+
 function collectDryRunSchemaErrors(params: {
   config: OpenClawConfig;
   operations: ReadonlyArray<ConfigSetOperation>;
@@ -1192,6 +1208,13 @@ export async function runConfigSet(opts: {
           value: opts.value,
           opts: opts.cliOptions,
         });
+    if (
+      operations.some((operation) =>
+        pathStartsWith(operation.requestedPath, PLUGIN_INSTALL_RECORD_PATH_PREFIX),
+      )
+    ) {
+      throw new Error(formatPluginInstallConfigSetError());
+    }
     const snapshot = await loadValidConfig(runtime);
     // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
     // instead of snapshot.config (runtime-merged with defaults).

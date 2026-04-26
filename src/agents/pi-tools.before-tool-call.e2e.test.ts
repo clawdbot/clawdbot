@@ -391,7 +391,12 @@ describe("before_tool_call loop detection behavior", () => {
         paramsSummary: {
           kind: "object",
         },
-        trace,
+        trace: {
+          traceId: trace.traceId,
+          parentSpanId: trace.spanId,
+          spanId: expect.any(String),
+          traceFlags: trace.traceFlags,
+        },
       });
       expect(emitted[0]?.trace).not.toBe(trace);
       expect(Object.isFrozen(emitted[0]?.trace)).toBe(true);

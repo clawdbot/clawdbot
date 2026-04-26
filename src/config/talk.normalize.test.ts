@@ -10,11 +10,13 @@ describe("talk normalization", () => {
       modelId: "eleven_v3",
       outputFormat: "pcm_44100",
       apiKey: "secret-key", // pragma: allowlist secret
+      speechLocale: " ru-RU ",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     } as unknown as never);
 
     expect(normalized).toEqual({
+      speechLocale: "ru-RU",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
@@ -77,6 +79,7 @@ describe("talk normalization", () => {
           modelId: "acme-model",
         },
       },
+      speechLocale: "ru-RU",
       interruptOnSpeech: true,
     });
 
@@ -95,6 +98,7 @@ describe("talk normalization", () => {
           modelId: "acme-model",
         },
       },
+      speechLocale: "ru-RU",
       interruptOnSpeech: true,
     });
   });

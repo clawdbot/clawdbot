@@ -35,15 +35,23 @@ cache-write size, directly lowering cost.
 
 ## Legacy image cleanup
 
-OpenClaw also runs a separate idempotent cleanup for older legacy sessions that
-persisted raw image blocks in history.
+OpenClaw also builds a separate idempotent replay view for sessions that
+persist raw image blocks or prompt-hydration media markers in history.
 
 - It preserves the **3 most recent completed turns** byte-for-byte so prompt
   cache prefixes for recent follow-ups stay stable.
-- Older already-processed image blocks in `user` or `toolResult` history can be
-  replaced with `[image data removed - already processed by model]`.
+- In the replay view, older already-processed image blocks from `user` or
+  `toolResult` history can be replaced with
+  `[image data removed - already processed by model]`.
+- Older textual media references such as `[media attached: ...]`,
+  `[Image: source: ...]`, and `media://inbound/...` can be replaced with
+  `[media reference removed - already processed by model]`. Current-turn
+  attachment markers stay intact so vision models can still hydrate fresh
+  images.
+- The raw session transcript is not rewritten, so history viewers can still
+  render the original message entries and their images.
 - This is separate from normal cache-TTL pruning. It exists to stop repeated
-  image payloads from busting prompt caches on later turns.
+  image payloads or stale media refs from busting prompt caches on later turns.
 
 ## Smart defaults
 

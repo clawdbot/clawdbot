@@ -94,6 +94,64 @@ describe("browser remote profile tab ops via Playwright", () => {
     );
   });
 
+  it("transfers stable aliases across a high-confidence target replacement", async () => {
+    let currentPages = [page("A", "https://app.example/form")];
+    const listPagesViaPlaywright = vi.fn(async () => currentPages);
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { state, remote } = deps.createRemoteRouteHarness();
+
+    const first = await remote.listTabs();
+    expect(first).toMatchObject([{ targetId: "A", tabId: "t1", suggestedTargetId: "t1" }]);
+    const labeled = await remote.labelTab("t1", "form");
+    expect(labeled).toMatchObject({ targetId: "A", tabId: "t1", label: "form" });
+    state.profiles.get("remote")!.lastTargetId = "A";
+
+    currentPages = [page("B", "https://app.example/submitted")];
+
+    const afterSwap = await remote.listTabs();
+    expect(afterSwap).toMatchObject([
+      { targetId: "B", tabId: "t1", suggestedTargetId: "form", label: "form" },
+    ]);
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("B");
+    await expect(remote.ensureTabAvailable("A")).rejects.toThrow(/tab not found/i);
+    await expect(remote.ensureTabAvailable("form")).resolves.toMatchObject({
+      targetId: "B",
+      tabId: "t1",
+      label: "form",
+    });
+  });
+
+  it("does not transfer aliases when target replacement is ambiguous", async () => {
+    let currentPages = [page("A", "https://a.example"), page("C", "https://c.example")];
+    const listPagesViaPlaywright = vi.fn(async () => currentPages);
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { state, remote } = deps.createRemoteRouteHarness();
+
+    const first = await remote.listTabs();
+    expect(first.map((tab) => [tab.targetId, tab.tabId])).toEqual([
+      ["A", "t1"],
+      ["C", "t2"],
+    ]);
+    state.profiles.get("remote")!.lastTargetId = "A";
+
+    currentPages = [page("B", "https://b.example"), page("D", "https://d.example")];
+
+    const afterSwap = await remote.listTabs();
+    expect(afterSwap.map((tab) => [tab.targetId, tab.tabId])).toEqual([
+      ["B", "t3"],
+      ["D", "t4"],
+    ]);
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("A");
+  });
+
   it("prefers lastTargetId for remote profiles when targetId is omitted", async () => {
     const responses = [
       [

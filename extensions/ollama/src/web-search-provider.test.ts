@@ -115,17 +115,17 @@ describe("ollama web search provider", () => {
     ).toBe("http://localhost:11434");
   });
 
-  it("falls back to the local Ollama host when the model provider uses ollama cloud", () => {
+  it("uses the configured Ollama Cloud host for web search", () => {
     expect(
       testing.resolveOllamaWebSearchBaseUrl(
         createOllamaConfig({
           baseUrl: "https://ollama.com",
         }),
       ),
-    ).toBe("http://127.0.0.1:11434");
+    ).toBe("https://ollama.com");
   });
 
-  it("maps generic search args into the Ollama experimental search endpoint", async () => {
+  it("maps generic search args into the Ollama search endpoint", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(
@@ -157,7 +157,7 @@ describe("ollama web search provider", () => {
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: "http://ollama.local:11434/api/experimental/web_search",
+        url: "http://ollama.local:11434/api/web_search",
         auditContext: "ollama-web-search.search",
       }),
     );

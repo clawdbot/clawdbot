@@ -14,93 +14,94 @@ import type { SandboxPolicy } from "./SandboxPolicy.js";
  * connection have been emitted.
  */
 export type CommandExecParams = {
-/**
- * Command argv vector. Empty arrays are rejected.
- */
-command: Array<string>,
-/**
- * Optional client-supplied, connection-scoped process id.
- *
- * Required for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up
- * `command/exec/write`, `command/exec/resize`, and
- * `command/exec/terminate` calls. When omitted, buffered execution gets an
- * internal id that is not exposed to the client.
- */
-processId?: string | null,
-/**
- * Enable PTY mode.
- *
- * This implies `streamStdin` and `streamStdoutStderr`.
- */
-tty?: boolean,
-/**
- * Allow follow-up `command/exec/write` requests to write stdin bytes.
- *
- * Requires a client-supplied `processId`.
- */
-streamStdin?: boolean,
-/**
- * Stream stdout/stderr via `command/exec/outputDelta` notifications.
- *
- * Streamed bytes are not duplicated into the final response and require a
- * client-supplied `processId`.
- */
-streamStdoutStderr?: boolean,
-/**
- * Optional per-stream stdout/stderr capture cap in bytes.
- *
- * When omitted, the server default applies. Cannot be combined with
- * `disableOutputCap`.
- */
-outputBytesCap?: number | null,
-/**
- * Disable stdout/stderr capture truncation for this request.
- *
- * Cannot be combined with `outputBytesCap`.
- */
-disableOutputCap?: boolean,
-/**
- * Disable the timeout entirely for this request.
- *
- * Cannot be combined with `timeoutMs`.
- */
-disableTimeout?: boolean,
-/**
- * Optional timeout in milliseconds.
- *
- * When omitted, the server default applies. Cannot be combined with
- * `disableTimeout`.
- */
-timeoutMs?: number | null,
-/**
- * Optional working directory. Defaults to the server cwd.
- */
-cwd?: string | null,
-/**
- * Optional environment overrides merged into the server-computed
- * environment.
- *
- * Matching names override inherited values. Set a key to `null` to unset
- * an inherited variable.
- */
-env?: { [key in string]?: string | null } | null,
-/**
- * Optional initial PTY size in character cells. Only valid when `tty` is
- * true.
- */
-size?: CommandExecTerminalSize | null,
-/**
- * Optional sandbox policy for this command.
- *
- * Uses the same shape as thread/turn execution sandbox configuration and
- * defaults to the user's configured policy when omitted. Cannot be
- * combined with `permissionProfile`.
- */
-sandboxPolicy?: SandboxPolicy | null,
-/**
- * Optional full permissions profile for this command.
- *
- * Defaults to the user's configured permissions when omitted. Cannot be
- * combined with `sandboxPolicy`.
- */
-permissionProfile?: PermissionProfile | null, };
+  /**
+   * Command argv vector. Empty arrays are rejected.
+   */
+  command: Array<string>;
+  /**
+   * Optional client-supplied, connection-scoped process id.
+   *
+   * Required for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up
+   * `command/exec/write`, `command/exec/resize`, and
+   * `command/exec/terminate` calls. When omitted, buffered execution gets an
+   * internal id that is not exposed to the client.
+   */
+  processId?: string | null;
+  /**
+   * Enable PTY mode.
+   *
+   * This implies `streamStdin` and `streamStdoutStderr`.
+   */
+  tty?: boolean;
+  /**
+   * Allow follow-up `command/exec/write` requests to write stdin bytes.
+   *
+   * Requires a client-supplied `processId`.
+   */
+  streamStdin?: boolean;
+  /**
+   * Stream stdout/stderr via `command/exec/outputDelta` notifications.
+   *
+   * Streamed bytes are not duplicated into the final response and require a
+   * client-supplied `processId`.
+   */
+  streamStdoutStderr?: boolean;
+  /**
+   * Optional per-stream stdout/stderr capture cap in bytes.
+   *
+   * When omitted, the server default applies. Cannot be combined with
+   * `disableOutputCap`.
+   */
+  outputBytesCap?: number | null;
+  /**
+   * Disable stdout/stderr capture truncation for this request.
+   *
+   * Cannot be combined with `outputBytesCap`.
+   */
+  disableOutputCap?: boolean;
+  /**
+   * Disable the timeout entirely for this request.
+   *
+   * Cannot be combined with `timeoutMs`.
+   */
+  disableTimeout?: boolean;
+  /**
+   * Optional timeout in milliseconds.
+   *
+   * When omitted, the server default applies. Cannot be combined with
+   * `disableTimeout`.
+   */
+  timeoutMs?: number | null;
+  /**
+   * Optional working directory. Defaults to the server cwd.
+   */
+  cwd?: string | null;
+  /**
+   * Optional environment overrides merged into the server-computed
+   * environment.
+   *
+   * Matching names override inherited values. Set a key to `null` to unset
+   * an inherited variable.
+   */
+  env?: { [key in string]?: string | null } | null;
+  /**
+   * Optional initial PTY size in character cells. Only valid when `tty` is
+   * true.
+   */
+  size?: CommandExecTerminalSize | null;
+  /**
+   * Optional sandbox policy for this command.
+   *
+   * Uses the same shape as thread/turn execution sandbox configuration and
+   * defaults to the user's configured policy when omitted. Cannot be
+   * combined with `permissionProfile`.
+   */
+  sandboxPolicy?: SandboxPolicy | null;
+  /**
+   * Optional full permissions profile for this command.
+   *
+   * Defaults to the user's configured permissions when omitted. Cannot be
+   * combined with `sandboxPolicy`.
+   */
+  permissionProfile?: PermissionProfile | null;
+};

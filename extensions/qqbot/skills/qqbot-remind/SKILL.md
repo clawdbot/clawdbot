@@ -14,7 +14,7 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
 
 ---
 
-## 推荐流程（优先使用 `qqbot_remind` 工具）
+## 推荐流程（使用 `qqbot_remind` 工具）
 
 **第一步**：调用 `qqbot_remind` 工具，传入简单参数：
 
@@ -26,23 +26,20 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
 | `time`    | 时间（相对时间或 cron 表达式）               | `"5m"` / `"1h30m"` / `"0 8 * * *"` |
 | `jobId`   | 任务 ID（仅 remove）                         | `"xxx"`                            |
 
-**第二步**：`qqbot_remind` 会返回 `cronParams`，你必须**立即**将 `cronParams` 的值作为参数调用 `cron` 工具。
-
-**第三步**：根据 `cron` 工具的返回结果，回复用户。
+**第二步**：根据 `qqbot_remind` 的返回结果，回复用户。`qqbot_remind` 会直接创建、查询或取消 Gateway cron 任务；成功后不要再调用 `cron` 工具。
 
 ### 示例
 
 用户说："5分钟后提醒我喝水"
 
 1. 调用 `qqbot_remind`：`{ "action": "add", "content": "喝水", "time": "5m" }`
-2. 收到返回的 `cronParams` → 立即调用 `cron` 工具，参数为该 `cronParams`
-3. 回复用户：`⏰ 好的，5分钟后提醒你喝水~`
+2. 工具返回成功后，回复用户：`⏰ 好的，5分钟后提醒你喝水~`
 
 ---
 
 ## 备用方案（直接使用 `cron` 工具）
 
-> 仅当 `qqbot_remind` 工具不可用时使用以下方式。
+> 仅当 `qqbot_remind` 工具不可用但 `cron` 工具可用时使用以下方式。
 
 ### 核心规则
 
@@ -113,7 +110,6 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
 ```
 
 > 周期任务**不加** `deleteAfterRun`。群聊 `delivery.to` 格式为 `"qqbot:group:{group_openid}"`。
-> 若通过 `qqbot_remind` 工具生成 cronParams，**必须**原样传给 `cron` 工具，不要修改或省略任何字段，特别是 `delivery.accountId`。
 
 ---
 

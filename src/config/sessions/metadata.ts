@@ -1,7 +1,7 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -139,7 +139,7 @@ export function deriveGroupSessionPatch(params: {
     subjectLooksChannel && resolution.chatType !== "channel" ? normalizeChannelId(channel) : null;
   const isChannelProvider = Boolean(
     normalizedChannel &&
-    getChannelPlugin(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
+    getLoadedChannelPlugin(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
   );
   const nextGroupChannel =
     explicitChannel ??

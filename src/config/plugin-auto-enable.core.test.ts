@@ -289,8 +289,8 @@ describe("applyPluginAutoEnable core", () => {
         agents: {
           defaults: {
             model: "openai/gpt-5.5",
-            embeddedHarness: {
-              runtime: "codex",
+            agentRuntime: {
+              id: "codex",
               fallback: "none",
             },
           },
@@ -312,17 +312,17 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
     expect(result.changes).toEqual([
       "openai/gpt-5.5 model configured, enabled automatically.",
-      "codex agent harness runtime configured, enabled automatically.",
+      "codex agent runtime configured, enabled automatically.",
     ]);
   });
 
-  it("auto-enables an opt-in plugin when an embedded agent harness runtime is configured", () => {
+  it("auto-enables an opt-in plugin when an agent runtime is configured", () => {
     const result = applyPluginAutoEnable({
       config: {
         agents: {
           defaults: {
-            embeddedHarness: {
-              runtime: "codex",
+            agentRuntime: {
+              id: "codex",
               fallback: "none",
             },
           },
@@ -341,9 +341,38 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(result.changes).toContain(
-      "codex agent harness runtime configured, enabled automatically.",
-    );
+    expect(result.changes).toContain("codex agent runtime configured, enabled automatically.");
+  });
+
+  it("auto-enables a CLI backend owner when an agent runtime is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          defaults: {
+            agentRuntime: {
+              id: "claude-cli",
+              fallback: "none",
+            },
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "anthropic",
+          channels: [],
+          providers: ["anthropic"],
+          cliBackends: ["claude-cli"],
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.anthropic?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "anthropic"]);
+    expect(result.changes).toContain("claude-cli agent runtime configured, enabled automatically.");
   });
 
   it("auto-enables an opt-in plugin when an agent harness runtime is forced by env", () => {
@@ -362,9 +391,7 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(result.changes).toContain(
-      "codex agent harness runtime configured, enabled automatically.",
-    );
+    expect(result.changes).toContain("codex agent runtime configured, enabled automatically.");
   });
 
   it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {

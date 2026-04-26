@@ -80,6 +80,9 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.compactionStatus = null;
   state.fallbackStatus = null;
   state.chatAvatarUrl = null;
+  state.chatAvatarSource = null;
+  state.chatAvatarStatus = null;
+  state.chatAvatarReason = null;
   state.chatQueue = [];
   host.chatStreamStartedAt = null;
   state.chatRunId = null;

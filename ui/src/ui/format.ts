@@ -1,9 +1,9 @@
 import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
 import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
-import { stripAssistantInternalScaffolding } from "../../../src/shared/text/assistant-visible-text.js";
 import { t } from "../i18n/index.ts";
 
 export { formatRelativeTimestamp, formatDurationHuman };
+export { stripThinkingTags } from "./strip-thinking-tags.ts";
 
 export function formatUnknownText(
   value: unknown,
@@ -78,10 +78,6 @@ export function truncateText(
 export function toNumber(value: string, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
-}
-
-export function stripThinkingTags(value: string): string {
-  return stripAssistantInternalScaffolding(value);
 }
 
 export function formatCost(cost: number | null | undefined, fallback = "$0.00"): string {

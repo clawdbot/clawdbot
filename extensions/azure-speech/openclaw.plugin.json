@@ -1,0 +1,63 @@
+{
+  "id": "azure-speech",
+  "enabledByDefault": true,
+  "name": "Azure Speech",
+  "description": "Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).",
+  "providerAuthEnvVars": {
+    "azure-speech": [
+      "AZURE_SPEECH_KEY",
+      "AZURE_SPEECH_API_KEY",
+      "SPEECH_KEY",
+      "AZURE_SPEECH_REGION",
+      "SPEECH_REGION"
+    ],
+    "azure": [
+      "AZURE_SPEECH_KEY",
+      "AZURE_SPEECH_API_KEY",
+      "SPEECH_KEY",
+      "AZURE_SPEECH_REGION",
+      "SPEECH_REGION"
+    ]
+  },
+  "contracts": {
+    "speechProviders": ["azure-speech", "azure"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "Azure Speech resource key. Falls back to AZURE_SPEECH_KEY, AZURE_SPEECH_API_KEY, or SPEECH_KEY."
+      },
+      "region": {
+        "type": "string",
+        "description": "Azure Speech resource region, for example eastus. Falls back to AZURE_SPEECH_REGION or SPEECH_REGION."
+      },
+      "endpoint": {
+        "type": "string",
+        "description": "Optional Azure Speech endpoint/base URL override."
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Optional Azure Speech base URL override."
+      },
+      "voice": {
+        "type": "string",
+        "description": "Azure Speech voice ShortName (default en-US-JennyNeural)."
+      },
+      "lang": {
+        "type": "string",
+        "description": "SSML language code (default en-US)."
+      },
+      "outputFormat": {
+        "type": "string",
+        "description": "Azure Speech X-Microsoft-OutputFormat for audio-file output."
+      },
+      "voiceNoteOutputFormat": {
+        "type": "string",
+        "description": "Azure Speech X-Microsoft-OutputFormat for voice-note output."
+      }
+    }
+  }
+}

@@ -3,6 +3,7 @@ import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fileExists } from "./archive.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
+import { createNpmProjectInstallEnv } from "./npm-install-env.js";
 
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
@@ -249,6 +250,11 @@ export async function installPackageDir(params: {
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
               cwd: stageDir,
+              env: {
+                ...createNpmProjectInstallEnv(process.env),
+                COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+                NPM_CONFIG_IGNORE_SCRIPTS: "true",
+              },
             },
           );
         } finally {

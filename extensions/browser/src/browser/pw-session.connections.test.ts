@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import {
   closePlaywrightBrowserConnection,
+  createPageViaPlaywright,
   getPageForTargetId,
   listPagesViaPlaywright,
 } from "./pw-session.js";
@@ -62,6 +63,62 @@ function makeEmptyBrowser(): BrowserMockBundle {
   } as unknown as import("playwright-core").Browser;
 
   return { browser, browserClose };
+}
+
+function makeDisconnectedReadBrowser(): BrowserMockBundle {
+  let context: import("playwright-core").BrowserContext;
+  const browserClose = vi.fn(async () => {});
+  const page = {
+    on: vi.fn(),
+    context: () => context,
+    title: vi.fn(async () => {
+      throw new Error("Target page, context or browser has been closed");
+    }),
+    url: vi.fn(() => {
+      throw new Error("Target page, context or browser has been closed");
+    }),
+  } as unknown as import("playwright-core").Page;
+
+  context = {
+    pages: () => [page],
+    on: vi.fn(),
+    newCDPSession: vi.fn(async () => {
+      throw new Error("Target page, context or browser has been closed");
+    }),
+  } as unknown as import("playwright-core").BrowserContext;
+
+  const browser = {
+    contexts: () => [context],
+    on: vi.fn(),
+    off: vi.fn(),
+    close: browserClose,
+  } as unknown as import("playwright-core").Browser;
+
+  return { browser, browserClose };
+}
+
+function makeMutatingDisconnectBrowser(): BrowserMockBundle & {
+  newPage: ReturnType<typeof vi.fn>;
+} {
+  const browserClose = vi.fn(async () => {});
+  const newPage = vi.fn(async () => {
+    throw new Error("Target page, context or browser has been closed");
+  });
+  const context = {
+    pages: () => [],
+    on: vi.fn(),
+    newCDPSession: vi.fn(),
+    newPage,
+  } as unknown as import("playwright-core").BrowserContext;
+
+  const browser = {
+    contexts: () => [context],
+    on: vi.fn(),
+    off: vi.fn(),
+    close: browserClose,
+  } as unknown as import("playwright-core").Browser;
+
+  return { browser, browserClose, newPage };
 }
 
 afterEach(async () => {
@@ -170,5 +227,54 @@ describe("pw-session connection scoping", () => {
     expect(refreshedA.browserClose).not.toHaveBeenCalled();
     expect(browserB.browserClose).not.toHaveBeenCalled();
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("reconnects listPagesViaPlaywright once after a cached transport disconnect", async () => {
+    const stale = makeDisconnectedReadBrowser();
+    const refreshed = makeBrowser("A", "https://a.example/recovered");
+    let connectCalls = 0;
+
+    connectOverCdpSpy.mockImplementation((async (...args: unknown[]) => {
+      const endpointText = String(args[0]);
+      if (endpointText !== "http://127.0.0.1:9222") {
+        throw new Error(`unexpected endpoint: ${endpointText}`);
+      }
+      connectCalls += 1;
+      return connectCalls === 1 ? stale.browser : refreshed.browser;
+    }) as never);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    const pages = await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
+
+    expect(pages.map((page) => page.targetId)).toEqual(["A"]);
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(stale.browserClose).toHaveBeenCalledTimes(1));
+    expect(refreshed.browserClose).not.toHaveBeenCalled();
+  });
+
+  it("does not replay mutating page creation after an ambiguous disconnect", async () => {
+    const stale = makeMutatingDisconnectBrowser();
+    const refreshed = makeBrowser("A", "https://a.example/recovered");
+    let connectCalls = 0;
+
+    connectOverCdpSpy.mockImplementation((async (...args: unknown[]) => {
+      const endpointText = String(args[0]);
+      if (endpointText !== "http://127.0.0.1:9222") {
+        throw new Error(`unexpected endpoint: ${endpointText}`);
+      }
+      connectCalls += 1;
+      return connectCalls === 1 ? stale.browser : refreshed.browser;
+    }) as never);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        url: "about:blank",
+      }),
+    ).rejects.toThrow(/browser has been closed/);
+
+    expect(stale.newPage).toHaveBeenCalledTimes(1);
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(1);
   });
 });

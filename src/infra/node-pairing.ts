@@ -5,7 +5,7 @@ import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pa
 import {
   createAsyncLock,
   pruneExpiredPending,
-  readJsonFile,
+  readDurableJsonFile,
   reconcilePendingPairingRequests,
   resolvePairingPaths,
   writeJsonAtomic,
@@ -134,8 +134,8 @@ type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairing
 async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
   const [pending, paired] = await Promise.all([
-    readJsonFile<Record<string, NodePairingPendingRequest>>(pendingPath),
-    readJsonFile<Record<string, NodePairingPairedNode>>(pairedPath),
+    readDurableJsonFile<Record<string, NodePairingPendingRequest>>(pendingPath),
+    readDurableJsonFile<Record<string, NodePairingPairedNode>>(pairedPath),
   ]);
   const state: NodePairingStateFile = {
     pendingById: pending ?? {},

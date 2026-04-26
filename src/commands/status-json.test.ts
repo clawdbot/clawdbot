@@ -110,6 +110,7 @@ describe("statusJsonCommand", () => {
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
       plugins: expect.any(Array),
     });
     expect(logs).toHaveLength(1);

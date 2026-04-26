@@ -1,6 +1,7 @@
 import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import { normalizeMessage } from "./message-normalizer.ts";
+import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
 import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
 

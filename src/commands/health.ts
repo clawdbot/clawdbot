@@ -12,6 +12,7 @@ import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -24,6 +25,8 @@ import type {
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
   HealthSummary,
+  PluginHealthErrorSummary,
+  PluginHealthSummary,
 } from "./health.types.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
@@ -133,6 +136,42 @@ const buildSessionSummary = async (storePath: string) => {
     recent,
   } satisfies HealthSummary["sessions"];
 };
+
+function buildPluginHealthSummary(): PluginHealthSummary | undefined {
+  const registry = getActivePluginRegistry();
+  if (!registry) {
+    return undefined;
+  }
+  const loaded = registry.plugins
+    .filter((plugin) => plugin.status === "loaded")
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+  const errors = registry.plugins
+    .filter((plugin) => plugin.status === "error")
+    .map((plugin) => {
+      const error: PluginHealthErrorSummary = {
+        id: plugin.id,
+        origin: plugin.origin,
+        activated: plugin.activated === true,
+        error: plugin.error ?? "unknown plugin load error",
+      };
+      if (plugin.activationSource) {
+        error.activationSource = plugin.activationSource;
+      }
+      if (plugin.activationReason) {
+        error.activationReason = plugin.activationReason;
+      }
+      if (plugin.failurePhase) {
+        error.failurePhase = plugin.failurePhase;
+      }
+      return error;
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  if (loaded.length === 0 && errors.length === 0) {
+    return undefined;
+  }
+  return { loaded, errors };
+}
 
 async function inspectHealthAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
   return (
@@ -247,7 +286,9 @@ export async function getHealthSnapshot(params?: {
   const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
   const doProbe = params?.probe !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
-  const plugins = listReadOnlyChannelPluginsForConfig(cfg);
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    includeSetupRuntimeFallback: false,
+  });
   const channelOrder = plugins.map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
 
@@ -373,10 +414,12 @@ export async function getHealthSnapshot(params?: {
     }
   }
 
+  const pluginHealth = buildPluginHealthSummary();
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
+    ...(pluginHealth ? { plugins: pluginHealth } : {}),
     channels,
     channelOrder,
     channelLabels,
@@ -448,7 +491,9 @@ export async function healthCommand(
       ? resolvedAgents
       : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
     const channelBindings = buildChannelAccountBindings(cfg);
-    const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg);
+    const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
+      includeSetupRuntimeFallback: false,
+    });
     if (debugEnabled) {
       runtime.log(info("[debug] local channel accounts"));
       for (const plugin of displayPlugins) {

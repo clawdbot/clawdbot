@@ -103,6 +103,39 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Queue: collect");
   });
 
+  it("shows sanitized TTS provider details in the voice status line", async () => {
+    await withTempHome(async () => {
+      const text = buildStatusMessage({
+        config: {
+          messages: {
+            tts: {
+              auto: "always",
+              provider: "openai",
+              providers: {
+                openai: {
+                  displayName: "NeuTTS local",
+                  baseUrl: "http://user:secret@127.0.0.1:18801/v1?token=hidden#fragment",
+                  model: "neutts-nano",
+                  voice: "clara",
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        agent: {},
+        now: 0,
+      });
+      const normalized = normalizeTestText(text);
+
+      expect(normalized).toContain(
+        "Voice: always · provider=openai · name=NeuTTS local · model=neutts-nano · voice=clara · endpoint=custom(http://127.0.0.1:18801/v1)",
+      );
+      expect(normalized).not.toContain("secret");
+      expect(normalized).not.toContain("token=hidden");
+      expect(normalized).not.toContain("fragment");
+    });
+  });
+
   it("shows the model runtime for CLI-backed providers", () => {
     const text = buildStatusMessage({
       config: {

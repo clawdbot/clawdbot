@@ -49,6 +49,10 @@ OpenClaw has three public release lanes:
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
   `dist/*` release artifacts and Control UI bundle exist for the pack
   validation step
+- Run `pnpm qa:otel:smoke` when validating release telemetry. It exercises
+  QA-lab through a local OTLP/HTTP receiver and verifies the exported trace
+  span names, bounded attributes, and content/identifier redaction without
+  requiring Opik, Langfuse, or another external collector.
 - Run `pnpm release:check` before every tagged release
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`

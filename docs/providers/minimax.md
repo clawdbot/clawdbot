@@ -12,15 +12,15 @@ MiniMax also provides:
 
 - Bundled speech synthesis via T2A v2
 - Bundled image understanding via `MiniMax-VL-01`
-- Bundled music generation via `music-2.5+`
+- Bundled music generation via `music-2.6`
 - Bundled `web_search` through the MiniMax Coding Plan search API
 
 Provider split:
 
-| Provider ID      | Auth    | Capabilities                                                    |
-| ---------------- | ------- | --------------------------------------------------------------- |
-| `minimax`        | API key | Text, image generation, image understanding, speech, web search |
-| `minimax-portal` | OAuth   | Text, image generation, image understanding                     |
+| Provider ID      | Auth    | Capabilities                                                                                        |
+| ---------------- | ------- | --------------------------------------------------------------------------------------------------- |
+| `minimax`        | API key | Text, image generation, music generation, video generation, image understanding, speech, web search |
+| `minimax-portal` | OAuth   | Text, image generation, music generation, video generation, image understanding, speech             |
 
 ## Built-in catalog
 
@@ -30,7 +30,7 @@ Provider split:
 | `MiniMax-M2.7-highspeed` | Chat (reasoning) | Faster M2.7 reasoning tier               |
 | `MiniMax-VL-01`          | Vision           | Image understanding model                |
 | `image-01`               | Image generation | Text-to-image and image-to-image editing |
-| `music-2.5+`             | Music generation | Default music model                      |
+| `music-2.6`              | Music generation | Default music model                      |
 | `music-2.5`              | Music generation | Previous music generation tier           |
 | `music-2.0`              | Music generation | Legacy music generation tier             |
 | `MiniMax-Hailuo-2.3`     | Video generation | Text-to-video and image reference flows  |
@@ -235,6 +235,13 @@ Both `minimax` and `minimax-portal` register `image_generate` with the same
 `image-01` model. API-key setups use `MINIMAX_API_KEY`; OAuth setups can use
 the bundled `minimax-portal` auth path instead.
 
+Image generation always uses MiniMax's dedicated image endpoint
+(`/v1/image_generation`) and ignores `models.providers.minimax.baseUrl`,
+since that field configures the chat/Anthropic-compatible base URL. Set
+`MINIMAX_API_HOST=https://api.minimaxi.com` to route image generation
+through the CN endpoint; the default global endpoint is
+`https://api.minimax.io`.
+
 When onboarding or API-key setup writes explicit `models.providers.minimax`
 entries, OpenClaw materializes `MiniMax-M2.7` and
 `MiniMax-M2.7-highspeed` as text-only chat models. Image understanding is
@@ -251,6 +258,16 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for
 
 - Default TTS model: `speech-2.8-hd`
 - Default voice: `English_expressive_narrator`
+- Supported bundled model ids include `speech-2.8-hd`, `speech-2.8-turbo`,
+  `speech-2.6-hd`, `speech-2.6-turbo`, `speech-02-hd`,
+  `speech-02-turbo`, `speech-01-hd`, and `speech-01-turbo`.
+- Auth resolution is `messages.tts.providers.minimax.apiKey`, then
+  `minimax-portal` OAuth/token auth profiles, then Token Plan environment
+  keys (`MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`,
+  `MINIMAX_CODING_API_KEY`), then `MINIMAX_API_KEY`.
+- If no TTS host is configured, OpenClaw reuses the configured
+  `minimax-portal` OAuth host and strips Anthropic-compatible path suffixes
+  such as `/anthropic`.
 - Normal audio attachments stay MP3.
 - Voice-note targets such as Feishu and Telegram are transcoded from MiniMax
   MP3 to 48kHz Opus with `ffmpeg`, because the Feishu/Lark file API only
@@ -269,10 +286,11 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for
 
 ### Music generation
 
-The bundled `minimax` plugin also registers music generation through the shared
-`music_generate` tool.
+The bundled MiniMax plugin registers music generation through the shared
+`music_generate` tool for both `minimax` and `minimax-portal`.
 
-- Default music model: `minimax/music-2.5+`
+- Default music model: `minimax/music-2.6`
+- OAuth music model: `minimax-portal/music-2.6`
 - Also supports `minimax/music-2.5` and `minimax/music-2.0`
 - Prompt controls: `lyrics`, `instrumental`, `durationSeconds`
 - Output format: `mp3`
@@ -285,7 +303,7 @@ To use MiniMax as the default music provider:
   agents: {
     defaults: {
       musicGenerationModel: {
-        primary: "minimax/music-2.5+",
+        primary: "minimax/music-2.6",
       },
     },
   },
@@ -298,10 +316,11 @@ See [Music Generation](/tools/music-generation) for shared tool parameters, prov
 
 ### Video generation
 
-The bundled `minimax` plugin also registers video generation through the shared
-`video_generate` tool.
+The bundled MiniMax plugin registers video generation through the shared
+`video_generate` tool for both `minimax` and `minimax-portal`.
 
 - Default video model: `minimax/MiniMax-Hailuo-2.3`
+- OAuth video model: `minimax-portal/MiniMax-Hailuo-2.3`
 - Modes: text-to-video and single-image reference flows
 - Supports `aspectRatio` and `resolution`
 

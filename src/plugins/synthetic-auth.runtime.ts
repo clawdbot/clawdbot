@@ -1,5 +1,5 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 
 function uniqueProviderRefs(values: readonly string[]): string[] {
@@ -19,7 +19,7 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
 
 function resolveManifestSyntheticAuthProviderRefs(): string[] {
   return uniqueProviderRefs(
-    loadPluginManifestRegistry({ cache: true }).plugins.flatMap(
+    loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true }).plugins.flatMap(
       (plugin) => plugin.syntheticAuthRefs ?? [],
     ),
   );

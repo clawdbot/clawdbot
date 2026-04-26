@@ -4,10 +4,11 @@ import {
   diagnosticHttpStatusCode,
 } from "../infra/diagnostic-error-metadata.js";
 import {
-  emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
   type DiagnosticToolParamsSummary,
 } from "../infra/diagnostic-events.js";
 import {
+  createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
@@ -456,16 +457,19 @@ export function wrapToolWithBeforeToolCallHook(
         }
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
+      const trace = ctx?.trace
+        ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))
+        : undefined;
       const eventBase = {
         ...(ctx?.runId && { runId: ctx.runId }),
         ...(ctx?.sessionKey && { sessionKey: ctx.sessionKey }),
         ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
-        ...(ctx?.trace && { trace: freezeDiagnosticTraceContext(ctx.trace) }),
+        ...(trace && { trace }),
         toolName: normalizedToolName,
         ...(toolCallId && { toolCallId }),
         paramsSummary: summarizeToolParams(outcome.params),
       };
-      emitDiagnosticEvent({
+      emitTrustedDiagnosticEvent({
         type: "tool.execution.started",
         ...eventBase,
       });
@@ -480,7 +484,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           result,
         });
-        emitDiagnosticEvent({
+        emitTrustedDiagnosticEvent({
           type: "tool.execution.completed",
           ...eventBase,
           durationMs,
@@ -489,7 +493,7 @@ export function wrapToolWithBeforeToolCallHook(
       } catch (err) {
         const cause = unwrapErrorCause(err);
         const errorCode = diagnosticHttpStatusCode(cause);
-        emitDiagnosticEvent({
+        emitTrustedDiagnosticEvent({
           type: "tool.execution.error",
           ...eventBase,
           durationMs: Date.now() - startedAt,

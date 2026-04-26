@@ -6,6 +6,7 @@ import {
   type SpeechProviderConfig,
   type SpeechProviderOverrides,
   type SpeechProviderPlugin,
+  type SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -48,7 +49,7 @@ function normalizeXaiSpeechResponseFormat(value: unknown): XaiSpeechResponseForm
 }
 
 function resolveSpeechResponseFormat(
-  target: "audio-file" | "voice-note",
+  target: SpeechSynthesisTarget,
   configuredFormat?: XaiSpeechResponseFormat,
 ): XaiSpeechResponseFormat {
   if (configuredFormat) {

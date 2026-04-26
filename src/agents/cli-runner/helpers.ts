@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -98,7 +99,9 @@ export function buildSystemPrompt(params: {
       shell: detectRuntimeShell(),
     },
   });
-  const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+  const ttsHint = params.config
+    ? buildTtsSystemPromptHint(params.config, params.agentId)
+    : undefined;
   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -111,7 +114,7 @@ export function buildSystemPrompt(params: {
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
-    acpEnabled: params.config?.acp?.enabled !== false,
+    acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     modelAliasLines: buildModelAliasLines(params.config),
@@ -160,6 +163,7 @@ export function resolveSystemPromptUsage(params: {
   }
   if (
     !params.backend.systemPromptArg?.trim() &&
+    !params.backend.systemPromptFileArg?.trim() &&
     !params.backend.systemPromptFileConfigKey?.trim()
   ) {
     return null;
@@ -292,7 +296,10 @@ export async function writeCliSystemPromptFile(params: {
   backend: CliBackendConfig;
   systemPrompt: string;
 }): Promise<{ filePath?: string; cleanup: () => Promise<void> }> {
-  if (!params.backend.systemPromptFileConfigKey?.trim()) {
+  if (
+    !params.backend.systemPromptFileArg?.trim() &&
+    !params.backend.systemPromptFileConfigKey?.trim()
+  ) {
     return { cleanup: async () => {} };
   }
   const tempDir = await fs.mkdtemp(
@@ -369,6 +376,13 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
+    !params.useResume &&
+    params.systemPrompt &&
+    params.systemPromptFilePath &&
+    params.backend.systemPromptFileArg
+  ) {
+    args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
+  } else if (
     !params.useResume &&
     params.systemPrompt &&
     params.systemPromptFilePath &&

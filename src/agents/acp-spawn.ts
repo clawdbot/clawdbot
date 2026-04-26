@@ -70,6 +70,7 @@ import {
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
@@ -98,6 +99,8 @@ export type SpawnAcpParams = {
   agentId?: string;
   resumeSessionId?: string;
   model?: string;
+  thinking?: string;
+  runTimeoutSeconds?: number;
   cwd?: string;
   mode?: SpawnAcpMode;
   thread?: boolean;
@@ -127,6 +130,7 @@ export const ACP_SPAWN_ERROR_CODES = [
   "subagent_policy",
   "thread_required",
   "target_agent_required",
+  "runtime_agent_mismatch",
   "agent_forbidden",
   "cwd_resolution_failed",
   "thread_binding_invalid",
@@ -394,6 +398,24 @@ function resolveTargetAcpAgentId(params: {
 }): { ok: true; agentId: string } | { ok: false; error: string } {
   const requested = normalizeOptionalAgentId(params.requestedAgentId);
   if (requested) {
+    const configuredAgent = params.cfg.agents?.list?.find(
+      (agent) => normalizeOptionalAgentId(agent.id) === requested,
+    );
+    if (configuredAgent?.runtime?.type === "acp") {
+      return {
+        ok: true,
+        agentId: normalizeOptionalAgentId(configuredAgent.runtime.acp?.agent) ?? requested,
+      };
+    }
+    if (configuredAgent && !isExplicitlyAllowedAcpAgent(params.cfg, requested)) {
+      return {
+        ok: false,
+        error:
+          `agentId "${requested}" is an OpenClaw config agent, not an ACP harness. ` +
+          'Use runtime="subagent" or omit runtime for OpenClaw config agents. ' +
+          'Use runtime="acp" only with external ACP harness ids such as codex, claude, droid, gemini, or opencode, or configure agents.list[].runtime.type="acp" with runtime.acp.agent.',
+      };
+    }
     return { ok: true, agentId: requested };
   }
 
@@ -407,6 +429,13 @@ function resolveTargetAcpAgentId(params: {
     error:
       "ACP target agent is not configured. Pass `agentId` in `sessions_spawn` or set `acp.defaultAgent` in config.",
   };
+}
+
+function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): boolean {
+  return (cfg.acp?.allowedAgents ?? []).some((entry) => {
+    const normalized = normalizeOptionalAgentId(entry);
+    return normalized === "*" || normalized === agentId;
+  });
 }
 
 function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
@@ -826,6 +855,8 @@ async function initializeAcpSpawnRuntime(params: {
   runtimeMode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
   model?: string;
+  thinking?: string;
+  runTimeoutSeconds?: number;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
@@ -850,7 +881,14 @@ async function initializeAcpSpawnRuntime(params: {
     agent: params.targetAgentId,
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
-    runtimeOptions: params.model ? { model: params.model } : undefined,
+    runtimeOptions:
+      params.model || params.thinking || params.runTimeoutSeconds
+        ? {
+            ...(params.model ? { model: params.model } : {}),
+            ...(params.thinking ? { thinking: params.thinking } : {}),
+            ...(params.runTimeoutSeconds ? { timeoutSeconds: params.runTimeoutSeconds } : {}),
+          }
+        : undefined,
     cwd: params.cwd,
     backendId: params.cfg.acp?.backend,
   });
@@ -1070,7 +1108,9 @@ export async function spawnAcpDirect(
     return createAcpSpawnFailure({
       status: "error",
       errorCode: "thread_required",
-      error: 'mode="session" requires thread=true so the ACP session can stay bound to a thread.',
+      error:
+        'sessions_spawn(runtime="acp", mode="session") requires thread=true so the ACP session can stay bound to a channel thread. ' +
+        'Retry with { mode: "session", thread: true } on a channel that exposes threads (e.g. Discord, Slack, Telegram topics), or use mode="run" for one-shot work.',
     });
   }
 
@@ -1081,7 +1121,10 @@ export async function spawnAcpDirect(
   if (!targetAgentResult.ok) {
     return createAcpSpawnFailure({
       status: "error",
-      errorCode: "target_agent_required",
+      errorCode:
+        params.agentId && normalizeOptionalAgentId(params.agentId)
+          ? "runtime_agent_mismatch"
+          : "target_agent_required",
       error: targetAgentResult.error,
     });
   }
@@ -1189,6 +1232,8 @@ export async function spawnAcpDirect(
       runtimeMode,
       resumeSessionId: params.resumeSessionId,
       model: params.model,
+      thinking: params.thinking,
+      runTimeoutSeconds: params.runTimeoutSeconds,
       cwd: runtimeCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
@@ -1272,6 +1317,8 @@ export async function spawnAcpDirect(
         threadId: deliveryPlan.threadId,
         idempotencyKey: childIdem,
         deliver: deliveryPlan.useInlineDelivery,
+        lane: AGENT_LANE_SUBAGENT,
+        ...(params.runTimeoutSeconds != null ? { timeout: params.runTimeoutSeconds } : {}),
         label: params.label || undefined,
       },
       timeoutMs: 10_000,

@@ -81,8 +81,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: { PATH: "/usr/bin" },
         },
-        primaryModel: "openai/gpt-5.4",
-        alternateModel: "openai/gpt-5.4-mini",
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
         providerMode: "mock-openai",
       } as never,
       ["qa", "suite"],
@@ -103,6 +103,48 @@ describe("qa suite runtime agent process helpers", () => {
     );
   });
 
+  it("merges isolated env overrides into qa cli runs", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: { PATH: "/usr/bin", OPENCLAW_STATE_DIR: "/tmp/default-state" },
+        },
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["crestodian", "-m", "overview"],
+      {
+        env: {
+          OPENCLAW_STATE_DIR: "/tmp/isolated-state",
+          OPENCLAW_CONFIG_PATH: "/tmp/isolated-state/openclaw.json",
+        },
+      },
+    );
+
+    await waitForSpawnCount(1);
+    child.stdout.emit("data", Buffer.from("ok\n"));
+    child.emit("exit", 0);
+
+    await expect(pending).resolves.toBe("ok");
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/usr/bin/node",
+      ["/repo/dist/index.js", "crestodian", "-m", "overview"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          PATH: "/usr/bin",
+          OPENCLAW_STATE_DIR: "/tmp/isolated-state",
+          OPENCLAW_CONFIG_PATH: "/tmp/isolated-state/openclaw.json",
+        }),
+      }),
+    );
+  });
+
   it("parses json qa cli output when requested", async () => {
     const child = createSpawnedProcess();
     spawnMock.mockReturnValue(child);
@@ -114,8 +156,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.4",
-        alternateModel: "openai/gpt-5.4-mini",
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search"],
@@ -140,8 +182,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.4",
-        alternateModel: "openai/gpt-5.4-mini",
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -171,8 +213,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.4",
-        alternateModel: "openai/gpt-5.4-mini",
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],

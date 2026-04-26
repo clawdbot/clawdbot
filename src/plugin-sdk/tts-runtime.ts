@@ -40,6 +40,10 @@ export const getTtsMaxLength: FacadeModule["getTtsMaxLength"] = createLazyFacade
   loadFacadeModule,
   "getTtsMaxLength",
 );
+export const getTtsPersona: FacadeModule["getTtsPersona"] = createLazyFacadeRuntimeValue(
+  loadFacadeModule,
+  "getTtsPersona",
+);
 export const getTtsProvider: FacadeModule["getTtsProvider"] = createLazyFacadeRuntimeValue(
   loadFacadeModule,
   "getTtsProvider",
@@ -55,6 +59,10 @@ export const isTtsProviderConfigured: FacadeModule["isTtsProviderConfigured"] =
 export const listSpeechVoices: FacadeModule["listSpeechVoices"] = createLazyFacadeRuntimeValue(
   loadFacadeModule,
   "listSpeechVoices",
+);
+export const listTtsPersonas: FacadeModule["listTtsPersonas"] = createLazyFacadeRuntimeValue(
+  loadFacadeModule,
+  "listTtsPersonas",
 );
 export const maybeApplyTtsToPayload: FacadeModule["maybeApplyTtsToPayload"] =
   createLazyFacadeRuntimeValue(loadFacadeModule, "maybeApplyTtsToPayload");
@@ -89,6 +97,10 @@ export const setTtsEnabled: FacadeModule["setTtsEnabled"] = createLazyFacadeRunt
 export const setTtsMaxLength: FacadeModule["setTtsMaxLength"] = createLazyFacadeRuntimeValue(
   loadFacadeModule,
   "setTtsMaxLength",
+);
+export const setTtsPersona: FacadeModule["setTtsPersona"] = createLazyFacadeRuntimeValue(
+  loadFacadeModule,
+  "setTtsPersona",
 );
 export const setTtsProvider: FacadeModule["setTtsProvider"] = createLazyFacadeRuntimeValue(
   loadFacadeModule,

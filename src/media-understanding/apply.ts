@@ -48,6 +48,8 @@ export type ApplyMediaUnderstandingResult = {
 };
 
 const CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["image", "audio", "video"];
+const EMPTY_VOICE_NOTE_PLACEHOLDER =
+  "[Voice note could not be transcribed because the audio attachment was too small]";
 const EXTRA_TEXT_MIMES = [
   "application/xml",
   "text/xml",
@@ -306,6 +308,32 @@ function resolveTextMimeFromName(name?: string): string | undefined {
   return TEXT_EXT_MIME.get(ext);
 }
 
+function buildSyntheticSkippedAudioOutputs(
+  decisions: MediaUnderstandingDecision[],
+): MediaUnderstandingOutput[] {
+  const audioDecision = decisions.find((decision) => decision.capability === "audio");
+  if (!audioDecision) {
+    return [];
+  }
+  return audioDecision.attachments.flatMap((attachment) => {
+    const hasTooSmallAttempt = attachment.attempts.some((attempt) =>
+      attempt.reason?.trim().startsWith("tooSmall"),
+    );
+    if (!hasTooSmallAttempt) {
+      return [];
+    }
+    return [
+      {
+        kind: "audio.transcription" as const,
+        attachmentIndex: attachment.attachmentIndex,
+        text: EMPTY_VOICE_NOTE_PLACEHOLDER,
+        provider: "openclaw",
+        model: "synthetic-empty-audio",
+      },
+    ];
+  });
+}
+
 function isBinaryMediaMime(mime?: string): boolean {
   if (!mime) {
     return false;
@@ -527,6 +555,54 @@ export async function applyMediaUnderstanding(params: {
       decisions.push(entry.decision);
     }
 
+    const audioOutputAttachmentIndexes = new Set(
+      outputs
+        .filter((output) => output.kind === "audio.transcription")
+        .map((output) => output.attachmentIndex),
+    );
+    const syntheticSkippedAudioOutputs = buildSyntheticSkippedAudioOutputs(decisions).filter(
+      (output) => !audioOutputAttachmentIndexes.has(output.attachmentIndex),
+    );
+
+    // Merge synthetic placeholders into the audio slice while preserving the
+    // selected audio attachment order from `runCapability()` / `attachments.prefer`.
+    // When audio produced no real outputs, insert the synthetic slice at the
+    // audio capability slot (before video) instead of appending at the end.
+    if (syntheticSkippedAudioOutputs.length > 0) {
+      const audioDecision = decisions.find((decision) => decision.capability === "audio");
+      const audioAttachmentOrder =
+        audioDecision?.attachments.map((attachment) => attachment.attachmentIndex) ?? [];
+      const audioOutputsByAttachmentIndex = new Map<number, MediaUnderstandingOutput>();
+      for (const output of outputs) {
+        if (output.kind === "audio.transcription") {
+          audioOutputsByAttachmentIndex.set(output.attachmentIndex, output);
+        }
+      }
+      for (const output of syntheticSkippedAudioOutputs) {
+        audioOutputsByAttachmentIndex.set(output.attachmentIndex, output);
+      }
+      const mergedAudio = audioAttachmentOrder
+        .map((attachmentIndex) => audioOutputsByAttachmentIndex.get(attachmentIndex))
+        .filter((output): output is MediaUnderstandingOutput => Boolean(output));
+
+      const firstAudioIdx = outputs.findIndex((o) => o.kind === "audio.transcription");
+      if (firstAudioIdx >= 0) {
+        const before = outputs.slice(0, firstAudioIdx);
+        const afterLastAudio = outputs.slice(
+          outputs.reduce(
+            (last, o, i) => (o.kind === "audio.transcription" ? i : last),
+            firstAudioIdx,
+          ) + 1,
+        );
+        outputs.length = 0;
+        outputs.push(...before, ...mergedAudio, ...afterLastAudio);
+      } else {
+        const firstVideoIdx = outputs.findIndex((o) => o.kind === "video.description");
+        const audioInsertIdx = firstVideoIdx >= 0 ? firstVideoIdx : outputs.length;
+        outputs.splice(audioInsertIdx, 0, ...mergedAudio);
+      }
+    }
+
     if (decisions.length > 0) {
       ctx.MediaUnderstandingDecisions = [...(ctx.MediaUnderstandingDecisions ?? []), ...decisions];
     }
@@ -560,9 +636,19 @@ export async function applyMediaUnderstanding(params: {
       }
       ctx.MediaUnderstanding = [...(ctx.MediaUnderstanding ?? []), ...outputs];
     }
+    // Only skip file extraction for attachments that have a real (non-synthetic)
+    // audio transcription. Synthetic placeholders should not prevent file extraction
+    // for tiny audio-MIME files that could be recovered as text via forcedTextMime.
+    const syntheticAudioIndexes = new Set(
+      syntheticSkippedAudioOutputs.map((o) => o.attachmentIndex),
+    );
     const audioAttachmentIndexes = new Set(
       outputs
-        .filter((output) => output.kind === "audio.transcription")
+        .filter(
+          (output) =>
+            output.kind === "audio.transcription" &&
+            !syntheticAudioIndexes.has(output.attachmentIndex),
+        )
         .map((output) => output.attachmentIndex),
     );
     const fileBlocks = await extractFileBlocks({

@@ -101,6 +101,8 @@ const localAdapter: MemoryEmbeddingProviderAdapter = {
       provider,
       runtime: {
         id: "local",
+        inlineQueryTimeoutMs: 5 * 60_000,
+        inlineBatchTimeoutMs: 10 * 60_000,
         cacheKeyData: {
           provider: "local",
           model: provider.model,

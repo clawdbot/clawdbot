@@ -46,7 +46,9 @@
 .chat-group-footer {
   display: flex;
   gap: 8px;
-  align-items: baseline;
+  row-gap: 5px;
+  align-items: center;
+  flex-wrap: wrap;
   margin-top: 6px;
 }
 
@@ -60,6 +62,7 @@
   font-size: 11px;
   color: var(--muted);
   opacity: 0.7;
+  line-height: 1.2;
 }
 
 /* ── Group footer action buttons (TTS, delete) ── */
@@ -382,12 +385,79 @@ img.chat-avatar {
 .msg-meta {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-size: 11px;
   line-height: 1;
   color: var(--muted);
-  margin-top: 4px;
   flex-wrap: wrap;
+}
+
+.msg-meta__summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 2px 7px 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-hover, rgba(255, 255, 255, 0.08)) 65%, transparent);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    border-color var(--duration-fast) ease-out,
+    background var(--duration-fast) ease-out,
+    color var(--duration-fast) ease-out;
+}
+
+.msg-meta__summary::-webkit-details-marker {
+  display: none;
+}
+
+.msg-meta__summary:hover,
+.msg-meta__summary:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--fg);
+}
+
+.msg-meta__summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.msg-meta__summary-icon {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  transition: transform 120ms ease-out;
+}
+
+.msg-meta__summary-icon svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.msg-meta[open] .msg-meta__summary-icon {
+  transform: rotate(90deg);
+}
+
+details.msg-meta:not([open]) .msg-meta__details {
+  display: none;
+}
+
+.msg-meta__details {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .msg-meta__tokens,

@@ -13,7 +13,12 @@ Assistant output can carry a small set of delivery/render directives:
 - `[[reply_to_current]]` / `[[reply_to:<id>]]` for reply metadata
 - `[embed ...]` for Control UI rich rendering
 
+Remote `MEDIA:` attachments must be public `https:` URLs. Plain `http:`,
+loopback, link-local, private, and internal hostnames are ignored as attachment
+directives; server-side media fetchers still enforce their own network guards.
+
 These directives are separate. `MEDIA:` and reply/voice tags remain delivery metadata; `[embed ...]` is the web-only rich render path.
+Trusted tool-result media uses the same `MEDIA:` / `[[audio_as_voice]]` parser before delivery, so text tool outputs can still mark an audio attachment as a voice note.
 
 When block streaming is enabled, `MEDIA:` remains single-delivery metadata for a
 turn. If the same media URL is sent in a streamed block and repeated in the final

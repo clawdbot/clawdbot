@@ -3,8 +3,10 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
-  buildPluginSnapshotReport,
+  buildPluginRegistrySnapshotReport,
+  inspectPluginRegistry,
   resetPluginsCliTestState,
+  refreshPluginRegistry,
   runPluginsCommand,
   runtimeLogs,
 } from "./plugins-cli-test-helpers.js";
@@ -15,8 +17,10 @@ describe("plugins cli list", () => {
   });
 
   it("includes imported state in JSON output", async () => {
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
+      registrySource: "persisted",
+      registryDiagnostics: [],
       plugins: [
         createPluginRecord({
           id: "demo",
@@ -30,8 +34,9 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "list", "--json"]);
 
-    expect(buildPluginSnapshotReport).toHaveBeenCalledWith(
+    expect(buildPluginRegistrySnapshotReport).toHaveBeenCalledWith(
       expect.objectContaining({
+        config: {},
         logger: expect.objectContaining({
           info: expect.any(Function),
           warn: expect.any(Function),
@@ -42,6 +47,10 @@ describe("plugins cli list", () => {
 
     expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
       workspaceDir: "/workspace",
+      registry: {
+        source: "persisted",
+        diagnostics: [],
+      },
       plugins: [
         expect.objectContaining({
           id: "demo",
@@ -64,6 +73,49 @@ describe("plugins cli list", () => {
 
     expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith();
     expect(runtimeLogs).toContain("No plugin issues detected.");
+  });
+
+  it("reports persisted plugin registry state without refreshing", async () => {
+    inspectPluginRegistry.mockResolvedValue({
+      state: "stale",
+      refreshReasons: ["stale-manifest"],
+      persisted: {
+        plugins: [{ pluginId: "demo", enabled: true }],
+      },
+      current: {
+        plugins: [
+          { pluginId: "demo", enabled: true },
+          { pluginId: "next", enabled: false },
+        ],
+      },
+    });
+
+    await runPluginsCommand(["plugins", "registry"]);
+
+    expect(inspectPluginRegistry).toHaveBeenCalledWith({ config: {} });
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(runtimeLogs.join("\n")).toContain("State:");
+    expect(runtimeLogs.join("\n")).toContain("stale");
+    expect(runtimeLogs.join("\n")).toContain("Refresh reasons:");
+    expect(runtimeLogs.join("\n")).toContain("openclaw plugins registry --refresh");
+  });
+
+  it("refreshes the persisted plugin registry on request", async () => {
+    refreshPluginRegistry.mockResolvedValue({
+      plugins: [
+        { pluginId: "demo", enabled: true },
+        { pluginId: "off", enabled: false },
+      ],
+    });
+
+    await runPluginsCommand(["plugins", "registry", "--refresh"]);
+
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: {},
+      reason: "manual",
+    });
+    expect(inspectPluginRegistry).not.toHaveBeenCalled();
+    expect(runtimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
   });
 
   it("shows conversation-access hook policy in inspect output", async () => {

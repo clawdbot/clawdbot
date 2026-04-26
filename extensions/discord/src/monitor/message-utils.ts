@@ -1,5 +1,6 @@
 import type { ChannelType, Client, Message } from "@buape/carbon";
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
+import { getFileExtension } from "openclaw/plugin-sdk/media-mime";
 import { fetchRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -25,6 +26,27 @@ const DISCORD_MEDIA_SSRF_POLICY: SsrFPolicy = {
   hostnameAllowlist: DISCORD_CDN_HOSTNAMES,
   allowRfc2544BenchmarkRange: true,
 };
+
+const AUDIO_ATTACHMENT_EXTENSIONS = new Set([
+  ".aac",
+  ".caf",
+  ".flac",
+  ".m4a",
+  ".mp3",
+  ".oga",
+  ".ogg",
+  ".opus",
+  ".wav",
+]);
+
+function isDiscordAudioAttachmentFileName(fileName?: string | null): boolean {
+  const ext = getFileExtension(fileName);
+  return Boolean(ext && AUDIO_ATTACHMENT_EXTENSIONS.has(ext));
+}
+
+function hasDiscordVoiceAttachmentFields(attachment: APIAttachment): boolean {
+  return typeof attachment.duration_secs === "number" || typeof attachment.waveform === "string";
+}
 
 function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | undefined {
   const merged = lists
@@ -381,10 +403,17 @@ async function appendResolvedMediaFromAttachments(params: {
     return;
   }
   for (const attachment of attachments) {
+    const attachmentUrl = normalizeOptionalString(attachment.url);
+    if (!attachmentUrl) {
+      logVerbose(
+        `${params.errorPrefix} ${attachment.id ?? attachment.filename ?? "attachment"}: missing url`,
+      );
+      continue;
+    }
     try {
       const fetched = await fetchDiscordMedia({
-        url: attachment.url,
-        filePathHint: attachment.filename ?? attachment.url,
+        url: attachmentUrl,
+        filePathHint: attachment.filename ?? attachmentUrl,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
         ssrfPolicy: params.ssrfPolicy,
@@ -404,11 +433,11 @@ async function appendResolvedMediaFromAttachments(params: {
         placeholder: inferPlaceholder(attachment),
       });
     } catch (err) {
-      const id = attachment.id ?? attachment.url;
+      const id = attachment.id ?? attachmentUrl;
       logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
       // Preserve attachment context even when remote fetch is blocked/fails.
       params.out.push({
-        path: attachment.url,
+        path: attachmentUrl,
         contentType: attachment.content_type,
         placeholder: inferPlaceholder(attachment),
       });
@@ -551,6 +580,12 @@ function inferPlaceholder(attachment: APIAttachment): string {
     return "<media:video>";
   }
   if (mime.startsWith("audio/")) {
+    return "<media:audio>";
+  }
+  if (hasDiscordVoiceAttachmentFields(attachment)) {
+    return "<media:audio>";
+  }
+  if (isDiscordAudioAttachmentFileName(attachment.filename ?? attachment.url)) {
     return "<media:audio>";
   }
   return "<media:document>";

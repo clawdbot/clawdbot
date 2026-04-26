@@ -11,6 +11,11 @@ import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import {
   clearMemoryPluginState,
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
@@ -138,6 +143,7 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
+  resetDiagnosticEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedPiAgentMock.mockClear();
@@ -169,6 +175,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetDiagnosticEventsForTest();
   vi.useRealTimers();
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
@@ -232,8 +239,12 @@ describe("runReplyAgent auto-compaction token update", () => {
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
 
-  it("updates totalTokens from lastCallUsage even without compaction", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-last-"));
+  async function runBaseReplyWithAgentMeta(params: {
+    agentMeta: Record<string, unknown>;
+    collectDiagnostics?: boolean;
+    tmpPrefix: string;
+  }) {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tmpPrefix));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {
@@ -247,47 +258,127 @@ describe("runReplyAgent auto-compaction token update", () => {
     runEmbeddedPiAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {
-        agentMeta: {
-          // Tool-use loop: accumulated input is higher than last call's input
-          usage: { input: 75_000, output: 5_000, total: 80_000 },
-          lastCallUsage: { input: 55_000, output: 2_000, total: 57_000 },
-        },
+        agentMeta: params.agentMeta,
       },
     });
 
+    const diagnostics: DiagnosticEventPayload[] = [];
+    const unsubscribe = params.collectDiagnostics
+      ? onInternalDiagnosticEvent((event) => {
+          diagnostics.push(event);
+        })
+      : undefined;
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,
       sessionEntry,
     });
 
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
+    try {
+      await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: "main",
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionCtx,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 200_000,
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+    } finally {
+      unsubscribe?.();
+    }
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const usageEvent = diagnostics.find((event) => event.type === "model.usage");
+    return { sessionKey, stored, usageEvent };
+  }
+
+  it("updates totalTokens from lastCallUsage even without compaction", async () => {
+    const { sessionKey, stored } = await runBaseReplyWithAgentMeta({
+      tmpPrefix: "openclaw-usage-last-",
+      agentMeta: {
+        // Tool-use loop: accumulated input is higher than last call's input
+        usage: { input: 75_000, output: 5_000, total: 80_000 },
+        lastCallUsage: { input: 55_000, output: 2_000, total: 57_000 },
+      },
+    });
+
     // totalTokens should use lastCallUsage (55k), not accumulated (75k)
     expect(stored[sessionKey].totalTokens).toBe(55_000);
+  });
+
+  it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
+    const { usageEvent } = await runBaseReplyWithAgentMeta({
+      tmpPrefix: "openclaw-usage-diagnostic-",
+      collectDiagnostics: true,
+      agentMeta: {
+        usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
+        lastCallUsage: { input: 55_000, output: 2_000, cacheRead: 25_000, total: 82_000 },
+        promptTokens: 44_000,
+      },
+    });
+
+    expect(usageEvent).toMatchObject({
+      type: "model.usage",
+      agentId: "main",
+      usage: {
+        input: 75_000,
+        output: 5_000,
+        cacheRead: 25_000,
+        promptTokens: 100_000,
+        total: 105_000,
+      },
+      context: {
+        limit: 200_000,
+        used: 44_000,
+      },
+    });
+  });
+
+  it("falls back to last-call prompt usage for live diagnostic context", async () => {
+    const { usageEvent } = await runBaseReplyWithAgentMeta({
+      tmpPrefix: "openclaw-usage-diagnostic-last-",
+      collectDiagnostics: true,
+      agentMeta: {
+        usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
+        lastCallUsage: {
+          input: 55_000,
+          output: 2_000,
+          cacheRead: 25_000,
+          cacheWrite: 1_000,
+          total: 83_000,
+        },
+      },
+    });
+
+    expect(usageEvent).toMatchObject({
+      type: "model.usage",
+      usage: {
+        input: 75_000,
+        output: 5_000,
+        cacheRead: 25_000,
+        promptTokens: 100_000,
+        total: 105_000,
+      },
+      context: {
+        limit: 200_000,
+        used: 81_000,
+      },
+    });
   });
 });
 
@@ -913,6 +1004,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
           model: "claude",
           usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
           lastCallUsage: { input: 1000, output: 45, cacheRead: 750, cacheWrite: 150, total: 1945 },
+          promptTokens: 1250,
           compactionCount: 1,
         },
       },
@@ -987,6 +1079,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("🔎 Usage (Session Total):");
     expect(traceText).toContain("🔎 Usage (Last Turn Total):");
     expect(traceText).toContain("🔎 Context Window (Last Model Request):");
+    expect(traceText).toContain("used=1,250 tok (1.3k)");
     expect(traceText).toContain("🔎 Execution Result:");
     expect(traceText).toContain("winner=anthropic/claude");
     expect(traceText).toContain("fallbackUsed=yes");
@@ -1025,7 +1118,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("🔎 Model Input (User Role):");
     expect(traceText).toContain("🔎 Model Output (Assistant Role):");
     expect(traceText).toContain(
-      "Summary: winner=claude 🧠 low fallback=yes attempts=2 stop=end_turn prompt=1.9k/200k ⬇️ 1.2k ⬆️ 45 ♻️ 800 🆕 200 🔢 2.2k tools=2 compactions=1",
+      "Summary: winner=claude 🧠 low fallback=yes attempts=2 stop=end_turn prompt=1.3k/200k ⬇️ 1.2k ⬆️ 45 ♻️ 800 🆕 200 🔢 2.2k tools=2 compactions=1",
     );
     expect(traceText.indexOf("🔎 Execution Result:")).toBeGreaterThan(
       traceText.indexOf("🔎 Context Window (Last Model Request):"),
@@ -1574,7 +1667,7 @@ describe("runReplyAgent claude-cli routing", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: { agents: { defaults: { embeddedHarness: { runtime: "claude-cli" } } } },
+        config: { agents: { defaults: { agentRuntime: { id: "claude-cli" } } } },
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude-opus-4-7",

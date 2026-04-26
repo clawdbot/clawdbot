@@ -11,6 +11,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -453,6 +454,22 @@ describe("sanitizeChatHistoryMessages", () => {
         timestamp: 3,
       },
     ]);
+  });
+});
+
+describe("projectRecentChatDisplayMessages", () => {
+  it("applies history limits after dropping display-hidden messages", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        { role: "user", content: "older visible", timestamp: 1 },
+        { role: "assistant", content: "older answer", timestamp: 2 },
+        { role: "assistant", content: "NO_REPLY", timestamp: 3 },
+        { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+      ],
+      { maxMessages: 1 },
+    );
+
+    expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
 });
 
@@ -1489,6 +1506,74 @@ describe("exec approval handlers", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async () => {
+    const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+    const requestContext = {
+      ...context,
+      hasExecApprovalClients: () => true,
+      broadcast: (event: string, payload: unknown) => {
+        broadcasts.push({ event, payload });
+      },
+    };
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context: requestContext,
+      params: {
+        id: "approval-control-ui-multichannel",
+        twoPhase: true,
+        timeoutMs: 60_000,
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+        sessionKey: "agent:main:feishu:chat-123",
+        turnSourceChannel: "feishu",
+        turnSourceTo: "chat-123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "thread-456",
+      },
+    });
+    await drainApprovalRequestTicks();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-control-ui-multichannel",
+      respond: resolveRespond,
+      context: requestContext,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(forwarder.handleResolved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "approval-control-ui-multichannel",
+        decision: "allow-once",
+        request: expect.objectContaining({
+          sessionKey: "agent:main:feishu:chat-123",
+          turnSourceChannel: "feishu",
+          turnSourceTo: "chat-123",
+          turnSourceAccountId: "work",
+          turnSourceThreadId: "thread-456",
+        }),
+      }),
+    );
+    expect(broadcasts).toContainEqual(
+      expect.objectContaining({
+        event: "exec.approval.resolved",
+        payload: expect.objectContaining({
+          id: "approval-control-ui-multichannel",
+          request: expect.objectContaining({
+            turnSourceChannel: "feishu",
+            turnSourceTo: "chat-123",
+          }),
+        }),
+      }),
+    );
   });
 
   it("fast-fails approvals when no approver clients and no forwarding targets", async () => {

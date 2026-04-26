@@ -210,7 +210,7 @@ steps:
           message:
             expr: "`report missing expected finding ids: ${reportText}`"
       - assert:
-          expr: "!JSON.stringify(report).includes('REL-STALE-000') && !handoffText.includes('REL-STALE-000')"
+          expr: "!JSON.stringify(Array.isArray(report.findings) ? report.findings : report).includes('REL-STALE-000') && !handoffText.includes('REL-STALE-000')"
           message:
             expr: "`stale archive finding leaked into audit: report=${reportText}\\nhandoff=${handoffText}`"
       - assert:

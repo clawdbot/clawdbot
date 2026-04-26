@@ -34,6 +34,8 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Available model overrides:",
   "Available model overrides exposed in this session",
   "Available model overrides here:",
+  "Available model overrides listed in this session:",
+  "Available model overrides shown in this session:",
   "Available model overrides in this session:",
   "Available agent models:",
   "Visible options in this session:",
@@ -48,6 +50,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Current session model: `codex/",
   "Current session model is `openai/",
   "Current session model is `codex/",
+  "Visible session model:",
   "The current session is using `openai/",
   "The current session is using `codex/",
   "current session is using `openai/",
@@ -109,6 +112,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
   const mentionsSessionModel =
     normalized.includes("current session is using") ||
     normalized.includes("current session model") ||
+    normalized.includes("visible session model") ||
     normalized.includes("the current session is using");
   const mentionsConfigSummary =
     normalized.includes("default model") ||
@@ -130,6 +134,8 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
   const mentionsVisibleOptions =
     normalized.includes("visible options in this session:") ||
     normalized.includes("visible options:") ||
+    normalized.includes("available model overrides listed in this session:") ||
+    normalized.includes("available model overrides shown in this session:") ||
     normalized.includes("available here:") ||
     normalized.includes("available agent ids in this session:");
   const mentionsCurrentActiveModel =

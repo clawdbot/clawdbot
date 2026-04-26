@@ -4,6 +4,7 @@ import {
   EXPERIMENTAL_WARNING_FLAG,
   OPENCLAW_NODE_EXTRA_CA_CERTS_READY,
   OPENCLAW_NODE_OPTIONS_READY,
+  resolveCliRespawnCommand,
 } from "./entry.respawn.js";
 
 const shouldSkipRespawnForArgvMock = vi.hoisted(() => vi.fn(() => false));
@@ -42,6 +43,7 @@ describe("buildCliRespawnPlan", () => {
     });
 
     expect(plan).not.toBeNull();
+    expect(plan?.command).toBe(process.execPath);
     expect(plan?.argv[0]).toBe(EXPERIMENTAL_WARNING_FLAG);
     expect(plan?.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
     expect(plan?.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
@@ -71,5 +73,52 @@ describe("buildCliRespawnPlan", () => {
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
       }),
     ).toBeNull();
+  });
+
+  it("does not respawn on Windows", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: [
+          "node",
+          "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
+          "onboard",
+        ],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "win32",
+      }),
+    ).toBeNull();
+  });
+
+  it("respawns Volta shims through node so the shim is not called directly", () => {
+    const plan = buildCliRespawnPlan({
+      argv: ["/home/alice/.volta/bin/volta-shim", "/usr/local/bin/openclaw", "status"],
+      env: { PATH: "/home/alice/.volta/bin:/usr/bin:/bin" },
+      execArgv: [],
+      execPath: "/home/alice/.volta/bin/volta-shim",
+      autoNodeExtraCaCerts: undefined,
+      platform: "linux",
+    });
+
+    expect(plan?.command).toBe("node");
+    expect(plan?.argv).toEqual([EXPERIMENTAL_WARNING_FLAG, "/usr/local/bin/openclaw", "status"]);
+  });
+});
+
+describe("resolveCliRespawnCommand", () => {
+  it("keeps normal node paths absolute", () => {
+    expect(resolveCliRespawnCommand({ execPath: "/usr/bin/node", platform: "linux" })).toBe(
+      "/usr/bin/node",
+    );
+  });
+
+  it("maps Volta's Unix shim target back to the named node shim", () => {
+    expect(
+      resolveCliRespawnCommand({
+        execPath: "/home/alice/.volta/bin/volta-shim",
+        platform: "linux",
+      }),
+    ).toBe("node");
   });
 });

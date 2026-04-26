@@ -106,9 +106,12 @@ export type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
 export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
   maxInputImages?: number;
+  maxInputImagesByModel?: Readonly<Record<string, number>>;
   maxInputVideos?: number;
+  maxInputVideosByModel?: Readonly<Record<string, number>>;
   /** Max number of reference audio assets the provider accepts (e.g. background music, voice reference). */
   maxInputAudios?: number;
+  maxInputAudiosByModel?: Readonly<Record<string, number>>;
   maxDurationSeconds?: number;
   supportedDurationSeconds?: readonly number[];
   supportedDurationSecondsByModel?: Readonly<Record<string, readonly number[]>>;

@@ -22,6 +22,7 @@ import {
   type CodexTurn,
   type CodexTurnStartParams,
   type JsonObject,
+  type JsonValue,
 } from "./src/app-server/protocol.js";
 
 const DEFAULT_CODEX_IMAGE_MODEL =
@@ -108,7 +109,7 @@ async function describeCodexImages(
           model,
           modelProvider: "openai",
           cwd: req.agentDir || process.cwd(),
-          approvalPolicy: "never",
+          approvalPolicy: "on-request",
           sandbox: "read-only",
           serviceName: "OpenClaw",
           developerInstructions:
@@ -123,6 +124,7 @@ async function describeCodexImages(
     );
     const collector = createCodexImageTurnCollector(thread.thread.id);
     const cleanup = client.addNotificationHandler(collector.handleNotification);
+    const requestCleanup = client.addRequestHandler(denyCodexImageApprovalRequest);
     try {
       const turn = assertCodexTurnStartResponse(
         await client.request<unknown>(
@@ -137,7 +139,7 @@ async function describeCodexImages(
               })),
             ],
             cwd: req.agentDir || process.cwd(),
-            approvalPolicy: "never",
+            approvalPolicy: "on-request",
             model,
             effort: "low",
           } satisfies CodexTurnStartParams,
@@ -150,6 +152,7 @@ async function describeCodexImages(
       });
       return { text, model };
     } finally {
+      requestCleanup();
       cleanup();
     }
   } finally {
@@ -158,6 +161,31 @@ async function describeCodexImages(
       client.close();
     }
   }
+}
+
+function denyCodexImageApprovalRequest(request: { method: string }): JsonValue | undefined {
+  if (
+    request.method === "item/commandExecution/requestApproval" ||
+    request.method === "item/fileChange/requestApproval"
+  ) {
+    return {
+      decision: "decline",
+      reason: "OpenClaw Codex image understanding does not grant tool or file approvals.",
+    };
+  }
+  if (request.method === "item/permissions/requestApproval") {
+    return { permissions: {}, scope: "turn" };
+  }
+  if (request.method.includes("requestApproval")) {
+    return {
+      decision: "decline",
+      reason: "OpenClaw Codex image understanding does not grant native approvals.",
+    };
+  }
+  if (request.method === "mcpServer/elicitation/request") {
+    return { action: "decline" };
+  }
+  return undefined;
 }
 
 async function assertCodexModelSupportsImage(params: {

@@ -112,6 +112,44 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(false);
   });
 
+  it("accepts Linux fnm aliases/default without requiring the legacy current symlink", async () => {
+    const env = { HOME: "/home/testuser", FNM_DIR: "/home/testuser/.local/share/fnm" };
+    const pathParts = buildMinimalServicePath({ platform: "linux", env })
+      .split(":")
+      .filter((entry) => !entry.includes("/fnm/current/bin"));
+    const audit = await auditGatewayServiceConfig({
+      env,
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: pathParts.join(":") },
+      },
+    });
+
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
+    ).toBe(false);
+  });
+
+  it("accepts Linux fnm current symlink without requiring aliases/default", async () => {
+    const env = { HOME: "/home/testuser", FNM_DIR: "/home/testuser/.local/share/fnm" };
+    const pathParts = buildMinimalServicePath({ platform: "linux", env })
+      .split(":")
+      .filter((entry) => !entry.includes("/fnm/aliases/default/bin"));
+    const audit = await auditGatewayServiceConfig({
+      env,
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: pathParts.join(":") },
+      },
+    });
+
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
+    ).toBe(false);
+  });
+
   it("flags gateway token mismatch when service token is stale", async () => {
     const audit = await createGatewayAudit({
       expectedGatewayToken: "new-token",

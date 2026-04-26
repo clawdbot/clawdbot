@@ -1,6 +1,16 @@
 // Shared helpers for parsing MEDIA tokens from command/stdout text.
 
 import { parseFenceSpans } from "../markdown/fences.js";
+import {
+  extractEmbeddedIpv4FromIpv6,
+  isBlockedSpecialUseIpv4Address,
+  isBlockedSpecialUseIpv6Address,
+  isCanonicalDottedDecimalIPv4,
+  isIpv4Address,
+  isLegacyIpv4Literal,
+  parseCanonicalIpAddress,
+  parseLooseIpAddress,
+} from "../shared/net/ip.js";
 import { parseAudioTag } from "./audio-tags.js";
 
 // Allow optional wrapping backticks and punctuation after the token; capture the core token.
@@ -69,6 +79,69 @@ function isLikelyLocalPath(candidate: string): boolean {
   );
 }
 
+function normalizeRemoteMediaHostname(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.+$/, "");
+  if (normalized.split(".").some((label) => label.length === 0)) {
+    return "";
+  }
+  return normalized;
+}
+
+function isBlockedRemoteMediaHostname(hostname: string): boolean {
+  const normalized = normalizeRemoteMediaHostname(hostname);
+  if (!normalized) {
+    return true;
+  }
+  if (!normalized.includes(".")) {
+    return true;
+  }
+  if (
+    normalized === "localhost" ||
+    normalized === "localhost.localdomain" ||
+    normalized === "metadata.google.internal" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".internal")
+  ) {
+    return true;
+  }
+
+  const strictIp = parseCanonicalIpAddress(normalized);
+  if (strictIp) {
+    if (isIpv4Address(strictIp)) {
+      return isBlockedSpecialUseIpv4Address(strictIp);
+    }
+    if (isBlockedSpecialUseIpv6Address(strictIp)) {
+      return true;
+    }
+    const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
+    return embeddedIpv4 ? isBlockedSpecialUseIpv4Address(embeddedIpv4) : false;
+  }
+
+  if (normalized.includes(":") && !parseLooseIpAddress(normalized)) {
+    return true;
+  }
+  return !isCanonicalDottedDecimalIPv4(normalized) && isLegacyIpv4Literal(normalized);
+}
+
+function isAllowedRemoteMediaUrl(candidate: string): boolean {
+  try {
+    const parsed = new URL(candidate);
+    return (
+      parsed.protocol === "https:" &&
+      !parsed.username &&
+      !parsed.password &&
+      !isBlockedRemoteMediaHostname(parsed.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isValidMedia(
   candidate: string,
   opts?: { allowSpaces?: boolean; allowBareFilename?: boolean },
@@ -83,7 +156,7 @@ function isValidMedia(
     return false;
   }
   if (/^https?:\/\//i.test(candidate)) {
-    return true;
+    return isAllowedRemoteMediaUrl(candidate);
   }
 
   if (isLikelyLocalPath(candidate)) {

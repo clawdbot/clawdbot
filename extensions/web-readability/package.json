@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/web-readability-plugin",
-  "version": "2026.4.24",
+  "version": "2026.4.25",
   "private": true,
   "description": "OpenClaw local Readability web extraction plugin",
   "type": "module",

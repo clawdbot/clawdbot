@@ -9,6 +9,7 @@ import { formatHelpExamples } from "../help-format.js";
 import {
   runNodeDaemonInstall,
   runNodeDaemonRestart,
+  runNodeDaemonStart,
   runNodeDaemonStatus,
   runNodeDaemonStop,
   runNodeDaemonUninstall,
@@ -33,6 +34,7 @@ export function registerNodeCli(program: Command) {
           ],
           ["openclaw node status", "Check node host service status."],
           ["openclaw node install", "Install the node host service."],
+          ["openclaw node start", "Start the installed node host service."],
           ["openclaw node restart", "Restart the installed node host service."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.openclaw.ai/cli/node")}\n`,
     );
@@ -101,6 +103,14 @@ export function registerNodeCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runNodeDaemonStop(opts);
+    });
+
+  node
+    .command("start")
+    .description("Start the node host service (launchd/systemd/schtasks)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runNodeDaemonStart(opts);
     });
 
   node

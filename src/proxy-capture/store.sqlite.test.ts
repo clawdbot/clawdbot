@@ -2,11 +2,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DebugProxyCaptureStore, persistEventPayload } from "./store.sqlite.js";
+import {
+  acquireDebugProxyCaptureStore,
+  closeDebugProxyCaptureStore,
+  DebugProxyCaptureStore,
+  getDebugProxyCaptureStore,
+  persistEventPayload,
+} from "./store.sqlite.js";
 
 const cleanupDirs: string[] = [];
 
 afterEach(() => {
+  closeDebugProxyCaptureStore();
   while (cleanupDirs.length > 0) {
     const dir = cleanupDirs.pop();
     if (dir) {
@@ -22,6 +29,35 @@ function makeStore() {
 }
 
 describe("DebugProxyCaptureStore", () => {
+  it("keeps the cached store open until the last lease releases", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-lease-"));
+    cleanupDirs.push(root);
+    const dbPath = path.join(root, "capture.sqlite");
+    const blobDir = path.join(root, "blobs");
+
+    const first = acquireDebugProxyCaptureStore(dbPath, blobDir);
+    const second = acquireDebugProxyCaptureStore(dbPath, blobDir);
+
+    expect(second.store).toBe(first.store);
+    first.release();
+    expect(first.store.isClosed).toBe(false);
+
+    second.release();
+    expect(first.store.isClosed).toBe(true);
+
+    const reopened = getDebugProxyCaptureStore(dbPath, blobDir);
+    expect(Object.is(reopened, first.store)).toBe(false);
+    expect(reopened.isClosed).toBe(false);
+  });
+
+  it("ignores duplicate close calls", () => {
+    const store = makeStore();
+
+    store.close();
+    expect(() => store.close()).not.toThrow();
+    expect(store.isClosed).toBe(true);
+  });
+
   it("stores sessions, blobs, and duplicate-send query results", () => {
     const store = makeStore();
     store.upsertSession({

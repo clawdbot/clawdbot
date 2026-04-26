@@ -1112,6 +1112,7 @@ export async function preflightDiscordMessage(
     commandAuthorized,
     baseText,
     messageText,
+    ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
     wasMentioned,
     route: effectiveRoute,
     threadBinding,

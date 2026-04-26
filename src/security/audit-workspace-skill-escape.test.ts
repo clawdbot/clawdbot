@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectWorkspaceSkillSymlinkEscapeFindings } from "./audit-extra.async.js";
+import { collectWorkspaceSkillSymlinkEscapeFindings } from "./audit-workspace-skills.js";
 import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
 const isWindows = process.platform === "win32";

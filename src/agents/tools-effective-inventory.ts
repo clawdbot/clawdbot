@@ -12,7 +12,9 @@ import { createOpenClawCodingTools } from "./pi-tools.js";
 import { resolveEffectiveToolPolicy } from "./pi-tools.policy.js";
 import { summarizeToolDescriptionText } from "./tool-description-summary.js";
 import { resolveToolDisplay } from "./tool-display.js";
+import { normalizeToolName } from "./tool-policy.js";
 import type {
+  EffectiveToolInventoryNotice,
   EffectiveToolInventoryEntry,
   EffectiveToolInventoryGroup,
   EffectiveToolInventoryResult,
@@ -68,6 +70,82 @@ function groupLabel(source: EffectiveToolSource): string {
     default:
       return "Built-in tools";
   }
+}
+
+function listIncludesTool(list: string[] | undefined, toolName: string): boolean {
+  if (!Array.isArray(list)) {
+    return false;
+  }
+  const normalizedToolName = normalizeToolName(toolName);
+  return list.some((entry) => normalizeToolName(entry) === normalizedToolName);
+}
+
+function policyDeniesTool(policy: { deny?: string[] } | undefined, toolName: string): boolean {
+  return (
+    listIncludesTool(policy?.deny, toolName) ||
+    listIncludesTool(policy?.deny, "group:ui") ||
+    listIncludesTool(policy?.deny, "group:openclaw")
+  );
+}
+
+function hasExplicitBrowserIntent(cfg: OpenClawConfig): boolean {
+  return cfg.browser?.enabled !== false && Boolean(cfg.browser || cfg.plugins?.entries?.browser);
+}
+
+function buildToolInventoryNotices(params: {
+  cfg: OpenClawConfig;
+  profile: string;
+  entries: EffectiveToolInventoryEntry[];
+  effectivePolicy: ReturnType<typeof resolveEffectiveToolPolicy>;
+}): EffectiveToolInventoryNotice[] | undefined {
+  const hasBrowserTool = params.entries.some((entry) => normalizeToolName(entry.id) === "browser");
+  if (hasBrowserTool || !hasExplicitBrowserIntent(params.cfg)) {
+    return undefined;
+  }
+
+  const browserDenied = [
+    params.effectivePolicy.globalPolicy,
+    params.effectivePolicy.globalProviderPolicy,
+    params.effectivePolicy.agentPolicy,
+    params.effectivePolicy.agentProviderPolicy,
+  ].some((policy) => policyDeniesTool(policy, "browser"));
+  if (browserDenied) {
+    return [
+      {
+        id: "browser-denied-by-policy",
+        severity: "info",
+        message:
+          "Browser is configured, but this session does not expose the browser tool because tool policy denies it. Remove the browser deny entry to use browser automation.",
+      },
+    ];
+  }
+
+  if (params.profile !== "full") {
+    return [
+      {
+        id: "browser-filtered-by-profile",
+        severity: "info",
+        message:
+          'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"] or agents.list[].tools.alsoAllow: ["browser"]; tools.subagents.tools.allow alone cannot add it back after profile filtering.',
+      },
+    ];
+  }
+
+  if (
+    Array.isArray(params.cfg.plugins?.allow) &&
+    !listIncludesTool(params.cfg.plugins.allow, "browser")
+  ) {
+    return [
+      {
+        id: "browser-plugin-not-allowed",
+        severity: "warning",
+        message:
+          'Browser is configured, but plugins.allow does not include browser. Add "browser" to plugins.allow or remove the restrictive plugin allowlist.',
+      },
+    ];
+  }
+
+  return undefined;
 }
 
 function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveToolInventoryEntry[] {
@@ -170,6 +248,7 @@ export function resolveEffectiveToolInventory(
       })
       .toSorted((a, b) => a.label.localeCompare(b.label)),
   );
+  const notices = buildToolInventoryNotices({ cfg: params.cfg, profile, entries, effectivePolicy });
   const groupsBySource = new Map<EffectiveToolSource, EffectiveToolInventoryEntry[]>();
   for (const entry of entries) {
     const tools = groupsBySource.get(entry.source) ?? [];
@@ -192,5 +271,5 @@ export function resolveEffectiveToolInventory(
     })
     .filter((group): group is EffectiveToolInventoryGroup => group !== null);
 
-  return { agentId, profile, groups };
+  return { agentId, profile, groups, ...(notices ? { notices } : {}) };
 }

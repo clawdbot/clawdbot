@@ -5,6 +5,7 @@ import type {
 import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
+  AgentRuntimePolicyConfig,
   AgentSandboxConfig,
 } from "./types.agents-shared.js";
 import type {
@@ -127,6 +128,8 @@ export type CliBackendConfig = {
   sessionIdFields?: string[];
   /** Flag used to pass system prompt. */
   systemPromptArg?: string;
+  /** Flag used to pass a system prompt file. */
+  systemPromptFileArg?: string;
   /** Config override flag used to pass a system prompt file (e.g. -c). */
   systemPromptFileConfigArg?: string;
   /** Config override key used to pass a system prompt file. */
@@ -176,7 +179,9 @@ export type CliBackendConfig = {
 export type AgentDefaultsConfig = {
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
-  /** Default embedded agent harness policy. */
+  /** Default agent runtime policy. */
+  agentRuntime?: AgentRuntimePolicyConfig;
+  /** @deprecated Use agentRuntime. */
   embeddedHarness?: AgentEmbeddedHarnessConfig;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;

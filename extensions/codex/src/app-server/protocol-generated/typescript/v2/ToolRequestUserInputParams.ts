@@ -6,4 +6,9 @@ import type { ToolRequestUserInputQuestion } from "./ToolRequestUserInputQuestio
 /**
  * EXPERIMENTAL. Params sent with a request_user_input event.
  */
-export type ToolRequestUserInputParams = { threadId: string, turnId: string, itemId: string, questions: Array<ToolRequestUserInputQuestion>, };
+export type ToolRequestUserInputParams = {
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  questions: Array<ToolRequestUserInputQuestion>;
+};

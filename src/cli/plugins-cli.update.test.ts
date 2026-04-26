@@ -3,14 +3,17 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadConfig,
+  refreshPluginRegistry,
   registerPluginsCli,
   resetPluginsCliTestState,
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
+  setInstalledPluginIndexInstallRecords,
   updateNpmInstalledHookPacks,
   updateNpmInstalledPlugins,
   writeConfigFile,
+  writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
 function createTrackedPluginConfig(params: {
@@ -106,6 +109,7 @@ describe("plugins cli update", () => {
       }),
     );
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(
       runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
     ).toBe(true);
@@ -144,6 +148,7 @@ describe("plugins cli update", () => {
       spec: "openclaw-codex-app-server@beta",
     });
     loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
     updateNpmInstalledPlugins.mockResolvedValue({
       config,
       changed: false,
@@ -188,6 +193,7 @@ describe("plugins cli update", () => {
       },
     } as OpenClawConfig;
     loadConfig.mockReturnValue(cfg);
+    setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
     updateNpmInstalledPlugins.mockResolvedValue({
       outcomes: [{ status: "ok", message: "Updated alpha -> 1.1.0" }],
       changed: true,
@@ -208,7 +214,15 @@ describe("plugins cli update", () => {
         dryRun: false,
       }),
     );
-    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      nextConfig.plugins?.installs,
+    );
+    expect(writeConfigFile).toHaveBeenCalledWith({});
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: {},
+      installRecords: nextConfig.plugins?.installs,
+      reason: "source-changed",
+    });
     expect(
       runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
     ).toBe(true);

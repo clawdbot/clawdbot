@@ -4,4 +4,7 @@
 import type { PermissionProfileFileSystemPermissions } from "./PermissionProfileFileSystemPermissions.js";
 import type { PermissionProfileNetworkPermissions } from "./PermissionProfileNetworkPermissions.js";
 
-export type PermissionProfile = { network: PermissionProfileNetworkPermissions | null, fileSystem: PermissionProfileFileSystemPermissions | null, };
+export type PermissionProfile = {
+  network: PermissionProfileNetworkPermissions | null;
+  fileSystem: PermissionProfileFileSystemPermissions | null;
+};

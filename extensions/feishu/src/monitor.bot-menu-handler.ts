@@ -93,6 +93,7 @@ export function createFeishuBotMenuHandler(params: {
         },
         message: {
           message_id: `bot-menu:${eventKey}:${event.timestamp ?? Date.now()}`,
+          suppress_reply_target: true,
           chat_id: `p2p:${operatorOpenId}`,
           chat_type: "p2p",
           message_type: "text",

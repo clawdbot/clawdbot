@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { saveSessionStore } from "../../config/sessions/store.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { MsgContext } from "../templating.js";
 import { initSessionState } from "./session.js";
+
+vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
+  closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
+}));
 
 describe("initSessionState - heartbeat should not trigger session reset", () => {
   let tempDir: string;
@@ -62,12 +67,17 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     ...overrides,
   });
 
-  const saveExistingSession = async (sessionId: string, updatedAt: number): Promise<void> => {
+  const saveExistingSession = async (
+    sessionId: string,
+    updatedAt: number,
+    overrides: Partial<SessionEntry> = {},
+  ): Promise<void> => {
     await saveSessionStore(storePath, {
       "main:user123": {
         sessionId,
         updatedAt,
         systemSent: true,
+        ...overrides,
       },
     });
   };
@@ -150,6 +160,137 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     // Assert: Session should NOT be reset even though it's past daily reset time
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe("original-session-id-67890");
+  });
+
+  it("does not let heartbeat keep an expired daily session fresh for the next user message", async () => {
+    const now = Date.now();
+    const staleTime = now - 25 * 60 * 60 * 1000;
+
+    await saveExistingSession("daily-session-id", now, {
+      sessionStartedAt: staleTime,
+      lastInteractionAt: staleTime,
+    });
+
+    const cfg = createBaseConfig();
+    cfg.session!.reset = {
+      mode: "daily",
+      atHour: 4,
+    };
+
+    const heartbeatResult = await initSessionState({
+      ctx: createBaseCtx({
+        Provider: "heartbeat",
+        Body: "HEARTBEAT_OK",
+      }),
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(heartbeatResult.isNewSession).toBe(false);
+    expect(heartbeatResult.sessionId).toBe("daily-session-id");
+    expect(heartbeatResult.sessionEntry.lastInteractionAt).toBe(staleTime);
+
+    const persistedAfterHeartbeat = loadSessionStore(storePath);
+    expect(persistedAfterHeartbeat["main:user123"]?.lastInteractionAt).toBe(staleTime);
+
+    const userResult = await initSessionState({
+      ctx: createBaseCtx({
+        Provider: "quietchat",
+        Body: "real user message",
+      }),
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(userResult.isNewSession).toBe(true);
+    expect(userResult.sessionId).not.toBe("daily-session-id");
+  });
+
+  it("resets legacy daily sessions using the JSONL header even when updatedAt is fresh", async () => {
+    const now = Date.now();
+    const staleTime = now - 25 * 60 * 60 * 1000;
+    const sessionFile = path.join(tempDir, "legacy-daily-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "legacy-daily-session",
+        timestamp: new Date(staleTime).toISOString(),
+        cwd: tempDir,
+      })}\n`,
+      "utf8",
+    );
+    await saveExistingSession("legacy-daily-session", now, {
+      sessionFile,
+      lastInteractionAt: staleTime,
+    });
+
+    const cfg = createBaseConfig();
+    cfg.session!.reset = {
+      mode: "daily",
+      atHour: 4,
+    };
+
+    const result = await initSessionState({
+      ctx: createBaseCtx({
+        Provider: "quietchat",
+        Body: "real user message",
+      }),
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe("legacy-daily-session");
+  });
+
+  it("does not let heartbeat keep a legacy idle session fresh without lastInteractionAt", async () => {
+    const now = Date.now();
+    const staleTime = now - 10 * 60 * 1000;
+    const sessionFile = path.join(tempDir, "legacy-idle-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "legacy-idle-session",
+        timestamp: new Date(staleTime).toISOString(),
+        cwd: tempDir,
+      })}\n`,
+      "utf8",
+    );
+    await saveExistingSession("legacy-idle-session", now, {
+      sessionFile,
+    });
+
+    const cfg = createBaseConfig();
+    const heartbeatResult = await initSessionState({
+      ctx: createBaseCtx({
+        Provider: "heartbeat",
+        Body: "HEARTBEAT_OK",
+      }),
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(heartbeatResult.isNewSession).toBe(false);
+    expect(heartbeatResult.sessionId).toBe("legacy-idle-session");
+
+    const persistedAfterHeartbeat = loadSessionStore(storePath);
+    expect(persistedAfterHeartbeat["main:user123"]?.lastInteractionAt).toBeUndefined();
+
+    const userResult = await initSessionState({
+      ctx: createBaseCtx({
+        Provider: "quietchat",
+        Body: "real user message",
+      }),
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(userResult.isNewSession).toBe(true);
+    expect(userResult.sessionId).not.toBe("legacy-idle-session");
   });
 
   it("should handle cron-event provider same as heartbeat (no reset)", async () => {

@@ -2,6 +2,7 @@
 
 export type {
   GeneratedImageAsset,
+  ImageGenerationBackground,
   ImageGenerationOpenAIBackground,
   ImageGenerationOpenAIModeration,
   ImageGenerationOpenAIOptions,

@@ -73,9 +73,14 @@ export type TelegramInboundBodyResult = {
   effectiveWasMentioned: boolean;
   canDetectMention: boolean;
   shouldBypassMention: boolean;
+  audioTranscribedMediaIndex?: number;
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
 };
+
+function formatAudioTranscriptForAgent(transcript: string): string {
+  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
+}
 
 async function resolveStickerVisionSupport(params: {
   cfg: OpenClawConfig;
@@ -226,14 +231,20 @@ export async function resolveTelegramInboundBody(params: {
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
     }
   }
+  const audioTranscribedMediaIndex =
+    preflightTranscript === undefined
+      ? undefined
+      : allMedia.findIndex((media) => media.contentType?.startsWith("audio/"));
 
   if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
-    bodyText = preflightTranscript;
+    bodyText = formatAudioTranscriptForAgent(preflightTranscript);
   }
 
   if (!bodyText && allMedia.length > 0) {
     if (hasAudio) {
-      bodyText = preflightTranscript || "<media:audio>";
+      bodyText = preflightTranscript
+        ? formatAudioTranscriptForAgent(preflightTranscript)
+        : "<media:audio>";
     } else {
       bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
     }
@@ -357,6 +368,9 @@ export async function resolveTelegramInboundBody(params: {
     effectiveWasMentioned,
     canDetectMention,
     shouldBypassMention: mentionDecision.shouldBypassMention,
+    ...(audioTranscribedMediaIndex !== undefined && audioTranscribedMediaIndex >= 0
+      ? { audioTranscribedMediaIndex }
+      : {}),
     stickerCacheHit,
     locationData: locationData ?? undefined,
   };

@@ -1,20 +1,27 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 
-function matchesProviderId(
-  candidate: { id: string; aliases?: string[] | readonly string[] },
+function normalizeProviderIdForAuth(
   providerId: string,
-): boolean {
+  aliases: Readonly<Record<string, string>>,
+): string {
   const normalized = normalizeProviderId(providerId);
+  return normalized ? (aliases[normalized] ?? normalized) : normalized;
+}
+
+function matchesProviderAuthChoice(
+  choice: { providerId: string },
+  providerId: string,
+  aliases: Readonly<Record<string, string>>,
+): boolean {
+  const normalized = normalizeProviderIdForAuth(providerId, aliases);
   if (!normalized) {
     return false;
   }
-  if (normalizeProviderId(candidate.id) === normalized) {
-    return true;
-  }
-  return (candidate.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalized);
+  return normalizeProviderIdForAuth(choice.providerId, aliases) === normalized;
 }
 
 export function resolveProviderAuthLoginCommand(params: {
@@ -23,16 +30,14 @@ export function resolveProviderAuthLoginCommand(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  const provider = resolvePluginProviders({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    mode: "setup",
-  }).find((candidate) => matchesProviderId(candidate, params.provider));
-  if (!provider || provider.auth.length === 0) {
+  const aliases = resolveProviderAuthAliasMap(params);
+  const choice = resolveManifestProviderAuthChoices(params).find((candidate) =>
+    matchesProviderAuthChoice(candidate, params.provider, aliases),
+  );
+  if (!choice) {
     return undefined;
   }
-  return formatCliCommand(`openclaw models auth login --provider ${provider.id}`);
+  return formatCliCommand(`openclaw models auth login --provider ${choice.providerId}`);
 }
 
 export function buildProviderAuthRecoveryHint(params: {

@@ -915,15 +915,15 @@ function renderMessageAttachments(message: Message): string {
 
 const MOCK_MODELS: RunnerModelOption[] = [
   {
-    key: "mock-openai/gpt-5.4",
-    name: "GPT-5.4 (mock)",
+    key: "mock-openai/gpt-5.5",
+    name: "GPT-5.5 (mock)",
     provider: "mock-openai",
     input: "text",
     preferred: true,
   },
   {
-    key: "mock-openai/gpt-5.4-alt",
-    name: "GPT-5.4 Alt (mock)",
+    key: "mock-openai/gpt-5.5-alt",
+    name: "GPT-5.5 Alt (mock)",
     provider: "mock-openai",
     input: "text",
     preferred: false,

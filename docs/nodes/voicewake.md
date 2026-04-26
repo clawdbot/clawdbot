@@ -37,9 +37,32 @@ Notes:
 - Triggers are normalized (trimmed, empties dropped). Empty lists fall back to defaults.
 - Limits are enforced for safety (count/length caps).
 
+### Routing methods (trigger → target)
+
+- `voicewake.routing.get` → `{ config: VoiceWakeRoutingConfig }`
+- `voicewake.routing.set` with params `{ config: VoiceWakeRoutingConfig }` → `{ config: VoiceWakeRoutingConfig }`
+
+`VoiceWakeRoutingConfig` shape:
+
+```json
+{
+  "version": 1,
+  "defaultTarget": { "mode": "current" },
+  "routes": [{ "trigger": "robot wake", "target": { "sessionKey": "agent:main:main" } }],
+  "updatedAtMs": 1730000000000
+}
+```
+
+Route targets support exactly one of:
+
+- `{ "mode": "current" }`
+- `{ "agentId": "main" }`
+- `{ "sessionKey": "agent:main:main" }`
+
 ### Events
 
 - `voicewake.changed` payload `{ triggers: string[] }`
+- `voicewake.routing.changed` payload `{ config: VoiceWakeRoutingConfig }`
 
 Who receives it:
 

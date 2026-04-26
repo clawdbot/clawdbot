@@ -271,6 +271,35 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
+  it("drops self-authored message_changed events that only include block user IDs", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open" },
+      event: {
+        ...makeAssistantChangedEvent(),
+        message: {
+          ts: "123.456",
+          user: "U_BOT",
+          text: "preview edit with mention",
+          blocks: [
+            {
+              type: "rich_text",
+              elements: [
+                {
+                  type: "rich_text_section",
+                  elements: [{ type: "user", user_id: "UREAL123" }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
   it("handles channel and group messages via the unified message handler", async () => {
     const { handler, handleSlackMessage } = createHandlers("message", {
       dmPolicy: "open",

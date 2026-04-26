@@ -17,10 +17,8 @@ import {
   isActivatedManifestOwner,
   passesManifestOwnerBasePolicy,
 } from "../plugins/manifest-owner-policy.js";
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRecord,
-} from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
@@ -183,9 +181,10 @@ function resolveUsageCredentialProviderIds(params: {
   const providerIds = new Set(normalizeProviderIds([params.provider]));
   const providerIdSet = new Set(providerIds);
   try {
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryForPluginRegistry({
       config: params.state.cfg,
       env: params.state.env,
+      includeDisabled: true,
     });
     for (const plugin of registry.plugins) {
       const pluginProviderIds = normalizeProviderIds(plugin.providers);

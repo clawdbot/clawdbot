@@ -158,6 +158,44 @@ describe("browser control server", () => {
   );
 
   it(
+    "returns the replacement targetId after an action-triggered target swap",
+    async () => {
+      const base = await startServerAndBase();
+      pwMocks.clickViaPlaywright.mockImplementationOnce(async () => {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (url: string) => {
+            if (url.includes("/json/list")) {
+              return makeResponse([
+                {
+                  id: "fresh5678",
+                  title: "Submitted",
+                  url: "https://submitted.example",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/fresh5678",
+                  type: "page",
+                },
+              ]);
+            }
+            throw new Error(`unexpected fetch: ${url}`);
+          }),
+        );
+      });
+
+      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/act`, {
+        kind: "click",
+        ref: "5",
+        targetId: "abcd1234",
+      });
+
+      expect(response).toMatchObject({
+        ok: true,
+        targetId: "fresh5678",
+      });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns ACT_SELECTOR_UNSUPPORTED for selector on unsupported action kinds",
     async () => {
       const base = await startServerAndBase();
@@ -219,6 +257,11 @@ describe("browser control server", () => {
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       limit: 1,
     });
+    expect(pwMocks.storeAriaSnapshotRefsViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
+    });
 
     const snapAi = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
       ok: boolean;
@@ -247,6 +290,47 @@ describe("browser control server", () => {
       ssrfPolicy: {
         dangerouslyAllowPrivateNetwork: true,
       },
+    });
+
+    pwMocks.snapshotRoleViaPlaywright.mockRejectedValueOnce(new Error("playwright stale page"));
+    const fallback = (await realFetch(`${base}/snapshot?format=ai&interactive=true`).then((r) =>
+      r.json(),
+    )) as { ok: boolean; format?: string; snapshot?: string };
+    expect(fallback.ok).toBe(true);
+    expect(fallback.format).toBe("ai");
+    expect(fallback.snapshot).toContain("Fallback");
+    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      urls: undefined,
+      options: {
+        interactive: true,
+        compact: undefined,
+        maxDepth: undefined,
+      },
+    });
+  });
+
+  it("agent contract: doctor deep runs a live snapshot probe", async () => {
+    const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
+
+    const report = (await realFetch(`${base}/doctor?deep=true`).then((r) => r.json())) as {
+      ok: boolean;
+      checks?: Array<{ id?: string; status?: string; summary?: string }>;
+    };
+
+    expect(report.ok).toBe(true);
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "live-snapshot",
+          status: "pass",
+        }),
+      ]),
+    );
+    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      limit: 25,
     });
   });
 

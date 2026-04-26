@@ -105,6 +105,10 @@ Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
 mentions, channel messages, and rich media including voice, images, videos,
 and files.
 
+Current OpenClaw releases bundle QQ Bot. Use the bundled setup in
+[QQ Bot](/channels/qqbot) for normal installs; install this external plugin only
+when you intentionally want the Tencent-maintained standalone package.
+
 - **npm:** `@tencent-connect/openclaw-qqbot`
 - **repo:** [github.com/tencent-connect/openclaw-qqbot](https://github.com/tencent-connect/openclaw-qqbot)
 

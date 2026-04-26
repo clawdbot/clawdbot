@@ -384,6 +384,29 @@ function Add-ToPath {
     }
 }
 
+$script:InstallExitCode = 0
+
+function Fail-Install {
+    param([int]$Code = 1)
+
+    $script:InstallExitCode = $Code
+    return $false
+}
+
+function Complete-Install {
+    param([bool]$Succeeded)
+
+    if ($Succeeded) {
+        return
+    }
+
+    if ($PSCommandPath) {
+        exit $script:InstallExitCode
+    }
+
+    throw "OpenClaw installation failed with exit code $($script:InstallExitCode)."
+}
+
 # Main
 function Main {
     Write-Banner
@@ -394,16 +417,16 @@ function Main {
     if (!(Ensure-ExecutionPolicy)) {
         Write-Host ""
         Write-Host "Installation cannot continue due to execution policy restrictions" -Level error
-        exit 1
+        return (Fail-Install)
     }
     
     if (!(Ensure-Node)) {
-        exit 1
+        return (Fail-Install)
     }
     
     if ($InstallMethod -eq "git") {
         if (!(Ensure-Git)) {
-            exit 1
+            return (Fail-Install)
         }
         
         if ($DryRun) {
@@ -421,7 +444,7 @@ function Main {
             Write-Host "[DRY RUN] Would install OpenClaw via npm ($((Resolve-PackageInstallSpec -Target $Tag)))" -Level info
         } else {
             if (!(Install-OpenClawNpm -Target $Tag)) {
-                exit 1
+                return (Fail-Install)
             }
         }
     }
@@ -446,6 +469,8 @@ function Main {
     
     Write-Host ""
     Write-Host "🦞 OpenClaw installed successfully!" -Level success
+    return $true
 }
 
-Main
+$installSucceeded = Main
+Complete-Install -Succeeded:$installSucceeded

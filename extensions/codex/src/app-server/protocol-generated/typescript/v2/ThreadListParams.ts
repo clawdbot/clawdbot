@@ -6,49 +6,50 @@ import type { ThreadSortKey } from "./ThreadSortKey.js";
 import type { ThreadSourceKind } from "./ThreadSourceKind.js";
 
 export type ThreadListParams = {
-/**
- * Opaque pagination cursor returned by a previous call.
- */
-cursor?: string | null,
-/**
- * Optional page size; defaults to a reasonable server-side value.
- */
-limit?: number | null,
-/**
- * Optional sort key; defaults to created_at.
- */
-sortKey?: ThreadSortKey | null,
-/**
- * Optional sort direction; defaults to descending (newest first).
- */
-sortDirection?: SortDirection | null,
-/**
- * Optional provider filter; when set, only sessions recorded under these
- * providers are returned. When present but empty, includes all providers.
- */
-modelProviders?: Array<string> | null,
-/**
- * Optional source filter; when set, only sessions from these source kinds
- * are returned. When omitted or empty, defaults to interactive sources.
- */
-sourceKinds?: Array<ThreadSourceKind> | null,
-/**
- * Optional archived filter; when set to true, only archived threads are returned.
- * If false or null, only non-archived threads are returned.
- */
-archived?: boolean | null,
-/**
- * Optional cwd filter or filters; when set, only threads whose session cwd
- * exactly matches one of these paths are returned.
- */
-cwd?: string | Array<string> | null,
-/**
- * If true, return from the state DB without scanning JSONL rollouts to
- * repair thread metadata. Omitted or false preserves scan-and-repair
- * behavior.
- */
-useStateDbOnly?: boolean,
-/**
- * Optional substring filter for the extracted thread title.
- */
-searchTerm?: string | null, };
+  /**
+   * Opaque pagination cursor returned by a previous call.
+   */
+  cursor?: string | null;
+  /**
+   * Optional page size; defaults to a reasonable server-side value.
+   */
+  limit?: number | null;
+  /**
+   * Optional sort key; defaults to created_at.
+   */
+  sortKey?: ThreadSortKey | null;
+  /**
+   * Optional sort direction; defaults to descending (newest first).
+   */
+  sortDirection?: SortDirection | null;
+  /**
+   * Optional provider filter; when set, only sessions recorded under these
+   * providers are returned. When present but empty, includes all providers.
+   */
+  modelProviders?: Array<string> | null;
+  /**
+   * Optional source filter; when set, only sessions from these source kinds
+   * are returned. When omitted or empty, defaults to interactive sources.
+   */
+  sourceKinds?: Array<ThreadSourceKind> | null;
+  /**
+   * Optional archived filter; when set to true, only archived threads are returned.
+   * If false or null, only non-archived threads are returned.
+   */
+  archived?: boolean | null;
+  /**
+   * Optional cwd filter or filters; when set, only threads whose session cwd
+   * exactly matches one of these paths are returned.
+   */
+  cwd?: string | Array<string> | null;
+  /**
+   * If true, return from the state DB without scanning JSONL rollouts to
+   * repair thread metadata. Omitted or false preserves scan-and-repair
+   * behavior.
+   */
+  useStateDbOnly?: boolean;
+  /**
+   * Optional substring filter for the extracted thread title.
+   */
+  searchTerm?: string | null;
+};

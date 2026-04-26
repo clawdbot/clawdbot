@@ -414,11 +414,13 @@ function resolveClaudeCliSyntheticAuth() {
         apiKey: credential.access,
         source: "Claude CLI native auth",
         mode: "oauth" as const,
+        expiresAt: credential.expires,
       }
     : {
         apiKey: credential.token,
         source: "Claude CLI native auth",
         mode: "token" as const,
+        expiresAt: credential.expires,
       };
 }
 

@@ -81,4 +81,65 @@ describe("enforceSessionDiskBudget", () => {
       );
     });
   });
+
+  it("removes unreferenced compaction checkpoint artifacts under pressure", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionId = "keep";
+      const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+      const checkpointPath = path.join(
+        dir,
+        "keep.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+      );
+      const referencedCheckpointPath = path.join(
+        dir,
+        "keep.checkpoint.22222222-2222-4222-8222-222222222222.jsonl",
+      );
+      const store: Record<string, SessionEntry> = {
+        "agent:main:main": {
+          sessionId,
+          updatedAt: Date.now(),
+          compactionCheckpoints: [
+            {
+              checkpointId: "referenced",
+              sessionKey: "agent:main:main",
+              sessionId,
+              createdAt: Date.now(),
+              reason: "manual",
+              preCompaction: {
+                sessionId,
+                sessionFile: referencedCheckpointPath,
+                leafId: "leaf",
+              },
+              postCompaction: { sessionId },
+            },
+          ],
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
+      await fs.writeFile(checkpointPath, "c".repeat(5000), "utf-8");
+      await fs.writeFile(referencedCheckpointPath, "r".repeat(260), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: 4000,
+          highWaterBytes: 3000,
+        },
+        warnOnly: false,
+      });
+
+      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
+      await expect(fs.stat(checkpointPath)).rejects.toThrow();
+      await expect(fs.stat(referencedCheckpointPath)).resolves.toBeDefined();
+      expect(result).toEqual(
+        expect.objectContaining({
+          removedFiles: 1,
+          removedEntries: 0,
+        }),
+      );
+    });
+  });
 });

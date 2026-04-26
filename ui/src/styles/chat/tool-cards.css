@@ -553,11 +553,7 @@
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   border-radius: var(--radius-md);
   background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--accent) 9%, transparent),
-      transparent 34%
-    ),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 34%),
     color-mix(in srgb, var(--card) 86%, var(--secondary) 14%);
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, var(--bg) 76%, transparent),
@@ -575,11 +571,7 @@
 
 .chat-tool-msg-summary[type="button"] {
   background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--accent) 9%, transparent),
-      transparent 34%
-    ),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 34%),
     color-mix(in srgb, var(--card) 86%, var(--secondary) 14%);
 }
 
@@ -610,11 +602,7 @@
 .chat-tool-msg-summary:hover {
   color: var(--text);
   background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--accent) 13%, transparent),
-      transparent 38%
-    ),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 13%, transparent), transparent 38%),
     color-mix(in srgb, var(--card) 76%, var(--bg-hover) 24%);
   border-color: color-mix(in srgb, var(--border-strong) 70%, transparent);
 }

@@ -1,4 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentHarness } from "../harness/types.js";
+import type { AgentInternalEvent } from "../internal-events.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -8,6 +11,7 @@ import {
 } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildAgentRuntimePlan,
   mockedBuildEmbeddedRunPayloads,
   mockedCoerceToFailoverError,
   mockedCompactDirect,
@@ -26,8 +30,111 @@ import {
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
+import type { RunEmbeddedPiAgentParams } from "./run/params.js";
+import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
+type RuntimePlanOverrides = Partial<Omit<AgentRuntimePlan, "auth" | "resolvedRef">> & {
+  auth?: Partial<AgentRuntimePlan["auth"]>;
+  resolvedRef?: Partial<AgentRuntimePlan["resolvedRef"]>;
+};
+function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
+  return {
+    runId: "forward-attempt-params",
+    params: {
+      toolsAllow: ["exec", "read"],
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
+      disableMessageTool: true,
+      forceMessageTool: true,
+      requireExplicitMessageTarget: true,
+      internalEvents,
+    },
+    expected: {
+      toolsAllow: ["exec", "read"],
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
+      disableMessageTool: true,
+      forceMessageTool: true,
+      requireExplicitMessageTarget: true,
+    },
+  } satisfies {
+    runId: string;
+    params: Partial<RunEmbeddedPiAgentParams>;
+    expected: Record<string, unknown>;
+  };
+}
+
+function makeForwardedRuntimePlan(overrides: RuntimePlanOverrides = {}): AgentRuntimePlan {
+  const transcriptPolicy = {
+    sanitizeMode: "full",
+    sanitizeToolCallIds: true,
+    preserveNativeAnthropicToolUseIds: false,
+    repairToolUseResultPairing: true,
+    preserveSignatures: false,
+    sanitizeThinkingSignatures: true,
+    dropThinkingBlocks: false,
+    applyGoogleTurnOrdering: false,
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+    allowSyntheticToolResults: false,
+  } satisfies AgentRuntimePlan["transcript"]["policy"];
+  const basePlan: AgentRuntimePlan = {
+    auth: {
+      authProfileProviderForAuth: "anthropic",
+      providerForAuth: "anthropic",
+    },
+    delivery: {
+      isSilentPayload: vi.fn(() => false),
+      resolveFollowupRoute: vi.fn(),
+    },
+    observability: {
+      provider: "anthropic",
+      resolvedRef: "anthropic/test-model",
+      modelId: "test-model",
+    },
+    outcome: {
+      classifyRunResult: vi.fn(() => undefined),
+    },
+    prompt: {
+      provider: "anthropic",
+      modelId: "test-model",
+      resolveSystemPromptContribution: vi.fn(),
+    },
+    transcript: {
+      policy: transcriptPolicy,
+      resolvePolicy: vi.fn((params): AgentRuntimePlan["transcript"]["policy"] => ({
+        ...transcriptPolicy,
+        sanitizeMode: params?.modelApi === "anthropic-messages" ? "full" : "images-only",
+      })),
+    },
+    transport: {
+      extraParams: {},
+      resolveExtraParams: vi.fn(() => ({})),
+    },
+    resolvedRef: {
+      provider: "anthropic",
+      modelId: "test-model",
+      harnessId: "pi",
+    },
+    tools: {
+      normalize: vi.fn((tools) => tools),
+      logDiagnostics: vi.fn(),
+    },
+  };
+  return {
+    ...basePlan,
+    ...overrides,
+    auth: {
+      ...basePlan.auth,
+      ...overrides.auth,
+    },
+    resolvedRef: {
+      ...basePlan.resolvedRef,
+      ...overrides.resolvedRef,
+    },
+  };
+}
 
 describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   beforeAll(async () => {
@@ -83,9 +190,61 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     );
   });
 
+  it("forwards optional attempt params and the runtime plan into one attempt call", async () => {
+    const internalEvents: AgentInternalEvent[] = [];
+    const forwardingCase = makeForwardingCase(internalEvents);
+    const runtimePlan = makeForwardedRuntimePlan();
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      ...forwardingCase.params,
+      runId: forwardingCase.runId,
+    });
+
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...forwardingCase.expected,
+        runtimePlan: expect.objectContaining({
+          resolvedRef: expect.objectContaining({
+            provider: "anthropic",
+            modelId: "test-model",
+          }),
+          tools: expect.objectContaining({
+            normalize: expect.any(Function),
+          }),
+          transport: expect.objectContaining({
+            resolveExtraParams: expect.any(Function),
+          }),
+        }),
+      }),
+    );
+    const attemptParams = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as
+      | EmbeddedRunAttemptParams
+      | undefined;
+    expect(attemptParams?.runtimePlan).toBe(runtimePlan);
+    expect(attemptParams?.internalEvents).toBe(internalEvents);
+  });
+
   it("forwards explicit OpenAI Codex auth profiles to codex plugin harnesses", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
-    const pluginRunAttempt = vi.fn(async () => makeAttemptResult({ assistantTexts: ["ok"] }));
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "codex",
+        modelId: "gpt-5.4",
+        harnessId: "codex",
+      },
+      auth: {
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:work",
+      },
+    });
     clearAgentHarnesses();
     registerAgentHarness({
       id: "codex",
@@ -94,6 +253,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
       runAttempt: pluginRunAttempt,
     });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
 
     try {
@@ -104,7 +264,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         config: {
           agents: {
             defaults: {
-              embeddedHarness: { runtime: "codex", fallback: "none" },
+              agentRuntime: { id: "codex", fallback: "none" },
             },
           },
         },
@@ -117,18 +277,47 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "codex",
         authProfileId: "openai-codex:work",
         authProfileIdSource: "user",
+        runtimePlan: expect.objectContaining({
+          resolvedRef: expect.objectContaining({
+            provider: "codex",
+            modelId: "gpt-5.4",
+            harnessId: "codex",
+          }),
+          auth: expect.objectContaining({
+            harnessAuthProvider: "openai-codex",
+            forwardedAuthProfileId: "openai-codex:work",
+          }),
+        }),
       }),
     );
+    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    expect(harnessParams?.runtimePlan).toBe(runtimePlan);
   });
 
   it("forwards OpenAI Codex auth profiles when openai/* is forced through codex", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
-    const pluginRunAttempt = vi.fn(async () => makeAttemptResult({ assistantTexts: ["ok"] }));
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.4",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:work",
+      },
+    });
     clearAgentHarnesses();
     registerAgentHarness({
       id: "codex",
@@ -136,6 +325,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       supports: () => ({ supported: false }),
       runAttempt: pluginRunAttempt,
     });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
 
     try {
@@ -146,7 +336,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         config: {
           agents: {
             defaults: {
-              embeddedHarness: { runtime: "codex", fallback: "none" },
+              agentRuntime: { id: "codex", fallback: "none" },
             },
           },
         },
@@ -159,13 +349,29 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
         authProfileId: "openai-codex:work",
         authProfileIdSource: "user",
+        runtimePlan: expect.objectContaining({
+          resolvedRef: expect.objectContaining({
+            provider: "openai",
+            modelId: "gpt-5.4",
+            harnessId: "codex",
+          }),
+          auth: expect.objectContaining({
+            providerForAuth: "openai",
+            harnessAuthProvider: "openai-codex",
+            forwardedAuthProfileId: "openai-codex:work",
+          }),
+        }),
       }),
     );
+    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    expect(harnessParams?.runtimePlan).toBe(runtimePlan);
   });
 
   it("blocks undersized models before dispatching a provider attempt", async () => {

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -7,9 +7,10 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
   cfg?: OpenClawConfig,
 ): Map<string, MediaUnderstandingProvider> {
   const registry = new Map<string, MediaUnderstandingProvider>();
-  for (const plugin of loadPluginManifestRegistry({
+  for (const plugin of loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
     env: process.env,
+    includeDisabled: true,
   }).plugins) {
     const declaredProviders = new Set(
       (plugin.contracts?.mediaUnderstandingProviders ?? []).map((providerId) =>

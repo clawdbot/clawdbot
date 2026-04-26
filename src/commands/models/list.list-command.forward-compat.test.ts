@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => {
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
     loadProviderCatalogModelsForList: vi.fn(),
+    loadStaticManifestCatalogRowsForList: vi.fn(),
     hasProviderStaticCatalogForFilter: vi.fn(),
     resolveConfiguredEntries: vi.fn(),
     printModelTable: vi.fn(),
@@ -89,6 +90,7 @@ function resetMocks() {
   });
   mocks.loadModelCatalog.mockResolvedValue([]);
   mocks.loadProviderCatalogModelsForList.mockResolvedValue([]);
+  mocks.loadStaticManifestCatalogRowsForList.mockReturnValue([]);
   mocks.hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   mocks.resolveConfiguredEntries.mockReturnValue({
     entries: [
@@ -145,6 +147,10 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("./list.provider-catalog.js", () => ({
     hasProviderStaticCatalogForFilter: mocks.hasProviderStaticCatalogForFilter,
+  }));
+
+  vi.doMock("./list.manifest-catalog.js", () => ({
+    loadStaticManifestCatalogRowsForList: mocks.loadStaticManifestCatalogRowsForList,
   }));
 
   vi.doMock("./list.registry-load.js", () => ({
@@ -469,6 +475,55 @@ describe("modelsListCommand forward-compat", () => {
       ]);
     });
 
+    it("uses manifest catalog rows before provider runtime catalog rows", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([
+        {
+          provider: "moonshot",
+          id: "kimi-k2.6",
+          ref: "moonshot/kimi-k2.6",
+          mergeKey: "moonshot::kimi-k2.6",
+          name: "Kimi K2.6",
+          source: "manifest",
+          input: ["text", "image"],
+          reasoning: false,
+          status: "available",
+          baseUrl: "https://api.moonshot.ai/v1",
+          contextWindow: 262_144,
+        },
+      ]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
+      expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
+        expect.objectContaining({
+          key: "moonshot/kimi-k2.6",
+          available: false,
+        }),
+      ]);
+    });
+
+    it("uses provider index preview rows when an installable provider is not installed", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(false);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
+        expect.objectContaining({
+          key: "moonshot/kimi-k2.6",
+          available: false,
+        }),
+      ]);
+    });
+
     it("falls back to registry-backed rows when the fast-path catalog is empty", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
@@ -526,6 +581,51 @@ describe("modelsListCommand forward-compat", () => {
           providerFilter: "openrouter",
         }),
       );
+    });
+
+    it("includes provider-owned supplemental catalog rows with provider filters", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [],
+        availableKeys: new Set(["opencode-go/deepseek-v4-pro"]),
+        registry: {
+          getAll: () => [],
+        },
+      });
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        {
+          provider: "opencode-go",
+          id: "deepseek-v4-pro",
+          name: "DeepSeek V4 Pro",
+          input: ["text"],
+          contextWindow: 1_000_000,
+        },
+      ]);
+      mocks.resolveModelWithRegistry.mockImplementation(
+        ({ provider, modelId }: { provider: string; modelId: string }) =>
+          provider === "opencode-go" && modelId === "deepseek-v4-pro"
+            ? {
+                provider,
+                id: modelId,
+                name: "DeepSeek V4 Pro",
+                api: "anthropic-messages",
+                baseUrl: "https://opencode.ai/zen/go",
+                input: ["text"],
+                contextWindow: 1_000_000,
+                maxTokens: 384_000,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              }
+            : undefined,
+      );
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "opencode-go", json: true }, runtime as never);
+
+      expect(lastPrintedRows<{ key: string }>()).toEqual([
+        expect.objectContaining({
+          key: "opencode-go/deepseek-v4-pro",
+        }),
+      ]);
     });
 
     it("includes synthetic codex gpt-5.4 in --all output when catalog supports it", async () => {

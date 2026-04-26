@@ -19,6 +19,7 @@ export async function resolveLinkChannelContext(
   const sourceConfig = options.sourceConfig ?? cfg;
   for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
+    includeSetupRuntimeFallback: false,
   })) {
     const { defaultAccountId, account, enabled, configured } =
       await resolveDefaultChannelAccountContext(plugin, cfg, {

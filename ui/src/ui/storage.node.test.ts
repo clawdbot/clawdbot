@@ -1,13 +1,13 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { normalizeImportedCustomTheme } from "./custom-theme.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
   saveLocalUserIdentity,
   saveSettings,
 } from "./storage.ts";
-import { normalizeImportedCustomTheme } from "./custom-theme.ts";
 
 function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
   vi.stubGlobal("location", {

@@ -460,7 +460,7 @@ describe("test-projects args", () => {
     ).toBe(1);
   });
 
-  it("keeps conservative full-suite runs on aggregate shards", () => {
+  it("keeps conservative core full-suite runs on aggregate shards", () => {
     const originalVitestMaxWorkers = process.env.OPENCLAW_VITEST_MAX_WORKERS;
     const originalTestWorkers = process.env.OPENCLAW_TEST_WORKERS;
     const originalProjectParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
@@ -473,7 +473,9 @@ describe("test-projects args", () => {
 
       const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
 
+      expect(configs).toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
       expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.agents.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.plugins.config.ts");
     } finally {
       if (originalVitestMaxWorkers === undefined) {

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   ACPX_BACKEND_ID,
   AcpxRuntime as BaseAcpxRuntime,
@@ -13,7 +14,7 @@ import {
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
 } from "acpx/runtime";
-import type { AcpRuntime } from "../runtime-api.js";
+import { AcpRuntimeError, type AcpRuntime } from "../runtime-api.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
 type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
@@ -60,6 +61,27 @@ function createResetAwareSessionStore(baseStore: AcpSessionStore): ResetAwareSes
 
 const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
 const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
+const CODEX_ACP_AGENT_ID = "codex";
+const CODEX_ACP_OPENCLAW_PREFIX = "openai-codex/";
+const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
+const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
+  ["off", undefined],
+  ["minimal", "low"],
+  ["low", "low"],
+  ["medium", "medium"],
+  ["high", "high"],
+  ["x-high", "xhigh"],
+  ["x_high", "xhigh"],
+  ["extra-high", "xhigh"],
+  ["extra_high", "xhigh"],
+  ["extra high", "xhigh"],
+  ["xhigh", "xhigh"],
+]);
+
+type CodexAcpModelOverride = {
+  model?: string;
+  reasoningEffort?: string;
+};
 
 function normalizeAgentName(value: string | undefined): string | undefined {
   const normalized = value?.trim().toLowerCase();
@@ -175,6 +197,149 @@ function isOpenClawBridgeCommand(command: string | undefined): boolean {
   return /^openclaw(?:\.[cm]?js)?$/i.test(scriptName) && parts[2] === OPENCLAW_BRIDGE_SUBCOMMAND;
 }
 
+function isCodexAcpPackageSpec(value: string): boolean {
+  return /^@zed-industries\/codex-acp(?:@.+)?$/i.test(value.trim());
+}
+
+function isCodexAcpCommand(command: string | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
+  if (!parts.length) {
+    return false;
+  }
+  if (parts.some(isCodexAcpPackageSpec)) {
+    return true;
+  }
+  const commandName = basename(parts[0] ?? "");
+  if (/^codex-acp(?:\.exe)?$/i.test(commandName)) {
+    return true;
+  }
+  if (commandName !== "node") {
+    return false;
+  }
+  const scriptName = basename(parts[1] ?? "");
+  return /^codex-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
+}
+
+function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never {
+  throw new AcpRuntimeError(
+    "ACP_INVALID_RUNTIME_OPTION",
+    detail ??
+      `Codex ACP model "${rawModel}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
+  );
+}
+
+function failUnsupportedCodexAcpThinking(rawThinking: string): never {
+  throw new AcpRuntimeError(
+    "ACP_INVALID_RUNTIME_OPTION",
+    `Codex ACP thinking level "${rawThinking}" is not supported. Use off, minimal, low, medium, high, or xhigh.`,
+  );
+}
+
+function normalizeCodexAcpReasoningEffort(rawThinking: string | undefined): string | undefined {
+  const normalized = rawThinking?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (!CODEX_ACP_THINKING_ALIASES.has(normalized)) {
+    failUnsupportedCodexAcpThinking(rawThinking ?? "");
+  }
+  return CODEX_ACP_THINKING_ALIASES.get(normalized);
+}
+
+function normalizeCodexAcpModelOverride(
+  rawModel: string | undefined,
+  rawThinking?: string,
+): CodexAcpModelOverride | undefined {
+  const raw = rawModel?.trim();
+  const thinkingReasoningEffort = normalizeCodexAcpReasoningEffort(rawThinking);
+
+  if (!raw) {
+    return thinkingReasoningEffort ? { reasoningEffort: thinkingReasoningEffort } : undefined;
+  }
+
+  let value = raw;
+  if (value.toLowerCase().startsWith(CODEX_ACP_OPENCLAW_PREFIX)) {
+    value = value.slice(CODEX_ACP_OPENCLAW_PREFIX.length);
+  }
+  const parts = value.split("/");
+  if (parts.length > 2) {
+    failUnsupportedCodexAcpModel(
+      raw,
+      `Codex ACP model "${raw}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
+    );
+  }
+  const model = (parts[0] ?? "").trim();
+  const modelReasoningEffort = normalizeCodexAcpReasoningEffort(parts[1]);
+  if (!model) {
+    failUnsupportedCodexAcpModel(
+      raw,
+      `Codex ACP model "${raw}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
+    );
+  }
+  const reasoningEffort = thinkingReasoningEffort ?? modelReasoningEffort;
+  if (reasoningEffort && !CODEX_ACP_REASONING_EFFORTS.has(reasoningEffort)) {
+    failUnsupportedCodexAcpThinking(reasoningEffort);
+  }
+  return {
+    model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+}
+
+function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
+  if (!override.model) {
+    return "";
+  }
+  return override.reasoningEffort
+    ? `${override.model}/${override.reasoningEffort}`
+    : override.model;
+}
+
+function quoteShellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelOverride): string {
+  const configArgs = override.model ? [`model=${override.model}`] : [];
+  if (override.reasoningEffort) {
+    configArgs.push(`model_reasoning_effort=${override.reasoningEffort}`);
+  }
+  if (configArgs.length === 0) {
+    return command;
+  }
+  return `${command} ${configArgs.map((arg) => `-c ${quoteShellArg(arg)}`).join(" ")}`;
+}
+
+function createModelScopedAgentRegistry(params: {
+  agentRegistry: AcpAgentRegistry;
+  scope: AsyncLocalStorage<CodexAcpModelOverride | undefined>;
+}): AcpAgentRegistry {
+  return {
+    resolve(agentName: string): string | undefined {
+      const command = params.agentRegistry.resolve(agentName);
+      const override = params.scope.getStore();
+      if (
+        !override ||
+        normalizeAgentName(agentName) !== CODEX_ACP_AGENT_ID ||
+        typeof command !== "string" ||
+        !isCodexAcpCommand(command)
+      ) {
+        return command;
+      }
+      return appendCodexAcpConfigOverrides(command, override);
+    },
+    list(): string[] {
+      return params.agentRegistry.list();
+    },
+  };
+}
+
 function resolveAgentCommand(params: {
   agentName: string | undefined;
   agentRegistry: AcpAgentRegistry;
@@ -211,6 +376,10 @@ function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
 export class AcpxRuntime implements AcpRuntime {
   private readonly sessionStore: ResetAwareSessionStore;
   private readonly agentRegistry: AcpAgentRegistry;
+  private readonly scopedAgentRegistry: AcpAgentRegistry;
+  private readonly codexAcpModelOverrideScope = new AsyncLocalStorage<
+    CodexAcpModelOverride | undefined
+  >();
   private readonly delegate: BaseAcpxRuntime;
   private readonly bridgeSafeDelegate: BaseAcpxRuntime;
   private readonly probeDelegate: BaseAcpxRuntime;
@@ -221,9 +390,14 @@ export class AcpxRuntime implements AcpRuntime {
   ) {
     this.sessionStore = createResetAwareSessionStore(options.sessionStore);
     this.agentRegistry = options.agentRegistry;
+    this.scopedAgentRegistry = createModelScopedAgentRegistry({
+      agentRegistry: this.agentRegistry,
+      scope: this.codexAcpModelOverrideScope,
+    });
     const sharedOptions = {
       ...options,
       sessionStore: this.sessionStore,
+      agentRegistry: this.scopedAgentRegistry,
     };
     this.delegate = new BaseAcpxRuntime(sharedOptions, testOptions);
     this.bridgeSafeDelegate = shouldUseDistinctBridgeDelegate(options)
@@ -259,6 +433,18 @@ export class AcpxRuntime implements AcpRuntime {
     return this.resolveDelegateForAgent(readAgentFromHandle(handle));
   }
 
+  private async resolveCommandForHandle(handle: AcpRuntimeHandle): Promise<string | undefined> {
+    const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+    const recordCommand = readAgentCommandFromRecord(record);
+    if (recordCommand) {
+      return recordCommand;
+    }
+    return resolveAgentCommandForName({
+      agentName: readAgentFromHandle(handle),
+      agentRegistry: this.agentRegistry,
+    });
+  }
+
   isHealthy(): boolean {
     return this.probeDelegate.isHealthy();
   }
@@ -271,8 +457,32 @@ export class AcpxRuntime implements AcpRuntime {
     return this.probeDelegate.doctor();
   }
 
-  ensureSession(input: Parameters<AcpRuntime["ensureSession"]>[0]): Promise<AcpRuntimeHandle> {
-    return this.resolveDelegateForAgent(input.agent).ensureSession(input);
+  async ensureSession(
+    input: Parameters<AcpRuntime["ensureSession"]>[0],
+  ): Promise<AcpRuntimeHandle> {
+    const command = resolveAgentCommandForName({
+      agentName: input.agent,
+      agentRegistry: this.agentRegistry,
+    });
+    const delegate = this.resolveDelegateForCommand(command);
+    const codexModelOverride =
+      normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command)
+        ? normalizeCodexAcpModelOverride(input.model, input.thinking)
+        : undefined;
+
+    if (!codexModelOverride) {
+      return delegate.ensureSession(input);
+    }
+
+    const normalizedInput = {
+      ...input,
+      ...(codexAcpSessionModelId(codexModelOverride)
+        ? { model: codexAcpSessionModelId(codexModelOverride) }
+        : {}),
+    };
+    return this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
+      delegate.ensureSession(normalizedInput),
+    );
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
@@ -299,6 +509,39 @@ export class AcpxRuntime implements AcpRuntime {
     input: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0],
   ): Promise<void> {
     const delegate = await this.resolveDelegateForHandle(input.handle);
+    const command = await this.resolveCommandForHandle(input.handle);
+    if (
+      (input.key === "model" ||
+        input.key === "thinking" ||
+        input.key === "thought_level" ||
+        input.key === "reasoning_effort") &&
+      isCodexAcpCommand(command)
+    ) {
+      const override =
+        input.key === "model"
+          ? normalizeCodexAcpModelOverride(input.value)
+          : normalizeCodexAcpModelOverride(undefined, input.value);
+      if (!override && input.key !== "model") {
+        return;
+      }
+      if (override) {
+        if (override.model) {
+          await delegate.setConfigOption({
+            ...input,
+            key: "model",
+            value: override.model,
+          });
+        }
+        if (override.reasoningEffort) {
+          await delegate.setConfigOption({
+            ...input,
+            key: "reasoning_effort",
+            value: override.reasoningEffort,
+          });
+        }
+        return;
+      }
+    }
     await delegate.setConfigOption(input);
   }
 
@@ -332,6 +575,13 @@ export {
   createFileSessionStore,
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
+};
+
+export const __testing = {
+  appendCodexAcpConfigOverrides,
+  codexAcpSessionModelId,
+  isCodexAcpCommand,
+  normalizeCodexAcpModelOverride,
 };
 
 export type { AcpAgentRegistry, AcpRuntimeOptions, AcpSessionRecord, AcpSessionStore };

@@ -11,6 +11,20 @@ For the overview, operator runbook, and concepts, see [ACP agents](/tools/acp-ag
 
 The sections below cover acpx harness config, plugin setup for the MCP bridges, and permission configuration.
 
+Use this page only when you are setting up the ACP/acpx route. For native Codex
+app-server runtime config, use [Codex harness](/plugins/codex-harness). For
+OpenAI API keys or Codex OAuth model-provider config, use
+[OpenAI](/providers/openai).
+
+Codex has two OpenClaw routes:
+
+| Route                      | Config/command                                         | Setup page                              |
+| -------------------------- | ------------------------------------------------------ | --------------------------------------- |
+| Native Codex app-server    | `/codex ...`, `agentRuntime.id: "codex"`               | [Codex harness](/plugins/codex-harness) |
+| Explicit Codex ACP adapter | `/acp spawn codex`, `runtime: "acp", agentId: "codex"` | This page                               |
+
+Prefer the native route unless you explicitly need ACP/acpx behavior.
+
 ## acpx harness support (current)
 
 Current acpx built-in harness aliases:
@@ -34,6 +48,11 @@ When OpenClaw uses the acpx backend, prefer these values for `agentId` unless yo
 If your local Cursor install still exposes ACP as `agent acp`, override the `cursor` agent command in your acpx config instead of changing the built-in default.
 
 Direct acpx CLI usage can also target arbitrary adapters via `--agent <command>`, but that raw escape hatch is an acpx CLI feature (not the normal OpenClaw `agentId` path).
+
+Model control is adapter-capability dependent. Codex ACP model refs are
+normalized by OpenClaw before startup. Other harnesses need ACP `models` plus
+`session/set_model` support; if a harness exposes neither that ACP capability
+nor its own startup model flag, OpenClaw/acpx cannot force a model selection.
 
 ## Required config
 
@@ -138,7 +157,10 @@ Then verify backend health:
 
 ### acpx command and version configuration
 
-By default, the bundled `acpx` plugin uses its plugin-local pinned binary (`node_modules/.bin/acpx` inside the plugin package). Startup registers the backend as not-ready and a background job verifies `acpx --version`; if the binary is missing or mismatched, it runs `npm install --omit=dev --no-save acpx@<pinned>` and re-verifies. The gateway stays non-blocking throughout.
+By default, the bundled `acpx` plugin registers the embedded ACP backend without
+spawning an ACP agent during Gateway startup. Run `/acp doctor` for an explicit
+live probe. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=1` only when you need the
+Gateway to probe the configured agent at startup.
 
 Override the command or version in plugin config:
 
@@ -234,10 +256,11 @@ Restart the gateway after changing this value.
 
 ### Health probe agent configuration
 
-The bundled `acpx` plugin probes one harness agent while deciding whether the
-embedded runtime backend is ready. If `acp.allowedAgents` is set, it defaults to
-the first allowed agent; otherwise it defaults to `codex`. If your deployment
-needs a different ACP agent for health checks, set the probe agent explicitly:
+When `/acp doctor` or the opt-in startup probe checks the backend, the bundled
+`acpx` plugin probes one harness agent. If `acp.allowedAgents` is set, it
+defaults to the first allowed agent; otherwise it defaults to `codex`. If your
+deployment needs a different ACP agent for health checks, set the probe agent
+explicitly:
 
 ```bash
 openclaw config set plugins.entries.acpx.config.probeAgent claude

@@ -1,5 +1,5 @@
 import type { SecretRefSource } from "../config/types.secrets.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
@@ -47,8 +47,8 @@ export function listKnownNonSecretApiKeyMarkers(): string[] {
   knownNonSecretApiKeyMarkersCache ??= [
     ...new Set([
       ...CORE_NON_SECRET_API_KEY_MARKERS,
-      ...loadPluginManifestRegistry({ cache: true }).plugins.flatMap((plugin) =>
-        plugin.origin === "bundled" ? (plugin.nonSecretAuthMarkers ?? []) : [],
+      ...loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true }).plugins.flatMap(
+        (plugin) => (plugin.origin === "bundled" ? (plugin.nonSecretAuthMarkers ?? []) : []),
       ),
     ]),
   ];

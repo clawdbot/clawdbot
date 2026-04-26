@@ -14,18 +14,20 @@ import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 export type FeishuCardActionEvent = {
   operator: {
     open_id: string;
-    user_id: string;
-    union_id: string;
+    user_id?: string;
+    union_id?: string;
   };
   token: string;
   action: {
     value: Record<string, unknown>;
     tag: string;
   };
+  open_message_id?: string;
   context: {
-    open_id: string;
-    user_id: string;
-    chat_id: string;
+    open_message_id?: string;
+    open_id?: string;
+    user_id?: string;
+    chat_id?: string;
   };
 };
 
@@ -107,6 +109,7 @@ function buildSyntheticMessageEvent(
   content: string,
   chatType: "p2p" | "group",
 ): FeishuMessageEvent {
+  const replyTargetMessageId = event.context.open_message_id ?? event.open_message_id;
   return {
     sender: {
       sender_id: {
@@ -117,6 +120,8 @@ function buildSyntheticMessageEvent(
     },
     message: {
       message_id: `card-action-${event.token}`,
+      ...(replyTargetMessageId ? { reply_target_message_id: replyTargetMessageId } : {}),
+      ...(!replyTargetMessageId ? { suppress_reply_target: true } : {}),
       chat_id: event.context.chat_id || event.operator.open_id,
       chat_type: chatType,
       message_type: "text",

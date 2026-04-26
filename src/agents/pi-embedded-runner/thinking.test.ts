@@ -3,10 +3,12 @@ import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
 import {
+  OMITTED_ASSISTANT_REASONING_TEXT,
   assessLastAssistantMessage,
   dropThinkingBlocks,
   isAssistantMessageWithContent,
   sanitizeThinkingForRecovery,
+  stripInvalidThinkingSignatures,
   wrapAnthropicStreamWithRecovery,
 } from "./thinking.js";
 
@@ -103,6 +105,135 @@ describe("dropThinkingBlocks", () => {
       { type: "text", text: "latest text" },
     ]);
   });
+
+  it("uses non-empty omitted-reasoning text when an older assistant turn is thinking-only", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "old", thinkingSignature: "sig_old" }],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "latest", thinkingSignature: "sig_latest" },
+          { type: "text", text: "latest text" },
+        ],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const oldAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const latestAssistant = result[3] as Extract<AgentMessage, { role: "assistant" }>;
+    const originalLatestAssistant = messages[3] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(oldAssistant.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
+    expect(latestAssistant.content).toEqual(originalLatestAssistant.content);
+  });
+
+  it("uses non-empty omitted-reasoning text when an older assistant turn is redacted-thinking-only", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "redacted_thinking", data: "opaque" }],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "latest text" }],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const oldAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(oldAssistant.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
+  });
+});
+
+describe("stripInvalidThinkingSignatures", () => {
+  it("returns the original reference when no invalid thinking signatures are present", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+
+    expect(result).toBe(messages);
+  });
+
+  it("strips thinking blocks with missing, empty, or blank signatures", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "missing" },
+          { type: "thinking", thinking: "empty", thinkingSignature: "" },
+          { type: "thinking", thinking: "blank", thinkingSignature: "   " },
+          { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(result).not.toBe(messages);
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+      { type: "text", text: "answer" },
+    ]);
+  });
+
+  it("uses non-empty omitted-reasoning text when all thinking signatures are invalid", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "reasoning", thinkingSignature: "" }],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(assistant.content).toEqual([{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }]);
+  });
+
+  it("strips redacted thinking blocks with invalid opaque signatures", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "" },
+          { type: "redacted_thinking", signature: "   " },
+          { type: "redacted_thinking", data: "opaque" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(assistant.content).toEqual([
+      { type: "redacted_thinking", data: "opaque" },
+      { type: "text", text: "answer" },
+    ]);
+  });
 });
 
 describe("sanitizeThinkingForRecovery", () => {
@@ -191,11 +322,13 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     "thinking or redacted_thinking blocks in the latest assistant message cannot be modified",
   );
 
-  it("retries once when the request is rejected before streaming", async () => {
+  it("retries once with omitted-reasoning text when the request is rejected before streaming", async () => {
     let callCount = 0;
+    const contexts: Array<{ messages?: AgentMessage[] }> = [];
     const wrapped = wrapAnthropicStreamWithRecovery(
-      (() => {
+      ((_model, context) => {
         callCount += 1;
+        contexts.push(context as { messages?: AgentMessage[] });
         return Promise.reject(anthropicThinkingError);
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
       { id: "test-session" },
@@ -216,6 +349,44 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       ),
     ).rejects.toBe(anthropicThinkingError);
     expect(callCount).toBe(2);
+    expect(contexts[1]?.messages?.[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
+    });
+  });
+
+  it("retries with visible assistant text when stripping thinking leaves content", async () => {
+    const contexts: Array<{ messages?: AgentMessage[] }> = [];
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      ((_model, context) => {
+        contexts.push(context as { messages?: AgentMessage[] });
+        return Promise.reject(anthropicThinkingError);
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+
+    await expect(
+      wrapped(
+        {} as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "secret", thinkingSignature: "sig" },
+                { type: "text", text: "visible answer" },
+              ],
+            },
+          ]),
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toBe(anthropicThinkingError);
+
+    expect(contexts[1]?.messages?.[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "visible answer" }],
+    });
   });
 
   it("does not retry when the stream fails after yielding a chunk", async () => {

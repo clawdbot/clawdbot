@@ -85,6 +85,14 @@ export function createWebSendApi(params: {
       const result = quotedOpts
         ? await params.sock.sendMessage(jid, payload, quotedOpts)
         : await params.sock.sendMessage(jid, payload);
+      if (mediaBuffer && mediaType?.startsWith("audio/") && text.trim()) {
+        const textPayload: AnyMessageContent = { text };
+        if (quotedOpts) {
+          await params.sock.sendMessage(jid, textPayload, quotedOpts);
+        } else {
+          await params.sock.sendMessage(jid, textPayload);
+        }
+      }
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
       const messageId = resolveOutboundMessageId(result);

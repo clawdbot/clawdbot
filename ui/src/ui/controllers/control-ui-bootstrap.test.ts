@@ -12,6 +12,9 @@ describe("loadControlUiBootstrapConfig", () => {
         basePath: "/openclaw",
         assistantName: "Ops",
         assistantAvatar: "O",
+        assistantAvatarSource: "avatars/ops.png",
+        assistantAvatarStatus: "none",
+        assistantAvatarReason: "missing",
         assistantAgentId: "main",
         serverVersion: "2026.3.7",
         localMediaPreviewRoots: ["/tmp/openclaw"],
@@ -25,6 +28,9 @@ describe("loadControlUiBootstrapConfig", () => {
       basePath: "/openclaw",
       assistantName: "Assistant",
       assistantAvatar: null,
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
       assistantAgentId: null,
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
@@ -40,6 +46,9 @@ describe("loadControlUiBootstrapConfig", () => {
     );
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
+    expect(state.assistantAvatarSource).toBe("avatars/ops.png");
+    expect(state.assistantAvatarStatus).toBe("none");
+    expect(state.assistantAvatarReason).toBe("missing");
     expect(state.assistantAgentId).toBe("main");
     expect(state.serverVersion).toBe("2026.3.7");
     expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);

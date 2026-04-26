@@ -83,6 +83,8 @@ That bootstrap token carries the built-in pairing bootstrap profile:
 - bootstrap scope checks are role-prefixed, not one flat scope pool:
   operator scope entries only satisfy operator requests, and non-operator roles
   must still request scopes under their own role prefix
+- later token rotation/revocation remains bounded by both the device's approved
+  role contract and the caller session's operator scopes
 
 Treat the setup code like a password while it is valid.
 

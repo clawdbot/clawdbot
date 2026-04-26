@@ -19,7 +19,7 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
-import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   fetchOllamaModels,
@@ -41,7 +41,7 @@ const OLLAMA_WEB_SEARCH_SCHEMA = Type.Object(
   { additionalProperties: false },
 );
 
-const OLLAMA_WEB_SEARCH_PATH = "/api/experimental/web_search";
+const OLLAMA_WEB_SEARCH_PATH = "/api/web_search";
 const DEFAULT_OLLAMA_WEB_SEARCH_COUNT = 5;
 const DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS = 15_000;
 const OLLAMA_WEB_SEARCH_SNIPPET_MAX_CHARS = 300;
@@ -73,10 +73,7 @@ function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
   }
   const configuredBaseUrl = config?.models?.providers?.ollama?.baseUrl;
   if (normalizeOptionalString(configuredBaseUrl)) {
-    const baseUrl = resolveOllamaApiBase(configuredBaseUrl);
-    if (baseUrl !== OLLAMA_CLOUD_BASE_URL) {
-      return baseUrl;
-    }
+    return resolveOllamaApiBase(configuredBaseUrl);
   }
   return OLLAMA_DEFAULT_BASE_URL;
 }
@@ -230,7 +227,7 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
       }),
     createTool: (ctx) => ({
       description:
-        "Search the web using Ollama's experimental web search API. Returns titles, URLs, and snippets from the configured Ollama host.",
+        "Search the web using Ollama's web search API. Returns titles, URLs, and snippets from the configured Ollama host.",
       parameters: OLLAMA_WEB_SEARCH_SCHEMA,
       execute: async (args) =>
         await runOllamaWebSearch({

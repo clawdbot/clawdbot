@@ -81,10 +81,10 @@ export function installSessionStoreCaptureMock(
     onStore?: (store: SessionStore) => void;
   },
 ) {
+  const store: SessionStore = {};
   updateSessionStoreMock.mockImplementation(
     async (_storePath: string, mutator: SessionStoreMutator) => {
       params?.operations?.push("store:update");
-      const store: SessionStore = {};
       await mutator(store);
       params?.onStore?.(store);
       return store;

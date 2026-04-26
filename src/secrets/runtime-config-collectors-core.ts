@@ -506,6 +506,29 @@ function collectMessagesTtsAssignments(params: {
   });
 }
 
+function collectAgentTtsAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const agents = params.config.agents as Record<string, unknown> | undefined;
+  const list = agents?.list;
+  if (!Array.isArray(list)) {
+    return;
+  }
+  for (const [index, entry] of list.entries()) {
+    if (!isRecord(entry) || !isRecord(entry.tts)) {
+      continue;
+    }
+    collectTtsApiKeyAssignments({
+      tts: entry.tts,
+      pathPrefix: `agents.list.${index}.tts`,
+      defaults: params.defaults,
+      context: params.context,
+    });
+  }
+}
+
 function collectCronAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -640,6 +663,7 @@ export function collectCoreConfigAssignments(params: {
   collectGatewayAssignments(params);
   collectSandboxSshAssignments(params);
   collectMessagesTtsAssignments(params);
+  collectAgentTtsAssignments(params);
   collectCronAssignments(params);
   collectMediaRequestAssignments(params);
 }

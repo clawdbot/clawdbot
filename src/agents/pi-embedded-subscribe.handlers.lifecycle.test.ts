@@ -12,10 +12,13 @@ function createContext(
   overrides?: {
     onAgentEvent?: (event: unknown) => void;
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
+    onBlockReply?: ((payload: unknown) => void) | undefined;
     onBlockReplyFlush?: () => void | Promise<void>;
   },
 ): EmbeddedPiSubscribeContext {
-  const onBlockReply = vi.fn();
+  const hasOnBlockReplyOverride = Boolean(overrides && "onBlockReply" in overrides);
+  const onBlockReply = hasOnBlockReplyOverride ? overrides?.onBlockReply : vi.fn();
+  const emitBlockReply = vi.fn();
   return {
     params: {
       runId: "run-1",
@@ -23,7 +26,7 @@ function createContext(
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
       onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
-      onBlockReply,
+      ...(onBlockReply ? { onBlockReply } : {}),
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
     },
     state: {
@@ -43,7 +46,7 @@ function createContext(
       warn: vi.fn(),
     },
     flushBlockReplyBuffer: vi.fn(),
-    emitBlockReply: onBlockReply,
+    emitBlockReply,
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
   } as unknown as EmbeddedPiSubscribeContext;
@@ -319,6 +322,18 @@ describe("handleAgentEnd", () => {
     });
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  it("preserves orphaned tool media when no block reply callback is configured", async () => {
+    const ctx = createContext(undefined, { onBlockReply: undefined });
+    ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
+    ctx.state.pendingToolAudioAsVoice = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(ctx.emitBlockReply).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
 
   it("emits orphaned tool media before the lifecycle end event", async () => {

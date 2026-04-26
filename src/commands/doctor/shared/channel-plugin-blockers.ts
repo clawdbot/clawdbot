@@ -4,7 +4,7 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../../../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 
 export type ChannelPluginBlockerHit = {
@@ -45,9 +45,10 @@ export function scanConfiguredChannelPluginBlockers(
   }
 
   const pluginsConfig = normalizePluginsConfig(cfg.plugins);
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
     env,
+    includeDisabled: true,
   });
   const hits: ChannelPluginBlockerHit[] = [];
 

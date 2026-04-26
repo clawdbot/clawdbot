@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -16,6 +17,24 @@ let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePlug
 let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
+
+function forceNodeRuntimeVersionsForTest(): () => void {
+  const originalVersions = process.versions;
+  const nodeVersions = { ...originalVersions } as NodeJS.ProcessVersions & {
+    bun?: string | undefined;
+  };
+  delete nodeVersions.bun;
+  Object.defineProperty(process, "versions", {
+    configurable: true,
+    value: nodeVersions,
+  });
+  return () => {
+    Object.defineProperty(process, "versions", {
+      configurable: true,
+      value: originalVersions,
+    });
+  };
+}
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
@@ -158,7 +177,7 @@ describe("setup-registry getJiti", () => {
     clearPluginSetupRegistryCache();
   });
 
-  it("disables native jiti loading on Windows for setup-api modules", () => {
+  it("uses the runtime-supported Jiti boundary on Windows for setup-api modules", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -166,6 +185,8 @@ describe("setup-registry getJiti", () => {
       diagnostics: [],
     });
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const restoreVersions = forceNodeRuntimeVersionsForTest();
+    const expectedTryNative = shouldExpectNativeJitiForJavaScriptTestRuntime();
 
     try {
       resolvePluginSetupRegistry({
@@ -173,6 +194,7 @@ describe("setup-registry getJiti", () => {
         env: {},
       });
     } finally {
+      restoreVersions();
       platformSpy.mockRestore();
     }
 
@@ -180,7 +202,27 @@ describe("setup-registry getJiti", () => {
     expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        tryNative: false,
+        tryNative: expectedTryNative,
+      }),
+    );
+  });
+
+  it("passes explicit plugin id scope into setup manifest reads", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+
+    resolvePluginSetupRegistry({
+      pluginIds: ["test-plugin"],
+      env: {},
+    });
+
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["test-plugin"],
       }),
     );
   });

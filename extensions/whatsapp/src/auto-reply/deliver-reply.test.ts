@@ -1,9 +1,24 @@
+import fsSync from "node:fs";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sleep } from "openclaw/plugin-sdk/text-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadWebMedia } from "../media.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import type { WebInboundMsg } from "./types.js";
+
+const hoisted = vi.hoisted(() => ({
+  runFfmpeg: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    runFfmpeg: hoisted.runFfmpeg,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
@@ -74,6 +89,12 @@ function mockFirstReplyFailureWithWrappedError(msg: WebInboundMsg, message: stri
   (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce({
     error: { message },
   });
+}
+
+function expectFirstSendMediaPayload(msg: WebInboundMsg) {
+  const payload = vi.mocked(msg.sendMedia).mock.calls[0]?.[0];
+  expect(payload).toBeDefined();
+  return payload;
 }
 
 function mockSecondReplySuccess(msg: WebInboundMsg) {
@@ -509,14 +530,14 @@ describe("deliverWebReply", () => {
         audio: expect.any(Buffer),
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
-        caption: "caption",
       }),
       undefined,
     );
-    expect(msg.reply).not.toHaveBeenCalled();
+    expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
+    expect(msg.reply).toHaveBeenCalledWith("caption", undefined);
   });
 
-  it("sends audio media as ptt voice note", async () => {
+  it("sends audio media as ptt voice note with visible text separately", async () => {
     const msg = makeMsg();
     (
       loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
@@ -540,10 +561,51 @@ describe("deliverWebReply", () => {
         audio: expect.any(Buffer),
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
-        caption: "cap",
       }),
       undefined,
     );
+    expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
+    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
+  });
+
+  it("transcodes mp3 audio media before sending a ptt voice note", async () => {
+    vi.clearAllMocks();
+    hoisted.runFfmpeg.mockImplementation(async (args: string[]) => {
+      fsSync.writeFileSync(args.at(-1) ?? "", Buffer.from("opus-output"));
+      return "";
+    });
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("mp3"),
+      contentType: "audio/mpeg",
+      kind: "audio",
+      fileName: "voice.mp3",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/a.mp3" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(hoisted.runFfmpeg).toHaveBeenCalledWith(
+      expect.arrayContaining(["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]),
+    );
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audio: Buffer.from("opus-output"),
+        ptt: true,
+        mimetype: "audio/ogg; codecs=opus",
+      }),
+      undefined,
+    );
+    expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
+    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
   });
 
   it("sends video media", async () => {

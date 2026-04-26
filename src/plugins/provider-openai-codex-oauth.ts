@@ -15,7 +15,10 @@ const openAICodexOAuthOriginator = "openclaw";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
 
-type OpenAICodexOAuthFailureCode = "callback_timeout" | "callback_validation_failed";
+type OpenAICodexOAuthFailureCode =
+  | "callback_timeout"
+  | "callback_validation_failed"
+  | "unsupported_region";
 
 function waitForDelayOrLoginSettle(params: {
   delayMs: number;
@@ -54,6 +57,16 @@ function createOpenAICodexOAuthError(
 
 function rewriteOpenAICodexOAuthError(error: unknown): Error {
   const message = formatErrorMessage(error);
+  if (/unsupported_country_region_territory/i.test(message)) {
+    return createOpenAICodexOAuthError(
+      "unsupported_region",
+      [
+        "OpenAI rejected the token exchange for this country, region, or network route.",
+        "If you normally use a proxy, verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process and then retry `openclaw models auth login --provider openai-codex`.",
+      ].join(" "),
+      error,
+    );
+  }
   if (/state mismatch|missing authorization code/i.test(message)) {
     return createOpenAICodexOAuthError("callback_validation_failed", message, error);
   }

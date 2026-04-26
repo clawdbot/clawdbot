@@ -171,7 +171,7 @@ describe("gateway codex harness live helpers", () => {
       "`codex models` didn’t return a plain list in this environment; it dropped into the interactive TUI instead.",
       "",
       "What I could confirm from that session is:",
-      "- Codex CLI version: `v0.118.0`",
+      "- Codex CLI version: `v0.125.0`",
       "- Current selected model: `local-default-model`",
       "- The UI indicates `/model` is the command to change models",
     ].join("\n");

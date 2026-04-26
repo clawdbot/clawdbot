@@ -4,7 +4,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
-import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
 
@@ -105,7 +104,15 @@ function createRuntime(): {
   setConfigOption: ReturnType<typeof vi.fn>;
 } {
   const ensureSession = vi.fn(
-    async (input: { sessionKey: string; agent: string; mode: "persistent" | "oneshot" }) => ({
+    async (input: {
+      sessionKey: string;
+      agent: string;
+      mode: "persistent" | "oneshot";
+      model?: string;
+      thinking?: string;
+      cwd?: string;
+      resumeSessionId?: string;
+    }) => ({
       sessionKey: input.sessionKey,
       backend: "acpx",
       runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
@@ -237,7 +244,6 @@ describe("AcpSessionManager", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
-    resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
@@ -1066,6 +1072,82 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("passes persisted model runtime options into ensureSession after restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:model-restart";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          runtimeOptions: {
+            model: "openai-codex/gpt-5.4",
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart-model",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        model: "openai-codex/gpt-5.4",
+      }),
+    );
+  });
+
+  it("passes persisted thinking runtime options into ensureSession after restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:thinking-restart";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          runtimeOptions: {
+            thinking: "high",
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart-thinking",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        thinking: "high",
+      }),
+    );
+  });
+
   it("does not resume persisted ACP identity for oneshot sessions after restart", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -1310,6 +1392,7 @@ describe("AcpSessionManager", () => {
       acp: readySessionMeta({
         runtimeOptions: {
           model: "openai-codex/gpt-5.4",
+          thinking: "high",
         },
       }),
     });
@@ -1322,12 +1405,21 @@ describe("AcpSessionManager", () => {
       mode: "persistent",
       runtimeOptions: {
         model: "openai-codex/gpt-5.4",
+        thinking: "high",
       },
     });
 
     expect(extractRuntimeOptionsFromUpserts()).toContainEqual({
       model: "openai-codex/gpt-5.4",
+      thinking: "high",
     });
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:session-a",
+        model: "openai-codex/gpt-5.4",
+        thinking: "high",
+      }),
+    );
   });
 
   it("preserves runtimeOptions cwd when initializeSession cwd is omitted", async () => {
@@ -2307,6 +2399,91 @@ describe("AcpSessionManager", () => {
     expect(currentMeta.identity?.agentSessionId).toBe("agent-fresh");
   });
 
+  it("reconciles oneshot ACP identity from runtime status before closing after a turn", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey: "agent:codex:acp:session-1",
+      backend: "acpx",
+      runtimeSessionName: "runtime-1",
+      backendSessionId: "acpx-oneshot",
+    });
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=done",
+      backendSessionId: "acpx-oneshot",
+      agentSessionId: "agent-oneshot",
+      details: { status: "done" },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    let currentMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey =
+        (paramsUnknown as { sessionKey?: string }).sessionKey ?? "agent:codex:acp:session-1";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      agent: "codex",
+      mode: "oneshot",
+    });
+
+    expect(currentMeta?.identity).toMatchObject({
+      state: "pending",
+      acpxSessionId: "acpx-oneshot",
+      source: "ensure",
+    });
+
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expect(runtimeState.getStatus).toHaveBeenCalledTimes(2);
+    expect(runtimeState.close).toHaveBeenCalledWith({
+      handle: expect.objectContaining({
+        backendSessionId: "acpx-oneshot",
+        agentSessionId: "agent-oneshot",
+      }),
+      reason: "oneshot-complete",
+    });
+    expect(currentMeta?.identity).toMatchObject({
+      state: "resolved",
+      acpxSessionId: "acpx-oneshot",
+      agentSessionId: "agent-oneshot",
+      source: "status",
+    });
+  });
+
   it("reconciles pending ACP identities during startup scan", async () => {
     const runtimeState = createRuntime();
     runtimeState.getStatus.mockResolvedValue({
@@ -2603,6 +2780,7 @@ describe("AcpSessionManager", () => {
         runtimeOptions: {
           runtimeMode: "plan",
           model: "openai-codex/gpt-5.4",
+          thinking: "high",
           permissionProfile: "strict",
           timeoutSeconds: 120,
         },
@@ -2627,6 +2805,12 @@ describe("AcpSessionManager", () => {
       expect.objectContaining({
         key: "model",
         value: "openai-codex/gpt-5.4",
+      }),
+    );
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "thinking",
+        value: "high",
       }),
     );
     expect(runtimeState.setConfigOption).toHaveBeenCalledWith(

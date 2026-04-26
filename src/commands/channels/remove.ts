@@ -1,20 +1,16 @@
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import {
-  getChannelPlugin,
-  listChannelPlugins,
-  normalizeChannelId,
-} from "../../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import {
-  type ChatChannel,
-  channelLabel,
-  requireValidConfigFileSnapshot,
-  shouldUseWizard,
-} from "./shared.js";
+import { channelLabel } from "./runtime-label.js";
+import { type ChatChannel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
 export type ChannelsRemoveOptions = {
   channel?: string;
@@ -22,8 +18,12 @@ export type ChannelsRemoveOptions = {
   delete?: boolean;
 };
 
-function listAccountIds(cfg: OpenClawConfig, channel: ChatChannel): string[] {
-  const plugin = getChannelPlugin(channel);
+function listAccountIds(
+  cfg: OpenClawConfig,
+  channel: ChatChannel,
+  plugin?: ChannelPlugin,
+): string[] {
+  plugin ??= getChannelPlugin(channel);
   if (!plugin) {
     return [];
   }
@@ -45,23 +45,29 @@ export async function channelsRemoveCommand(
   const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;
   const rawChannel = normalizeOptionalString(opts.channel) ?? "";
+  let lookupChannel = rawChannel;
   let channel: ChatChannel | null = normalizeChannelId(rawChannel);
   let accountId = normalizeAccountId(opts.account);
   const deleteConfig = Boolean(opts.delete);
 
   if (useWizard && prompter) {
     await prompter.intro("Remove channel account");
+    const readOnlyPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
+      includeSetupRuntimeFallback: true,
+    });
     const selectedChannel = await prompter.select({
       message: "Channel",
-      options: listChannelPlugins().map((plugin) => ({
+      options: readOnlyPlugins.map((plugin) => ({
         value: plugin.id,
         label: plugin.meta.label,
       })),
     });
     channel = selectedChannel;
+    lookupChannel = selectedChannel;
 
     accountId = await (async () => {
-      const ids = listAccountIds(cfg, selectedChannel);
+      const readOnlyPlugin = readOnlyPlugins.find((plugin) => plugin.id === selectedChannel);
+      const ids = listAccountIds(cfg, selectedChannel, readOnlyPlugin);
       const choice = await prompter.select({
         message: "Account",
         options: ids.map((id) => ({
@@ -100,8 +106,7 @@ export async function channelsRemoveCommand(
     }
   }
 
-  const shouldResolveInstallablePlugin =
-    !useWizard && rawChannel && (!channel || !getChannelPlugin(channel));
+  const shouldResolveInstallablePlugin = Boolean(lookupChannel || channel);
   const resolvedPluginState = shouldResolveInstallablePlugin
     ? await (async () => {
         const { resolveInstallableChannelPlugin } =
@@ -109,7 +114,7 @@ export async function channelsRemoveCommand(
         return await resolveInstallableChannelPlugin({
           cfg,
           runtime,
-          rawChannel,
+          rawChannel: lookupChannel,
           allowInstall: true,
         });
       })()
@@ -171,10 +176,34 @@ export async function channelsRemoveCommand(
     });
   }
 
-  await replaceConfigFile({
-    nextConfig: next,
-    ...(baseHash !== undefined ? { baseHash } : {}),
-  });
+  const shouldMovePluginInstalls = Boolean(
+    next.plugins?.installs && Object.keys(next.plugins.installs).length > 0,
+  );
+  if (shouldMovePluginInstalls) {
+    const committed = await commitConfigWithPendingPluginInstalls({
+      nextConfig: next,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
+    next = committed.config;
+    await refreshPluginRegistryAfterConfigMutation({
+      config: next,
+      reason: "source-changed",
+      installRecords: committed.installRecords,
+      logger: { warn: (message) => runtime.log(message) },
+    });
+  } else {
+    await replaceConfigFile({
+      nextConfig: next,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
+    if (resolvedPluginState?.pluginInstalled) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: next,
+        reason: "source-changed",
+        logger: { warn: (message) => runtime.log(message) },
+      });
+    }
+  }
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig

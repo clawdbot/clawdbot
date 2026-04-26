@@ -206,7 +206,7 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    MODEL_ID="openai/gpt-5.4"
+    MODEL_ID="openai/gpt-5.5"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
@@ -443,12 +443,25 @@ resolve_registry_target_version() {
   if [[ "$spec" != openclaw@* ]]; then
     spec="openclaw@$spec"
   fi
-  npm view "$spec" version 2>/dev/null || true
+  npm view "$spec" version 2>/dev/null | tail -n 1 | tr -d '\r' || true
 }
 
 is_explicit_package_target() {
   local target="$1"
   [[ "$target" == *"://"* || "$target" == *"#"* || "$target" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
+}
+
+preflight_registry_update_target() {
+  local baseline_version target_version
+  [[ -n "$UPDATE_TARGET" && "$UPDATE_TARGET" != "local-main" ]] || return 0
+  is_explicit_package_target "$UPDATE_TARGET" && return 0
+
+  baseline_version="$(resolve_registry_target_version "$PACKAGE_SPEC")"
+  target_version="$(resolve_registry_target_version "$UPDATE_TARGET")"
+  [[ -n "$baseline_version" && -n "$target_version" ]] || return 0
+  if [[ "$baseline_version" == "$target_version" ]]; then
+    die "--update-target $UPDATE_TARGET resolves to openclaw@$target_version, same as baseline $PACKAGE_SPEC; publish or choose a newer --update-target before running VM update coverage"
+  fi
 }
 
 write_windows_update_script() {
@@ -718,7 +731,17 @@ function Invoke-OpenClawUpdateWithTimeout {
 
   $updateJob = Start-Job -ScriptBlock {
     param([string]$Path, [string]$Target)
-    $output = & $Path update --tag $Target --yes --json *>&1
+    $previousDisableBundledPlugins = $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS
+    $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
+    try {
+      $output = & $Path update --tag $Target --yes --json *>&1
+    } finally {
+      if ($null -eq $previousDisableBundledPlugins) {
+        Remove-Item Env:OPENCLAW_DISABLE_BUNDLED_PLUGINS -ErrorAction SilentlyContinue
+      } else {
+        $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = $previousDisableBundledPlugins
+      }
+    }
     [pscustomobject]@{
       ExitCode = $LASTEXITCODE
       Output = ($output | Out-String).Trim()
@@ -1649,7 +1672,11 @@ stop_openclaw_gateway_processes() {
 # host can observe new plugin metadata mid-update and abort config validation.
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-/opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
+# The baseline updater process may run its post-install doctor through the old
+# host while new bundled plugin metadata is already on disk. Keep this
+# same-guest update hop focused on core/package migration; post-update smoke
+# below starts the fresh gateway with bundled plugins enabled.
+OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
 # Same-guest npm upgrades can leave the old gateway process holding the old
 # bundled plugin host version. Stop it before post-update config commands.
 stop_openclaw_gateway_processes
@@ -1782,7 +1809,7 @@ stop_openclaw_gateway_processes() {
 # the old host can observe new plugin metadata mid-update and abort validation.
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-openclaw update --tag "$update_target" --yes --json
+OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag "$update_target" --yes --json
 # The fresh Linux lane starts a manual gateway; stop the old process before
 # post-update config validation sees mixed old-host/new-plugin metadata.
 stop_openclaw_gateway_processes
@@ -1865,6 +1892,7 @@ LATEST_VERSION="$(resolve_latest_version)"
 if [[ -z "$PACKAGE_SPEC" ]]; then
   PACKAGE_SPEC="openclaw@$LATEST_VERSION"
 fi
+preflight_registry_update_target
 resolve_current_head
 
 if platform_enabled linux; then

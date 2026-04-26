@@ -7,12 +7,14 @@ import type { DeviceKeyAlgorithm } from "./DeviceKeyAlgorithm.js";
  * ASN.1 DER signature returned by `device/key/sign`.
  */
 export type DeviceKeySignResponse = {
-/**
- * ECDSA signature DER encoded as base64.
- */
-signatureDerBase64: string,
-/**
- * Exact bytes signed by the device key, encoded as base64. Verifiers must verify this byte
- * string directly and must not reserialize `payload`.
- */
-signedPayloadBase64: string, algorithm: DeviceKeyAlgorithm, };
+  /**
+   * ECDSA signature DER encoded as base64.
+   */
+  signatureDerBase64: string;
+  /**
+   * Exact bytes signed by the device key, encoded as base64. Verifiers must verify this byte
+   * string directly and must not reserialize `payload`.
+   */
+  signedPayloadBase64: string;
+  algorithm: DeviceKeyAlgorithm;
+};

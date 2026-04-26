@@ -41,7 +41,11 @@ enum VoiceWakeRecognitionDebugSupport {
             minCommandLength: config.minCommandLength,
             trimWake: trimWake)
         else { return nil }
-        return WakeWordGateMatch(triggerEndTime: 0, postGap: 0, command: command)
+        return WakeWordGateMatch(
+            triggerEndTime: 0,
+            postGap: 0,
+            command: command,
+            trigger: VoiceWakeTextUtils.matchedTriggerWord(transcript: transcript, triggers: triggers))
     }
 
     static func transcriptSummary(

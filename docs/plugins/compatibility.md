@@ -82,10 +82,12 @@ Current compatibility records include:
 - bundled plugin allowlist and enablement behavior
 - legacy provider/channel env-var manifest metadata
 - activation hints that are being replaced by manifest contribution ownership
-- `embeddedHarness` and `agent-harness` naming aliases while public naming moves
-  toward `agentRuntime`
+- legacy runtime-policy config keys while doctor migrates operators to
+  `agentRuntime`
 - generated bundled channel config metadata fallback while registry-first
   `channelConfigs` metadata lands
+- the persisted plugin registry disable env while repair flows migrate operators
+  to `openclaw plugins registry --refresh` and `openclaw doctor --fix`
 
 New plugin code should prefer the replacement listed in the registry and in the
 specific migration guide. Existing plugins can keep using a compatibility path

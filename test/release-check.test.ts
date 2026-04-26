@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
   collectBundledPluginRootRuntimeMirrorErrors,
   collectForbiddenPackContentPaths,
   collectInstalledBundledPluginRuntimeDepErrors,
+  bundledRuntimeDependencySentinelCandidates,
   collectRootDistBundledRuntimeMirrors,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
@@ -433,10 +434,12 @@ describe("collectForbiddenPackPaths", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
+        "dist/extensions/browser/.OpenClaw-Install-Stage/package.json",
         "dist/extensions/codex/.openclaw-runtime-deps-backup-node_modules-old/zod/index.js",
         "dist/extensions/discord/.openclaw-runtime-deps-stamp.json",
       ]),
     ).toEqual([
+      "dist/extensions/browser/.OpenClaw-Install-Stage/package.json",
       "dist/extensions/codex/.openclaw-runtime-deps-backup-node_modules-old/zod/index.js",
       "dist/extensions/discord/.openclaw-runtime-deps-stamp.json",
     ]);
@@ -670,6 +673,39 @@ describe("collectInstalledBundledPluginRuntimeDepErrors", () => {
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bundledRuntimeDependencySentinelCandidates", () => {
+  it("checks canonical external runtime-deps roots for packed installs", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-check-runtime-candidates-"));
+    const packageRoot = join(root, "package");
+    const aliasRoot = join(root, "package-alias");
+    const homeRoot = join(root, "home");
+    try {
+      mkdirSync(join(packageRoot, "dist", "extensions", "browser"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.4.25-beta.1" }, null, 2),
+      );
+      symlinkSync(packageRoot, aliasRoot, "dir");
+
+      const candidates = bundledRuntimeDependencySentinelCandidates(
+        aliasRoot,
+        "browser",
+        "playwright-core",
+        { HOME: homeRoot } as NodeJS.ProcessEnv,
+      );
+      const externalCandidates = candidates.filter(
+        (candidate) =>
+          candidate.startsWith(join(homeRoot, ".openclaw", "plugin-runtime-deps")) &&
+          candidate.endsWith(join("node_modules", "playwright-core", "package.json")),
+      );
+
+      expect(externalCandidates.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

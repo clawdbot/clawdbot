@@ -1,9 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const pluginRegistryMocks = vi.hoisted(() => ({
+  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
+  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+}));
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("./manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex:
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+}));
+
+vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
 import {
@@ -26,7 +37,10 @@ function createProviderAuthChoice(overrides: Record<string, unknown>) {
 }
 
 function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
-  loadPluginManifestRegistry.mockReturnValue({
+  pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+    plugins,
+  });
+  pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
     plugins,
   });
 }
@@ -53,6 +67,19 @@ function setSingleManifestProviderAuthChoices(
 }
 
 describe("provider auth choice manifest helpers", () => {
+  beforeEach(() => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [],
+    });
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [],
+    });
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+  });
+
   it("flattens manifest auth choices", () => {
     setSingleManifestProviderAuthChoices("openai", [
       createProviderAuthChoice({

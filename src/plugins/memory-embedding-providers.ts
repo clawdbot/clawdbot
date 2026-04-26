@@ -20,6 +20,8 @@ export type MemoryEmbeddingBatchOptions = {
 export type MemoryEmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
+  inlineQueryTimeoutMs?: number;
+  inlineBatchTimeoutMs?: number;
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 

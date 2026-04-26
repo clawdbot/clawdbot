@@ -189,6 +189,7 @@ export type PluginServiceRegistration = {
   pluginName?: string;
   service: OpenClawPluginService;
   source: string;
+  origin: PluginOrigin;
   rootDir?: string;
 };
 

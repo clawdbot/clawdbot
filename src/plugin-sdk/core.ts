@@ -504,11 +504,11 @@ export function defineChannelPluginEntry<TPlugin>({
         return;
       }
       api.registerChannel({ plugin: plugin as ChannelPlugin });
+      setRuntime?.(api.runtime);
       if (api.registrationMode === "discovery") {
         registerCliMetadata?.(api);
         return;
       }
-      setRuntime?.(api.runtime);
       if (api.registrationMode !== "full") {
         return;
       }

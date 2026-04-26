@@ -1,4 +1,8 @@
-import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedback";
+import {
+  createAckReactionHandle,
+  shouldAckReactionForWhatsApp,
+  type AckReactionHandle,
+} from "openclaw/plugin-sdk/channel-feedback";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSenderIdentity } from "../../identity.js";
@@ -18,9 +22,9 @@ export async function maybeSendAckReaction(params: {
   accountId?: string;
   info: (obj: unknown, msg: string) => void;
   warn: (obj: unknown, msg: string) => void;
-}) {
+}): Promise<AckReactionHandle | null> {
   if (!params.msg.id) {
-    return;
+    return null;
   }
 
   // Keep ackReaction as the emoji/scope control, while letting reactionLevel
@@ -30,7 +34,7 @@ export async function maybeSendAckReaction(params: {
     accountId: params.accountId,
   });
   if (reactionLevel.level === "off") {
-    return;
+    return null;
   }
 
   const ackConfig = params.cfg.channels?.whatsapp?.ackReaction;
@@ -61,7 +65,7 @@ export async function maybeSendAckReaction(params: {
     });
 
   if (!shouldSendReaction()) {
-    return;
+    return null;
   }
 
   params.info(
@@ -69,21 +73,27 @@ export async function maybeSendAckReaction(params: {
     "sending ack reaction",
   );
   const sender = getSenderIdentity(params.msg);
-  sendReactionWhatsApp(params.msg.chatId, params.msg.id, emoji, {
+  const reactionOptions = {
     verbose: params.verbose,
     fromMe: false,
-    participant: sender.jid ?? undefined,
-    accountId: params.accountId,
+    ...(sender.jid ? { participant: sender.jid } : {}),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
     cfg: params.cfg,
-  }).catch((err) => {
-    params.warn(
-      {
-        error: formatError(err),
-        chatId: params.msg.chatId,
-        messageId: params.msg.id,
-      },
-      "failed to send ack reaction",
-    );
-    logVerbose(`WhatsApp ack reaction failed for chat ${params.msg.chatId}: ${formatError(err)}`);
+  };
+  return createAckReactionHandle({
+    ackReactionValue: emoji,
+    send: () => sendReactionWhatsApp(params.msg.chatId, params.msg.id!, emoji, reactionOptions),
+    remove: () => sendReactionWhatsApp(params.msg.chatId, params.msg.id!, "", reactionOptions),
+    onSendError: (err) => {
+      params.warn(
+        {
+          error: formatError(err),
+          chatId: params.msg.chatId,
+          messageId: params.msg.id,
+        },
+        "failed to send ack reaction",
+      );
+      logVerbose(`WhatsApp ack reaction failed for chat ${params.msg.chatId}: ${formatError(err)}`);
+    },
   });
 }

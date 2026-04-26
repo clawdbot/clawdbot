@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { __testing as agentJobTesting } from "./server-methods/agent-job.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -108,7 +109,7 @@ describe("gateway server chat", () => {
       return await run(dir);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   };
 
@@ -155,6 +156,10 @@ describe("gateway server chat", () => {
     expect(res.ok).toBe(true);
     expect(res.payload?.status).toBe("ok");
     return res;
+  };
+
+  const waitForLifecycleWaiter = async (runId: string) => {
+    await vi.waitFor(() => expect(agentJobTesting.getWaiterCount(runId)).toBeGreaterThan(0));
   };
 
   const abortChatRun = async (runId: string) => {
@@ -1102,14 +1107,7 @@ describe("gateway server chat", () => {
           timeoutMs: 1_000,
         });
 
-        vi.useFakeTimers();
-        try {
-          const settle = new Promise((resolve) => setTimeout(resolve, 20));
-          await vi.advanceTimersByTimeAsync(20);
-          await settle;
-        } finally {
-          vi.useRealTimers();
-        }
+        await waitForLifecycleWaiter(runId);
         emitAgentEvent({
           runId,
           stream: "lifecycle",

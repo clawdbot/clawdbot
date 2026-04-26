@@ -12,6 +12,7 @@ const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
+  refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveInstallableChannelPlugin: vi.fn(),
 }));
 
@@ -36,6 +37,10 @@ vi.mock("../../config/config.js", async () => {
     replaceConfigFile: mocks.replaceConfigFile,
   };
 });
+
+vi.mock("../../cli/plugins-registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
+}));
 
 vi.mock("../channel-setup/channel-plugin-resolution.js", () => ({
   resolveInstallableChannelPlugin: mocks.resolveInstallableChannelPlugin,
@@ -203,6 +208,7 @@ describe("channelsCapabilitiesCommand", () => {
       channelId: "whatsapp",
       plugin,
       configChanged: true,
+      pluginInstalled: true,
     });
     vi.mocked(listChannelPlugins).mockReturnValue([]);
     vi.mocked(getChannelPlugin).mockReturnValue(undefined);
@@ -221,6 +227,11 @@ describe("channelsCapabilitiesCommand", () => {
       }),
       baseHash: "config-1",
     });
+    expect(mocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "source-changed",
+      }),
+    );
     expect(logs.join("\n")).toContain("Probe: linked");
   });
 });

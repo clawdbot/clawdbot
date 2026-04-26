@@ -1231,6 +1231,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: "2"
         shell: bash
         run: |

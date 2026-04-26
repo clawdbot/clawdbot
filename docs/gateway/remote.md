@@ -98,6 +98,8 @@ You can persist a remote target so CLI commands use it by default:
 ```
 
 When the gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and open the SSH tunnel first.
+In the macOS app’s SSH tunnel transport, discovered gateway hostnames belong in
+`gateway.remote.sshTarget`; `gateway.remote.url` remains the local tunnel URL.
 
 ## Credential precedence
 

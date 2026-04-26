@@ -150,9 +150,11 @@ final class RemotePortTunnel {
         else {
             return nil
         }
-        let sshKey = OpenClawConfigFile.hostKey(sshHost)
-        let urlKey = OpenClawConfigFile.hostKey(host)
-        guard !sshKey.isEmpty, !urlKey.isEmpty else { return nil }
+        guard let sshKey = OpenClawConfigFile.canonicalHostForComparison(sshHost),
+              let urlKey = OpenClawConfigFile.canonicalHostForComparison(host)
+        else {
+            return nil
+        }
         guard sshKey == urlKey else {
             Self.logger.debug(
                 "remote url host mismatch sshHost=\(sshHost, privacy: .public) urlHost=\(host, privacy: .public)")

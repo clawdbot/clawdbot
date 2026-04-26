@@ -140,6 +140,7 @@ describe("existing-session browser routes", () => {
     });
     expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalledWith({
       profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
       targetId: "7",
     });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
@@ -166,6 +167,7 @@ describe("existing-session browser routes", () => {
     });
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledWith({
       profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
       targetId: "7",
       uid: "btn-1",
       fullPage: false,
@@ -285,6 +287,8 @@ describe("existing-session browser routes", () => {
     expect(response.body).toMatchObject({ ok: true, targetId: "7" });
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
       profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      userDataDir: undefined,
       targetId: "7",
       fn: "() => window.location.href",
     });
@@ -308,7 +312,7 @@ describe("existing-session browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledWith({
       profileName: "chrome-live",
-      userDataDir: undefined,
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
       targetId: "7",
       uid: "btn-1",
       doubleClick: false,
@@ -334,7 +338,7 @@ describe("existing-session browser routes", () => {
     expect(response.body).toMatchObject({ ok: true, targetId: "7", url: "https://example.com" });
     expect(chromeMcpMocks.clickChromeMcpCoords).toHaveBeenCalledWith({
       profileName: "chrome-live",
-      userDataDir: undefined,
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
       targetId: "7",
       x: 25,
       y: 32,

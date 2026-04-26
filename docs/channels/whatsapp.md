@@ -151,6 +151,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
+- When `messages.removeAckAfterReply` is enabled, OpenClaw clears the WhatsApp ack reaction after a visible reply is delivered.
 
 ## Plugin hooks and privacy
 
@@ -243,6 +244,7 @@ content and identifiers.
 
     - explicit WhatsApp mentions of the bot identity
     - configured mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
+    - inbound voice-note transcripts for authorized group messages
     - implicit reply-to-bot detection (reply sender matches bot identity)
 
     Security note:
@@ -294,6 +296,11 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - `<media:audio>`
     - `<media:document>`
     - `<media:sticker>`
+
+    Authorized group voice notes are transcribed before mention gating when the
+    body is only `<media:audio>`, so saying the bot mention in the voice note can
+    trigger the reply. If the transcript still does not mention the bot, the
+    transcript is kept in pending group history instead of the raw placeholder.
 
     Location bodies use terse coordinate text. Location labels/comments and contact/vCard details are rendered as fenced untrusted metadata, not inline prompt text.
 
@@ -361,10 +368,13 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
-    - reply payloads preserve `audioAsVoice`; WhatsApp sends audio media as Baileys PTT voice notes
-    - `audio/ogg` is rewritten to `audio/ogg; codecs=opus` for voice-note compatibility
+    - audio media is sent through the Baileys `audio` payload with `ptt: true`, so WhatsApp clients render it as a push-to-talk voice note
+    - reply payloads preserve `audioAsVoice`; TTS voice-note output for WhatsApp stays on this PTT path even when the provider returns MP3 or WebM
+    - native Ogg/Opus audio is sent as `audio/ogg; codecs=opus` for voice-note compatibility
+    - non-Ogg audio, including Microsoft Edge TTS MP3/WebM output, is transcoded with `ffmpeg` to 48 kHz mono Ogg/Opus before PTT delivery
+    - `/tts latest` sends the latest assistant reply as one voice note and suppresses repeat sends for the same reply; `/tts chat on|off|default` controls auto-TTS for the current WhatsApp chat
     - animated GIF playback is supported via `gifPlayback: true` on video sends
-    - captions are applied to the first media item when sending multi-media reply payloads
+    - captions are applied to the first media item when sending multi-media reply payloads, except PTT voice notes send the audio first and visible text separately because WhatsApp clients do not render voice-note captions consistently
     - media source can be HTTP(S), `file://`, or local paths
   </Accordion>
 

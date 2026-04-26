@@ -9,6 +9,7 @@ import {
   handleMessageEnd,
   handleMessageUpdate,
   hasAssistantVisibleReply,
+  readPendingToolMediaReply,
   recordPendingAssistantReplyDirectives,
   resolveSilentReplyFallbackText,
 } from "./pi-embedded-subscribe.handlers.messages.js";
@@ -372,6 +373,48 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolMediaUrls).toEqual([]);
   });
 
+  it("does not append queued image tool media when the reply already names media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/generated.png"],
+      pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: true,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+        mediaUrls: ["./selected.png"],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["./selected.png"],
+    });
+    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
+  });
+
+  it("does not append queued voice media when the reply already names media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: true,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+        mediaUrls: ["/tmp/assistant-provided.opus"],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/assistant-provided.opus"],
+    });
+    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
+  });
+
   it("preserves reasoning replies without consuming queued media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png"],
@@ -394,6 +437,21 @@ describe("consumePendingToolMediaIntoReply", () => {
 });
 
 describe("consumePendingToolMediaReply", () => {
+  it("reads a media-only reply without consuming queued tool media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
+    };
+
+    expect(readPendingToolMediaReply(state)).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(state.pendingToolAudioAsVoice).toBe(true);
+  });
+
   it("builds a media-only reply for orphaned tool media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],

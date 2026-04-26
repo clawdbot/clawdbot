@@ -1,20 +1,23 @@
 ---
-summary: "Volcano Engine setup (Doubao models, general + coding endpoints)"
+summary: "Volcano Engine setup (Doubao models, coding endpoints, and Seed Speech TTS)"
 title: "Volcengine (Doubao)"
 read_when:
   - You want to use Volcano Engine or Doubao models with OpenClaw
   - You need the Volcengine API key setup
+  - You want to use Volcengine Speech text-to-speech
 ---
 
 The Volcengine provider gives access to Doubao models and third-party models
 hosted on Volcano Engine, with separate endpoints for general and coding
-workloads.
+workloads. The same bundled plugin can also register Volcengine Speech as a TTS
+provider.
 
-| Detail    | Value                                               |
-| --------- | --------------------------------------------------- |
-| Providers | `volcengine` (general) + `volcengine-plan` (coding) |
-| Auth      | `VOLCANO_ENGINE_API_KEY`                            |
-| API       | OpenAI-compatible                                   |
+| Detail     | Value                                                      |
+| ---------- | ---------------------------------------------------------- |
+| Providers  | `volcengine` (general + TTS) + `volcengine-plan` (coding)  |
+| Model auth | `VOLCANO_ENGINE_API_KEY`                                   |
+| TTS auth   | `VOLCENGINE_TTS_API_KEY` or `BYTEPLUS_SEED_SPEECH_API_KEY` |
+| API        | OpenAI-compatible models, BytePlus Seed Speech TTS         |
 
 ## Getting started
 
@@ -95,6 +98,59 @@ Both providers are configured from a single API key. Setup registers both automa
   </Tab>
 </Tabs>
 
+## Text-to-speech
+
+Volcengine TTS uses the BytePlus Seed Speech HTTP API and is configured
+separately from the OpenAI-compatible Doubao model API key. In the BytePlus
+console, open Seed Speech > Settings > API Keys and copy the API key, then set:
+
+```bash
+export VOLCENGINE_TTS_API_KEY="byteplus_seed_speech_api_key"
+export VOLCENGINE_TTS_RESOURCE_ID="seed-tts-1.0"
+```
+
+Then enable it in `openclaw.json`:
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "volcengine",
+      providers: {
+        volcengine: {
+          apiKey: "byteplus_seed_speech_api_key",
+          voice: "en_female_anna_mars_bigtts",
+          speedRatio: 1.0,
+        },
+      },
+    },
+  },
+}
+```
+
+For voice-note targets, OpenClaw asks Volcengine for provider-native
+`ogg_opus`. For normal audio attachments, it asks for `mp3`. Provider aliases
+`bytedance` and `doubao` also resolve to the same speech provider.
+
+The default resource id is `seed-tts-1.0` because that is what BytePlus grants
+to newly created Seed Speech API keys in the default project. If your project
+has TTS 2.0 entitlement, set `VOLCENGINE_TTS_RESOURCE_ID=seed-tts-2.0`.
+
+<Warning>
+`VOLCANO_ENGINE_API_KEY` is for the ModelArk/Doubao model endpoints and is not a
+Seed Speech API key. TTS needs a Seed Speech API key from the BytePlus Speech
+Console, or a legacy Speech Console AppID/token pair.
+</Warning>
+
+Legacy AppID/token auth remains supported for older Speech Console applications:
+
+```bash
+export VOLCENGINE_TTS_APPID="speech_app_id"
+export VOLCENGINE_TTS_TOKEN="speech_access_token"
+export VOLCENGINE_TTS_CLUSTER="volcano_tts"
+```
+
 ## Advanced configuration
 
 <AccordionGroup>
@@ -112,8 +168,10 @@ Both providers are configured from a single API key. Setup registers both automa
   </Accordion>
 
   <Accordion title="Environment variables for daemon processes">
-    If the Gateway runs as a daemon (launchd/systemd), make sure
-    `VOLCANO_ENGINE_API_KEY` is available to that process (for example, in
+    If the Gateway runs as a daemon (launchd/systemd), make sure model and TTS
+    env vars such as `VOLCANO_ENGINE_API_KEY`, `VOLCENGINE_TTS_API_KEY`,
+    `BYTEPLUS_SEED_SPEECH_API_KEY`, `VOLCENGINE_TTS_APPID`, and
+    `VOLCENGINE_TTS_TOKEN` are available to that process (for example, in
     `~/.openclaw/.env` or via `env.shellEnv`).
   </Accordion>
 </AccordionGroup>

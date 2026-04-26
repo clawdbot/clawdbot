@@ -18,6 +18,12 @@ describe("session cost usage", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, fn);
   const makeSessionCostRoot = async (prefix: string): Promise<string> =>
     await suiteRootTracker.make(prefix);
+  const transcriptText = (sessionId: string, entry: unknown): string =>
+    [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify(entry),
+      "",
+    ].join("\n");
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
@@ -118,6 +124,54 @@ describe("session cost usage", () => {
       expect(summary.daily.length).toBe(1);
       expect(summary.totals.totalTokens).toBe(50);
       expect(summary.totals.totalCost).toBeCloseTo(0.03003, 5);
+    });
+  });
+
+  it("ignores compaction checkpoint transcript snapshots in daily totals and discovery", async () => {
+    const root = await makeSessionCostRoot("cost-checkpoint");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const now = new Date();
+    const assistantEntry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: 10,
+          output: 20,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 30,
+          cost: { total: 0.03 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", assistantEntry),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+      transcriptText("sess-1", assistantEntry),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      expect(summary.daily.length).toBe(1);
+      expect(summary.totals.totalTokens).toBe(30);
+      expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
+
+      const sessions = await discoverAllSessions();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.sessionId).toBe("sess-1");
+      expect(sessions[0]?.sessionFile.endsWith("sess-1.jsonl")).toBe(true);
     });
   });
 

@@ -171,6 +171,11 @@ export class OpenClawApp extends LitElement {
 
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
+  @state() assistantAvatarSource = bootAssistantIdentity.avatarSource ?? null;
+  @state() assistantAvatarStatus = bootAssistantIdentity.avatarStatus ?? null;
+  @state() assistantAvatarReason = bootAssistantIdentity.avatarReason ?? null;
+  @state() assistantAvatarUploadBusy = false;
+  @state() assistantAvatarUploadError: string | null = null;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
   @state() userName = bootLocalUserIdentity.name;
   @state() userAvatar = bootLocalUserIdentity.avatar;
@@ -193,6 +198,9 @@ export class OpenClawApp extends LitElement {
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
+  @state() chatAvatarSource: string | null = null;
+  @state() chatAvatarStatus: "none" | "local" | "remote" | "data" | null = null;
+  @state() chatAvatarReason: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
   @state() chatModelsLoading = false;
@@ -504,6 +512,11 @@ export class OpenClawApp extends LitElement {
   @state() debugCallResult: string | null = null;
   @state() debugCallError: string | null = null;
 
+  @state() webPushSupported = false;
+  @state() webPushPermission: NotificationPermission | "unsupported" = "unsupported";
+  @state() webPushSubscribed = false;
+  @state() webPushLoading = false;
+
   @state() logsLoading = false;
   @state() logsError: string | null = null;
   @state() logsFile: string | null = null;
@@ -574,6 +587,7 @@ export class OpenClawApp extends LitElement {
     };
     document.addEventListener("keydown", this.globalKeydownHandler);
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
+    void this.initWebPushState();
   }
 
   protected firstUpdated() {
@@ -946,6 +960,97 @@ export class OpenClawApp extends LitElement {
     const newRatio = Math.max(0.4, Math.min(0.7, ratio));
     this.splitRatio = newRatio;
     this.applySettings({ ...this.settings, splitRatio: newRatio });
+  }
+
+  private async initWebPushState() {
+    const supported =
+      "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+    this.webPushSupported = supported;
+    this.webPushPermission = supported ? Notification.permission : "unsupported";
+    if (supported) {
+      try {
+        const { getExistingSubscription } = await import("./push-subscription.ts");
+        const existing = await getExistingSubscription();
+        this.webPushSubscribed = existing !== null;
+      } catch {
+        // ignore — just means we can't check
+      }
+    }
+  }
+
+  /** Re-register local push subscription with the gateway after connect. */
+  async reconcileWebPushState() {
+    if (!this.client) {
+      return;
+    }
+    try {
+      // Always check PushManager directly — initWebPushState may not have finished
+      // yet if gateway connected quickly.
+      const { getExistingSubscription } = await import("./push-subscription.ts");
+      const existing = await getExistingSubscription();
+      if (!existing) {
+        return;
+      }
+      this.webPushSubscribed = true;
+      const subJson = existing.toJSON();
+      if (subJson.endpoint && subJson.keys?.p256dh && subJson.keys?.auth) {
+        await this.client.request("push.web.subscribe", {
+          endpoint: subJson.endpoint,
+          keys: { p256dh: subJson.keys.p256dh, auth: subJson.keys.auth },
+        });
+      }
+    } catch {
+      // Best-effort — don't block if gateway is unreachable.
+    }
+  }
+
+  async handleWebPushSubscribe() {
+    if (!this.client || this.webPushLoading) {
+      return;
+    }
+    this.webPushLoading = true;
+    try {
+      const { subscribeToWebPush } = await import("./push-subscription.ts");
+      await subscribeToWebPush(this.client);
+      this.webPushSubscribed = true;
+      this.webPushPermission = Notification.permission;
+    } catch (err) {
+      this.lastError = String(err);
+    } finally {
+      this.webPushLoading = false;
+      // Always refresh permission state — catches denied prompts too.
+      if ("Notification" in window) {
+        this.webPushPermission = Notification.permission;
+      }
+    }
+  }
+
+  async handleWebPushUnsubscribe() {
+    if (!this.client || this.webPushLoading) {
+      return;
+    }
+    this.webPushLoading = true;
+    try {
+      const { unsubscribeFromWebPush } = await import("./push-subscription.ts");
+      await unsubscribeFromWebPush(this.client);
+      this.webPushSubscribed = false;
+    } catch (err) {
+      this.lastError = String(err);
+    } finally {
+      this.webPushLoading = false;
+    }
+  }
+
+  async handleWebPushTest() {
+    if (!this.client) {
+      return;
+    }
+    try {
+      const { sendTestWebPush } = await import("./push-subscription.ts");
+      await sendTestWebPush(this.client);
+    } catch (err) {
+      this.lastError = String(err);
+    }
   }
 
   render() {

@@ -56,6 +56,46 @@ public enum TalkConfigParsing {
         self.resolvedPositiveInt(talk?["silenceTimeoutMs"], fallback: fallback)
     }
 
+    public static func normalizedSpeechLocaleID(_ value: String?) -> String? {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed.replacingOccurrences(of: "_", with: "-")
+    }
+
+    public static func resolvedSpeechLocaleID(
+        _ talk: [String: AnyCodable]?,
+        fallback: String? = nil
+    ) -> String? {
+        self.normalizedSpeechLocaleID(talk?["speechLocale"]?.stringValue)
+            ?? self.normalizedSpeechLocaleID(fallback)
+    }
+
+    public static func normalizedExplicitSpeechLocaleID(
+        _ value: String?,
+        automaticID: String = "auto"
+    ) -> String? {
+        let normalized = self.normalizedSpeechLocaleID(value)
+        return normalized == automaticID ? nil : normalized
+    }
+
+    public static func resolvedSpeechRecognitionLocaleID(
+        preferredLocaleIDs: [String?],
+        fallbackLocaleID: String = "en-US",
+        supportedLocaleIDs: Set<String>
+    ) -> String? {
+        let supported = Set(supportedLocaleIDs.compactMap(self.normalizedSpeechLocaleID))
+        var seen = Set<String>()
+        let candidates = (preferredLocaleIDs + [fallbackLocaleID])
+            .compactMap(self.normalizedSpeechLocaleID)
+
+        for candidate in candidates {
+            guard seen.insert(candidate).inserted else { continue }
+            if supported.isEmpty || supported.contains(candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
     private static func normalizedTalkProviderID(_ raw: String?) -> String? {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return trimmed.isEmpty ? nil : trimmed

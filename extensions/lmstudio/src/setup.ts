@@ -822,6 +822,9 @@ export async function prepareLmstudioDynamicModels(
       provider: PROVIDER_ID,
       api: ctx.providerConfig?.api ?? `openai-completions`,
       baseUrl,
+      input: model.input.filter(
+        (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+      ),
     }),
   );
 }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -7,10 +8,8 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-policy.js";
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRegistry,
-} from "../../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 
@@ -51,9 +50,10 @@ export function resolvePluginSkillDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir,
     config: params.config,
+    includeDisabled: true,
   });
   if (registry.plugins.length === 0) {
     return [];
@@ -62,7 +62,7 @@ export function resolvePluginSkillDirs(params: {
     params.config?.plugins,
     createRegistryPluginIdNormalizer(registry),
   );
-  const acpEnabled = params.config?.acp?.enabled !== false;
+  const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config: params.config });
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
@@ -82,8 +82,8 @@ export function resolvePluginSkillDirs(params: {
     if (!activationState.activated) {
       continue;
     }
-    // ACP router skills should not be attached when ACP is explicitly disabled.
-    if (!acpEnabled && record.id === "acpx") {
+    // ACP router skills should not be attached unless ACP can actually spawn.
+    if (!acpRuntimeAvailable && record.id === "acpx") {
       continue;
     }
     const memoryDecision = resolveMemorySlotDecision({

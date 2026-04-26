@@ -1,4 +1,4 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
@@ -304,7 +304,10 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
   };
 
-  for (const plugin of listChannelPlugins()) {
+  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
+    includePersistedAuthState: true,
+    includeSetupRuntimeFallback: false,
+  })) {
     if (!plugin.security) {
       continue;
     }

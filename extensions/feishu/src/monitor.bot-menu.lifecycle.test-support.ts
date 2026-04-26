@@ -179,7 +179,7 @@ describe("Feishu bot-menu lifecycle", () => {
       expect.objectContaining({
         accountId: "acct-menu",
         chatId: "p2p:ou_user1",
-        replyToMessageId: "bot-menu:quick-actions:1700000000001",
+        replyToMessageId: undefined,
       }),
     );
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(

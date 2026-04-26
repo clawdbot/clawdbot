@@ -2164,6 +2164,34 @@ describe("shared send behaviors", () => {
     }
   });
 
+  it("uses native reply parameters for direct quote sends without trimming the quote", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 56,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "reply text", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      replyToMessageId: 100,
+      quoteText: " quoted text\n",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
+      parse_mode: "HTML",
+      reply_parameters: {
+        message_id: 100,
+        quote: " quoted text\n",
+        allow_sending_without_reply: true,
+      },
+    });
+  });
+
   it("omits invalid reply_to_message_id values before calling Telegram", async () => {
     const invalidReplyToMessageIds = ["session-meta-id", "123abc", Number.NaN] as const;
 

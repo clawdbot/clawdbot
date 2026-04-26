@@ -7,11 +7,13 @@ let pageState: {
   armIdUpload: number;
   armIdDialog: number;
   armIdDownload: number;
+  downloadWaiterDepth: number;
 } = {
   console: [],
   armIdUpload: 0,
   armIdDialog: 0,
   armIdDownload: 0,
+  downloadWaiterDepth: 0,
 };
 
 const sessionMocks = vi.hoisted(() => ({
@@ -81,6 +83,7 @@ export function installPwToolsCoreTestHooks() {
       armIdUpload: 0,
       armIdDialog: 0,
       armIdDownload: 0,
+      downloadWaiterDepth: 0,
     };
 
     for (const fn of Object.values(sessionMocks)) {

@@ -7,6 +7,20 @@ import {
   normalizeTokenProviderInput,
 } from "./provider-auth-input.js";
 
+const resolveEnvApiKey = vi.hoisted(() =>
+  vi.fn((provider: string, env?: NodeJS.ProcessEnv) => {
+    if (provider !== "minimax") {
+      return null;
+    }
+    const apiKey = env?.MINIMAX_API_KEY?.trim();
+    return apiKey ? { apiKey, source: "env: MINIMAX_API_KEY" } : null;
+  }),
+);
+
+vi.mock("../agents/model-auth-env.js", () => ({
+  resolveEnvApiKey,
+}));
+
 const ORIGINAL_MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 const ORIGINAL_MINIMAX_OAUTH_TOKEN = process.env.MINIMAX_OAUTH_TOKEN;
 

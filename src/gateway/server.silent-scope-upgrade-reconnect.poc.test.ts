@@ -1,8 +1,17 @@
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+} from "../infra/device-identity.js";
 import * as devicePairingModule from "../infra/device-pairing.js";
-import { getPairedDevice } from "../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  getPairedDevice,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { callGateway } from "./call.js";
 import {
   issueOperatorToken,
   loadDeviceIdentity,
@@ -217,6 +226,42 @@ describe("gateway silent scope-upgrade reconnect", () => {
     } finally {
       watcherWs?.close();
       backendReconnectWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("keeps direct-local backend callGateway scoped calls off stale paired CLI baseline", async () => {
+    const started = await startServerWithClient("secret");
+    const identity = loadOrCreateDeviceIdentity();
+    const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+    const request = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey,
+      role: "operator",
+      scopes: ["operator.read"],
+      clientId: GATEWAY_CLIENT_NAMES.CLI,
+      clientMode: GATEWAY_CLIENT_MODES.CLI,
+    });
+    await approveDevicePairing(request.request.requestId, {
+      callerScopes: ["operator.read"],
+    });
+
+    try {
+      await expect(
+        callGateway({
+          url: `ws://127.0.0.1:${started.port}`,
+          token: "secret",
+          method: "health",
+          scopes: ["operator.admin"],
+          timeoutMs: 2_000,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.approvedScopes).toEqual(["operator.read"]);
+    } finally {
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();

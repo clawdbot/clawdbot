@@ -1,18 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { resolveBundledPluginScanDir } from "./bundled-plugin-scan.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getPackageManifestMetadata,
   type PackageManifest,
   type PluginPackageChannel,
 } from "./manifest.js";
-
-const PACKAGE_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
-const RUNNING_FROM_BUILT_ARTIFACT =
-  CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
-  CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
 let bundledPackageChannelMetadataCache: readonly PluginPackageChannel[] | undefined;
 
@@ -32,10 +25,7 @@ export function listBundledPackageChannelMetadata(): readonly PluginPackageChann
   if (bundledPackageChannelMetadataCache) {
     return bundledPackageChannelMetadataCache;
   }
-  const scanDir = resolveBundledPluginScanDir({
-    packageRoot: PACKAGE_ROOT,
-    runningFromBuiltArtifact: RUNNING_FROM_BUILT_ARTIFACT,
-  });
+  const scanDir = resolveBundledPluginsDir();
   if (!scanDir || !fs.existsSync(scanDir)) {
     bundledPackageChannelMetadataCache = [];
     return bundledPackageChannelMetadataCache;

@@ -6,23 +6,24 @@
  * Metadata returned by `fs/getMetadata`.
  */
 export type FsGetMetadataResponse = {
-/**
- * Whether the path resolves to a directory.
- */
-isDirectory: boolean,
-/**
- * Whether the path resolves to a regular file.
- */
-isFile: boolean,
-/**
- * Whether the path itself is a symbolic link.
- */
-isSymlink: boolean,
-/**
- * File creation time in Unix milliseconds when available, otherwise `0`.
- */
-createdAtMs: number,
-/**
- * File modification time in Unix milliseconds when available, otherwise `0`.
- */
-modifiedAtMs: number, };
+  /**
+   * Whether the path resolves to a directory.
+   */
+  isDirectory: boolean;
+  /**
+   * Whether the path resolves to a regular file.
+   */
+  isFile: boolean;
+  /**
+   * Whether the path itself is a symbolic link.
+   */
+  isSymlink: boolean;
+  /**
+   * File creation time in Unix milliseconds when available, otherwise `0`.
+   */
+  createdAtMs: number;
+  /**
+   * File modification time in Unix milliseconds when available, otherwise `0`.
+   */
+  modifiedAtMs: number;
+};

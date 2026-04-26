@@ -1,12 +1,22 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const runFfmpegMock = vi.hoisted(() => vi.fn());
+const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  runFfmpeg: runFfmpegMock,
+  transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
 import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+
+function clearMinimaxAuthEnv() {
+  delete process.env.MINIMAX_API_KEY;
+  delete process.env.MINIMAX_OAUTH_TOKEN;
+  delete process.env.MINIMAX_CODE_PLAN_KEY;
+  delete process.env.MINIMAX_CODING_API_KEY;
+}
 
 describe("buildMinimaxSpeechProvider", () => {
   const provider = buildMinimaxSpeechProvider();
@@ -23,15 +33,28 @@ describe("buildMinimaxSpeechProvider", () => {
 
     it("exposes models and voices", () => {
       expect(provider.models).toContain("speech-2.8-hd");
+      expect(provider.models).toEqual(expect.arrayContaining(["speech-2.6-hd", "speech-02-hd"]));
       expect(provider.voices).toContain("English_expressive_narrator");
     });
   });
 
   describe("isConfigured", () => {
     const savedEnv = { ...process.env };
+    let tempStateDir: string;
+    let tempAgentDir: string;
 
-    afterEach(() => {
+    beforeEach(async () => {
+      tempStateDir = await mkdtemp(path.join(tmpdir(), "openclaw-minimax-tts-auth-"));
+      tempAgentDir = path.join(tempStateDir, "agents", "main", "agent");
+      await mkdir(tempAgentDir, { recursive: true });
+      process.env.OPENCLAW_STATE_DIR = tempStateDir;
+      process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
+      clearMinimaxAuthEnv();
+    });
+
+    afterEach(async () => {
       process.env = { ...savedEnv };
+      await rm(tempStateDir, { recursive: true, force: true });
     });
 
     it("returns true when apiKey is in provider config", () => {
@@ -41,12 +64,34 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("returns false when no apiKey anywhere", () => {
-      delete process.env.MINIMAX_API_KEY;
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
     });
 
     it("returns true when MINIMAX_API_KEY env var is set", () => {
       process.env.MINIMAX_API_KEY = "sk-env";
+      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
+    });
+
+    it("returns true when a MiniMax Token Plan env var is set", () => {
+      process.env.MINIMAX_CODING_API_KEY = "sk-cp-env";
+      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
+    });
+
+    it("returns true when a MiniMax portal auth profile is available", async () => {
+      await writeFile(
+        path.join(tempAgentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "minimax-portal:test": {
+              type: "token",
+              provider: "minimax-portal",
+              token: "portal-token",
+            },
+          },
+        }),
+      );
+
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
   });
@@ -94,13 +139,29 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("keeps trusted MINIMAX_API_HOST fallback for TTS baseUrl", () => {
-      process.env.MINIMAX_API_HOST = "https://env.api.com";
+      process.env.MINIMAX_API_HOST = "https://api.minimax.io/anthropic";
       process.env.MINIMAX_TTS_MODEL = "speech-01-240228";
       process.env.MINIMAX_TTS_VOICE_ID = "Chinese (Mandarin)_Gentle_Boy";
       const config = provider.resolveConfig!({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
-      expect(config.baseUrl).toBe("https://env.api.com");
+      expect(config.baseUrl).toBe("https://api.minimax.io");
       expect(config.model).toBe("speech-01-240228");
       expect(config.voiceId).toBe("Chinese (Mandarin)_Gentle_Boy");
+    });
+
+    it("derives the TTS host from minimax-portal OAuth config", () => {
+      delete process.env.MINIMAX_API_HOST;
+      const config = provider.resolveConfig!({
+        rawConfig: {},
+        cfg: {
+          models: {
+            providers: {
+              "minimax-portal": { baseUrl: "https://api.minimaxi.com/anthropic" },
+            },
+          },
+        } as never,
+        timeoutMs: 30000,
+      });
+      expect(config.baseUrl).toBe("https://api.minimaxi.com");
     });
   });
 
@@ -217,15 +278,29 @@ describe("buildMinimaxSpeechProvider", () => {
 
   describe("synthesize", () => {
     const savedFetch = globalThis.fetch;
+    const savedEnv = { ...process.env };
+    let tempStateDir: string;
+    let tempAgentDir: string;
 
-    beforeEach(() => {
+    beforeEach(async () => {
+      tempStateDir = await mkdtemp(path.join(tmpdir(), "openclaw-minimax-tts-synth-"));
+      tempAgentDir = path.join(tempStateDir, "agents", "main", "agent");
+      await mkdir(tempAgentDir, { recursive: true });
+      process.env = {
+        ...savedEnv,
+        OPENCLAW_AGENT_DIR: tempAgentDir,
+        OPENCLAW_STATE_DIR: tempStateDir,
+      };
+      clearMinimaxAuthEnv();
       vi.stubGlobal("fetch", vi.fn());
-      runFfmpegMock.mockReset();
+      transcodeAudioBufferToOpusMock.mockReset();
     });
 
-    afterEach(() => {
+    afterEach(async () => {
       globalThis.fetch = savedFetch;
+      process.env = { ...savedEnv };
       vi.restoreAllMocks();
+      await rm(tempStateDir, { recursive: true, force: true });
     });
 
     it("makes correct API call and decodes hex response", async () => {
@@ -258,7 +333,7 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
       expect(body.voice_setting.voice_id).toBe("English_expressive_narrator");
-      expect(runFfmpegMock).not.toHaveBeenCalled();
+      expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
     });
 
     it("transcodes MiniMax MP3 to Opus for voice-note targets", async () => {
@@ -270,15 +345,7 @@ describe("buildMinimaxSpeechProvider", () => {
           headers: { "Content-Type": "application/json" },
         }),
       );
-      runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
-        const outputPath = args.at(-1);
-        if (typeof outputPath !== "string") {
-          throw new Error("missing ffmpeg output path");
-        }
-        await import("node:fs/promises").then((fs) =>
-          fs.writeFile(outputPath, Buffer.from("fake-opus-data")),
-        );
-      });
+      transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-data"));
 
       const result = await provider.synthesize({
         text: "Hello world",
@@ -292,10 +359,12 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.fileExtension).toBe(".opus");
       expect(result.voiceCompatible).toBe(true);
       expect(result.audioBuffer.toString()).toBe("fake-opus-data");
-      expect(runFfmpegMock).toHaveBeenCalledWith(
-        expect.arrayContaining(["-c:a", "libopus", "-ar", "48000"]),
-        { timeoutMs: 30000 },
-      );
+      expect(transcodeAudioBufferToOpusMock).toHaveBeenCalledWith({
+        audioBuffer: Buffer.from("fake-mp3-data"),
+        inputExtension: "mp3",
+        tempPrefix: "tts-minimax-",
+        timeoutMs: 30000,
+      });
     });
 
     it("applies overrides", async () => {
@@ -328,24 +397,74 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(body.voice_setting.pitch).toBe(0);
     });
 
+    it("uses a MiniMax Token Plan env var when no API key is configured", async () => {
+      process.env.MINIMAX_CODING_API_KEY = "sk-cp-env";
+      const hexAudio = Buffer.from("audio").toString("hex");
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
+      );
+
+      await provider.synthesize({
+        text: "Token plan TTS",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "audio-file",
+        timeoutMs: 30000,
+      });
+
+      const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+      expect(init?.headers).toMatchObject({ Authorization: "Bearer sk-cp-env" });
+    });
+
+    it("uses a minimax-portal auth profile before env API keys", async () => {
+      process.env.MINIMAX_API_KEY = "sk-env";
+      await writeFile(
+        path.join(tempAgentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "minimax-portal:test": {
+              type: "token",
+              provider: "minimax-portal",
+              token: "portal-token",
+            },
+          },
+        }),
+      );
+      const hexAudio = Buffer.from("audio").toString("hex");
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
+      );
+
+      await provider.synthesize({
+        text: "Portal TTS",
+        cfg: {
+          models: {
+            providers: {
+              "minimax-portal": { baseUrl: "https://api.minimaxi.com/anthropic" },
+            },
+          },
+        } as never,
+        providerConfig: {},
+        target: "audio-file",
+        timeoutMs: 30000,
+      });
+
+      const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+      expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
+      expect(init?.headers).toMatchObject({ Authorization: "Bearer portal-token" });
+    });
+
     it("throws when API key is missing", async () => {
-      const savedKey = process.env.MINIMAX_API_KEY;
-      delete process.env.MINIMAX_API_KEY;
-      try {
-        await expect(
-          provider.synthesize({
-            text: "Test",
-            cfg: {} as never,
-            providerConfig: {},
-            target: "audio-file",
-            timeoutMs: 30000,
-          }),
-        ).rejects.toThrow("MiniMax API key missing");
-      } finally {
-        if (savedKey) {
-          process.env.MINIMAX_API_KEY = savedKey;
-        }
-      }
+      await expect(
+        provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: {},
+          target: "audio-file",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("MiniMax TTS auth missing");
     });
 
     it("throws on API error with response body", async () => {

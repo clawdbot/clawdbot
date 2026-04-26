@@ -17,7 +17,7 @@ successCriteria:
   - Scenario details preserve the observed compaction count for review context.
 docsRefs:
   - docs/help/testing.md
-  - docs/help/gpt54-codex-agentic-parity.md
+  - docs/help/gpt55-codex-agentic-parity.md
 codeRefs:
   - extensions/qa-lab/src/suite.ts
   - extensions/qa-lab/src/mock-openai-server.ts

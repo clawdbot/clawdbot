@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import {
   createEffectiveEnableStateResolver,
   createPluginEnableStateResolver,
@@ -19,7 +20,6 @@ import {
   normalizePluginsConfigWithResolver,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
@@ -52,24 +52,21 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
   }
 
   const lookup = new Map<string, string>();
-  for (const plugin of loadPluginManifestRegistry({ cache: true }).plugins) {
-    if (plugin.origin !== "bundled") {
-      continue;
-    }
-    const pluginId = normalizeOptionalLowercaseString(plugin.id);
+  for (const plugin of listBundledPluginMetadata({ includeChannelConfigs: false })) {
+    const pluginId = normalizeOptionalLowercaseString(plugin.manifest.id);
     if (pluginId) {
-      lookup.set(pluginId, plugin.id);
+      lookup.set(pluginId, plugin.manifest.id);
     }
-    for (const providerId of plugin.providers) {
+    for (const providerId of plugin.manifest.providers ?? []) {
       const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
       if (normalizedProviderId) {
-        lookup.set(normalizedProviderId, plugin.id);
+        lookup.set(normalizedProviderId, plugin.manifest.id);
       }
     }
-    for (const legacyPluginId of plugin.legacyPluginIds ?? []) {
+    for (const legacyPluginId of plugin.manifest.legacyPluginIds ?? []) {
       const normalizedLegacyPluginId = normalizeOptionalLowercaseString(legacyPluginId);
       if (normalizedLegacyPluginId) {
-        lookup.set(normalizedLegacyPluginId, plugin.id);
+        lookup.set(normalizedLegacyPluginId, plugin.manifest.id);
       }
     }
   }

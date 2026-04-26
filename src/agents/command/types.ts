@@ -1,5 +1,6 @@
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
+import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -93,6 +94,10 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
+  modelRun?: boolean;
+  /** Internal prompt-mode override for trusted local/gateway callsites. */
+  promptMode?: PromptMode;
 };
 
 export type AgentCommandIngressOpts = Omit<

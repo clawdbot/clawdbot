@@ -162,6 +162,24 @@ describe("active-memory plugin", () => {
     expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
   });
 
+  it("runs recall without recording shared auth-profile failures", async () => {
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileFailurePolicy: "local",
+      }),
+    );
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";
@@ -904,6 +922,53 @@ describe("active-memory plugin", () => {
     });
   });
 
+  it("infers the configured provider for bare active-memory default models", async () => {
+    api.config = {
+      agents: {
+        defaults: {
+          model: { primary: "gpt-5.5" },
+        },
+      },
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT 5.5",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    };
+    api.pluginConfig = {
+      agents: ["main"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? bare model default", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.5",
+    });
+  });
+
   it("skips recall when no model or explicit fallback resolves", async () => {
     api.config = {};
     api.pluginConfig = {
@@ -1225,6 +1290,44 @@ describe("active-memory plugin", () => {
           line.includes("activeModel=gpt-5.4-mini"),
       ),
     ).toBe(true);
+  });
+
+  it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
+    const CONFIGURED_TIMEOUT_MS = 200;
+    const MARGIN_MS = 500;
+    __testing.setMinimumTimeoutMsForTests(1);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    // Simulate a subagent that never cooperatively checks the abort signal --
+    // it just blocks for a long time.
+    runEmbeddedPiAgent.mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(() => resolve({ payloads: [] }), 30_000)),
+    );
+
+    const startedAt = Date.now();
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? hard deadline test", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:hard-deadline",
+        messageProvider: "webchat",
+      },
+    );
+    const wallClockMs = Date.now() - startedAt;
+
+    // The hook returns undefined for timeout results (summary is null).
+    expect(result).toBeUndefined();
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
+    // Hard deadline: wall-clock time must be near timeoutMs, not 30s.
+    expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + MARGIN_MS);
   });
 
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {

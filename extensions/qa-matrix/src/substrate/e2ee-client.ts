@@ -73,7 +73,9 @@ export type MatrixQaE2eeScenarioClient = {
     roomId?: string;
     userId?: string;
   }): Promise<MatrixVerificationSummary>;
-  resetRoomKeyBackup(): Promise<MatrixRoomKeyBackupResetResult>;
+  resetRoomKeyBackup(params?: {
+    rotateRecoveryKey?: boolean;
+  }): Promise<MatrixRoomKeyBackupResetResult>;
   restoreRoomKeyBackup(params?: {
     recoveryKey?: string;
   }): Promise<MatrixRoomKeyBackupRestoreResult>;
@@ -301,8 +303,8 @@ export async function createMatrixQaE2eeScenarioClient(
     async requestVerification(opts) {
       return await requireCrypto().requestVerification(opts);
     },
-    async resetRoomKeyBackup() {
-      return await client.resetRoomKeyBackup();
+    async resetRoomKeyBackup(params) {
+      return await client.resetRoomKeyBackup(params);
     },
     async restoreRoomKeyBackup(opts) {
       return await client.restoreRoomKeyBackup(opts);

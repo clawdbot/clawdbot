@@ -334,6 +334,11 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         reactions: true,
         threads: true,
         media: true,
+        tts: {
+          voice: {
+            synthesisTarget: "voice-note",
+          },
+        },
       },
       reload: { configPrefixes: ["channels.matrix"] },
       configSchema: buildChannelConfigSchema(MatrixConfigSchema),

@@ -89,14 +89,7 @@ export class TelegramPollingLivenessTracker {
     this.#inFlightGetUpdates = Math.max(0, this.#inFlightGetUpdates - 1);
   }
 
-  detectStall(params: {
-    thresholdMs: number;
-    runnerIsRunning: boolean;
-    now?: number;
-  }): TelegramPollingStall | null {
-    if (!params.runnerIsRunning) {
-      return null;
-    }
+  detectStall(params: { thresholdMs: number; now?: number }): TelegramPollingStall | null {
     const now = params.now ?? this.#now();
     const activeElapsed =
       this.#inFlightGetUpdates > 0 && this.#lastGetUpdatesStartedAt != null

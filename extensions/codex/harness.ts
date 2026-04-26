@@ -48,8 +48,9 @@ export function createCodexAppServerAgentHarness(options?: {
       }
     },
     dispose: async () => {
-      const { clearSharedCodexAppServerClient } = await import("./src/app-server/shared-client.js");
-      clearSharedCodexAppServerClient();
+      const { clearSharedCodexAppServerClientAndWait } =
+        await import("./src/app-server/shared-client.js");
+      await clearSharedCodexAppServerClientAndWait();
     },
   };
 }

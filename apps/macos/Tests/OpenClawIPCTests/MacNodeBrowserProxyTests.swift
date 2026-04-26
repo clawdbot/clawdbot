@@ -83,4 +83,28 @@ struct MacNodeBrowserProxyTests {
         let arr = try #require(parsed["arr"] as? [Any])
         #expect(arr.count == 2)
     }
+
+    @Test func requestReportsActionableUnavailableWhenControlServiceIsMissing() async throws {
+        let proxy = MacNodeBrowserProxy(
+            endpointProvider: {
+                MacNodeBrowserProxy.Endpoint(
+                    baseURL: URL(string: "http://127.0.0.1:18791")!,
+                    token: nil,
+                    password: nil)
+            },
+            performRequest: { _ in
+                throw URLError(.cannotConnectToHost)
+            })
+
+        do {
+            _ = try await proxy.request(paramsJSON: #"{"method":"GET","path":"/"}"#)
+            Issue.record("request should fail when browser control is unreachable")
+        } catch {
+            let message = error.localizedDescription
+            #expect(message.contains("UNAVAILABLE: macOS app node could not reach the local browser control service"))
+            #expect(message.contains("http://127.0.0.1:18791"))
+            #expect(message.contains("browser control is owned by the CLI node-host"))
+            #expect(message.contains("openclaw node start"))
+        }
+    }
 }

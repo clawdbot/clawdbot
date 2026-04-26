@@ -50,6 +50,21 @@ pnpm qa:lab:watch
 rebuilds that bundle on change, and the browser auto-reloads when the QA Lab
 asset hash changes.
 
+For a local OpenTelemetry trace smoke, run:
+
+```bash
+pnpm qa:otel:smoke
+```
+
+That script starts a local OTLP/HTTP trace receiver, runs the
+`otel-trace-smoke` QA scenario with the `diagnostics-otel` plugin enabled, then
+decodes the exported protobuf spans and asserts the release-critical shape:
+`openclaw.run`, `openclaw.harness.run`, `openclaw.model.call`,
+`openclaw.context.assembled`, and `openclaw.message.delivery` must be present;
+model calls must not export `StreamAbandoned` on successful turns; raw diagnostic IDs and
+`openclaw.content.*` attributes must stay out of the trace. It writes
+`otel-smoke-summary.json` next to the QA suite artifacts.
+
 For a transport-real Matrix smoke lane, run:
 
 ```bash
@@ -238,7 +253,7 @@ refs and write a judged Markdown report:
 
 ```bash
 pnpm openclaw qa character-eval \
-  --model openai/gpt-5.4,thinking=medium,fast \
+  --model openai/gpt-5.5,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
   --model anthropic/claude-opus-4-6,thinking=high \
@@ -246,7 +261,7 @@ pnpm openclaw qa character-eval \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
-  --judge-model openai/gpt-5.4,thinking=xhigh,fast \
+  --judge-model openai/gpt-5.5,thinking=xhigh,fast \
   --judge-model anthropic/claude-opus-4-6,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
@@ -263,7 +278,7 @@ Use `--blind-judge-models` when comparing providers: the judge prompt still gets
 every transcript and run status, but candidate refs are replaced with neutral
 labels such as `candidate-01`; the report maps rankings back to real refs after
 parsing.
-Candidate runs default to `high` thinking, with `medium` for GPT-5.4 and `xhigh`
+Candidate runs default to `high` thinking, with `medium` for GPT-5.5 and `xhigh`
 for older OpenAI eval refs that support it. Override a specific candidate inline with
 `--model provider/model,thinking=<level>`. `--thinking <level>` still sets a
 global fallback, and the older `--model-thinking <provider/model=level>` form is
@@ -278,12 +293,12 @@ Candidate and judge model runs both default to concurrency 16. Lower
 `--concurrency` or `--judge-concurrency` when provider limits or local gateway
 pressure make a run too noisy.
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.4`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
+`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
 `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and
 `google/gemini-3.1-pro-preview` when no `--model` is passed.
 When no `--judge-model` is passed, the judges default to
-`openai/gpt-5.4,thinking=xhigh,fast` and
+`openai/gpt-5.5,thinking=xhigh,fast` and
 `anthropic/claude-opus-4-6,thinking=high`.
 
 ## Related docs

@@ -11,8 +11,60 @@ import type { ReasoningItemContent } from "./ReasoningItemContent.js";
 import type { ReasoningItemReasoningSummary } from "./ReasoningItemReasoningSummary.js";
 import type { WebSearchAction } from "./WebSearchAction.js";
 
-export type ResponseItem = { "type": "message", role: string, content: Array<ContentItem>, end_turn?: boolean, phase?: MessagePhase, } | { "type": "reasoning", summary: Array<ReasoningItemReasoningSummary>, content?: Array<ReasoningItemContent>, encrypted_content: string | null, } | { "type": "local_shell_call",
-/**
- * Set when using the Responses API.
- */
-call_id: string | null, status: LocalShellStatus, action: LocalShellAction, } | { "type": "function_call", name: string, namespace?: string, arguments: string, call_id: string, } | { "type": "tool_search_call", call_id: string | null, status?: string, execution: string, arguments: unknown, } | { "type": "function_call_output", call_id: string, output: FunctionCallOutputBody, } | { "type": "custom_tool_call", status?: string, call_id: string, name: string, input: string, } | { "type": "custom_tool_call_output", call_id: string, name?: string, output: FunctionCallOutputBody, } | { "type": "tool_search_output", call_id: string | null, status: string, execution: string, tools: unknown[], } | { "type": "web_search_call", status?: string, action?: WebSearchAction, } | { "type": "image_generation_call", id: string, status: string, revised_prompt?: string, result: string, } | { "type": "ghost_snapshot", ghost_commit: GhostCommit, } | { "type": "compaction", encrypted_content: string, } | { "type": "other" };
+export type ResponseItem =
+  | {
+      type: "message";
+      role: string;
+      content: Array<ContentItem>;
+      end_turn?: boolean;
+      phase?: MessagePhase;
+    }
+  | {
+      type: "reasoning";
+      summary: Array<ReasoningItemReasoningSummary>;
+      content?: Array<ReasoningItemContent>;
+      encrypted_content: string | null;
+    }
+  | {
+      type: "local_shell_call";
+      /**
+       * Set when using the Responses API.
+       */
+      call_id: string | null;
+      status: LocalShellStatus;
+      action: LocalShellAction;
+    }
+  | { type: "function_call"; name: string; namespace?: string; arguments: string; call_id: string }
+  | {
+      type: "tool_search_call";
+      call_id: string | null;
+      status?: string;
+      execution: string;
+      arguments: unknown;
+    }
+  | { type: "function_call_output"; call_id: string; output: FunctionCallOutputBody }
+  | { type: "custom_tool_call"; status?: string; call_id: string; name: string; input: string }
+  | {
+      type: "custom_tool_call_output";
+      call_id: string;
+      name?: string;
+      output: FunctionCallOutputBody;
+    }
+  | {
+      type: "tool_search_output";
+      call_id: string | null;
+      status: string;
+      execution: string;
+      tools: unknown[];
+    }
+  | { type: "web_search_call"; status?: string; action?: WebSearchAction }
+  | {
+      type: "image_generation_call";
+      id: string;
+      status: string;
+      revised_prompt?: string;
+      result: string;
+    }
+  | { type: "ghost_snapshot"; ghost_commit: GhostCommit }
+  | { type: "compaction"; encrypted_content: string }
+  | { type: "other" };

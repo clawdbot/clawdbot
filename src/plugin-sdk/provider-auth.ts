@@ -1,8 +1,12 @@
 // Public auth/onboarding helpers for provider plugins.
 
+import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
+import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 export type { OpenClawConfig } from "../config/config.js";
 export type { SecretInput } from "../config/types.secrets.js";
@@ -97,4 +101,61 @@ export function isProviderApiKeyConfigured(params: {
     allowKeychainPrompt: false,
   });
   return listProfilesForProvider(store, params.provider).length > 0;
+}
+
+export function listUsableProviderAuthProfileIds(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): { agentDir: string; profileIds: string[] } {
+  try {
+    const agentDir = params.agentDir?.trim() || resolveOpenClawAgentDir();
+    const store = ensureAuthProfileStore(agentDir, {
+      allowKeychainPrompt: false,
+    });
+    return {
+      agentDir,
+      profileIds: resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store,
+        provider: params.provider,
+      }),
+    };
+  } catch {
+    return { agentDir: "", profileIds: [] };
+  }
+}
+
+export function isProviderAuthProfileConfigured(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): boolean {
+  return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
+}
+
+export async function resolveProviderAuthProfileApiKey(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Promise<string | undefined> {
+  const { agentDir, profileIds } = listUsableProviderAuthProfileIds(params);
+  if (!agentDir || profileIds.length === 0) {
+    return undefined;
+  }
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
+  for (const profileId of profileIds) {
+    const resolved = await resolveApiKeyForProfile({
+      cfg: params.cfg,
+      store,
+      agentDir,
+      profileId,
+    });
+    if (resolved?.apiKey) {
+      return resolved.apiKey;
+    }
+  }
+  return undefined;
 }

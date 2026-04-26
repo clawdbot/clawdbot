@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
   replaceConfigFile: vi.fn(),
+  refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
   getChannelPlugin: vi.fn(),
@@ -25,6 +26,10 @@ vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   replaceConfigFile: mocks.replaceConfigFile,
+}));
+
+vi.mock("../cli/plugins-registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -54,6 +59,7 @@ describe("channelsResolveCommand", () => {
     vi.clearAllMocks();
     mocks.loadConfig.mockReturnValue({ channels: {} });
     mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
+    mocks.refreshPluginRegistryAfterConfigMutation.mockResolvedValue(undefined);
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
@@ -88,6 +94,7 @@ describe("channelsResolveCommand", () => {
       cfg: installedCfg,
       channelId: "whatsapp",
       configChanged: true,
+      pluginInstalled: true,
       plugin: {
         id: "whatsapp",
         resolver: { resolveTargets },
@@ -112,6 +119,12 @@ describe("channelsResolveCommand", () => {
       nextConfig: installedCfg,
       baseHash: "config-1",
     });
+    expect(mocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: installedCfg,
+        reason: "source-changed",
+      }),
+    );
     expect(resolveTargets).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: installedCfg,

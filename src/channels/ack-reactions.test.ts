@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createAckReactionHandle,
+  removeAckReactionHandleAfterReply,
   removeAckReactionAfterReply,
   shouldAckReaction,
   shouldAckReactionForWhatsApp,
@@ -178,6 +180,48 @@ describe("shouldAckReactionForWhatsApp", () => {
   });
 });
 
+describe("createAckReactionHandle", () => {
+  it("tracks a successful ack send", async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    const remove = vi.fn().mockResolvedValue(undefined);
+
+    const handle = createAckReactionHandle({
+      ackReactionValue: " 👀 ",
+      send,
+      remove,
+    });
+
+    expect(handle).toMatchObject({ ackReactionValue: "👀", remove });
+    expect(send).toHaveBeenCalledTimes(1);
+    await expect(handle?.ackReactionPromise).resolves.toBe(true);
+  });
+
+  it("tracks a failed ack send without throwing", async () => {
+    const error = new Error("nope");
+    const onSendError = vi.fn();
+
+    const handle = createAckReactionHandle({
+      ackReactionValue: "👀",
+      send: vi.fn().mockRejectedValue(error),
+      remove: vi.fn().mockResolvedValue(undefined),
+      onSendError,
+    });
+
+    await expect(handle?.ackReactionPromise).resolves.toBe(false);
+    expect(onSendError).toHaveBeenCalledWith(error);
+  });
+
+  it("skips empty ack values", () => {
+    const handle = createAckReactionHandle({
+      ackReactionValue: " ",
+      send: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(handle).toBeNull();
+  });
+});
+
 describe("removeAckReactionAfterReply", () => {
   it("removes only when ack succeeded", async () => {
     const remove = vi.fn().mockResolvedValue(undefined);
@@ -204,5 +248,22 @@ describe("removeAckReactionAfterReply", () => {
     });
     await flushMicrotasks();
     expect(remove).not.toHaveBeenCalled();
+  });
+});
+
+describe("removeAckReactionHandleAfterReply", () => {
+  it("removes through an ack handle", async () => {
+    const remove = vi.fn().mockResolvedValue(undefined);
+    removeAckReactionHandleAfterReply({
+      removeAfterReply: true,
+      ackReaction: {
+        ackReactionPromise: Promise.resolve(true),
+        ackReactionValue: "👀",
+        remove,
+      },
+    });
+
+    await flushMicrotasks();
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 });

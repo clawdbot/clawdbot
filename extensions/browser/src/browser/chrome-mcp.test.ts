@@ -139,6 +139,68 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("uses browserUrl for existing-session cdpUrl without also passing userDataDir", () => {
+    expect(
+      buildChromeMcpArgs({
+        cdpUrl: "http://127.0.0.1:9222",
+        userDataDir: "/tmp/brave-profile",
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--browserUrl",
+      "http://127.0.0.1:9222",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+    ]);
+  });
+
+  it("uses wsEndpoint for direct existing-session websocket cdpUrl", () => {
+    expect(
+      buildChromeMcpArgs({
+        cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--wsEndpoint",
+      "ws://127.0.0.1:9222/devtools/browser/abc",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+    ]);
+  });
+
+  it("appends custom Chrome MCP args and lets explicit endpoint args override auto-connect", () => {
+    expect(
+      buildChromeMcpArgs({
+        userDataDir: "/tmp/brave-profile",
+        mcpArgs: ["--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--browserUrl",
+      "http://127.0.0.1:9222",
+      "--no-usage-statistics",
+    ]);
+  });
+
+  it("omits the npx package prefix for a custom Chrome MCP command", () => {
+    expect(
+      buildChromeMcpArgs({
+        mcpCommand: "/usr/local/bin/chrome-devtools-mcp",
+        cdpUrl: "http://127.0.0.1:9222",
+      }),
+    ).toEqual([
+      "--browserUrl",
+      "http://127.0.0.1:9222",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+    ]);
+  });
+
   it("parses new_page text responses and returns the created tab", async () => {
     const factory: ChromeMcpSessionFactory = async () => createFakeSession();
     setChromeMcpSessionFactoryForTest(factory);
@@ -435,8 +497,8 @@ describe("chrome MCP page parsing", () => {
     const createdSessions: ChromeMcpSession[] = [];
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
     const factoryCalls: Array<{ profileName: string; userDataDir?: string }> = [];
-    const factory: ChromeMcpSessionFactory = async (profileName, userDataDir) => {
-      factoryCalls.push({ profileName, userDataDir });
+    const factory: ChromeMcpSessionFactory = async (profileName, options) => {
+      factoryCalls.push({ profileName, userDataDir: options?.userDataDir });
       const session = createFakeSession();
       const closeMock = vi.fn().mockResolvedValue(undefined);
       session.client.close = closeMock as typeof session.client.close;

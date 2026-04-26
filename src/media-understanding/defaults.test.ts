@@ -1,4 +1,80 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const mediaMetadataPlugins = vi.hoisted(() => [
+  {
+    contracts: {
+      mediaUnderstandingProviders: [
+        "anthropic",
+        "google",
+        "minimax",
+        "minimax-portal",
+        "mistral",
+        "moonshot",
+        "openai",
+        "openai-codex",
+        "opencode",
+        "opencode-go",
+        "openrouter",
+        "qwen",
+        "xai",
+        "zai",
+      ],
+    },
+    mediaUnderstandingProviderMetadata: {
+      anthropic: {
+        capabilities: ["image"],
+        autoPriority: { image: 20 },
+        nativeDocumentInputs: ["pdf"],
+      },
+      google: {
+        capabilities: ["image", "audio", "video"],
+        defaultModels: {
+          image: "gemini-3-flash-preview",
+          audio: "gemini-3-flash-preview",
+          video: "gemini-3-flash-preview",
+        },
+        autoPriority: { image: 30, audio: 40, video: 10 },
+        nativeDocumentInputs: ["pdf"],
+      },
+      minimax: { capabilities: ["image"], autoPriority: { image: 40 } },
+      "minimax-portal": {
+        capabilities: ["image"],
+        defaultModels: { image: "MiniMax-VL-01" },
+        autoPriority: { image: 50 },
+      },
+      mistral: {
+        capabilities: ["audio"],
+        defaultModels: { audio: "voxtral-mini-latest" },
+        autoPriority: { audio: 50 },
+      },
+      moonshot: {
+        capabilities: ["image", "video"],
+        defaultModels: { image: "kimi-k2.6", video: "kimi-k2.6" },
+        autoPriority: { video: 30 },
+      },
+      openai: {
+        capabilities: ["image", "audio"],
+        defaultModels: { image: "gpt-5.4-mini", audio: "gpt-4o-transcribe" },
+        autoPriority: { image: 10, audio: 10 },
+      },
+      "openai-codex": { capabilities: ["image"], defaultModels: { image: "gpt-5.5" } },
+      opencode: { capabilities: ["image"], defaultModels: { image: "gpt-5-nano" } },
+      "opencode-go": { capabilities: ["image"], defaultModels: { image: "kimi-k2.6" } },
+      openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
+      qwen: { capabilities: ["video"], autoPriority: { video: 20 } },
+      xai: { capabilities: ["audio"], autoPriority: { audio: 25 } },
+      zai: { capabilities: ["image"], autoPriority: { image: 60 } },
+    },
+  },
+]);
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({
+    plugins: mediaMetadataPlugins,
+    diagnostics: [],
+  }),
+}));
+
 import {
   providerSupportsNativePdfDocument,
   resolveAutoMediaKeyProviders,
@@ -38,11 +114,8 @@ describe("resolveAutoMediaKeyProviders", () => {
   it("keeps the bundled audio fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",
-      "groq",
       "xai",
-      "deepgram",
       "google",
-      "elevenlabs",
       "mistral",
     ]);
   });

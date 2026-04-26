@@ -152,10 +152,16 @@ function uniqueRuntimeBinNames(
   ];
 }
 
+let cachedNativeBinaryFixturePath: string | undefined;
+
 function resolveNativeBinaryFixturePath(): string {
+  if (cachedNativeBinaryFixturePath) {
+    return cachedNativeBinaryFixturePath;
+  }
   for (const candidate of ["/bin/ls", "/usr/bin/ls", "/bin/echo", "/usr/bin/printf"]) {
     try {
       if (fs.statSync(candidate).isFile()) {
+        cachedNativeBinaryFixturePath = candidate;
         return candidate;
       }
     } catch {

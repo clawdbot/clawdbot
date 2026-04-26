@@ -4,6 +4,7 @@ import {
   hasProxyEnvConfigured,
   matchesNoProxy,
   resolveEnvHttpProxyUrl,
+  shouldUseEnvHttpProxyForUrl,
 } from "./proxy-env.js";
 
 describe("hasProxyEnvConfigured", () => {
@@ -231,5 +232,57 @@ describe("matchesNoProxy", () => {
     },
   ])("$name", ({ url, env, expected }) => {
     expect(matchesNoProxy(url, env)).toBe(expected);
+  });
+});
+
+describe("shouldUseEnvHttpProxyForUrl", () => {
+  it.each([
+    {
+      name: "uses HTTPS_PROXY for https URLs",
+      url: "https://api.example.com/v1",
+      env: { HTTPS_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "falls back to HTTP_PROXY for https URLs",
+      url: "https://api.example.com/v1",
+      env: { HTTP_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "uses HTTP_PROXY for http URLs",
+      url: "http://api.example.com/v1",
+      env: { HTTP_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "ignores ALL_PROXY-only environments",
+      url: "https://api.example.com/v1",
+      env: { ALL_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "keeps strict mode for NO_PROXY matches",
+      url: "https://internal.corp.example/v1",
+      env: {
+        HTTPS_PROXY: "http://proxy.test:8080",
+        NO_PROXY: "corp.example",
+      } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "keeps strict mode for non-http URLs",
+      url: "file:///tmp/input.txt",
+      env: { HTTPS_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "keeps strict mode for malformed URLs",
+      url: "not-a-url",
+      env: { HTTPS_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+  ])("$name", ({ url, env, expected }) => {
+    expect(shouldUseEnvHttpProxyForUrl(url, env)).toBe(expected);
   });
 });

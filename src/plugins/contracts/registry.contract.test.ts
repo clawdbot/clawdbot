@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { uniqueSortedStrings } from "../../../test/helpers/plugins/contracts-testkit.js";
-import {
-  loadPluginManifestRegistry,
-  resolveManifestContractPluginIds,
-} from "../manifest-registry.js";
+import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import {
   pluginRegistrationContractRegistry,
   providerContractLoadError,
@@ -102,6 +100,24 @@ describe("plugin contract registry", () => {
       actualPluginIds: providerContractPluginIds,
       predicate: (plugin) => plugin.origin === "bundled" && plugin.providers.length > 0,
     });
+  });
+
+  it("keeps video-only provider auth choices out of text onboarding", () => {
+    const registry = loadPluginManifestRegistry({});
+
+    for (const pluginId of ["alibaba", "runway"]) {
+      const plugin = registry.plugins.find(
+        (entry) => entry.origin === "bundled" && entry.id === pluginId,
+      );
+      expect(plugin?.providerAuthChoices).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: pluginId,
+            onboardingScopes: ["image-generation"],
+          }),
+        ]),
+      );
+    }
   });
 
   it("covers every bundled speech plugin discovered from manifests", () => {

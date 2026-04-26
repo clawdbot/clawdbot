@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
+import { createSyntheticSourceInfo } from "./skills/skill-contract.js";
+import type { OpenClawSkillMetadata, SkillEntry } from "./skills/types.js";
 import { buildWorkspaceSkillsPrompt } from "./skills/workspace.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-prompt-suite-");
@@ -14,6 +16,27 @@ beforeAll(async () => {
 afterAll(async () => {
   await fixtureSuite.cleanup();
 });
+
+function createSkillEntry(params: {
+  name: string;
+  description?: string;
+  metadata?: OpenClawSkillMetadata;
+}): SkillEntry {
+  const filePath = `/skills/${params.name}/SKILL.md`;
+  return {
+    skill: {
+      name: params.name,
+      description: params.description ?? params.name,
+      filePath,
+      source: "project",
+      baseDir: path.dirname(filePath),
+      sourceInfo: createSyntheticSourceInfo(filePath, { source: "project" }),
+      disableModelInvocation: false,
+    },
+    frontmatter: {},
+    metadata: params.metadata,
+  };
+}
 
 describe("buildWorkspaceSkillsPrompt", () => {
   it("prefers workspace skills over managed skills", async () => {
@@ -57,42 +80,38 @@ describe("buildWorkspaceSkillsPrompt", () => {
   });
   it("gates by bins, config, and always", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    const skillsDir = path.join(workspaceDir, "skills");
-
-    await writeSkill({
-      dir: path.join(skillsDir, "bin-skill"),
-      name: "bin-skill",
-      description: "Needs a bin",
-      metadata: '{"openclaw":{"requires":{"bins":["fakebin"]}}}',
-    });
-    await writeSkill({
-      dir: path.join(skillsDir, "anybin-skill"),
-      name: "anybin-skill",
-      description: "Needs any bin",
-      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","fakebin"]}}}',
-    });
-    await writeSkill({
-      dir: path.join(skillsDir, "config-skill"),
-      name: "config-skill",
-      description: "Needs config",
-      metadata: '{"openclaw":{"requires":{"config":["browser.enabled"]}}}',
-    });
-    await writeSkill({
-      dir: path.join(skillsDir, "always-skill"),
-      name: "always-skill",
-      description: "Always on",
-      metadata: '{"openclaw":{"always":true,"requires":{"env":["MISSING"]}}}',
-    });
-    await writeSkill({
-      dir: path.join(skillsDir, "env-skill"),
-      name: "env-skill",
-      description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
-    });
+    const entries = [
+      createSkillEntry({
+        name: "bin-skill",
+        description: "Needs a bin",
+        metadata: { requires: { bins: ["fakebin"] } },
+      }),
+      createSkillEntry({
+        name: "anybin-skill",
+        description: "Needs any bin",
+        metadata: { requires: { anyBins: ["missingbin", "fakebin"] } },
+      }),
+      createSkillEntry({
+        name: "config-skill",
+        description: "Needs config",
+        metadata: { requires: { config: ["browser.enabled"] } },
+      }),
+      createSkillEntry({
+        name: "always-skill",
+        description: "Always on",
+        metadata: { always: true, requires: { env: ["MISSING"] } },
+      }),
+      createSkillEntry({
+        name: "env-skill",
+        description: "Needs env",
+        metadata: { requires: { env: ["ENV_KEY"] }, primaryEnv: "ENV_KEY" },
+      }),
+    ];
 
     const managedSkillsDir = path.join(workspaceDir, ".managed");
     const defaultPrompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
+        entries,
         managedSkillsDir,
         eligibility: {
           remote: {
@@ -112,6 +131,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
     const gatedPrompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
+        entries,
         managedSkillsDir,
         config: {
           browser: { enabled: false },
@@ -135,16 +155,15 @@ describe("buildWorkspaceSkillsPrompt", () => {
   });
   it("uses skillKey for config lookups", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    const skillDir = path.join(workspaceDir, "skills", "alias-skill");
-    await writeSkill({
-      dir: skillDir,
-      name: "alias-skill",
-      description: "Uses skillKey",
-      metadata: '{"openclaw":{"skillKey":"alias"}}',
-    });
-
     const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
+        entries: [
+          createSkillEntry({
+            name: "alias-skill",
+            description: "Uses skillKey",
+            metadata: { skillKey: "alias" },
+          }),
+        ],
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         config: { skills: { entries: { alias: { enabled: false } } } },
       }),

@@ -7,6 +7,8 @@ vi.mock("../../config/sessions/store-load.js", () => ({
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionFilePathOptions: vi.fn().mockReturnValue({ sessionsDir: "/tmp" }),
+  resolveSessionFilePath: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
 }));
 
 vi.mock("../../config/sessions/reset-policy.js", () => ({
@@ -109,16 +111,19 @@ describe("resolveCronSession", () => {
   // New tests for session reuse behavior (#18027)
   describe("session reuse for webhooks/cron", () => {
     it("reuses existing sessionId when session is fresh", () => {
+      const lastInteractionAt = NOW_MS - 30 * 60_000;
       const result = resolveWithStoredEntry({
         entry: {
           sessionId: "existing-session-id-123",
           updatedAt: NOW_MS - 1000,
+          lastInteractionAt,
           systemSent: true,
         },
         fresh: true,
       });
 
       expect(result.sessionEntry.sessionId).toBe("existing-session-id-123");
+      expect(result.sessionEntry.lastInteractionAt).toBe(lastInteractionAt);
       expect(result.isNewSession).toBe(false);
       expect(result.previousSessionId).toBeUndefined();
       expect(result.systemSent).toBe(true);

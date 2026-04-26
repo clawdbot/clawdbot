@@ -149,6 +149,7 @@ describe("voice-call plugin", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.voice-call.runtime")];
     delete (globalThis as Record<PropertyKey, unknown>)[
       Symbol.for("openclaw.voice-call.runtimePromise")
@@ -195,6 +196,50 @@ describe("voice-call plugin", () => {
 
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
     expect(respond).toHaveBeenCalledWith(true, { callId: "call-2", initiated: true });
+  });
+
+  it("does not log a startup error when provider setup is incomplete", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "");
+    const { service } = setup({ provider: "twilio" });
+
+    await service?.start(createServiceContext());
+
+    expect(createVoiceCallRuntime).not.toHaveBeenCalled();
+    expect(
+      noopLogger.error.mock.calls.some(([message]) =>
+        String(message).includes("Failed to start runtime"),
+      ),
+    ).toBe(false);
+    expect(noopLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Runtime not started; setup incomplete"),
+    );
+    expect(noopLogger.warn).toHaveBeenCalledWith(expect.stringContaining("TWILIO_ACCOUNT_SID"));
+  });
+
+  it("still reports missing provider setup when a command needs the runtime", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "");
+    const { methods } = setup({ provider: "twilio" });
+    const handler = methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { message: "Hi", to: "+15550001234" }, respond });
+
+    expect(createVoiceCallRuntime).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({
+        error: expect.stringContaining("TWILIO_ACCOUNT_SID"),
+      }),
+    );
   });
 
   it("initiates a call via voicecall.initiate", async () => {

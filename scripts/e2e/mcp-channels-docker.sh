@@ -26,6 +26,7 @@ docker run --rm \
   -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
   -e "OPENCLAW_SKIP_CRON=1" \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
+  -e "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=1" \
   -e "OPENCLAW_STATE_DIR=/tmp/openclaw-state" \
   -e "OPENCLAW_CONFIG_PATH=/tmp/openclaw-state/openclaw.json" \
   -e "GW_URL=ws://127.0.0.1:$PORT" \

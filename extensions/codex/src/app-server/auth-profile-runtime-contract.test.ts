@@ -43,7 +43,7 @@ function threadStartResult(threadId = "thread-auth-contract") {
       status: { type: "idle" },
       path: null,
       cwd: "",
-      cliVersion: "0.118.0",
+      cliVersion: "0.125.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,

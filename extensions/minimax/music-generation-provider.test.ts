@@ -6,14 +6,23 @@ import {
   loadMinimaxMusicGenerationProviderModule,
 } from "./provider-http.test-helpers.js";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getMinimaxProviderHttpMocks();
+const {
+  resolveApiKeyForProviderMock,
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  resolveProviderHttpRequestConfigMock,
+} = getMinimaxProviderHttpMocks();
 
 let buildMinimaxMusicGenerationProvider: Awaited<
   ReturnType<typeof loadMinimaxMusicGenerationProviderModule>
 >["buildMinimaxMusicGenerationProvider"];
+let buildMinimaxPortalMusicGenerationProvider: Awaited<
+  ReturnType<typeof loadMinimaxMusicGenerationProviderModule>
+>["buildMinimaxPortalMusicGenerationProvider"];
 
 beforeAll(async () => {
-  ({ buildMinimaxMusicGenerationProvider } = await loadMinimaxMusicGenerationProviderModule());
+  ({ buildMinimaxMusicGenerationProvider, buildMinimaxPortalMusicGenerationProvider } =
+    await loadMinimaxMusicGenerationProviderModule());
 });
 
 installMinimaxProviderHttpMockCleanup();
@@ -47,7 +56,7 @@ describe("minimax music generation provider", () => {
     const provider = buildMinimaxMusicGenerationProvider();
     const result = await provider.generateMusic({
       provider: "minimax",
-      model: "music-2.5+",
+      model: "",
       prompt: "upbeat dance-pop with female vocals",
       cfg: {},
       lyrics: "our city wakes",
@@ -61,7 +70,7 @@ describe("minimax music generation provider", () => {
           get: expect.any(Function),
         }),
         body: expect.objectContaining({
-          model: "music-2.5+",
+          model: "music-2.6",
           lyrics: "our city wakes",
           output_format: "url",
           audio_setting: {
@@ -95,7 +104,7 @@ describe("minimax music generation provider", () => {
     const provider = buildMinimaxMusicGenerationProvider();
     const result = await provider.generateMusic({
       provider: "minimax",
-      model: "music-2.5+",
+      model: "music-2.6",
       prompt: "upbeat dance-pop with female vocals",
       cfg: {},
       lyrics: "our city wakes",
@@ -116,7 +125,7 @@ describe("minimax music generation provider", () => {
     await expect(
       provider.generateMusic({
         provider: "minimax",
-        model: "music-2.5+",
+        model: "music-2.6",
         prompt: "driving techno",
         cfg: {},
         instrumental: true,
@@ -135,7 +144,7 @@ describe("minimax music generation provider", () => {
     const provider = buildMinimaxMusicGenerationProvider();
     await provider.generateMusic({
       provider: "minimax",
-      model: "music-2.5+",
+      model: "music-2.6",
       prompt: "upbeat dance-pop",
       cfg: {},
     });
@@ -143,9 +152,57 @@ describe("minimax music generation provider", () => {
     expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         body: expect.objectContaining({
-          model: "music-2.5+",
+          model: "music-2.6",
           lyrics_optimizer: true,
         }),
+      }),
+    );
+  });
+
+  it("routes portal music generation through minimax-portal auth and HTTP config", async () => {
+    mockMusicGenerationResponse({
+      task_id: "task-portal",
+      audio_url: "https://example.com/portal.mp3",
+      base_resp: { status_code: 0 },
+    });
+
+    const provider = buildMinimaxPortalMusicGenerationProvider();
+    await provider.generateMusic({
+      provider: "minimax-portal",
+      model: "",
+      prompt: "cinematic synth theme",
+      cfg: {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://wrong.example/anthropic",
+              models: [],
+            },
+            "minimax-portal": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax-portal",
+      }),
+    );
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "https://api.minimaxi.com",
+        provider: "minimax-portal",
+        capability: "audio",
+        transport: "http",
+      }),
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.minimaxi.com/v1/music_generation",
       }),
     );
   });

@@ -14,7 +14,8 @@ enum ExecAllowlistMatcher {
                     if self.matches(pattern: pattern, target: target) { return entry }
                 } else if pattern != "*",
                           !ExecApprovalHelpers.patternHasPathSelector(rawExecutable),
-                          self.matchesExecutableBasename(pattern: pattern, resolution: resolution) {
+                          self.matchesExecutableBasename(pattern: pattern, resolution: resolution)
+                {
                     return entry
                 }
             case .invalid:

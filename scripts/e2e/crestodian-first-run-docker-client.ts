@@ -7,6 +7,24 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { runCrestodian } from "../../src/crestodian/crestodian.js";
 import type { RuntimeEnv } from "../../src/runtime.js";
 
+type CrestodianFirstRunCommand = {
+  id: string;
+  message: string;
+  expectOutput: string;
+  approve: boolean;
+};
+
+type CrestodianFirstRunSpec = {
+  dockerDefaultWorkspace: string;
+  dockerAgentWorkspace: string;
+  agentId: string;
+  model: string;
+  discordEnv: string;
+  discordToken: string;
+  commands: CrestodianFirstRunCommand[];
+  auditOperations: string[];
+};
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
@@ -27,7 +45,21 @@ function createRuntime(): { runtime: RuntimeEnv; lines: string[] } {
   };
 }
 
+async function readFirstRunSpec(): Promise<CrestodianFirstRunSpec> {
+  return JSON.parse(
+    await fs.readFile(
+      path.join(process.cwd(), "scripts", "e2e", "crestodian-first-run-spec.json"),
+      "utf8",
+    ),
+  ) as CrestodianFirstRunSpec;
+}
+
+function renderCommandTemplate(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{([A-Za-z0-9_]+)\}/g, (match, key: string) => vars[key] ?? match);
+}
+
 async function main() {
+  const spec = await readFirstRunSpec();
   const stateDir =
     process.env.OPENCLAW_STATE_DIR ??
     (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-crestodian-first-run-")));
@@ -57,49 +89,79 @@ async function main() {
     "fresh overview did not report missing config",
   );
   assert(
-    overviewOutput.includes('Next: say "setup" to create a starter config'),
+    overviewOutput.includes('Next: run "setup" to create a starter config'),
     "fresh overview did not include setup recommendation",
   );
 
-  const setupRuntime = createRuntime();
-  await runCrestodian(
-    {
-      message: "setup workspace /tmp/openclaw-first-run model openai/gpt-5.2",
-      yes: true,
-      interactive: false,
-    },
-    setupRuntime.runtime,
-  );
-  const setupOutput = setupRuntime.lines.join("\n");
-  assert(
-    setupOutput.includes("[crestodian] done: crestodian.setup"),
-    "Crestodian setup did not apply",
-  );
+  process.env[spec.discordEnv] = spec.discordToken;
 
-  clearConfigCache();
-  const validateRuntime = createRuntime();
-  await runCrestodian({ message: "validate config", interactive: false }, validateRuntime.runtime);
-  assert(
-    validateRuntime.lines.join("\n").includes("Config valid:"),
-    "post-setup config validation did not pass",
-  );
+  const commandVars = {
+    defaultWorkspace: spec.dockerDefaultWorkspace,
+    agentWorkspace: spec.dockerAgentWorkspace,
+    agentId: spec.agentId,
+    model: spec.model,
+    discordEnv: spec.discordEnv,
+  };
+  for (const command of spec.commands) {
+    clearConfigCache();
+    const commandRuntime = createRuntime();
+    await runCrestodian(
+      {
+        message: renderCommandTemplate(command.message, commandVars),
+        yes: command.approve,
+        interactive: false,
+      },
+      commandRuntime.runtime,
+    );
+    const output = commandRuntime.lines.join("\n");
+    assert(
+      output.includes(command.expectOutput),
+      `Crestodian first-run command ${command.id} did not apply: ${output}`,
+    );
+  }
 
   const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
   assert(
-    config.agents?.defaults?.workspace === "/tmp/openclaw-first-run",
+    config.agents?.defaults?.workspace === spec.dockerDefaultWorkspace,
     "first-run setup did not write default workspace",
   );
   assert(
     config.agents?.defaults?.model &&
       typeof config.agents.defaults.model === "object" &&
       "primary" in config.agents.defaults.model &&
-      config.agents.defaults.model.primary === "openai/gpt-5.2",
+      config.agents.defaults.model.primary === spec.model,
     "first-run setup did not write default model",
+  );
+  const reef = config.agents?.list?.find((agent) => agent.id === spec.agentId);
+  assert(reef, "Crestodian did not create reef agent");
+  assert(reef.workspace === spec.dockerAgentWorkspace, "Crestodian did not write reef workspace");
+  assert(reef.model === spec.model, "Crestodian did not write reef model");
+  assert(config.plugins?.allow?.includes("discord"), "Crestodian did not allow Discord plugin");
+  assert(
+    config.plugins?.entries?.discord?.enabled === true,
+    "Crestodian did not enable Discord plugin entry",
+  );
+  assert(config.channels?.discord?.enabled === true, "Crestodian did not enable Discord");
+  const discordToken = config.channels?.discord?.token;
+  assert(
+    discordToken &&
+      typeof discordToken === "object" &&
+      "source" in discordToken &&
+      discordToken.source === "env" &&
+      "id" in discordToken &&
+      discordToken.id === spec.discordEnv,
+    "Crestodian did not write Discord token SecretRef",
+  );
+  assert(
+    !JSON.stringify(config.channels.discord).includes(spec.discordToken),
+    "Crestodian persisted the raw Discord token",
   );
 
   const auditPath = path.join(stateDir, "audit", "crestodian.jsonl");
   const audit = (await fs.readFile(auditPath, "utf8")).trim();
-  assert(audit.includes('"operation":"crestodian.setup"'), "setup audit entry missing");
+  for (const operation of spec.auditOperations) {
+    assert(audit.includes(`"operation":"${operation}"`), `${operation} audit entry missing`);
+  }
 
   console.log("Crestodian first-run Docker E2E passed");
 }

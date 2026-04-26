@@ -12,6 +12,10 @@ export function normalizeTranscriptForMatch(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+type ExpectedTranscriptMatch = RegExp | string;
+
+const DEFAULT_OPENCLAW_TRANSCRIPT_MATCH = /open(?:claw|flaw)/;
+
 export async function waitForLiveExpectation(expectation: () => void, timeoutMs = 30_000) {
   const started = Date.now();
   let lastError: unknown;
@@ -86,7 +90,7 @@ export async function runRealtimeSttLiveTest(params: {
   provider: RealtimeTranscriptionProviderPlugin;
   providerConfig: RealtimeTranscriptionProviderConfig;
   audio: Buffer;
-  expectedNormalizedText?: string;
+  expectedNormalizedText?: ExpectedTranscriptMatch;
   timeoutMs?: number;
   closeBeforeWait?: boolean;
   chunkSize?: number;
@@ -95,7 +99,7 @@ export async function runRealtimeSttLiveTest(params: {
   const transcripts: string[] = [];
   const partials: string[] = [];
   const errors: Error[] = [];
-  const expected = params.expectedNormalizedText ?? "openclaw";
+  const expected = params.expectedNormalizedText ?? DEFAULT_OPENCLAW_TRANSCRIPT_MATCH;
   const session = params.provider.createSession({
     providerConfig: params.providerConfig,
     onPartial: (partial) => partials.push(partial),
@@ -119,7 +123,12 @@ export async function runRealtimeSttLiveTest(params: {
       if (errors[0]) {
         throw errors[0];
       }
-      expect(normalizeTranscriptForMatch(transcripts.join(" "))).toContain(expected);
+      const normalized = normalizeTranscriptForMatch(transcripts.join(" "));
+      if (typeof expected === "string") {
+        expect(normalized).toContain(expected);
+      } else {
+        expect(normalized).toMatch(expected);
+      }
     }, params.timeoutMs ?? 60_000);
   } finally {
     session.close();

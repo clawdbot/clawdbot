@@ -209,7 +209,8 @@ deprecation warning and forwards to `openclaw plugins install`.
 
 Npm specs are **registry-only** (package name + optional **exact version** or
 **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
-installs run with `--ignore-scripts` for safety.
+installs run project-local with `--ignore-scripts` for safety, even when your
+shell has global npm install settings.
 
 Bare specs and `@latest` stay on the stable track. If npm resolves either of
 those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a

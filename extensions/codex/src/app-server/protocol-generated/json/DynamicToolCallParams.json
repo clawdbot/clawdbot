@@ -6,10 +6,7 @@
       "type": "string"
     },
     "namespace": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": ["string", "null"]
     },
     "threadId": {
       "type": "string"
@@ -21,13 +18,7 @@
       "type": "string"
     }
   },
-  "required": [
-    "arguments",
-    "callId",
-    "threadId",
-    "tool",
-    "turnId"
-  ],
+  "required": ["arguments", "callId", "threadId", "tool", "turnId"],
   "title": "DynamicToolCallParams",
   "type": "object"
 }

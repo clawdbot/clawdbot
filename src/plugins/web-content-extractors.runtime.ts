@@ -5,8 +5,8 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "./config-state.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import { loadBundledWebContentExtractorEntriesFromDir } from "./web-content-extractor-public-artifacts.js";
 import type { PluginWebContentExtractorEntry } from "./web-content-extractor-types.js";
 
@@ -30,10 +30,11 @@ function resolveBundledWebContentExtractorCompatPluginIds(params: {
 }): string[] {
   const onlyPluginIdSet =
     params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    includeDisabled: true,
   })
     .plugins.filter(
       (plugin) =>
@@ -74,10 +75,11 @@ function resolveEnabledBundledExtractorPlugins(params: {
   });
   const onlyPluginIdSet =
     params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryForPluginRegistry({
     config: activation.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    includeDisabled: true,
   }).plugins.filter((plugin) => {
     if (
       plugin.origin !== "bundled" ||

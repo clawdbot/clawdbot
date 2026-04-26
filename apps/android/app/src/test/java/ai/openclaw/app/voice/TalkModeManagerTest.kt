@@ -5,6 +5,7 @@ import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,6 +50,34 @@ class TalkModeManagerTest {
     assertEquals(12L, playbackGeneration(manager).get())
   }
 
+  @Test
+  fun duplicateFinalForPendingTalkRunDoesNotStartAllResponseTts() {
+    val manager = createManager()
+    val final = CompletableDeferred<Boolean>()
+
+    manager.ttsOnAllResponses = true
+    setPrivateField(manager, "pendingRunId", "run-talk")
+    setPrivateField(manager, "pendingFinal", final)
+
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-talk", text = "spoken once"))
+    assertTrue(final.isCompleted)
+    assertEquals(0L, playbackGeneration(manager).get())
+
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-talk", text = "spoken once"))
+
+    assertEquals(0L, playbackGeneration(manager).get())
+  }
+
+  @Test
+  fun nonPendingFinalStillUsesAllResponseTts() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-other", text = "speak this"))
+
+    assertEquals(1L, playbackGeneration(manager).get())
+  }
+
   private fun createManager(): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -85,6 +114,22 @@ class TalkModeManagerTest {
     val field = target.javaClass.getDeclaredField(name)
     field.isAccessible = true
     return field.get(target)
+  }
+
+  private fun chatFinalPayload(runId: String, text: String): String {
+    return """
+      {
+        "runId": "$runId",
+        "sessionKey": "main",
+        "state": "final",
+        "message": {
+          "role": "assistant",
+          "content": [
+            { "type": "text", "text": "$text" }
+          ]
+        }
+      }
+    """.trimIndent()
   }
 }
 

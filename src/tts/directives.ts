@@ -21,6 +21,12 @@ type TextRange = {
   end: number;
 };
 
+export type TtsDirectiveTextStreamCleaner = {
+  push: (text: string) => string;
+  flush: () => string;
+  hasBufferedDirectiveText: () => boolean;
+};
+
 function buildProviderOrder(left: SpeechProviderPlugin, right: SpeechProviderPlugin): number {
   const leftOrder = left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
   const rightOrder = right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
@@ -56,6 +62,21 @@ function prioritizeProvider(
     return [...providers];
   }
   return [preferredProvider, ...providers.filter((provider) => provider.id !== providerId)];
+}
+
+function resolveDirectiveProvider(
+  providers: readonly SpeechProviderPlugin[],
+  providerId: string,
+): SpeechProviderPlugin | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(providerId);
+  if (!normalized) {
+    return undefined;
+  }
+  return providers.find(
+    (provider) =>
+      provider.id === normalized ||
+      provider.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalized),
+  );
 }
 
 function collectMarkdownCodeRanges(text: string): TextRange[] {
@@ -96,6 +117,85 @@ function replaceOutsideMarkdownCode(
     const captures = args.slice(1, -2).map((capture) => String(capture));
     return replace(match, captures);
   });
+}
+
+function normalizeTtsTagBody(body: string): string {
+  return body.trim().replace(/\s+/g, "").toLowerCase();
+}
+
+function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | "other" {
+  const normalized = normalizeTtsTagBody(body);
+  if (normalized === "tts:text") {
+    return "hidden-open";
+  }
+  if (normalized === "/tts:text") {
+    return "hidden-close";
+  }
+  if (
+    normalized === "tts" ||
+    normalized.startsWith("tts:") ||
+    normalized === "/tts" ||
+    normalized.startsWith("/tts:")
+  ) {
+    return "tts";
+  }
+  return "other";
+}
+
+export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCleaner {
+  let pending = "";
+  let insideHiddenTextBlock = false;
+
+  return {
+    push(text: string): string {
+      const input = pending + text;
+      pending = "";
+      let output = "";
+      let index = 0;
+
+      while (index < input.length) {
+        const tagStart = input.indexOf("[[", index);
+        if (tagStart === -1) {
+          if (!insideHiddenTextBlock) {
+            output += input.slice(index);
+          }
+          break;
+        }
+
+        if (!insideHiddenTextBlock) {
+          output += input.slice(index, tagStart);
+        }
+
+        const tagEnd = input.indexOf("]]", tagStart + 2);
+        if (tagEnd === -1) {
+          pending = input.slice(tagStart);
+          break;
+        }
+
+        const rawTag = input.slice(tagStart, tagEnd + 2);
+        const tag = classifyTtsTag(input.slice(tagStart + 2, tagEnd));
+        if (tag === "hidden-open") {
+          insideHiddenTextBlock = true;
+        } else if (tag === "hidden-close") {
+          insideHiddenTextBlock = false;
+        } else if (tag === "other" && !insideHiddenTextBlock) {
+          output += rawTag;
+        }
+
+        index = tagEnd + 2;
+      }
+
+      return output;
+    },
+    flush(): string {
+      const tail = pending;
+      pending = "";
+      return insideHiddenTextBlock ? "" : tail;
+    },
+    hasBufferedDirectiveText(): boolean {
+      return pending.length > 0 || insideHiddenTextBlock;
+    },
+  };
 }
 
 export function parseTtsDirectives(
@@ -170,13 +270,26 @@ export function parseTtsDirectives(
       }
     }
 
-    let orderedProviders: SpeechProviderPlugin[] | undefined;
-    const getOrderedProviders = () => {
-      orderedProviders ??= prioritizeProvider(
+    let directiveProviders: SpeechProviderPlugin[] | undefined;
+    const getDirectiveProviders = () => {
+      if (directiveProviders) {
+        return directiveProviders;
+      }
+      if (declaredProviderId) {
+        const declaredProvider = resolveDirectiveProvider(getProviders(), declaredProviderId);
+        if (!declaredProvider) {
+          warnings.push(`unknown provider "${declaredProviderId}"`);
+          directiveProviders = [];
+          return directiveProviders;
+        }
+        directiveProviders = [declaredProvider];
+        return directiveProviders;
+      }
+      directiveProviders = prioritizeProvider(
         getProviders(),
-        declaredProviderId ?? normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
+        normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
       );
-      return orderedProviders;
+      return directiveProviders;
     };
 
     for (const token of tokens) {
@@ -194,11 +307,14 @@ export function parseTtsDirectives(
         continue;
       }
 
-      for (const provider of getOrderedProviders()) {
+      let handled = false;
+      const directiveProviders = getDirectiveProviders();
+      for (const provider of directiveProviders) {
         const parsed = provider.parseDirectiveToken?.({
           key,
           value: rawValue,
           policy,
+          selectedProvider: declaredProviderId ? provider.id : undefined,
           providerConfig: resolveDirectiveProviderConfig(provider, options),
           currentOverrides: overrides.providerOverrides?.[provider.id],
         });
@@ -217,7 +333,11 @@ export function parseTtsDirectives(
         if (parsed.warnings?.length) {
           warnings.push(...parsed.warnings);
         }
+        handled = true;
         break;
+      }
+      if (!handled && declaredProviderId && directiveProviders.length > 0) {
+        warnings.push(`unsupported ${declaredProviderId} directive key "${key}"`);
       }
     }
     return "";

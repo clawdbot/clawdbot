@@ -1,7 +1,11 @@
+import Foundation
 import OpenClawDiscovery
+import OpenClawKit
 
 @MainActor
 enum GatewayDiscoverySelectionSupport {
+    private static let defaultSshTunnelGatewayUrl = "ws://127.0.0.1:18789"
+
     static func applyRemoteSelection(
         gateway: GatewayDiscoveryModel.DiscoveredGateway,
         state: AppState)
@@ -13,16 +17,38 @@ enum GatewayDiscoverySelectionSupport {
             state.remoteTransport = preferredTransport
         }
 
-        state.remoteUrl = GatewayDiscoveryHelpers.directUrl(for: gateway) ?? ""
+        if preferredTransport == .direct {
+            state.remoteUrl = GatewayDiscoveryHelpers.directUrl(for: gateway) ?? ""
+        } else {
+            state.remoteUrl = self.sshTunnelGatewayUrl(current: state.remoteUrl)
+        }
         state.remoteTarget = GatewayDiscoveryHelpers.sshTarget(for: gateway) ?? ""
 
-        if let endpoint = GatewayDiscoveryHelpers.serviceEndpoint(for: gateway) {
-            OpenClawConfigFile.setRemoteGatewayUrl(
-                host: endpoint.host,
-                port: endpoint.port)
+        if preferredTransport == .direct {
+            if let endpoint = GatewayDiscoveryHelpers.serviceEndpoint(for: gateway) {
+                OpenClawConfigFile.setRemoteGatewayUrl(
+                    host: endpoint.host,
+                    port: endpoint.port)
+            } else {
+                OpenClawConfigFile.clearRemoteGatewayUrl()
+            }
         } else {
-            OpenClawConfigFile.clearRemoteGatewayUrl()
+            OpenClawConfigFile.setRemoteGatewayUrlString(state.remoteUrl)
         }
+    }
+
+    private static func sshTunnelGatewayUrl(current: String) -> String {
+        let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let url = URL(string: trimmed),
+              let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty,
+              LoopbackHost.isLoopbackHost(host)
+        else {
+            return self.defaultSshTunnelGatewayUrl
+        }
+
+        return "ws://127.0.0.1:\(url.port ?? 18789)"
     }
 
     static func preferredTransport(

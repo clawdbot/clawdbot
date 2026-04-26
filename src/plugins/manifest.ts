@@ -40,6 +40,12 @@ export type PluginManifestChannelConfig = {
   label?: string;
   description?: string;
   preferOver?: string[];
+  commands?: PluginManifestChannelCommandDefaults;
+};
+
+export type PluginManifestChannelCommandDefaults = {
+  nativeCommandsAutoEnabled?: boolean;
+  nativeSkillsAutoEnabled?: boolean;
 };
 
 export type PluginManifestModelSupport = {
@@ -820,6 +826,7 @@ function normalizeChannelConfigs(
     const label = normalizeOptionalString(rawEntry.label) ?? "";
     const description = normalizeOptionalString(rawEntry.description) ?? "";
     const preferOver = normalizeTrimmedStringList(rawEntry.preferOver);
+    const commandDefaults = normalizeManifestChannelCommandDefaults(rawEntry.commands);
     normalized[channelId] = {
       schema,
       ...(uiHints ? { uiHints } : {}),
@@ -827,9 +834,30 @@ function normalizeChannelConfigs(
       ...(label ? { label } : {}),
       ...(description ? { description } : {}),
       ...(preferOver.length > 0 ? { preferOver } : {}),
+      ...(commandDefaults ? { commands: commandDefaults } : {}),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestChannelCommandDefaults(
+  value: unknown,
+): PluginManifestChannelCommandDefaults | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const nativeCommandsAutoEnabled =
+    typeof value.nativeCommandsAutoEnabled === "boolean"
+      ? value.nativeCommandsAutoEnabled
+      : undefined;
+  const nativeSkillsAutoEnabled =
+    typeof value.nativeSkillsAutoEnabled === "boolean" ? value.nativeSkillsAutoEnabled : undefined;
+  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
+    ? {
+        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
+        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
+      }
+    : undefined;
 }
 
 export function resolvePluginManifestPath(rootDir: string): string {
@@ -1012,6 +1040,7 @@ export type PluginPackageChannel = {
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
+  commands?: PluginManifestChannelCommandDefaults;
   configuredState?: {
     specifier?: string;
     exportName?: string;

@@ -24,6 +24,7 @@ import {
 } from "../messaging/outbound.js";
 import {
   handleStructuredPayload,
+  sendTextAsVoiceReply,
   sendErrorToTarget,
   sendWithTokenRetry,
   type ReplyDispatcherDeps,
@@ -52,6 +53,13 @@ export interface OutboundDispatchDeps {
   account: GatewayAccount;
   log?: EngineLogger;
 }
+
+type ReplyDeliverPayload = {
+  text?: string;
+  mediaUrls?: string[];
+  mediaUrl?: string;
+  audioAsVoice?: boolean;
+};
 
 // ============ dispatchOutbound ============
 
@@ -185,10 +193,7 @@ export async function dispatchOutbound(
     cfg,
     dispatcherOptions: {
       responsePrefix: messagesConfig.responsePrefix,
-      deliver: async (
-        payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
-        info: { kind: string },
-      ) => {
+      deliver: async (payload: ReplyDeliverPayload, info: { kind: string }) => {
         hasResponse = true;
 
         // ---- Tool deliver ----
@@ -303,7 +308,16 @@ export async function dispatchOutbound(
           return;
         }
 
-        // 3. Plain text + images
+        // 3. Voice-intent plain text
+        if (payload.audioAsVoice === true && !payload.mediaUrl && !payload.mediaUrls?.length) {
+          const sentVoice = await sendTextAsVoiceReply(replyCtx, replyText, replyDeps);
+          if (sentVoice) {
+            recordOutbound();
+            return;
+          }
+        }
+
+        // 4. Plain text + images/media
         await sendPlainReply(
           payload,
           replyText,
@@ -380,6 +394,12 @@ function buildCtxPayload(inbound: InboundContext, runtime: GatewayPluginRuntime)
     QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
     QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
     CommandAuthorized: inbound.commandAuthorized,
+    ...(inbound.voiceMediaTypes.length > 0
+      ? {
+          MediaTypes: inbound.voiceMediaTypes,
+          MediaType: inbound.voiceMediaTypes[0],
+        }
+      : {}),
     ...(inbound.localMediaPaths.length > 0
       ? {
           MediaPaths: inbound.localMediaPaths,

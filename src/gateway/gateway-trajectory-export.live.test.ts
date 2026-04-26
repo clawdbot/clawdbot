@@ -58,7 +58,7 @@ async function writeLiveGatewayConfig(params: {
       list: [{ id: "dev", default: true }],
       defaults: {
         workspace: params.workspace,
-        embeddedHarness: { runtime: "codex", fallback: "none" },
+        agentRuntime: { id: "codex", fallback: "none" },
         skipBootstrap: true,
         model: { primary: params.modelKey },
         models: { [params.modelKey]: {} },

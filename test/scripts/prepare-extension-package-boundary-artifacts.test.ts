@@ -6,6 +6,7 @@ import {
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
+  runNodeSteps,
   runNodeStepsInParallel,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
 
@@ -56,6 +57,52 @@ describe("prepare-extension-package-boundary-artifacts", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
   }, 45_000);
+
+  it("runs boundary prep steps serially for local checks", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-serial-"));
+    tempRoots.add(rootDir);
+    const logPath = path.join(rootDir, "steps.log");
+    const appendScript = (label: string) =>
+      `const fs=require("node:fs");` +
+      `const log=${JSON.stringify(logPath)};` +
+      `fs.appendFileSync(log, ${JSON.stringify(`${label}-start\n`)});` +
+      `setTimeout(()=>{fs.appendFileSync(log, ${JSON.stringify(`${label}-end\n`)});}, 50);`;
+
+    await runNodeSteps(
+      [
+        { label: "first", args: ["--eval", appendScript("first")], timeoutMs: 5_000 },
+        { label: "second", args: ["--eval", appendScript("second")], timeoutMs: 5_000 },
+      ],
+      { OPENCLAW_LOCAL_CHECK: "1" },
+    );
+
+    expect(fs.readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
+      "first-start",
+      "first-end",
+      "second-start",
+      "second-end",
+    ]);
+  });
+
+  it("passes step-specific environment overrides to child steps", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-env-"));
+    tempRoots.add(rootDir);
+    const outputPath = path.join(rootDir, "env.txt");
+    const writeEnvScript =
+      `const fs=require("node:fs");` +
+      `fs.writeFileSync(${JSON.stringify(outputPath)}, process.env.OPENCLAW_TEST_ENV || "", "utf8");`;
+
+    await runNodeStepsInParallel([
+      {
+        label: "env-step",
+        args: ["--eval", writeEnvScript],
+        env: { OPENCLAW_TEST_ENV: "passed" },
+        timeoutMs: 5_000,
+      },
+    ]);
+
+    expect(fs.readFileSync(outputPath, "utf8")).toBe("passed");
+  });
 
   it("treats artifacts as fresh only when outputs are newer than inputs", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-prep-"));

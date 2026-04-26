@@ -29,6 +29,7 @@ type ResolveInstallableChannelPluginResult = {
   plugin?: ChannelPlugin;
   catalogEntry?: ChannelPluginCatalogEntry;
   configChanged: boolean;
+  pluginInstalled: boolean;
 };
 
 function resolveWorkspaceDir(cfg: OpenClawConfig) {
@@ -197,6 +198,7 @@ export async function resolveInstallableChannelPlugin(params: {
       cfg: nextCfg,
       catalogEntry,
       configChanged: false,
+      pluginInstalled: false,
     };
   }
 
@@ -208,6 +210,7 @@ export async function resolveInstallableChannelPlugin(params: {
       plugin: existing,
       catalogEntry,
       configChanged: false,
+      pluginInstalled: false,
     };
   }
 
@@ -227,6 +230,7 @@ export async function resolveInstallableChannelPlugin(params: {
         plugin: scoped,
         catalogEntry,
         configChanged: false,
+        pluginInstalled: false,
       };
     }
 
@@ -258,6 +262,7 @@ export async function resolveInstallableChannelPlugin(params: {
             ? { ...catalogEntry, pluginId: installedPluginId }
             : catalogEntry,
         configChanged: nextCfg !== params.cfg,
+        pluginInstalled: installResult.installed,
       };
     }
   }
@@ -268,5 +273,6 @@ export async function resolveInstallableChannelPlugin(params: {
     plugin: existing,
     catalogEntry,
     configChanged: false,
+    pluginInstalled: false,
   };
 }

@@ -92,6 +92,11 @@ Treat Gateway and node as one operator trust domain, with different roles:
 - **Gateway** is the control plane and policy surface (`gateway.auth`, tool policy, routing).
 - **Node** is remote execution surface paired to that Gateway (commands, device actions, host-local capabilities).
 - A caller authenticated to the Gateway is trusted at Gateway scope. After pairing, node actions are trusted operator actions on that node.
+- Direct loopback backend clients authenticated with the shared gateway
+  token/password can make internal control-plane RPCs without presenting a user
+  device identity. This is not a remote or browser pairing bypass: network
+  clients, node clients, device-token clients, and explicit device identities
+  still go through pairing and scope-upgrade enforcement.
 - `sessionKey` is routing/context selection, not per-user auth.
 - Exec approvals (allowlist + ask) are guardrails for operator intent, not hostile multi-tenant isolation.
 - OpenClaw's product default for trusted single-operator setups is that host exec on `gateway`/`node` is allowed without approval prompts (`security="full"`, `ask="off"` unless you tighten it). That default is intentional UX, not a vulnerability by itself.
@@ -504,7 +509,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - If you install or update plugins (`openclaw plugins install <package>`, `openclaw plugins update <id>`), treat it like running untrusted code:
   - The install path is the per-plugin directory under the active plugin install root.
   - OpenClaw runs a built-in dangerous-code scan before install/update. `critical` findings block by default.
-  - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
+  - OpenClaw uses `npm pack`, then runs a project-local `npm install --omit=dev --ignore-scripts` in that directory. Inherited global npm install settings are ignored so dependencies stay under the plugin install path.
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
   - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives on plugin install/update flows. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
   - Gateway-backed skill dependency installs follow the same dangerous/suspicious split: built-in `critical` findings block unless the caller explicitly sets `dangerouslyForceUnsafeInstall`, while suspicious findings still warn only. `openclaw skills install` remains the separate ClawHub skill download/install flow.

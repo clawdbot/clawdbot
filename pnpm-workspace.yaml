@@ -8,6 +8,8 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "acpx"
+  - "tokenjuice"
+  - "@agentclientprotocol/sdk"
   - "axios"
   - "basic-ftp"
   - "hono"
@@ -18,6 +20,8 @@ minimumReleaseAgeExclude:
   - "@cloudflare/workers-types"
   - "@hono/node-server"
   - "@mariozechner/*"
+  - "@openai/codex"
+  - "@openai/codex-*"
   - "@typescript/native-preview*"
   - "@types/node"
   - "@rolldown/*"

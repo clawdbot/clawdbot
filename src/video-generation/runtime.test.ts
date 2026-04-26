@@ -405,6 +405,61 @@ describe("video-generation runtime", () => {
     expect(result.attempts[0]?.error).toMatch(/does not support reference audio inputs/);
   });
 
+  it("forwards mixed image, video, and audio references when explicitly supported", async () => {
+    const seenRequest: {
+      inputImages?: unknown;
+      inputVideos?: unknown;
+      inputAudios?: unknown;
+    } = {};
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue(
+      "fal/bytedance/seedance-2.0/fast/reference-to-video",
+    );
+    mocks.getVideoGenerationProvider.mockReturnValue({
+      id: "fal",
+      capabilities: {
+        videoToVideo: {
+          enabled: true,
+          maxInputImages: 9,
+          maxInputVideos: 3,
+          maxInputAudios: 3,
+        },
+      },
+      async generateVideo(req) {
+        seenRequest.inputImages = req.inputImages;
+        seenRequest.inputVideos = req.inputVideos;
+        seenRequest.inputAudios = req.inputAudios;
+        return {
+          videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+          model: "bytedance/seedance-2.0/fast/reference-to-video",
+        };
+      },
+    });
+
+    const result = await generateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: {
+              primary: "fal/bytedance/seedance-2.0/fast/reference-to-video",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "Blend all references",
+      inputImages: [{ url: "https://example.com/reference.png" }],
+      inputVideos: [{ url: "https://example.com/reference.mp4" }],
+      inputAudios: [{ url: "https://example.com/reference.mp3" }],
+    });
+
+    expect(result.provider).toBe("fal");
+    expect(result.attempts).toEqual([]);
+    expect(seenRequest).toEqual({
+      inputImages: [{ url: "https://example.com/reference.png" }],
+      inputVideos: [{ url: "https://example.com/reference.mp4" }],
+      inputAudios: [{ url: "https://example.com/reference.mp3" }],
+    });
+  });
+
   it("fails when every candidate is skipped for unsupported reference audio inputs", async () => {
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/sora-2");
     mocks.getVideoGenerationProvider.mockReturnValue({

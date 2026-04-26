@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
@@ -22,7 +25,7 @@ import {
   gotoPageWithNavigationGuard,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
-import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { markBackendDomRefsOnPage, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 type SnapshotUrlEntry = {
   text: string;
@@ -64,6 +67,73 @@ function appendSnapshotUrls(snapshot: string, urls: SnapshotUrlEntry[]): string 
   return `${snapshot}\n\nLinks:\n${lines.join("\n")}`;
 }
 
+function buildStoredAriaRefs(
+  nodes: AriaSnapshotNode[],
+  markedRefs: Set<string>,
+): Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }> {
+  const refs: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }> =
+    {};
+  const counts = new Map<string, number>();
+  const refsByKey = new Map<string, string[]>();
+
+  for (const node of nodes) {
+    const role = normalizeLowercaseStringOrEmpty(node.role) || "unknown";
+    const name = node.name.trim() || undefined;
+    const key = `${role}:${name ?? ""}`;
+    const nth = counts.get(key) ?? 0;
+    counts.set(key, nth + 1);
+    refsByKey.set(key, [...(refsByKey.get(key) ?? []), node.ref]);
+    refs[node.ref] = {
+      role,
+      ...(name ? { name } : {}),
+      ...(nth > 0 ? { nth } : {}),
+      ...(markedRefs.has(node.ref) ? { domMarker: true } : {}),
+    };
+  }
+
+  for (const refsForKey of refsByKey.values()) {
+    if (refsForKey.length > 1) {
+      continue;
+    }
+    const ref = refsForKey[0];
+    if (ref) {
+      delete refs[ref]?.nth;
+    }
+  }
+
+  return refs;
+}
+
+export async function storeAriaSnapshotRefsViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  nodes: AriaSnapshotNode[];
+  page?: Page;
+}): Promise<void> {
+  const page =
+    opts.page ??
+    (await getPageForTargetId({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+    }));
+  ensurePageState(page);
+  const markedRefs = await markBackendDomRefsOnPage({
+    page,
+    refs: opts.nodes.flatMap((node) =>
+      typeof node.backendDOMNodeId === "number"
+        ? [{ ref: node.ref, backendDOMNodeId: node.backendDOMNodeId }]
+        : [],
+    ),
+  });
+  storeRoleRefsForTarget({
+    page,
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    refs: buildStoredAriaRefs(opts.nodes, markedRefs),
+    mode: "role",
+  });
+}
+
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -99,7 +169,14 @@ export async function snapshotAriaViaPlaywright(opts: {
     nodes?: RawAXNode[];
   };
   const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-  return { nodes: formatAriaSnapshot(nodes, limit) };
+  const formatted = formatAriaSnapshot(nodes, limit);
+  await storeAriaSnapshotRefsViaPlaywright({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    nodes: formatted,
+    page,
+  });
+  return { nodes: formatted };
 }
 
 export async function snapshotAiViaPlaywright(opts: {

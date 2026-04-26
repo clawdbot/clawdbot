@@ -712,7 +712,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "level",
-          description: "off, minimal, low, medium, high, xhigh",
+          description: "Thinking level",
           type: "string",
           choices: ({ provider, model }) => listThinkingLevels(provider, model),
         },

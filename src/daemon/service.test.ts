@@ -1,4 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { captureEnv } from "../test-utils/env.js";
 import type { GatewayService } from "./service.js";
 import {
   describeGatewayServiceRestart,
@@ -47,6 +52,44 @@ describe("resolveGatewayService", () => {
   it("throws for unsupported platforms", () => {
     setPlatform("aix");
     expect(() => resolveGatewayService()).toThrow("Gateway service install not supported on aix");
+  });
+
+  it("guards mutating service adapters when config was written by a newer OpenClaw", async () => {
+    const tempHome = await makeTempWorkspace("openclaw-service-future-config-");
+    const stateDir = path.join(tempHome, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const envSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            meta: {
+              lastTouchedVersion: "9999.1.1",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      process.env.HOME = tempHome;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+
+      const service = resolveGatewayService();
+
+      await expect(service.restart({ env: process.env, stdout: process.stdout })).rejects.toThrow(
+        "Refusing to restart the gateway service",
+      );
+    } finally {
+      envSnapshot.restore();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
   });
 
   it("describes scheduled restart handoffs consistently", () => {

@@ -57,8 +57,41 @@ export function resolveUninstallDirectoryTarget(params: {
     return configuredPath;
   }
 
-  // Never trust configured installPath blindly for recursive deletes.
+  if (params.extensionsDir && isPathInsideOrEqual(params.extensionsDir, configuredPath)) {
+    return configuredPath;
+  }
+
+  const recordedManagedPath = resolveRecordedManagedInstallPath({
+    pluginId: params.pluginId,
+    installPath: configuredPath,
+  });
+  if (recordedManagedPath) {
+    return recordedManagedPath;
+  }
+
+  // Never trust configured installPath blindly for recursive deletes outside
+  // the managed extensions directory.
   return defaultPath;
+}
+
+function resolveRecordedManagedInstallPath(params: {
+  pluginId: string;
+  installPath: string;
+}): string | null {
+  const resolvedInstallPath = path.resolve(params.installPath);
+  const recordedExtensionsDir = path.dirname(resolvedInstallPath);
+  if (path.basename(recordedExtensionsDir) !== "extensions") {
+    return null;
+  }
+
+  try {
+    const canonicalInstallPath = path.resolve(
+      resolvePluginInstallDir(params.pluginId, recordedExtensionsDir),
+    );
+    return canonicalInstallPath === resolvedInstallPath ? params.installPath : null;
+  } catch {
+    return null;
+  }
 }
 
 const SHARED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
@@ -99,6 +132,11 @@ function resolveComparablePath(value: string): string {
   } catch {
     return resolved;
   }
+}
+
+function isPathInsideOrEqual(parent: string, child: string): boolean {
+  const relative = path.relative(resolveComparablePath(parent), resolveComparablePath(child));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 /**

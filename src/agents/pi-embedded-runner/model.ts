@@ -260,22 +260,48 @@ function resolveProviderTransport(params: {
   };
 }
 
+function matchesProviderScopedModelId(params: {
+  candidateId?: string;
+  provider: string;
+  modelId: string;
+}): boolean {
+  const { candidateId, provider, modelId } = params;
+  if (candidateId === modelId) {
+    return true;
+  }
+  const slashIndex = candidateId?.indexOf("/") ?? -1;
+  if (!candidateId || slashIndex <= 0) {
+    return false;
+  }
+  const candidateProvider = candidateId.slice(0, slashIndex);
+  const candidateModelId = candidateId.slice(slashIndex + 1);
+  return (
+    candidateModelId === modelId &&
+    normalizeProviderId(candidateProvider) === normalizeProviderId(provider)
+  );
+}
+
 function findInlineModelMatch(params: {
   providers: Record<string, InlineProviderConfig>;
   provider: string;
   modelId: string;
 }) {
+  const matchesModelId = (entry: { provider: string; id?: string }) =>
+    matchesProviderScopedModelId({
+      candidateId: entry.id,
+      provider: entry.provider,
+      modelId: params.modelId,
+    });
   const inlineModels = buildInlineProviderModels(params.providers);
   const exact = inlineModels.find(
-    (entry) => entry.provider === params.provider && entry.id === params.modelId,
+    (entry) => entry.provider === params.provider && matchesModelId(entry),
   );
   if (exact) {
     return exact;
   }
   const normalizedProvider = normalizeProviderId(params.provider);
   return inlineModels.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.modelId,
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && matchesModelId(entry),
   );
 }
 
@@ -306,6 +332,20 @@ function isModelsAddMetadataModel(params: {
   );
 }
 
+function findConfiguredProviderModel(
+  providerConfig: InlineProviderConfig | undefined,
+  provider: string,
+  modelId: string,
+) {
+  return providerConfig?.models?.find((candidate) =>
+    matchesProviderScopedModelId({
+      candidateId: candidate.id,
+      provider,
+      modelId,
+    }),
+  );
+}
+
 function applyConfiguredProviderOverrides(params: {
   provider: string;
   discoveredModel: ProviderRuntimeModel;
@@ -324,9 +364,9 @@ function applyConfiguredProviderOverrides(params: {
     };
   }
   const configuredModel =
-    providerConfig.models?.find((candidate) => candidate.id === modelId) ??
+    findConfiguredProviderModel(providerConfig, params.provider, modelId) ??
     (discoveredModel.id !== modelId
-      ? providerConfig.models?.find((candidate) => candidate.id === discoveredModel.id)
+      ? findConfiguredProviderModel(providerConfig, params.provider, discoveredModel.id)
       : undefined);
   const metadataOverrideModel =
     params.preferDiscoveredModelMetadata &&
@@ -546,7 +586,7 @@ function resolveConfiguredFallbackModel(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+  const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });

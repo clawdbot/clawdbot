@@ -1,6 +1,11 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth";
+import {
+  formatCommandArgMenuTitle,
+  resolveStoredModelOverride,
+  type ChatCommandDefinition,
+} from "openclaw/plugin-sdk/command-auth";
 import {
   type CommandArgs,
   resolveCommandAuthorizedFromAuthorizers,
@@ -9,11 +14,18 @@ import {
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
+  loadSessionStore,
+  resolveStorePath,
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { chunkItems, normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  chunkItems,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
@@ -72,6 +84,51 @@ function loadSlackPluginCommandsRuntime() {
 function loadSlashSkillCommandsRuntime() {
   slashSkillCommandsRuntimePromise ??= import("./slash-skill-commands.runtime.js");
   return slashSkillCommandsRuntimePromise;
+}
+
+function resolveSlackCommandMenuModelContext(params: {
+  cfg: SlackMonitorContext["cfg"];
+  agentId: string;
+  sessionKey: string;
+}): { provider?: string; model?: string } {
+  if (!params.sessionKey.trim()) {
+    return {};
+  }
+  try {
+    const defaultModel = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    });
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+    const store = loadSessionStore(storePath);
+    const entry = store[params.sessionKey];
+    if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
+      return { provider: defaultModel.provider, model: defaultModel.model };
+    }
+    const override = resolveStoredModelOverride({
+      sessionEntry: entry,
+      sessionStore: store,
+      sessionKey: params.sessionKey,
+      defaultProvider: defaultModel.provider,
+    });
+    if (override?.model) {
+      return {
+        provider: override.provider || defaultModel.provider,
+        model: override.model,
+      };
+    }
+    const provider =
+      normalizeOptionalString(entry?.providerOverride) ??
+      normalizeOptionalString(entry?.modelProvider);
+    const model =
+      normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model);
+    return {
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 type EncodedMenuChoice = SlackExternalArgMenuChoice;
@@ -496,17 +553,49 @@ export async function registerSlackMonitorSlashCommands(params: {
         }
       }
 
+      let resolvedSlashRoute: ResolvedAgentRoute | undefined;
+      const resolveSlashRoute = async () => {
+        if (resolvedSlashRoute) {
+          return resolvedSlashRoute;
+        }
+        const { resolveAgentRoute } = await loadSlashDispatchRuntime();
+        resolvedSlashRoute = resolveAgentRoute({
+          cfg,
+          channel: "slack",
+          accountId: account.accountId,
+          teamId: ctx.teamId || undefined,
+          peer: {
+            kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
+            id: isDirectMessage ? command.user_id : command.channel_id,
+          },
+        });
+        return resolvedSlashRoute;
+      };
+
       if (commandDefinition && supportsInteractiveArgMenus) {
         const { resolveCommandArgMenu } = await loadSlashCommandsRuntime();
+        const menuNeedsModelContext =
+          !(commandArgs?.raw && !commandArgs.values) &&
+          commandDefinition.args?.some(
+            (arg) => typeof arg.choices === "function" && commandArgs?.values?.[arg.name] == null,
+          );
+        const menuRoute = menuNeedsModelContext ? await resolveSlashRoute() : undefined;
+        const menuModelContext = menuRoute
+          ? resolveSlackCommandMenuModelContext({
+              cfg,
+              agentId: menuRoute.agentId,
+              sessionKey: menuRoute.sessionKey,
+            })
+          : {};
         const menu = resolveCommandArgMenu({
           command: commandDefinition,
           args: commandArgs,
           cfg,
+          ...menuModelContext,
         });
         if (menu) {
           const commandLabel = commandDefinition.nativeName ?? commandDefinition.key;
-          const title =
-            menu.title ?? `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
+          const title = formatCommandArgMenuTitle({ command: commandDefinition, menu });
           const blocks = buildSlackCommandArgMenuBlocks({
             title,
             command: commandLabel,
@@ -539,16 +628,18 @@ export async function registerSlackMonitorSlashCommands(params: {
         resolveMarkdownTableMode,
       } = await loadSlashDispatchRuntime();
 
-      const route = resolveAgentRoute({
-        cfg,
-        channel: "slack",
-        accountId: account.accountId,
-        teamId: ctx.teamId || undefined,
-        peer: {
-          kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
-          id: isDirectMessage ? command.user_id : command.channel_id,
-        },
-      });
+      const route =
+        resolvedSlashRoute ??
+        resolveAgentRoute({
+          cfg,
+          channel: "slack",
+          accountId: account.accountId,
+          teamId: ctx.teamId || undefined,
+          peer: {
+            kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
+            id: isDirectMessage ? command.user_id : command.channel_id,
+          },
+        });
 
       const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
         isRoomish,

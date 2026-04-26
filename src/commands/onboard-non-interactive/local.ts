@@ -262,6 +262,7 @@ export async function runNonInteractiveLocalSetup(params: {
       port: gatewayResult.port,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
     const installDaemonGatewayHealthTiming = resolveInstallDaemonGatewayHealthTiming();
     const probeAuth = await resolveGatewayHealthProbeToken(nextConfig);

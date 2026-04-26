@@ -186,4 +186,26 @@ describe("native hook relay CLI", () => {
     expect(stdout.text()).toBe("");
     expect(stderr.text()).toContain("native hook relay unavailable");
   });
+
+  it("keeps before_agent_finalize unavailable handling observational", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway closed");
+    });
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      { provider: "codex", relayId: "relay-1", event: "before_agent_finalize" },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.text()).toBe("");
+    expect(stderr.text()).toContain("native hook relay unavailable");
+  });
 });

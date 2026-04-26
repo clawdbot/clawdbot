@@ -6,6 +6,7 @@ import {
   type MediaNormalizationEntry,
 } from "../media-generation/runtime-shared.js";
 import type {
+  ImageGenerationBackground,
   ImageGenerationIgnoredOverride,
   ImageGenerationNormalization,
   ImageGenerationOutputFormat,
@@ -21,6 +22,7 @@ export type ResolvedImageGenerationOverrides = {
   resolution?: ImageGenerationResolution;
   quality?: ImageGenerationQuality;
   outputFormat?: ImageGenerationOutputFormat;
+  background?: ImageGenerationBackground;
   ignoredOverrides: ImageGenerationIgnoredOverride[];
   normalization?: ImageGenerationNormalization;
 };
@@ -42,6 +44,7 @@ export function resolveImageGenerationOverrides(params: {
   resolution?: ImageGenerationResolution;
   quality?: ImageGenerationQuality;
   outputFormat?: ImageGenerationOutputFormat;
+  background?: ImageGenerationBackground;
   inputImages?: ImageGenerationSourceImage[];
 }): ResolvedImageGenerationOverrides {
   const hasInputImages = (params.inputImages?.length ?? 0) > 0;
@@ -56,6 +59,7 @@ export function resolveImageGenerationOverrides(params: {
   let resolution = params.resolution;
   let quality = params.quality;
   let outputFormat = params.outputFormat;
+  let background = params.background;
 
   if (size && (geometry?.sizes?.length ?? 0) > 0 && modeCaps.supportsSize) {
     const normalizedSize = resolveClosestSize({
@@ -175,6 +179,12 @@ export function resolveImageGenerationOverrides(params: {
     outputFormat = undefined;
   }
 
+  const supportedBackgrounds = params.provider.capabilities.output?.backgrounds;
+  if (background && !(supportedBackgrounds ?? []).includes(background)) {
+    ignoredOverrides.push({ key: "background", value: background });
+    background = undefined;
+  }
+
   if (
     !normalization.aspectRatio &&
     aspectRatio &&
@@ -220,6 +230,7 @@ export function resolveImageGenerationOverrides(params: {
     resolution,
     quality,
     outputFormat,
+    background,
     ignoredOverrides,
     normalization: finalizeImageNormalization(normalization),
   };

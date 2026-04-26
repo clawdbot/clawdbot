@@ -81,6 +81,28 @@ describe("scanOpenRouterModels", () => {
     });
   });
 
+  it("applies the scan timeout to the OpenRouter catalog request", async () => {
+    const fetchImpl: typeof fetch = async (_input, init) =>
+      await new Promise<Response>((_resolve, reject) => {
+        const signal = typeof init === "object" && init ? init.signal : undefined;
+        if (signal?.aborted) {
+          reject(new Error("catalog aborted"));
+          return;
+        }
+        signal?.addEventListener("abort", () => reject(new Error("catalog aborted")), {
+          once: true,
+        });
+      });
+
+    await expect(
+      scanOpenRouterModels({
+        fetchImpl,
+        probe: false,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow(/catalog aborted/);
+  });
+
   it("matches provider filters across canonical provider aliases", async () => {
     const fetchImpl = createFetchFixture({
       data: [

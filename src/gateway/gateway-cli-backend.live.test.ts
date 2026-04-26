@@ -295,7 +295,7 @@ describeLive("gateway live (cli backend)", () => {
               [modelKey]: {},
               ...(modelSwitchTarget ? { [modelSwitchTarget]: {} } : {}),
             },
-            embeddedHarness: { runtime: "pi", fallback: "pi" },
+            agentRuntime: { id: "pi", fallback: "pi" },
             cliBackends: {
               ...existingBackends,
               [providerId]: {
@@ -537,7 +537,7 @@ describeLive("gateway live (cli backend)", () => {
         clearRuntimeConfigSnapshot();
         await client.stopAndWait();
         await server.close();
-        await fs.rm(tempDir, { recursive: true, force: true });
+        await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
         restoreCliBackendLiveEnv(previousEnv);
         logCliBackendLiveStep("cleanup:done");
       }

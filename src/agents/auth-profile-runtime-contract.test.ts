@@ -33,6 +33,22 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex: loadPluginManifestRegistry,
+  };
+});
+
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+  };
+});
+
 vi.mock("./cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
@@ -286,7 +302,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex", fallback: "none" },
+            agentRuntime: { id: "codex", fallback: "none" },
           },
         },
       } as OpenClawConfig,
@@ -369,7 +385,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex", fallback: "none" },
+            agentRuntime: { id: "codex", fallback: "none" },
           },
         },
       } as OpenClawConfig,
@@ -392,7 +408,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex", fallback: "none" },
+            agentRuntime: { id: "codex", fallback: "none" },
           },
         },
       } as OpenClawConfig,
@@ -418,7 +434,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
           list: [
             {
               id: "main",
-              embeddedHarness: { runtime: "codex", fallback: "none" },
+              agentRuntime: { id: "codex", fallback: "none" },
             },
           ],
         },

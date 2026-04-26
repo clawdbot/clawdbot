@@ -1,32 +1,21 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
 } from "../memory/root-memory-files.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
+import { readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
-
-export function resolveDefaultAgentWorkspaceDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
-): string {
-  const home = resolveRequiredHomeDir(env, homedir);
-  const profile = env.OPENCLAW_PROFILE?.trim();
-  if (profile && normalizeOptionalLowercaseString(profile) !== "default") {
-    return path.join(home, ".openclaw", `workspace-${profile}`);
-  }
-  return path.join(home, ".openclaw", "workspace");
-}
-
-export const DEFAULT_AGENT_WORKSPACE_DIR = resolveDefaultAgentWorkspaceDir();
+export {
+  DEFAULT_AGENT_WORKSPACE_DIR,
+  resolveDefaultAgentWorkspaceDir,
+} from "./workspace-default.js";
 export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
 export const DEFAULT_SOUL_FILENAME = "SOUL.md";
 export const DEFAULT_TOOLS_FILENAME = "TOOLS.md";

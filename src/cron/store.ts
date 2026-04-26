@@ -114,6 +114,39 @@ async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
   }
 }
 
+function loadStateFileSync(statePath: string): CronStateFile | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(statePath, "utf-8");
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return null;
+    }
+    throw new Error(`Failed to read cron state at ${statePath}: ${String(err)}`, {
+      cause: err,
+    });
+  }
+
+  try {
+    const parsed = parseJsonWithJson5Fallback(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (
+      record.version !== 1 ||
+      typeof record.jobs !== "object" ||
+      record.jobs === null ||
+      Array.isArray(record.jobs)
+    ) {
+      return null;
+    }
+    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
+  } catch {
+    return null;
+  }
+}
+
 function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {
   return jobs.some(
     (job) =>
@@ -213,6 +246,60 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       serializedStoreCache.delete(storePath);
+      return { version: 1, jobs: [] };
+    }
+    throw err;
+  }
+}
+
+export function loadCronStoreSync(storePath: string): CronStoreFile {
+  try {
+    const raw = fs.readFileSync(storePath, "utf-8");
+    let parsed: unknown;
+    try {
+      parsed = parseJsonWithJson5Fallback(raw);
+    } catch (err) {
+      throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
+        cause: err,
+      });
+    }
+    const parsedRecord =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
+    const store = {
+      version: 1 as const,
+      jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
+    };
+
+    const stateFile = loadStateFileSync(resolveStatePath(storePath));
+    const hasLegacyInlineState =
+      !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
+
+    if (stateFile) {
+      for (const job of store.jobs) {
+        const entry = stateFile.jobs[job.id];
+        if (entry) {
+          job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
+          job.state = (entry.state ?? {}) as never;
+        } else {
+          backfillMissingRuntimeFields(job);
+        }
+      }
+    } else if (!hasLegacyInlineState) {
+      for (const job of store.jobs) {
+        backfillMissingRuntimeFields(job);
+      }
+    }
+
+    for (const job of store.jobs) {
+      ensureJobStateObject(job);
+    }
+
+    return store;
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
       return { version: 1, jobs: [] };
     }
     throw err;

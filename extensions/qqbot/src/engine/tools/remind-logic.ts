@@ -33,6 +33,31 @@ export interface RemindExecuteContext {
   fallbackAccountId?: string;
 }
 
+export type RemindCronAction =
+  | { action: "list" }
+  | { action: "remove"; jobId: string }
+  | {
+      action: "add";
+      job: ReturnType<typeof buildOnceJob>["job"] | ReturnType<typeof buildCronJob>["job"];
+    };
+
+export type RemindCronScheduler = (params: RemindCronAction) => Promise<unknown>;
+
+export type RemindCronPlan =
+  | {
+      ok: true;
+      action: RemindParams["action"];
+      cronAction: RemindCronAction;
+      summary?: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+const PREPARED_CRON_PARAMS_INSTRUCTION =
+  "Gateway cron action prepared for internal QQ reminder scheduling.";
+
 /**
  * JSON Schema for AI tool parameters (used by framework registration).
  * AI Tool 参数的 JSON Schema 定义（供框架注册使用）。
@@ -161,20 +186,20 @@ export function buildOnceJob(params: RemindParams, delayMs: number, to: string, 
   const content = params.content!;
   const name = params.name || generateJobName(content);
   return {
-    action: "add",
+    action: "add" as const,
     job: {
       name,
-      schedule: { kind: "at", atMs },
-      sessionTarget: "isolated",
-      wakeMode: "now",
+      schedule: { kind: "at" as const, atMs },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
       deleteAfterRun: true,
       payload: {
-        kind: "agentTurn",
+        kind: "agentTurn" as const,
         message: buildReminderPrompt(content),
       },
       delivery: {
-        mode: "announce",
-        channel: "qqbot",
+        mode: "announce" as const,
+        channel: "qqbot" as const,
         to,
         accountId,
       },
@@ -188,19 +213,19 @@ export function buildCronJob(params: RemindParams, to: string, accountId: string
   const name = params.name || generateJobName(content);
   const tz = params.timezone || "Asia/Shanghai";
   return {
-    action: "add",
+    action: "add" as const,
     job: {
       name,
-      schedule: { kind: "cron", expr: params.time!.trim(), tz },
-      sessionTarget: "isolated",
-      wakeMode: "now",
+      schedule: { kind: "cron" as const, expr: params.time!.trim(), tz },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
       payload: {
-        kind: "agentTurn",
+        kind: "agentTurn" as const,
         message: buildReminderPrompt(content),
       },
       delivery: {
-        mode: "announce",
-        channel: "qqbot",
+        mode: "announce" as const,
+        channel: "qqbot" as const,
         to,
         accountId,
       },
@@ -233,6 +258,74 @@ function json(data: unknown) {
   };
 }
 
+function formatSchedulerError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function prepareRemindCronAction(
+  params: RemindParams,
+  ctx: RemindExecuteContext = {},
+): RemindCronPlan {
+  if (params.action === "list") {
+    return { ok: true, action: "list", cronAction: { action: "list" } };
+  }
+
+  if (params.action === "remove") {
+    if (!params.jobId) {
+      return { ok: false, error: "jobId is required when action=remove. Use action=list first." };
+    }
+    return {
+      ok: true,
+      action: "remove",
+      cronAction: { action: "remove", jobId: params.jobId },
+    };
+  }
+
+  if (!params.content) {
+    return { ok: false, error: "content is required when action=add" };
+  }
+  const resolvedTo = params.to || ctx.fallbackTo;
+  if (!resolvedTo) {
+    return {
+      ok: false,
+      error:
+        "Unable to determine delivery target for action=add. " +
+        "The reminder can only be scheduled from within an active conversation.",
+    };
+  }
+  if (!params.time) {
+    return { ok: false, error: "time is required when action=add" };
+  }
+  const resolvedAccountId = ctx.fallbackAccountId || "default";
+
+  if (isCronExpression(params.time)) {
+    return {
+      ok: true,
+      action: "add",
+      cronAction: buildCronJob(params, resolvedTo, resolvedAccountId),
+      summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${params.timezone || "Asia/Shanghai"})`,
+    };
+  }
+
+  const delayMs = parseRelativeTime(params.time);
+  if (delayMs == null) {
+    return {
+      ok: false,
+      error: `Could not parse time format: ${params.time}. Use values like 5m, 1h, 1h30m, or a cron expression.`,
+    };
+  }
+  if (delayMs < 30_000) {
+    return { ok: false, error: "Reminder delay must be at least 30 seconds" };
+  }
+
+  return {
+    ok: true,
+    action: "add",
+    cronAction: buildOnceJob(params, delayMs, resolvedTo, resolvedAccountId),
+    summary: `⏰ Reminder in ${formatDelay(delayMs)}: "${params.content}"`,
+  };
+}
+
 /**
  * Execute the reminder tool logic.
  * 执行提醒工具逻辑。
@@ -246,66 +339,39 @@ function json(data: unknown) {
  * the request-scoped AsyncLocalStorage) to fill them in.
  */
 export function executeRemind(params: RemindParams, ctx: RemindExecuteContext = {}) {
-  if (params.action === "list") {
-    return json({
-      _instruction: "Use the cron tool immediately with the following parameters.",
-      cronParams: { action: "list" },
-    });
+  const plan = prepareRemindCronAction(params, ctx);
+  if (!plan.ok) {
+    return json({ error: plan.error });
   }
-
-  if (params.action === "remove") {
-    if (!params.jobId) {
-      return json({
-        error: "jobId is required when action=remove. Use action=list first.",
-      });
-    }
-    return json({
-      _instruction: "Use the cron tool immediately with the following parameters.",
-      cronParams: { action: "remove", jobId: params.jobId },
-    });
-  }
-
-  if (!params.content) {
-    return json({ error: "content is required when action=add" });
-  }
-  const resolvedTo = params.to || ctx.fallbackTo;
-  if (!resolvedTo) {
-    return json({
-      error:
-        "Unable to determine delivery target for action=add. " +
-        "The reminder can only be scheduled from within an active conversation.",
-    });
-  }
-  if (!params.time) {
-    return json({ error: "time is required when action=add" });
-  }
-  const resolvedAccountId = ctx.fallbackAccountId || "default";
-
-  if (isCronExpression(params.time)) {
-    return json({
-      _instruction:
-        "Use the cron tool immediately with the following parameters. " +
-        "Pass cronParams verbatim — do not modify or omit any field, especially delivery.accountId — then tell the user the reminder has been scheduled.",
-      cronParams: buildCronJob(params, resolvedTo, resolvedAccountId),
-      summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${params.timezone || "Asia/Shanghai"})`,
-    });
-  }
-
-  const delayMs = parseRelativeTime(params.time);
-  if (delayMs == null) {
-    return json({
-      error: `Could not parse time format: ${params.time}. Use values like 5m, 1h, 1h30m, or a cron expression.`,
-    });
-  }
-  if (delayMs < 30_000) {
-    return json({ error: "Reminder delay must be at least 30 seconds" });
-  }
-
   return json({
-    _instruction:
-      "Use the cron tool immediately with the following parameters. " +
-      "Pass cronParams verbatim — do not modify or omit any field, especially delivery.accountId — then tell the user the reminder has been scheduled.",
-    cronParams: buildOnceJob(params, delayMs, resolvedTo, resolvedAccountId),
-    summary: `⏰ Reminder in ${formatDelay(delayMs)}: "${params.content}"`,
+    _instruction: PREPARED_CRON_PARAMS_INSTRUCTION,
+    action: plan.action,
+    summary: plan.summary,
   });
+}
+
+export async function executeScheduledRemind(
+  params: RemindParams,
+  ctx: RemindExecuteContext,
+  scheduler: RemindCronScheduler,
+) {
+  const plan = prepareRemindCronAction(params, ctx);
+  if (!plan.ok) {
+    return json({ error: plan.error });
+  }
+
+  try {
+    const cronResult = await scheduler(plan.cronAction);
+    return json({
+      ok: true,
+      action: plan.action,
+      summary: plan.summary,
+      cronResult,
+    });
+  } catch (error) {
+    return json({
+      error: `Failed to run Gateway cron action: ${formatSchedulerError(error)}`,
+      action: plan.action,
+    });
+  }
 }

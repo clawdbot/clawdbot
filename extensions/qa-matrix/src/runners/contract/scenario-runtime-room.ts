@@ -76,10 +76,12 @@ function buildMatrixQaThreadArtifacts(result: MatrixQaThreadScenarioResult) {
 }
 
 function failIfMatrixSubagentThreadHookError(event: MatrixQaObservedEvent) {
-  if (MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE.test(event.body ?? "")) {
-    throw new Error(
-      `Matrix subagent thread spawn hit missing hook error: ${event.body ?? "<empty>"}`,
-    );
+  const body = event.body ?? "";
+  if (MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE.test(body)) {
+    throw new Error(`Matrix subagent thread spawn hit missing hook error: ${body || "<empty>"}`);
+  }
+  if (/\bsessions_spawn failed:/i.test(body)) {
+    throw new Error(`Matrix subagent thread spawn failed: ${body || "<empty>"}`);
   }
 }
 
@@ -298,9 +300,9 @@ export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioCo
   const childToken = buildMatrixQaToken("MATRIX_QA_SUBAGENT_CHILD");
   const triggerBody = [
     `${context.sutUserId} Call sessions_spawn now for this QA check.`,
-    `Use task="Reply exactly \`${childToken}\`. This is the marker."`,
+    `Use task="Finish with exactly ${childToken}."`,
     "Use label=matrix-thread-subagent thread=true mode=session runTimeoutSeconds=60.",
-    "Do not answer with the marker yourself.",
+    "Do not send the child token from this parent session.",
   ].join(" ");
   const driverEventId = await client.sendTextMessage({
     body: triggerBody,

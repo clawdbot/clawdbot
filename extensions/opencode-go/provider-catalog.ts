@@ -1,5 +1,78 @@
+import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
+
+const PROVIDER_ID = "opencode-go";
+
 export const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
 export const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
+
+const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
+  [
+    {
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 1.74,
+        output: 3.48,
+        cacheRead: 0.145,
+        cacheWrite: 0,
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    },
+    {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0.14,
+        output: 0.28,
+        cacheRead: 0.028,
+        cacheWrite: 0,
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    },
+  ] satisfies ProviderRuntimeModel[]
+).map((model) => normalizeModelCompat(model));
+
+export function listOpencodeGoSupplementalModelCatalogEntries(): ModelCatalogEntry[] {
+  return OPENCODE_GO_SUPPLEMENTAL_MODELS.map((model) => ({
+    provider: model.provider,
+    id: model.id,
+    name: model.name,
+    reasoning: model.reasoning,
+    input: model.input,
+    contextWindow: model.contextWindow,
+  }));
+}
+
+export function resolveOpencodeGoSupplementalModel(
+  modelId: string,
+): ProviderRuntimeModel | undefined {
+  const normalizedModelId = modelId.trim().toLowerCase();
+  return OPENCODE_GO_SUPPLEMENTAL_MODELS.find((model) => model.id === normalizedModelId);
+}
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {
   return (baseUrl ?? "").trim().replace(/\/+$/, "");

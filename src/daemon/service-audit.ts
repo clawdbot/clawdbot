@@ -260,6 +260,26 @@ function normalizePathEntry(entry: string, platform: NodeJS.Platform): string {
   return normalized;
 }
 
+function getEquivalentMinimalPathEntries(
+  entry: string,
+  platform: NodeJS.Platform,
+  normalizedExpected: Set<string>,
+): string[] {
+  if (platform !== "linux") {
+    return [];
+  }
+  const equivalent = entry.endsWith("/aliases/default/bin")
+    ? `${entry.slice(0, -"/aliases/default/bin".length)}/current/bin`
+    : entry.endsWith("/current/bin")
+      ? `${entry.slice(0, -"/current/bin".length)}/aliases/default/bin`
+      : undefined;
+  if (!equivalent) {
+    return [];
+  }
+  const normalizedEquivalent = normalizePathEntry(equivalent, platform);
+  return normalizedExpected.has(normalizedEquivalent) ? [equivalent] : [];
+}
+
 function auditGatewayServicePath(
   command: GatewayServiceCommand,
   issues: ServiceConfigIssue[],
@@ -288,7 +308,12 @@ function auditGatewayServicePath(
   const normalizedExpected = new Set(expected.map((entry) => normalizePathEntry(entry, platform)));
   const missing = expected.filter((entry) => {
     const normalized = normalizePathEntry(entry, platform);
-    return !normalizedParts.has(normalized);
+    if (normalizedParts.has(normalized)) {
+      return false;
+    }
+    return !getEquivalentMinimalPathEntries(entry, platform, normalizedExpected).some(
+      (equivalent) => normalizedParts.has(normalizePathEntry(equivalent, platform)),
+    );
   });
   if (missing.length > 0) {
     issues.push({

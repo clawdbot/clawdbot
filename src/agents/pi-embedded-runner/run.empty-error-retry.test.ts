@@ -14,10 +14,9 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 //
 // Symptom: ollama/glm-5.1 occasionally ends a turn with stopReason="error" and
 // zero output tokens after a successful tool-call sequence. The user sees no
-// reply and has to nudge. The existing empty-response retry path is gated on
-// the strict-agentic contract (gpt-5 only), so non-frontier models fell
-// through to "incomplete turn detected". This suite locks in a narrower,
-// model-agnostic resubmission.
+// reply and has to nudge. This suite locks in a narrower model-agnostic
+// resubmission for errored turns, separate from the visible-answer retry used
+// for stopReason="stop" empty zero-token turns.
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 

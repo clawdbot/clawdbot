@@ -306,6 +306,9 @@ describe("applyPluginAutoEnable providers", () => {
         acp: {
           enabled: true,
         },
+        plugins: {
+          allow: ["telegram"],
+        },
       },
       candidates: [
         {
@@ -317,6 +320,7 @@ describe("applyPluginAutoEnable providers", () => {
       env,
     });
 
+    expect(result.config.plugins?.allow).toEqual(["telegram", "acpx"]);
     expect(result.config.plugins?.entries?.acpx?.enabled).toBe(true);
     expect(result.changes.join("\n")).toContain("ACP runtime configured, enabled automatically.");
   });

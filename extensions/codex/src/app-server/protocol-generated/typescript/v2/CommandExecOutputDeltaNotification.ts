@@ -10,21 +10,22 @@ import type { CommandExecOutputStream } from "./CommandExecOutputStream.js";
  * closes, the server terminates the process.
  */
 export type CommandExecOutputDeltaNotification = {
-/**
- * Client-supplied, connection-scoped `processId` from the original
- * `command/exec` request.
- */
-processId: string,
-/**
- * Output stream for this chunk.
- */
-stream: CommandExecOutputStream,
-/**
- * Base64-encoded output bytes.
- */
-deltaBase64: string,
-/**
- * `true` on the final streamed chunk for a stream when `outputBytesCap`
- * truncated later output on that stream.
- */
-capReached: boolean, };
+  /**
+   * Client-supplied, connection-scoped `processId` from the original
+   * `command/exec` request.
+   */
+  processId: string;
+  /**
+   * Output stream for this chunk.
+   */
+  stream: CommandExecOutputStream;
+  /**
+   * Base64-encoded output bytes.
+   */
+  deltaBase64: string;
+  /**
+   * `true` on the final streamed chunk for a stream when `outputBytesCap`
+   * truncated later output on that stream.
+   */
+  capReached: boolean;
+};

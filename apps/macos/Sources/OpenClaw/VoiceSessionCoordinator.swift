@@ -17,6 +17,7 @@ final class VoiceSessionCoordinator {
         var isFinal: Bool
         var sendChime: VoiceWakeChime
         var autoSendDelay: TimeInterval?
+        var voiceWakeTrigger: String?
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.coordinator")
@@ -28,7 +29,8 @@ final class VoiceSessionCoordinator {
         source: Source,
         text: String,
         attributed: NSAttributedString? = nil,
-        forwardEnabled: Bool = false) -> UUID
+        forwardEnabled: Bool = false,
+        voiceWakeTrigger: String? = nil) -> UUID
     {
         let token = UUID()
         self.logger.info("coordinator start token=\(token.uuidString) source=\(source.rawValue) len=\(text.count)")
@@ -40,7 +42,8 @@ final class VoiceSessionCoordinator {
             attributed: attributedText,
             isFinal: false,
             sendChime: .none,
-            autoSendDelay: nil)
+            autoSendDelay: nil,
+            voiceWakeTrigger: voiceWakeTrigger)
         self.session = session
         VoiceWakeOverlayController.shared.startSession(
             token: token,
@@ -63,7 +66,8 @@ final class VoiceSessionCoordinator {
         token: UUID,
         text: String,
         sendChime: VoiceWakeChime,
-        autoSendAfter: TimeInterval?)
+        autoSendAfter: TimeInterval?,
+        voiceWakeTrigger: String? = nil)
     {
         guard let session, session.token == token else { return }
         self.logger
@@ -73,6 +77,9 @@ final class VoiceSessionCoordinator {
         self.session?.isFinal = true
         self.session?.sendChime = sendChime
         self.session?.autoSendDelay = autoSendAfter
+        if let voiceWakeTrigger {
+            self.session?.voiceWakeTrigger = voiceWakeTrigger
+        }
 
         let attributed = VoiceWakeOverlayController.shared.makeAttributed(from: text)
         VoiceWakeOverlayController.shared.presentFinal(
@@ -86,15 +93,20 @@ final class VoiceSessionCoordinator {
     func sendNow(token: UUID, reason: String = "explicit") {
         guard let session, session.token == token else { return }
         let text = session.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let voiceWakeTrigger = session.voiceWakeTrigger
+        let sendChime = session.sendChime
         guard !text.isEmpty else {
             self.logger.info("coordinator sendNow \(reason) empty -> dismiss")
             VoiceWakeOverlayController.shared.dismiss(token: token, reason: .empty, outcome: .empty)
             self.clearSession()
             return
         }
-        VoiceWakeOverlayController.shared.beginSendUI(token: token, sendChime: session.sendChime)
+        VoiceWakeOverlayController.shared.beginSendUI(token: token, sendChime: sendChime)
         Task.detached {
-            _ = await VoiceWakeForwarder.forward(transcript: text)
+            _ = await VoiceWakeForwarder.forward(
+                transcript: text,
+                options: .init(
+                    voiceWakeTrigger: voiceWakeTrigger))
         }
     }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getGatewayRetryAfterMs,
+  isConfigApplyNoopForSnapshot,
   isConfigHashConflict,
   isConfigPatchNoopForSnapshot,
 } from "./suite-runtime-gateway.js";
@@ -30,7 +31,7 @@ describe("qa suite gateway helpers", () => {
         profile: "coding",
       },
       agents: {
-        list: [{ id: "qa", model: { primary: "openai/gpt-5.4" } }],
+        list: [{ id: "qa", model: { primary: "openai/gpt-5.5" } }],
       },
     };
 
@@ -57,6 +58,56 @@ describe("qa suite gateway helpers", () => {
         JSON.stringify({
           tools: {
             deny: null,
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("detects full config applies that only differ by gateway-written metadata", () => {
+    const config = {
+      gateway: {
+        controlUi: {
+          allowedOrigins: ["http://127.0.0.1:5173"],
+        },
+      },
+      meta: {
+        updatedAt: "2026-04-25T10:00:00.000Z",
+      },
+    };
+
+    expect(
+      isConfigApplyNoopForSnapshot(
+        config,
+        JSON.stringify({
+          gateway: {
+            controlUi: {
+              allowedOrigins: ["http://127.0.0.1:5173"],
+            },
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps changed full config applies eligible for the gateway", () => {
+    expect(
+      isConfigApplyNoopForSnapshot(
+        {
+          gateway: {
+            controlUi: {
+              allowedOrigins: ["http://127.0.0.1:5173"],
+            },
+          },
+          meta: {
+            updatedAt: "2026-04-25T10:00:00.000Z",
+          },
+        },
+        JSON.stringify({
+          gateway: {
+            controlUi: {
+              allowedOrigins: ["http://127.0.0.1:5174"],
+            },
           },
         }),
       ),

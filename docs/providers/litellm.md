@@ -108,6 +108,38 @@ export LITELLM_API_KEY="sk-litellm-key"
 
 ## Advanced configuration
 
+### Image generation
+
+LiteLLM can also back the `image_generate` tool through OpenAI-compatible
+`/images/generations` and `/images/edits` routes. Configure a LiteLLM image
+model under `agents.defaults.imageGenerationModel`:
+
+```json5
+{
+  models: {
+    providers: {
+      litellm: {
+        baseUrl: "http://localhost:4000",
+        apiKey: "${LITELLM_API_KEY}",
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "litellm/gpt-image-2",
+        timeoutMs: 180_000,
+      },
+    },
+  },
+}
+```
+
+Loopback LiteLLM URLs such as `http://localhost:4000` work without a global
+private-network override. For a LAN-hosted proxy, set
+`models.providers.litellm.request.allowPrivateNetwork: true` because the API key
+will be sent to the configured proxy host.
+
 <AccordionGroup>
   <Accordion title="Virtual keys">
     Create a dedicated key for OpenClaw with spend limits:

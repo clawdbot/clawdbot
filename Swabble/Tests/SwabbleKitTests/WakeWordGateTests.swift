@@ -47,6 +47,21 @@ import Testing
         #expect(match?.command == "do it")
     }
 
+    @Test func matchPrefersMostSpecificTriggerWhenOverlapping() {
+        let transcript = "hey clawd do it"
+        let segments = makeSegments(
+            transcript: transcript,
+            words: [
+                ("hey", 0.0, 0.1),
+                ("clawd", 0.2, 0.1),
+                ("do", 0.8, 0.1),
+                ("it", 1.0, 0.1),
+            ])
+        let config = WakeWordGateConfig(triggers: ["clawd", "hey clawd"], minPostTriggerGap: 0.3)
+        let match = WakeWordGate.match(transcript: transcript, segments: segments, config: config)
+        #expect(match?.trigger == "hey clawd")
+    }
+
     @Test func commandTextHandlesForeignRangeIndices() {
         let transcript = "hey clawd do thing"
         let other = "do thing"

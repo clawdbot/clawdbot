@@ -83,6 +83,38 @@ describe("task-registry audit", () => {
     });
   });
 
+  it("downgrades retained lost tasks with future cleanupAfter to warnings", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "lost-retained",
+          status: "lost",
+          error: "backing session missing",
+          endedAt: now - 60_000,
+          lastEventAt: now - 60_000,
+          cleanupAfter: now + 60_000,
+        }),
+        createTask({
+          taskId: "lost-expired",
+          status: "lost",
+          error: "backing session missing",
+          endedAt: now - 120_000,
+          lastEventAt: now - 120_000,
+          cleanupAfter: now - 1,
+        }),
+      ],
+    });
+
+    expect(
+      findings.map((finding) => [finding.task.taskId, finding.code, finding.severity]),
+    ).toEqual([
+      ["lost-expired", "lost", "error"],
+      ["lost-retained", "lost", "warn"],
+    ]);
+  });
+
   it("does not double-report lost tasks as missing cleanup", () => {
     const now = Date.parse("2026-03-30T01:00:00.000Z");
     const findings = listTaskAuditFindings({

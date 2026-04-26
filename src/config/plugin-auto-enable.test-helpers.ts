@@ -64,6 +64,7 @@ export function makeRegistry(
     modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
     contracts?: { webSearchProviders?: string[]; webFetchProviders?: string[]; tools?: string[] };
     providers?: string[];
+    cliBackends?: string[];
     configSchema?: Record<string, unknown>;
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
@@ -79,7 +80,7 @@ export function makeRegistry(
       configSchema: plugin.configSchema,
       channelConfigs: plugin.channelConfigs,
       providers: plugin.providers ?? [],
-      cliBackends: [],
+      cliBackends: plugin.cliBackends ?? [],
       skills: [],
       hooks: [],
       origin: "config" as const,

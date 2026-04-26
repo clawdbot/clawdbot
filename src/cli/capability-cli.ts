@@ -13,7 +13,7 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { modelsAuthLoginCommand, modelsStatusCommand } from "../commands/models.js";
+import { modelsStatusCommand } from "../commands/models/list.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,6 +22,10 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connectio
 import { isLoopbackHost } from "../gateway/net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
+import type {
+  ImageGenerationBackground,
+  ImageGenerationOutputFormat,
+} from "../image-generation/types.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import {
   describeImageFile,
@@ -52,15 +56,19 @@ import { theme } from "../terminal/theme.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
 import {
   getTtsProvider,
+  getTtsPersona,
+  listTtsPersonas,
   listSpeechVoices,
   resolveExplicitTtsOverrides,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setTtsEnabled,
+  setTtsPersona,
   setTtsProvider,
   textToSpeech,
 } from "../tts/tts.js";
 import { generateVideo, listRuntimeVideoGenerationProviders } from "../video-generation/runtime.js";
+import type { VideoGenerationResolution } from "../video-generation/types.js";
 import {
   isWebFetchProviderConfigured,
   resolveWebFetchDefinition,
@@ -77,6 +85,8 @@ import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
 type CapabilityTransport = "local" | "gateway";
+const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
+const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 
 type CapabilityMetadata = {
   id: string;
@@ -94,6 +104,7 @@ type CapabilityEnvelope = {
   model?: string;
   attempts: Array<Record<string, unknown>>;
   outputs: Array<Record<string, unknown>>;
+  ignoredOverrides?: Array<Record<string, unknown>>;
   error?: string;
 };
 
@@ -167,7 +178,20 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "image.edit",
     description: "Generate edited images from one or more input files.",
     transports: ["local"],
-    flags: ["--file", "--prompt", "--model", "--output", "--json"],
+    flags: [
+      "--file",
+      "--prompt",
+      "--model",
+      "--size",
+      "--aspect-ratio",
+      "--resolution",
+      "--output-format",
+      "--background",
+      "--openai-background",
+      "--timeout-ms",
+      "--output",
+      "--json",
+    ],
     resultShape: "saved image files plus attempts",
   },
   {
@@ -236,6 +260,13 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     resultShape: "provider ids, configured state, models, voices",
   },
   {
+    id: "tts.personas",
+    description: "List TTS personas.",
+    transports: ["local", "gateway"],
+    flags: ["--local", "--gateway", "--json"],
+    resultShape: "persona ids, labels, providers, active persona",
+  },
+  {
     id: "tts.status",
     description: "Show gateway-managed TTS state.",
     transports: ["gateway"],
@@ -264,10 +295,29 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     resultShape: "selected provider",
   },
   {
+    id: "tts.set-persona",
+    description: "Set the active TTS persona.",
+    transports: ["local", "gateway"],
+    flags: ["--persona", "--off", "--local", "--gateway", "--json"],
+    resultShape: "selected persona",
+  },
+  {
     id: "video.generate",
     description: "Generate video files with configured video providers.",
     transports: ["local"],
-    flags: ["--prompt", "--model", "--output", "--json"],
+    flags: [
+      "--prompt",
+      "--model",
+      "--size",
+      "--aspect-ratio",
+      "--resolution",
+      "--duration",
+      "--audio",
+      "--watermark",
+      "--timeout-ms",
+      "--output",
+      "--json",
+    ],
     resultShape: "saved video files plus attempts",
   },
   {
@@ -371,6 +421,9 @@ function formatEnvelopeForText(value: unknown): string {
     `${envelope.capability} via ${envelope.transport}`,
     ...(envelope.provider ? [`provider: ${envelope.provider}`] : []),
     ...(envelope.model ? [`model: ${envelope.model}`] : []),
+    ...(envelope.ignoredOverrides && envelope.ignoredOverrides.length > 0
+      ? [`ignoredOverrides: ${JSON.stringify(envelope.ignoredOverrides)}`]
+      : []),
     `outputs: ${String(envelope.outputs.length)}`,
   ];
   for (const output of envelope.outputs) {
@@ -530,6 +583,8 @@ async function runModelRun(params: {
         agentId,
         model: params.model,
         json: false,
+        modelRun: true,
+        promptMode: "none",
         cleanupBundleMcpOnRunEnd: true,
       },
       {
@@ -566,6 +621,8 @@ async function runModelRun(params: {
       message: params.prompt,
       provider,
       model,
+      modelRun: true,
+      promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
       idempotencyKey: randomIdempotencyKey(),
     },
@@ -689,8 +746,12 @@ async function runImageGenerate(params: {
   size?: string;
   aspectRatio?: string;
   resolution?: "1K" | "2K" | "4K";
+  outputFormat?: ImageGenerationOutputFormat;
+  background?: ImageGenerationBackground;
+  openaiBackground?: ImageGenerationBackground;
   file?: string[];
   output?: string;
+  timeoutMs?: number;
 }) {
   const cfg = loadConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
@@ -714,6 +775,12 @@ async function runImageGenerate(params: {
     size: params.size,
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
+    outputFormat: params.outputFormat,
+    background: params.background,
+    providerOptions: params.openaiBackground
+      ? { openai: { background: params.openaiBackground } }
+      : undefined,
+    timeoutMs: params.timeoutMs,
     inputImages,
   });
   const outputs = await Promise.all(
@@ -744,6 +811,7 @@ async function runImageGenerate(params: {
     model: result.model,
     attempts: result.attempts,
     outputs,
+    ignoredOverrides: result.ignoredOverrides,
   } satisfies CapabilityEnvelope;
 }
 
@@ -822,7 +890,75 @@ async function runAudioTranscribe(params: {
   } satisfies CapabilityEnvelope;
 }
 
-async function runVideoGenerate(params: { prompt: string; model?: string; output?: string }) {
+function parseOptionalFiniteNumber(
+  raw: string | number | undefined,
+  label: string,
+): number | undefined {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number`);
+  }
+  return value;
+}
+
+function normalizeImageOutputFormat(
+  raw: string | undefined,
+): ImageGenerationOutputFormat | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if ((IMAGE_OUTPUT_FORMATS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationOutputFormat;
+  }
+  throw new Error("--output-format must be one of png, jpeg, or webp");
+}
+
+function normalizeImageBackground(
+  raw: string | undefined,
+  label = "--background",
+): ImageGenerationBackground | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if ((IMAGE_BACKGROUNDS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationBackground;
+  }
+  throw new Error(`${label} must be one of transparent, opaque, or auto`);
+}
+
+function normalizeVideoResolution(raw: string | undefined): VideoGenerationResolution | undefined {
+  const normalized = raw?.trim().toUpperCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "480P" ||
+    normalized === "720P" ||
+    normalized === "768P" ||
+    normalized === "1080P"
+  ) {
+    return normalized;
+  }
+  throw new Error("video resolution must be one of 480P, 720P, 768P, or 1080P");
+}
+
+async function runVideoGenerate(params: {
+  prompt: string;
+  model?: string;
+  output?: string;
+  size?: string;
+  aspectRatio?: string;
+  resolution?: VideoGenerationResolution;
+  durationSeconds?: number;
+  audio?: boolean;
+  watermark?: boolean;
+  timeoutMs?: number;
+}) {
   const cfg = loadConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const result = await generateVideo({
@@ -830,6 +966,13 @@ async function runVideoGenerate(params: { prompt: string; model?: string; output
     agentDir,
     prompt: params.prompt,
     modelOverride: params.model,
+    size: params.size,
+    aspectRatio: params.aspectRatio,
+    resolution: params.resolution,
+    durationSeconds: params.durationSeconds,
+    audio: params.audio,
+    watermark: params.watermark,
+    timeoutMs: params.timeoutMs,
   });
   const outputs = await Promise.all(
     result.videos.map(async (video, index) => {
@@ -1059,6 +1202,30 @@ async function runTtsProviders(transport: CapabilityTransport) {
   };
 }
 
+async function runTtsPersonas(transport: CapabilityTransport) {
+  if (transport === "gateway") {
+    return await callGateway({
+      method: "tts.personas",
+      timeoutMs: 30_000,
+    });
+  }
+  const cfg = loadConfig();
+  const config = resolveTtsConfig(cfg);
+  const prefsPath = resolveTtsPrefsPath(config);
+  const active = getTtsPersona(config, prefsPath);
+  return {
+    active: active?.id ?? null,
+    personas: listTtsPersonas(config).map((persona) => ({
+      id: persona.id,
+      label: persona.label,
+      description: persona.description,
+      provider: persona.provider,
+      fallbackPolicy: persona.fallbackPolicy,
+      providers: Object.keys(persona.providers ?? {}),
+    })),
+  };
+}
+
 async function runTtsVoices(providerRaw?: string) {
   const cfg = loadConfig();
   const config = resolveTtsConfig(cfg);
@@ -1072,9 +1239,10 @@ async function runTtsVoices(providerRaw?: string) {
 }
 
 async function runTtsStateMutation(params: {
-  capability: "tts.enable" | "tts.disable" | "tts.set-provider";
+  capability: "tts.enable" | "tts.disable" | "tts.set-provider" | "tts.set-persona";
   transport: CapabilityTransport;
   provider?: string;
+  persona?: string | null;
 }) {
   if (params.transport === "gateway") {
     const method =
@@ -1082,10 +1250,17 @@ async function runTtsStateMutation(params: {
         ? "tts.enable"
         : params.capability === "tts.disable"
           ? "tts.disable"
-          : "tts.setProvider";
+          : params.capability === "tts.set-provider"
+            ? "tts.setProvider"
+            : "tts.setPersona";
     const payload = await callGateway({
       method,
-      params: params.provider ? { provider: params.provider } : undefined,
+      params:
+        params.capability === "tts.set-provider"
+          ? { provider: params.provider }
+          : params.capability === "tts.set-persona"
+            ? { persona: params.persona ?? "off" }
+            : undefined,
       timeoutMs: 30_000,
     });
     return payload;
@@ -1101,6 +1276,20 @@ async function runTtsStateMutation(params: {
   if (params.capability === "tts.disable") {
     setTtsEnabled(prefsPath, false);
     return { enabled: false };
+  }
+  if (params.capability === "tts.set-persona") {
+    if (!params.persona) {
+      setTtsPersona(prefsPath, null);
+      return { persona: null };
+    }
+    const persona = listTtsPersonas(config).find(
+      (entry) => entry.id === normalizeLowercaseStringOrEmpty(params.persona ?? ""),
+    );
+    if (!persona) {
+      throw new Error(`Unknown TTS persona: ${params.persona}`);
+    }
+    setTtsPersona(prefsPath, persona.id);
+    return { persona: persona.id };
   }
   if (!params.provider) {
     throw new Error("--provider is required");
@@ -1333,6 +1522,7 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--provider <id>", "Provider id")
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand({ provider: String(opts.provider) }, defaultRuntime);
       });
     });
@@ -1375,6 +1565,10 @@ export function registerCapabilityCli(program: Command) {
     .option("--size <size>", "Size hint like 1024x1024")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
     .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
+    .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
+    .option("--background <value>", "Background hint: transparent, opaque, or auto")
+    .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -1387,6 +1581,13 @@ export function registerCapabilityCli(program: Command) {
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
+          outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
+          background: normalizeImageBackground(opts.background as string | undefined),
+          openaiBackground: normalizeImageBackground(
+            opts.openaiBackground as string | undefined,
+            "--openai-background",
+          ),
+          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1399,6 +1600,13 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--file <path>", "Input file", collectOption, [])
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
+    .option("--size <size>", "Size hint like 1024x1024")
+    .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
+    .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
+    .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
+    .option("--background <value>", "Background hint: transparent, opaque, or auto")
+    .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -1408,7 +1616,17 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.edit",
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
+          size: opts.size as string | undefined,
+          aspectRatio: opts.aspectRatio as string | undefined,
+          resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
           file: files,
+          outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
+          background: normalizeImageBackground(opts.background as string | undefined),
+          openaiBackground: normalizeImageBackground(
+            opts.openaiBackground as string | undefined,
+            "--openai-background",
+          ),
+          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1597,6 +1815,27 @@ export function registerCapabilityCli(program: Command) {
     });
 
   tts
+    .command("personas")
+    .description("List TTS personas")
+    .option("--local", "Force local execution", false)
+    .option("--gateway", "Force gateway execution", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const transport = resolveTransport({
+          local: Boolean(opts.local),
+          gateway: Boolean(opts.gateway),
+          supported: ["local", "gateway"],
+          defaultTransport: "local",
+        });
+        const result = await runTtsPersonas(transport);
+        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
+          JSON.stringify(value, null, 2),
+        );
+      });
+    });
+
+  tts
     .command("status")
     .description("Show TTS status")
     .option("--gateway", "Force gateway execution", false)
@@ -1673,6 +1912,36 @@ export function registerCapabilityCli(program: Command) {
       });
     });
 
+  tts
+    .command("set-persona")
+    .description("Set the active TTS persona")
+    .option("--persona <id>", "TTS persona id")
+    .option("--off", "Disable the active TTS persona", false)
+    .option("--local", "Force local execution", false)
+    .option("--gateway", "Force gateway execution", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const transport = resolveTransport({
+          local: Boolean(opts.local),
+          gateway: Boolean(opts.gateway),
+          supported: ["local", "gateway"],
+          defaultTransport: "gateway",
+        });
+        if (!opts.off && !opts.persona) {
+          throw new Error("--persona is required unless --off is set");
+        }
+        const result = await runTtsStateMutation({
+          capability: "tts.set-persona",
+          persona: opts.off ? null : String(opts.persona),
+          transport,
+        });
+        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
+          JSON.stringify(value, null, 2),
+        );
+      });
+    });
+
   const video = capability.command("video").description("Video generation and description");
 
   video
@@ -1680,6 +1949,13 @@ export function registerCapabilityCli(program: Command) {
     .description("Generate video")
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
+    .option("--size <size>", "Size hint like 1280x720")
+    .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
+    .option("--resolution <value>", "Resolution hint: 480P, 720P, 768P, or 1080P")
+    .option("--duration <seconds>", "Target duration in seconds")
+    .option("--audio", "Enable generated audio when supported")
+    .option("--watermark", "Request provider watermark when supported")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -1688,6 +1964,13 @@ export function registerCapabilityCli(program: Command) {
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
           output: opts.output as string | undefined,
+          size: opts.size as string | undefined,
+          aspectRatio: opts.aspectRatio as string | undefined,
+          resolution: normalizeVideoResolution(opts.resolution as string | undefined),
+          durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
+          audio: opts.audio === true ? true : undefined,
+          watermark: opts.watermark === true ? true : undefined,
+          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });

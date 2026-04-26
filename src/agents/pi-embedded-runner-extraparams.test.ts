@@ -492,6 +492,7 @@ describe("applyExtraParamsToAgent", () => {
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
+    thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
   }) {
     const payload = params.payload ?? { store: false };
     const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -505,6 +506,7 @@ describe("applyExtraParamsToAgent", () => {
       params.applyProvider,
       params.applyModelId,
       params.extraParamsOverride,
+      params.thinkingLevel,
     );
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, params.options ?? {});
@@ -823,6 +825,159 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.google).toEqual({ thinking_config: { thinking_budget: 0 } });
     expect(payload).not.toHaveProperty("store");
+  });
+
+  it("forwards chat_template_kwargs params as top-level openai-completions payload fields", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "nemotron-3-super",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/nemotron-3-super": {
+                params: {
+                  chat_template_kwargs: {
+                    enable_thinking: false,
+                    force_nonempty_content: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "nemotron-3-super",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+    });
+
+    expect(payload.chat_template_kwargs).toEqual({
+      enable_thinking: false,
+      force_nonempty_content: true,
+    });
+  });
+
+  it("injects vLLM Nemotron chat_template_kwargs when thinking is off", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "nemotron-3-super",
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "nemotron-3-super",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+      thinkingLevel: "off",
+    });
+
+    expect(payload.chat_template_kwargs).toEqual({
+      enable_thinking: false,
+      force_nonempty_content: true,
+    });
+  });
+
+  it("does not inject vLLM Nemotron chat_template_kwargs when thinking is enabled", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "nemotron-3-super",
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "nemotron-3-super",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+      thinkingLevel: "low",
+    });
+
+    expect(payload).not.toHaveProperty("chat_template_kwargs");
+  });
+
+  it("lets extra_body override generated vLLM Nemotron chat_template_kwargs", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "nemotron-3-super",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/nemotron-3-super": {
+                params: {
+                  extra_body: {
+                    chat_template_kwargs: {
+                      enable_thinking: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "nemotron-3-super",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+      thinkingLevel: "off",
+    });
+
+    expect(payload.chat_template_kwargs).toEqual({
+      enable_thinking: true,
+    });
+  });
+
+  it("warns and skips invalid chat_template_kwargs params", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "vllm",
+        applyModelId: "nemotron-3-super",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "vllm/nemotron-3-super": {
+                  params: { chat_template_kwargs: "not-an-object" },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-completions",
+          provider: "vllm",
+          id: "nemotron-3-super",
+          baseUrl: "http://127.0.0.1:8000/v1",
+        } as Model<"openai-completions">,
+        payload: {
+          messages: [],
+        },
+      });
+
+      expect(payload).not.toHaveProperty("chat_template_kwargs");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "ignoring invalid chat_template_kwargs param: not-an-object",
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("warns and skips invalid extra_body params", () => {

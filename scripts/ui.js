@@ -76,6 +76,10 @@ export function assertSafeWindowsShellArgs(args, platform = process.platform) {
   );
 }
 
+export function prepareSpawnCommand(cmd, platform = process.platform) {
+  return shouldUseShellForCommand(cmd, platform) ? `"${cmd}"` : cmd;
+}
+
 function createSpawnOptions(cmd, args, envOverride) {
   const useShell = shouldUseShellForCommand(cmd);
   if (useShell) {
@@ -92,7 +96,7 @@ function createSpawnOptions(cmd, args, envOverride) {
 function run(cmd, args) {
   let child;
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    child = spawn(prepareSpawnCommand(cmd), args, createSpawnOptions(cmd, args));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -113,7 +117,7 @@ function run(cmd, args) {
 function runSync(cmd, args, envOverride) {
   let result;
   try {
-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
+    result = spawnSync(prepareSpawnCommand(cmd), args, createSpawnOptions(cmd, args, envOverride));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);

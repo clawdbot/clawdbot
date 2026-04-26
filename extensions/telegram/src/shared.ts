@@ -142,6 +142,11 @@ export function createTelegramPluginBase(params: {
       reactions: true,
       threads: true,
       media: true,
+      tts: {
+        voice: {
+          synthesisTarget: "voice-note",
+        },
+      },
       polls: true,
       nativeCommands: true,
       blockStreaming: true,

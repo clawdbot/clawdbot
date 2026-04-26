@@ -5,26 +5,29 @@ import type { ThreadItem } from "./ThreadItem.js";
 import type { TurnError } from "./TurnError.js";
 import type { TurnStatus } from "./TurnStatus.js";
 
-export type Turn = { id: string,
-/**
- * Only populated on a `thread/resume` or `thread/fork` response.
- * For all other responses and notifications returning a Turn,
- * the items field will be an empty list.
- */
-items: Array<ThreadItem>, status: TurnStatus,
-/**
- * Only populated when the Turn's status is failed.
- */
-error: TurnError | null,
-/**
- * Unix timestamp (in seconds) when the turn started.
- */
-startedAt: number | null,
-/**
- * Unix timestamp (in seconds) when the turn completed.
- */
-completedAt: number | null,
-/**
- * Duration between turn start and completion in milliseconds, if known.
- */
-durationMs: number | null, };
+export type Turn = {
+  id: string;
+  /**
+   * Only populated on a `thread/resume` or `thread/fork` response.
+   * For all other responses and notifications returning a Turn,
+   * the items field will be an empty list.
+   */
+  items: Array<ThreadItem>;
+  status: TurnStatus;
+  /**
+   * Only populated when the Turn's status is failed.
+   */
+  error: TurnError | null;
+  /**
+   * Unix timestamp (in seconds) when the turn started.
+   */
+  startedAt: number | null;
+  /**
+   * Unix timestamp (in seconds) when the turn completed.
+   */
+  completedAt: number | null;
+  /**
+   * Duration between turn start and completion in milliseconds, if known.
+   */
+  durationMs: number | null;
+};

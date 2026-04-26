@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { request } from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -57,6 +58,10 @@ describe("media server", () => {
     await expect(fs.stat(filePath)).rejects.toThrow();
   }
 
+  async function expectExistingMediaFile(filePath: string) {
+    await expect(fs.stat(filePath)).resolves.toEqual(expect.anything());
+  }
+
   function expectFetchedResponse(
     response: Awaited<ReturnType<MediaServerTestHarness["fetch"]>>,
     expected: { status: number; noSniff?: boolean },
@@ -107,6 +112,23 @@ describe("media server", () => {
     }
   }
 
+  async function requestAndAbort(url: string) {
+    await new Promise<void>((resolve, reject) => {
+      const req = request(url, (res) => {
+        res.destroy();
+        resolve();
+      });
+      req.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code === "ECONNRESET") {
+          resolve();
+          return;
+        }
+        reject(error);
+      });
+      req.end();
+    });
+  }
+
   beforeAll(async () => {
     ({ MEDIA_MAX_BYTES } = await import("./store.js"));
     mediaHarness = await startMediaServerTestHarness({
@@ -150,6 +172,64 @@ describe("media server", () => {
       return;
     }
     await expectMediaFileLifecycleCase(testCase);
+  });
+
+  it("sets safe fallback headers for untyped media bytes", async () => {
+    if (mediaHarness?.listenBlocked) {
+      return;
+    }
+    await writeMediaFile("raw", "hello");
+
+    const res = await withEnvAsync(LOOPBACK_FETCH_ENV, () => mediaHarness!.fetch(mediaUrl("raw")));
+
+    expectFetchedResponse(res, { status: 200, noSniff: true });
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("content-length")).toBe("5");
+    expect(await res.text()).toBe("hello");
+  });
+
+  it("answers HEAD media probes without consuming the media file", async () => {
+    if (mediaHarness?.listenBlocked) {
+      return;
+    }
+    const file = await writeMediaFile("head-probe", "hello");
+
+    const res = await withEnvAsync(LOOPBACK_FETCH_ENV, () =>
+      mediaHarness!.fetch(mediaUrl("head-probe"), { method: "HEAD" }),
+    );
+
+    expectFetchedResponse(res, { status: 200, noSniff: true });
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("content-length")).toBe("5");
+    expect(await res.text()).toBe("");
+    await expectExistingMediaFile(file);
+  });
+
+  it("forces active text media to download as opaque bytes", async () => {
+    if (mediaHarness?.listenBlocked) {
+      return;
+    }
+    await writeMediaFile("page.html", "<script>alert(1)</script>");
+
+    const res = await withEnvAsync(LOOPBACK_FETCH_ENV, () =>
+      mediaHarness!.fetch(mediaUrl("page.html")),
+    );
+
+    expectFetchedResponse(res, { status: 200, noSniff: true });
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="page.html"');
+    expect(await res.text()).toBe("<script>alert(1)</script>");
+  });
+
+  it("cleans up served media when the client aborts the response", async () => {
+    if (mediaHarness?.listenBlocked) {
+      return;
+    }
+    const file = await writeMediaFile("abort", "hello");
+
+    await withEnvAsync(LOOPBACK_FETCH_ENV, () => requestAndAbort(mediaUrl("abort")));
+
+    await waitForFileRemoval(file);
   });
 
   it.each([

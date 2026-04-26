@@ -26,6 +26,9 @@ type LifecycleHost = {
   tab: Tab;
   assistantName: string;
   assistantAvatar: string | null;
+  assistantAvatarSource?: string | null;
+  assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  assistantAvatarReason?: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
   localMediaPreviewRoots: string[];

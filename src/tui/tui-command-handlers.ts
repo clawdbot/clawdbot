@@ -163,6 +163,30 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     });
   };
 
+  const openContextModeSelector = () => {
+    const items = [
+      {
+        value: "list",
+        label: "list",
+        description: "Short context breakdown",
+      },
+      {
+        value: "detail",
+        label: "detail",
+        description: "Per-file, per-tool, per-skill, and system prompt size",
+      },
+      {
+        value: "json",
+        label: "json",
+        description: "Machine-readable context report",
+      },
+    ];
+    const selector = createSearchableSelectList(items, 9);
+    openSelector(selector, async (value) => {
+      await sendMessage(`/context ${value}`);
+    });
+  };
+
   const openSessionSelector = async () => {
     try {
       const result = await client.listSessions({
@@ -330,6 +354,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "agents":
         await openAgentSelector();
+        break;
+      case "context":
+        if (!args) {
+          openContextModeSelector();
+        } else {
+          await sendMessage(raw);
+        }
         break;
       case "crestodian":
         chatLog.addSystem(

@@ -280,10 +280,8 @@ describe("TelegramPollingSession", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds the persisted offset confirmation getUpdates call", async () => {
+  it("does not call getUpdates for offset confirmation (avoiding 409 conflicts)", async () => {
     const abort = new AbortController();
-    const timeoutSignal = new AbortController().signal;
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
     const bot = makeBot();
     createTelegramBotMock.mockReturnValueOnce(bot);
     runMock.mockReturnValueOnce({
@@ -308,17 +306,11 @@ describe("TelegramPollingSession", () => {
       telegramTransport: undefined,
     });
 
-    try {
-      await session.runUntilAbort();
+    await session.runUntilAbort();
 
-      expect(timeoutSpy).toHaveBeenCalledWith(10_000);
-      expect(bot.api.getUpdates).toHaveBeenCalledWith(
-        { offset: 42, limit: 1, timeout: 0 },
-        timeoutSignal,
-      );
-    } finally {
-      timeoutSpy.mockRestore();
-    }
+    // Offset confirmation was removed because it could self-conflict with the runner.
+    // OpenClaw middleware still skips duplicates using the persisted update offset.
+    expect(bot.api.getUpdates).not.toHaveBeenCalled();
   });
 
   it("forces a restart when polling stalls without getUpdates activity", async () => {
@@ -390,6 +382,60 @@ describe("TelegramPollingSession", () => {
       expect(botStop).toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
       expect(log).toHaveBeenCalledWith(expect.stringContaining("polling stall detected"));
+    } finally {
+      watchdogHarness.restore();
+    }
+  });
+
+  it("forces a restart when the runner task is pending but reports not running", async () => {
+    const abort = new AbortController();
+    const firstRunnerStop = vi.fn(async () => undefined);
+    const secondRunnerStop = vi.fn(async () => undefined);
+    createTelegramBotMock.mockReturnValue(makeBot());
+
+    let firstTaskResolve: (() => void) | undefined;
+    const firstTask = new Promise<void>((resolve) => {
+      firstTaskResolve = resolve;
+    });
+    let cycle = 0;
+    runMock.mockImplementation(() => {
+      cycle += 1;
+      if (cycle === 1) {
+        return {
+          task: () => firstTask,
+          stop: async () => {
+            await firstRunnerStop();
+            firstTaskResolve?.();
+          },
+          isRunning: () => false,
+        };
+      }
+      return {
+        task: async () => {
+          abort.abort();
+        },
+        stop: secondRunnerStop,
+        isRunning: () => false,
+      };
+    });
+
+    const watchdogHarness = installPollingStallWatchdogHarness();
+
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      watchdog?.();
+      await runPromise;
+
+      expect(runMock).toHaveBeenCalledTimes(2);
+      expect(firstRunnerStop).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
     } finally {
       watchdogHarness.restore();
     }
@@ -951,6 +997,32 @@ describe("TelegramPollingSession", () => {
     // is closed when dispose() fires on session exit.
     expect(transport1.close).toHaveBeenCalledTimes(1);
     expect(transport2.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs an actionable duplicate-poller hint for getUpdates conflicts", async () => {
+    const abort = new AbortController();
+    const log = vi.fn();
+    const conflictError = Object.assign(
+      new Error("Conflict: terminated by other getUpdates request"),
+      {
+        error_code: 409,
+        method: "getUpdates",
+      },
+    );
+    createTelegramBotMock.mockReturnValueOnce(makeBot()).mockReturnValueOnce(makeBot());
+    isRecoverableTelegramNetworkErrorMock.mockReturnValue(false);
+    mockRestartAfterPollingError(conflictError, abort);
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    await session.runUntilAbort();
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Another OpenClaw gateway, script, or Telegram poller"),
+    );
   });
 
   it("closes the transport once when runUntilAbort exits normally", async () => {

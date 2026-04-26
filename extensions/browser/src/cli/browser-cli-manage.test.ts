@@ -29,6 +29,7 @@ describe("browser manage output", () => {
             userDataDir: null,
             color: "#00AA00",
             headless: false,
+            headlessSource: "default",
             noSandbox: false,
             executablePath: null,
             attachOnly: true,
@@ -43,6 +44,7 @@ describe("browser manage output", () => {
 
     const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain("transport: chrome-mcp");
+    expect(output).toContain("headless: false (default)");
     expect(output).not.toContain("cdpPort:");
     expect(output).not.toContain("cdpUrl:");
   });

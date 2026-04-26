@@ -16,13 +16,13 @@ export type ConfigurablePlugin = {
   jsonSchema?: JsonSchemaObject;
 };
 
-type ManifestRegistryModule = typeof import("../plugins/manifest-registry.js");
+type PluginRegistryModule = typeof import("../plugins/plugin-registry.js");
 
-let manifestRegistryModulePromise: Promise<ManifestRegistryModule> | undefined;
+let pluginRegistryModulePromise: Promise<PluginRegistryModule> | undefined;
 
-function loadManifestRegistryModule(): Promise<ManifestRegistryModule> {
-  manifestRegistryModulePromise ??= import("../plugins/manifest-registry.js");
-  return manifestRegistryModulePromise;
+function loadPluginRegistryModule(): Promise<PluginRegistryModule> {
+  pluginRegistryModulePromise ??= import("../plugins/plugin-registry.js");
+  return pluginRegistryModulePromise;
 }
 
 type JsonSchemaProperty = {
@@ -299,10 +299,11 @@ export async function setupPluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await loadManifestRegistryModule();
-  const registry = loadPluginManifestRegistry({
+  const { loadPluginManifestRegistryForPluginRegistry } = await loadPluginRegistryModule();
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
+    includeDisabled: true,
   });
 
   const unconfigured = discoverUnconfiguredPlugins({
@@ -361,10 +362,11 @@ export async function configurePluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await loadManifestRegistryModule();
-  const registry = loadPluginManifestRegistry({
+  const { loadPluginManifestRegistryForPluginRegistry } = await loadPluginRegistryModule();
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
+    includeDisabled: true,
   });
 
   const configurable = discoverConfigurablePlugins({

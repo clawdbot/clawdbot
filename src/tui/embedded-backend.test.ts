@@ -47,13 +47,15 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => ({}),
 }));
 
-vi.mock("../gateway/chat-sanitize.js", () => ({
-  stripEnvelopeFromMessages: (messages: unknown[]) => messages,
-}));
-
 vi.mock("../gateway/cli-session-history.js", () => ({
   augmentChatHistoryWithCliSessionImports: ({ localMessages }: { localMessages?: unknown[] }) =>
     localMessages ?? [],
+}));
+
+vi.mock("../gateway/chat-display-projection.js", () => ({
+  projectChatDisplayMessages: (messages: unknown[]) => messages,
+  projectRecentChatDisplayMessages: (messages: unknown[]) => messages,
+  resolveEffectiveChatHistoryMaxChars: () => 100_000,
 }));
 
 vi.mock("../gateway/server-constants.js", () => ({
@@ -65,8 +67,6 @@ vi.mock("../gateway/server-methods/chat.js", () => ({
   augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
   enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
-  resolveEffectiveChatHistoryMaxChars: () => 100_000,
-  sanitizeChatHistoryMessages: (messages: unknown[]) => messages,
 }));
 
 vi.mock("../gateway/session-utils.js", () => ({
@@ -229,6 +229,63 @@ describe("EmbeddedTuiBackend", () => {
         },
       },
     ]);
+  });
+
+  it("keeps final short replies like No after suppressing lead-fragment deltas", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "answer shortly",
+      runId: "run-local-no",
+    });
+
+    registeredListener?.({
+      runId: "run-local-no",
+      stream: "assistant",
+      data: { text: "No", delta: "No" },
+    });
+    registeredListener?.({
+      runId: "run-local-no",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: [{ text: "No" }], meta: {} });
+    await flushMicrotasks();
+
+    const chatPayloads = events
+      .filter((entry) => entry.event === "chat")
+      .map(
+        (entry) =>
+          entry.payload as { state?: string; message?: { content?: Array<{ text?: string }> } },
+      );
+    const nonEmptyDeltas = chatPayloads.filter(
+      (payload) => payload.state === "delta" && payload.message?.content?.[0]?.text,
+    );
+    expect(nonEmptyDeltas).toHaveLength(0);
+    expect(chatPayloads.at(-1)).toEqual(
+      expect.objectContaining({
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "No" }],
+          timestamp: expect.any(Number),
+        },
+      }),
+    );
   });
 
   it("emits side-result events for local /btw runs", async () => {

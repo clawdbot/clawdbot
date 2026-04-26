@@ -8,7 +8,7 @@ export type ListRowModel = {
   id: string;
   name: string;
   provider: string;
-  input: Array<"text" | "image">;
+  input: Array<"text" | "image" | "document">;
   baseUrl?: string;
   contextWindow?: number | null;
   contextTokens?: number | null;

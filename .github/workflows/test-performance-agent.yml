@@ -181,7 +181,8 @@ jobs:
 
       - name: Restore Node 24 path
         if: steps.gate.outputs.run_agent == 'true' && steps.patch.outputs.has_changes == 'true'
-        run: | # zizmor: ignore[github-env] NODE_BIN is set by the trusted local setup-node-env action in this same job
+        run:
+          | # zizmor: ignore[github-env] NODE_BIN is set by the trusted local setup-node-env action in this same job
           set -euo pipefail
           export PATH="${NODE_BIN}:${PATH}"
           echo "${NODE_BIN}" >> "$GITHUB_PATH"

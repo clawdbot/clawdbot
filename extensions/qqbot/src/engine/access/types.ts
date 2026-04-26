@@ -32,6 +32,7 @@ export const QQBOT_ACCESS_REASON = {
   GROUP_POLICY_DISABLED: "group_policy_disabled",
   GROUP_POLICY_EMPTY_ALLOWLIST: "group_policy_empty_allowlist",
   GROUP_POLICY_NOT_ALLOWLISTED: "group_policy_not_allowlisted",
+  BOT_SELF_ECHO: "bot_self_echo",
 } as const;
 
 export type QQBotAccessReasonCode = (typeof QQBOT_ACCESS_REASON)[keyof typeof QQBOT_ACCESS_REASON];

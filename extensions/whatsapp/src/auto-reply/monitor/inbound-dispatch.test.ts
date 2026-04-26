@@ -378,7 +378,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(groupHistories.get("whatsapp:default:group:123@g.us") ?? []).toHaveLength(0);
   });
 
-  it("delivers block and final WhatsApp payloads; suppresses text-only tool payloads but delivers tool media", async () => {
+  it("delivers block and final WhatsApp payloads; suppresses text-only tool payloads but delivers media", async () => {
     const deliverReply = vi.fn(async () => undefined);
     const rememberSentText = vi.fn();
 
@@ -411,10 +411,27 @@ describe("whatsapp inbound dispatch", () => {
       }),
     );
 
+    await deliver?.(
+      { text: "generated image", mediaUrls: ["/tmp/generated.jpg"] },
+      {
+        kind: "block",
+      },
+    );
+    expect(deliverReply).toHaveBeenCalledTimes(2);
+    expect(rememberSentText).toHaveBeenCalledTimes(2);
+    expect(deliverReply).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          mediaUrls: ["/tmp/generated.jpg"],
+          text: "generated image",
+        }),
+      }),
+    );
+
     await deliver?.({ text: "block payload" }, { kind: "block" });
     await deliver?.({ text: "final payload" }, { kind: "final" });
-    expect(deliverReply).toHaveBeenCalledTimes(3);
-    expect(rememberSentText).toHaveBeenCalledTimes(3);
+    expect(deliverReply).toHaveBeenCalledTimes(4);
+    expect(rememberSentText).toHaveBeenCalledTimes(4);
   });
 
   it("suppresses reasoning and compaction payloads before WhatsApp delivery", async () => {

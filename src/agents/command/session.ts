@@ -6,6 +6,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
+import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
@@ -235,8 +236,16 @@ export function resolveSession(opts: {
     resetOverride: channelReset,
   });
   const fresh = sessionEntry
-    ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy })
-        .fresh
+    ? evaluateSessionFreshness({
+        updatedAt: sessionEntry.updatedAt,
+        ...resolveSessionLifecycleTimestamps({
+          entry: sessionEntry,
+          agentId: opts.agentId,
+          storePath,
+        }),
+        now,
+        policy: resetPolicy,
+      }).fresh
     : false;
   const sessionId =
     opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();

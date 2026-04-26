@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/openshell-sandbox",
-  "version": "2026.4.20",
+  "version": "2026.4.25",
   "private": true,
   "description": "OpenClaw OpenShell sandbox backend",
   "type": "module",

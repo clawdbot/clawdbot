@@ -1,11 +1,37 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveLocalVitestEnv,
   resolveLocalFullSuiteProfile,
   resolveLocalVitestScheduling,
   shouldUseLargeLocalFullSuiteProfile,
 } from "../../scripts/lib/vitest-local-scheduling.mjs";
 
 describe("vitest local full-suite profile", () => {
+  it("forces local Vitest runs back onto local-check policy", () => {
+    expect(resolveLocalVitestEnv({ OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" })).toEqual({
+      OPENCLAW_LOCAL_CHECK: "1",
+      PATH: "/usr/bin",
+    });
+    expect(resolveLocalVitestEnv({ OPENCLAW_LOCAL_CHECK: "false", PATH: "/usr/bin" })).toEqual({
+      OPENCLAW_LOCAL_CHECK: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("keeps local-check disablement for CI Vitest runs", () => {
+    expect(
+      resolveLocalVitestEnv({
+        CI: "true",
+        OPENCLAW_LOCAL_CHECK: "0",
+        PATH: "/usr/bin",
+      }),
+    ).toEqual({
+      CI: "true",
+      OPENCLAW_LOCAL_CHECK: "0",
+      PATH: "/usr/bin",
+    });
+  });
+
   it("selects the large local profile on roomy hosts that are not throttled", () => {
     const env = {};
     const hostInfo = {

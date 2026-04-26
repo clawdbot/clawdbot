@@ -95,9 +95,9 @@ If you omit `--scope`, later reconnects with the stored rotated token reuse that
 token's cached approved scopes. If you pass explicit `--scope` values, those
 become the stored scope set for future cached-token reconnects.
 Non-admin paired-device callers can rotate only their **own** device token.
-Also, any explicit `--scope` values must stay within the caller session's own
-operator scopes; rotation cannot mint a broader operator token than the caller
-already has.
+The target token scope set must stay within the caller session's own operator
+scopes; rotation cannot mint or preserve a broader operator token than the
+caller already has.
 
 ```
 openclaw devices rotate --device <deviceId> --role operator --scope operator.read --scope operator.write
@@ -111,6 +111,8 @@ Revoke a device token for a specific role.
 
 Non-admin paired-device callers can revoke only their **own** device token.
 Revoking some other device's token requires `operator.admin`.
+The target token scope set must also fit within the caller session's own
+operator scopes; pairing-only callers cannot revoke admin/write operator tokens.
 
 ```
 openclaw devices revoke --device <deviceId> --role node
@@ -135,12 +137,15 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 - These commands require `operator.pairing` (or `operator.admin`) scope.
 - `gateway.nodes.pairing.autoApproveCidrs` is an opt-in Gateway policy for
   fresh node device pairing only; it does not change CLI approval authority.
-- Token rotation stays inside the approved pairing role set and approved scope
-  baseline for that device. A stray cached token entry does not grant a new
-  rotate target.
+- Token rotation and revocation stay inside the approved pairing role set and
+  approved scope baseline for that device. A stray cached token entry does not
+  grant a token-management target.
 - For paired-device token sessions, cross-device management is admin-only:
   `remove`, `rotate`, and `revoke` are self-only unless the caller has
   `operator.admin`.
+- Token mutation is also caller-scope contained: a pairing-only session cannot
+  rotate or revoke a token that currently carries `operator.admin` or
+  `operator.write`.
 - `devices clear` is intentionally gated by `--yes`.
 - If pairing scope is unavailable on local loopback (and no explicit `--url` is passed), list/approve can use a local pairing fallback.
 - `devices approve` requires an explicit request ID before minting tokens; omitting `requestId` or passing `--latest` only previews the newest pending request.

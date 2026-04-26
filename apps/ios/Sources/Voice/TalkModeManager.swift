@@ -87,6 +87,7 @@ final class TalkModeManager: NSObject {
     private var apiKey: String?
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
+    private var gatewaySpeechLocaleID: String?
     private var mainSessionKey: String = "main"
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
@@ -500,12 +501,17 @@ final class TalkModeManager: NSObject {
         #endif
 
         self.stopRecognition()
-        self.speechRecognizer = SFSpeechRecognizer()
+        let localSpeechLocale = UserDefaults.standard.string(forKey: TalkSpeechLocale.storageKey)
+        let resolvedSpeech = TalkSpeechLocale.makeRecognizer(
+            localSelection: localSpeechLocale,
+            gatewaySelection: self.gatewaySpeechLocaleID)
+        self.speechRecognizer = resolvedSpeech.recognizer
         guard let recognizer = self.speechRecognizer else {
             throw NSError(domain: "TalkMode", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Speech recognizer unavailable",
             ])
         }
+        GatewayDiagnostics.log("talk speech: locale=\(resolvedSpeech.localeID ?? "default")")
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         self.recognitionRequest?.shouldReportPartialResults = true
@@ -2027,6 +2033,7 @@ extension TalkModeManager {
             if let interrupt = parsed.interruptOnSpeech {
                 self.interruptOnSpeech = interrupt
             }
+            self.gatewaySpeechLocaleID = parsed.speechLocaleID
             self.silenceWindow = TimeInterval(parsed.silenceTimeoutMs) / 1000
             if parsed.normalizedPayload || parsed.defaultVoiceId != nil || parsed.rawConfigApiKey != nil {
                 GatewayDiagnostics.log(
@@ -2041,6 +2048,7 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = nil
             self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
+            self.gatewaySpeechLocaleID = nil
             self.silenceWindow = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
         }
     }

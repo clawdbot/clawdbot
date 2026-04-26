@@ -15,6 +15,7 @@
 import {
   normalizeQQBotSenderId,
   resolveQQBotAccess,
+  QQBOT_ACCESS_REASON,
   type QQBotAccessResult,
 } from "../access/index.js";
 import {
@@ -56,6 +57,33 @@ export async function buildInboundContext(
     peer: { kind: isGroupChat ? "group" : "direct", id: peerId },
   });
 
+  const qualifiedTarget = isGroupChat
+    ? event.type === "guild"
+      ? `qqbot:channel:${event.channelId}`
+      : `qqbot:group:${event.groupOpenid}`
+    : event.type === "dm"
+      ? `qqbot:dm:${event.guildId}`
+      : `qqbot:c2c:${event.senderId}`;
+  const fromAddress = qualifiedTarget;
+
+  const selfEchoAccess = resolveBotSelfEchoAccess(event, account.accountId);
+  if (selfEchoAccess) {
+    log?.info(
+      `Blocked qqbot inbound self-echo: reasonCode=${selfEchoAccess.reasonCode} ` +
+        `msgIdx=${event.msgIdx ?? ""} senderId=${normalizeQQBotSenderId(event.senderId)} ` +
+        `accountId=${account.accountId} isGroup=${isGroupChat}`,
+    );
+    return buildBlockedInboundContext({
+      event,
+      route,
+      isGroupChat,
+      peerId,
+      qualifiedTarget,
+      fromAddress,
+      access: selfEchoAccess,
+    });
+  }
+
   // ---- 1a. Early access control ----
   //
   // Evaluate the account-level dmPolicy / groupPolicy + allowFrom /
@@ -73,15 +101,6 @@ export async function buildInboundContext(
     dmPolicy: account.config?.dmPolicy,
     groupPolicy: account.config?.groupPolicy,
   });
-
-  const qualifiedTarget = isGroupChat
-    ? event.type === "guild"
-      ? `qqbot:channel:${event.channelId}`
-      : `qqbot:group:${event.groupOpenid}`
-    : event.type === "dm"
-      ? `qqbot:dm:${event.guildId}`
-      : `qqbot:c2c:${event.senderId}`;
-  const fromAddress = qualifiedTarget;
 
   if (access.decision !== "allow") {
     log?.info(
@@ -254,6 +273,7 @@ export async function buildInboundContext(
       localMediaTypes.push(t);
     }
   }
+  const voiceMediaTypes = [...uniqueVoicePaths, ...uniqueVoiceUrls].map(() => "audio/wav");
 
   return {
     event,
@@ -279,6 +299,7 @@ export async function buildInboundContext(
     uniqueVoicePaths,
     uniqueVoiceUrls,
     uniqueVoiceAsrReferTexts,
+    voiceMediaTypes,
     hasAsrReferFallback,
     voiceTranscriptSources,
     replyTo,
@@ -342,6 +363,7 @@ function buildBlockedInboundContext(params: {
     uniqueVoicePaths: [],
     uniqueVoiceUrls: [],
     uniqueVoiceAsrReferTexts: [],
+    voiceMediaTypes: [],
     hasAsrReferFallback: false,
     voiceTranscriptSources: [],
     replyTo: undefined,
@@ -352,6 +374,33 @@ function buildBlockedInboundContext(params: {
     accessDecision: params.access.decision,
     typing: { keepAlive: null },
     inputNotifyRefIdx: undefined,
+  };
+}
+
+function resolveBotSelfEchoAccess(
+  event: QueuedMessage,
+  accountId: string,
+): QQBotAccessResult | null {
+  const currentMsgIdx = event.msgIdx?.trim();
+  if (!currentMsgIdx) {
+    return null;
+  }
+
+  // Only the current message ref is a self-echo signal. `refMsgIdx` points at
+  // a quoted message, and real users must still be able to reply to bot output.
+  const refEntry = getRefIndex(currentMsgIdx);
+  if (refEntry?.isBot !== true || refEntry.senderId !== accountId) {
+    return null;
+  }
+
+  return {
+    decision: "block",
+    reasonCode: QQBOT_ACCESS_REASON.BOT_SELF_ECHO,
+    reason: "bot self-echo",
+    effectiveAllowFrom: [],
+    effectiveGroupAllowFrom: [],
+    dmPolicy: "open",
+    groupPolicy: "open",
   };
 }
 

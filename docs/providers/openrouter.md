@@ -71,13 +71,14 @@ OpenRouter can also back the `image_generate` tool. Use an OpenRouter image mode
     defaults: {
       imageGenerationModel: {
         primary: "openrouter/google/gemini-3.1-flash-image-preview",
+        timeoutMs: 180_000,
       },
     },
   },
 }
 ```
 
-OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`.
+OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`. Use `agents.defaults.imageGenerationModel.timeoutMs` for slower OpenRouter image models; the `image_generate` tool's per-call `timeoutMs` parameter still wins.
 
 ## Text-to-speech
 

@@ -384,6 +384,35 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.readFileSync(runtimePackagePath, "utf8")).toContain('"extensions": [');
   });
 
+  it("copies bundled plugin skill trees into the runtime overlay", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-skills-");
+    createDistPluginDir(repoRoot, "feishu");
+    setupRepoFiles(repoRoot, {
+      [bundledDistPluginFile("feishu", "index.js")]: "export default {}\n",
+      [bundledDistPluginFile("feishu", "skills/feishu-doc/SKILL.md")]:
+        "---\nname: feishu-doc\n---\n",
+      [bundledDistPluginFile("feishu", "skills/feishu-doc/fixture.txt")]: "# Feishu Doc\n",
+    });
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const runtimeRoot = path.join(repoRoot, "dist-runtime");
+    const runtimeSkillPath = path.join(
+      runtimeRoot,
+      "extensions",
+      "feishu",
+      "skills",
+      "feishu-doc",
+      "fixture.txt",
+    );
+
+    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# Feishu Doc\n");
+    expect(path.relative(fs.realpathSync(runtimeRoot), fs.realpathSync(runtimeSkillPath))).toBe(
+      path.join("extensions", "feishu", "skills", "feishu-doc", "fixture.txt"),
+    );
+  });
+
   it("preserves package metadata needed for bundled plugin discovery from dist-runtime", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-discovery-");
     const runtimeExtensionsDir = path.join(repoRoot, "dist-runtime", "extensions");
@@ -480,13 +509,13 @@ describe("stageBundledPluginRuntime", () => {
     createDistPluginDir(repoRoot, "feishu");
     setupRepoFiles(repoRoot, {
       [bundledDistPluginFile("feishu", "index.js")]: "export default {}\n",
-      [bundledDistPluginFile("feishu", "skills/feishu-doc/fixture.txt")]: "# Feishu Doc\n",
+      [bundledDistPluginFile("feishu", "assets/fixture.txt")]: "# Feishu Doc\n",
     });
 
     const realSymlinkSync = fs.symlinkSync.bind(fs);
     const symlinkSpy = vi.spyOn(fs, "symlinkSync").mockImplementation(((target, link, type) => {
       const linkPath = String(link);
-      if (linkPath.endsWith(path.join("skills", "feishu-doc", "fixture.txt"))) {
+      if (linkPath.endsWith(path.join("assets", "fixture.txt"))) {
         const err = Object.assign(new Error("file already exists"), { code: "EEXIST" });
         realSymlinkSync(String(target), linkPath, type);
         throw err;
@@ -496,18 +525,55 @@ describe("stageBundledPluginRuntime", () => {
 
     expect(() => stageBundledPluginRuntime({ repoRoot })).not.toThrow();
 
-    const runtimeSkillPath = path.join(
+    const runtimeAssetPath = path.join(
       repoRoot,
       "dist-runtime",
       "extensions",
       "feishu",
-      "skills",
-      "feishu-doc",
+      "assets",
       "fixture.txt",
     );
-    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(true);
-    expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# Feishu Doc\n");
+    expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("# Feishu Doc\n");
 
     symlinkSpy.mockRestore();
   });
+
+  it.each(["EACCES", "ENOSYS"] as const)(
+    "falls back to copying runtime assets when Windows symlink creation fails with %s",
+    (code) => {
+      const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-win-copy-");
+      createDistPluginDir(repoRoot, "feishu");
+      setupRepoFiles(repoRoot, {
+        [bundledDistPluginFile("feishu", "index.js")]: "export default {}\n",
+        [bundledDistPluginFile("feishu", "assets/fixture.txt")]: "# Feishu Doc\n",
+      });
+
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const realSymlinkSync = fs.symlinkSync.bind(fs);
+      const symlinkSpy = vi.spyOn(fs, "symlinkSync").mockImplementation(((target, link, type) => {
+        const linkPath = String(link);
+        if (linkPath.endsWith(path.join("assets", "fixture.txt"))) {
+          throw Object.assign(new Error("symlink failed"), { code });
+        }
+        return realSymlinkSync(String(target), linkPath, type);
+      }) as typeof fs.symlinkSync);
+
+      stageBundledPluginRuntime({ repoRoot });
+
+      const runtimeAssetPath = path.join(
+        repoRoot,
+        "dist-runtime",
+        "extensions",
+        "feishu",
+        "assets",
+        "fixture.txt",
+      );
+      expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(false);
+      expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("# Feishu Doc\n");
+
+      symlinkSpy.mockRestore();
+      platformSpy.mockRestore();
+    },
+  );
 });

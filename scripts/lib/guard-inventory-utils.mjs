@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const parsedTypeScriptSourceCache = new Map();
+const sourceTextCache = new Map();
 
 export function normalizeRepoPath(repoRoot, filePath) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
@@ -74,6 +75,122 @@ export function writeLine(stream, text) {
   stream.write(`${text}\n`);
 }
 
+export function collectModuleReferencesFromSource(source) {
+  const lineStarts = computeLineStarts(source);
+  const isCodePosition = createCodePositionChecker(source);
+  const references = [];
+  const push = (kind, specifier, position, syntaxPosition) => {
+    if (!isCodePosition(syntaxPosition)) {
+      return;
+    }
+    references.push({
+      kind,
+      line: lineFromPosition(lineStarts, position),
+      specifier,
+    });
+  };
+
+  for (const match of source.matchAll(/\bimport\s*\(\s*(["'])([^"']+)\1/g)) {
+    push("dynamic-import", match[2], match.index + match[0].lastIndexOf(match[1]), match.index);
+  }
+  for (const match of source.matchAll(/^\s*import\s*(["'])([^"']+)\1/gm)) {
+    push(
+      "import",
+      match[2],
+      match.index + match[0].lastIndexOf(match[1]),
+      match.index + match[0].indexOf("import"),
+    );
+  }
+  for (const match of source.matchAll(
+    /^\s*(import|export)\s+(?:type\s+)?[^;"']*?\bfrom\s*(["'])([^"']+)\2/gm,
+  )) {
+    push(
+      match[1],
+      match[3],
+      match.index + match[0].lastIndexOf(match[2]),
+      match.index + match[0].indexOf(match[1]),
+    );
+  }
+
+  return references.toSorted(
+    (left, right) =>
+      left.line - right.line ||
+      left.kind.localeCompare(right.kind) ||
+      left.specifier.localeCompare(right.specifier),
+  );
+}
+
+function createCodePositionChecker(source) {
+  const codePositions = new Uint8Array(source.length);
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+
+    if (char === "/" && next === "/") {
+      index += 2;
+      while (index < source.length && source.charCodeAt(index) !== 10) {
+        index += 1;
+      }
+      index -= 1;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) {
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (char === "'" || char === '"' || char === "`") {
+      const quote = char;
+      index += 1;
+      while (index < source.length) {
+        if (source[index] === "\\") {
+          index += 2;
+          continue;
+        }
+        if (source[index] === quote) {
+          break;
+        }
+        index += 1;
+      }
+      continue;
+    }
+
+    codePositions[index] = 1;
+  }
+
+  return (position) => codePositions[position] === 1;
+}
+
+function computeLineStarts(source) {
+  const lineStarts = [0];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source.charCodeAt(index) === 10) {
+      lineStarts.push(index + 1);
+    }
+  }
+  return lineStarts;
+}
+
+function lineFromPosition(lineStarts, position) {
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (lineStarts[middle] <= position) {
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return high + 1;
+}
+
 export function createCachedAsync(factory) {
   let cachedPromise = null;
   return async function getCachedValue() {
@@ -118,7 +235,11 @@ export async function collectTypeScriptInventory(params) {
     const cacheKey = `${scriptKind}:${filePath}`;
     let sourceFile = parsedTypeScriptSourceCache.get(cacheKey);
     if (!sourceFile) {
-      const source = await fs.readFile(filePath, "utf8");
+      let source = sourceTextCache.get(filePath);
+      if (source === undefined) {
+        source = await fs.readFile(filePath, "utf8");
+        sourceTextCache.set(filePath, source);
+      }
       if (params.shouldParseSource && !params.shouldParseSource(source, filePath)) {
         continue;
       }

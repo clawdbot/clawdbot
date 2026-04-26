@@ -16,6 +16,10 @@ Tailscale provides HTTPS, routing, and (for Serve) identity headers.
 - `funnel`: Public HTTPS via `tailscale funnel`. OpenClaw requires a shared password.
 - `off`: Default (no Tailscale automation).
 
+Status and audit output use **Tailscale exposure** for this OpenClaw Serve/Funnel
+mode. `off` means OpenClaw is not managing Serve or Funnel; it does not mean the
+local Tailscale daemon is stopped or logged out.
+
 ## Auth
 
 Set `gateway.auth.mode` to control the handshake:

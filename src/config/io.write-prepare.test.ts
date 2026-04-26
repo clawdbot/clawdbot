@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectChangedPaths,
   formatConfigValidationFailure,
+  applyUnsetPathsForWrite,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
@@ -38,54 +39,51 @@ describe("config io write prepare", () => {
     expect(persisted).not.toHaveProperty("sessions.persistence");
   });
 
-  it("preserves authored source-only nested fields during partial writes", () => {
-    const persisted = resolvePersistCandidateForWrite({
-      runtimeConfig: {
-        plugins: {
-          entries: {},
+  it("strips transient plugin install records from partial writes", () => {
+    const persisted = applyUnsetPathsForWrite(
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {
+          plugins: {
+            entries: {},
+          },
         },
-      },
-      sourceConfig: {
-        plugins: {
-          entries: {},
-          installs: {
-            "openclaw-web-search": {
-              source: "npm",
-              spec: "@ollama/openclaw-web-search",
-              installPath: "/tmp/openclaw-web-search",
-              resolvedName: "@ollama/openclaw-web-search",
-              resolvedVersion: "0.2.2",
+        sourceConfig: {
+          plugins: {
+            entries: {},
+            installs: {
+              "openclaw-web-search": {
+                source: "npm",
+                spec: "@ollama/openclaw-web-search",
+                installPath: "/tmp/openclaw-web-search",
+                resolvedName: "@ollama/openclaw-web-search",
+                resolvedVersion: "0.2.2",
+              },
             },
           },
         },
-      },
-      nextConfig: {
-        plugins: {
-          entries: {},
-          installs: {
-            "openclaw-web-search": {
-              source: "npm",
-              spec: "@ollama/openclaw-web-search@0.2.2",
-              installPath: "/tmp/openclaw-web-search",
-              resolvedName: "@ollama/openclaw-web-search",
-              resolvedVersion: "0.2.2",
+        nextConfig: {
+          plugins: {
+            entries: {},
+            installs: {
+              "openclaw-web-search": {
+                source: "npm",
+                spec: "@ollama/openclaw-web-search@0.2.2",
+                installPath: "/tmp/openclaw-web-search",
+                resolvedName: "@ollama/openclaw-web-search",
+                resolvedVersion: "0.2.2",
+              },
             },
           },
         },
-      },
-    }) as {
+      }) as OpenClawConfig,
+      [["plugins", "installs"]],
+    ) as {
       plugins?: {
         installs?: Record<string, Record<string, unknown>>;
       };
     };
 
-    expect(persisted.plugins?.installs?.["openclaw-web-search"]).toEqual({
-      source: "npm",
-      spec: "@ollama/openclaw-web-search@0.2.2",
-      installPath: "/tmp/openclaw-web-search",
-      resolvedName: "@ollama/openclaw-web-search",
-      resolvedVersion: "0.2.2",
-    });
+    expect(persisted.plugins?.installs).toBeUndefined();
   });
 
   it("preserves untouched include-owned subtrees during unrelated writes", () => {

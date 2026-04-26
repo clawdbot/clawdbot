@@ -3598,8 +3598,7 @@ td.data-table-key-col {
 
 .md-preview-dialog::backdrop {
   background:
-    radial-gradient(circle at top, rgba(255, 92, 92, 0.12), transparent 32%),
-    rgba(5, 8, 15, 0.76);
+    radial-gradient(circle at top, rgba(255, 92, 92, 0.12), transparent 32%), rgba(5, 8, 15, 0.76);
   backdrop-filter: blur(14px);
 }
 
@@ -3613,8 +3612,7 @@ td.data-table-key-col {
   flex-direction: column;
   border: 1px solid color-mix(in srgb, var(--border-strong) 84%, white 8%);
   border-radius: calc(var(--radius-xl) + 6px);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, black 6%), var(--panel));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, black 6%), var(--panel));
   box-shadow:
     0 32px 96px rgba(0, 0, 0, 0.48),
     0 1px 0 rgba(255, 255, 255, 0.04) inset;
@@ -3702,12 +3700,11 @@ td.data-table-key-col {
   padding: 0;
   border-radius: 12px;
   border-color: color-mix(in srgb, var(--border) 78%, white 10%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--bg-elevated) 92%, white 8%),
-      color-mix(in srgb, var(--bg-elevated) 88%, black 12%)
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-elevated) 92%, white 8%),
+    color-mix(in srgb, var(--bg-elevated) 88%, black 12%)
+  );
   color: color-mix(in srgb, var(--text) 86%, var(--muted));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.045),
@@ -3716,12 +3713,11 @@ td.data-table-key-col {
 
 .md-preview-icon-btn:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--border-strong) 78%, white 14%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--bg-hover) 88%, white 10%),
-      color-mix(in srgb, var(--bg-elevated) 84%, black 16%)
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-hover) 88%, white 10%),
+    color-mix(in srgb, var(--bg-elevated) 84%, black 16%)
+  );
   color: var(--text-strong);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
@@ -3769,12 +3765,11 @@ td.data-table-key-col {
   gap: 8px;
   padding: 0 22px 16px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 88%, white 6%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--panel) 96%, transparent 4%),
-      color-mix(in srgb, var(--panel) 92%, black 8%)
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--panel) 96%, transparent 4%),
+    color-mix(in srgb, var(--panel) 92%, black 8%)
+  );
 }
 
 .md-preview-dialog__chip {
@@ -3826,12 +3821,11 @@ td.data-table-key-col {
   padding: clamp(26px, 4vw, 56px);
   border: 1px solid color-mix(in srgb, var(--border-strong) 70%, white 10%);
   border-radius: calc(var(--radius-xl) + 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--md-preview-document-bg) 94%, white 6%),
-      var(--md-preview-document-bg)
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--md-preview-document-bg) 94%, white 6%),
+    var(--md-preview-document-bg)
+  );
   box-shadow:
     0 22px 54px rgba(0, 0, 0, 0.32),
     inset 0 1px 0 rgba(255, 255, 255, 0.035);

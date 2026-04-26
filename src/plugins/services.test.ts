@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
@@ -17,12 +18,17 @@ vi.mock("../logging/subsystem.js", () => ({
 import { STATE_DIR } from "../config/paths.js";
 import { startPluginServices } from "./services.js";
 
-function createRegistry(services: OpenClawPluginService[]) {
+function createRegistry(
+  services: OpenClawPluginService[],
+  pluginId = "plugin:test",
+  origin: PluginOrigin = "workspace",
+) {
   const registry = createEmptyPluginRegistry();
   registry.services = services.map((service) => ({
-    pluginId: "plugin:test",
+    pluginId,
     service,
     source: "test",
+    origin,
     rootDir: "/plugins/test-plugin",
   })) as typeof registry.services;
   return registry;
@@ -172,5 +178,28 @@ describe("startPluginServices", () => {
     );
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();
+  });
+
+  it("grants internal diagnostics only to the bundled diagnostics OTEL service", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const diagnosticsService = createTrackingService("diagnostics-otel", { contexts });
+    await startPluginServices({
+      registry: createRegistry([diagnosticsService], "diagnostics-otel", "bundled"),
+      config: createServiceConfig(),
+    });
+
+    expect(contexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(contexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+
+    const untrustedContexts: OpenClawPluginServiceContext[] = [];
+    const untrustedService = createTrackingService("diagnostics-otel", {
+      contexts: untrustedContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([untrustedService], "diagnostics-otel", "workspace"),
+      config: createServiceConfig(),
+    });
+
+    expect(untrustedContexts[0]?.internalDiagnostics).toBeUndefined();
   });
 });

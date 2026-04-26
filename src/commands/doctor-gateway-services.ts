@@ -31,6 +31,12 @@ import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./dae
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { isDoctorUpdateRepairMode } from "./doctor-repair-mode.js";
+import {
+  confirmDoctorServiceRepair,
+  EXTERNAL_SERVICE_REPAIR_NOTE,
+  isServiceRepairExternallyManaged,
+  resolveServiceRepairPolicy,
+} from "./doctor-service-repair-policy.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -302,6 +308,9 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
+  const serviceRepairPolicy = resolveServiceRepairPolicy();
+  const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
+
   note(
     audit.issues
       .map((issue) =>
@@ -319,6 +328,11 @@ export async function maybeRepairGatewayServiceConfig(
       "Custom or unexpected service edits detected. Rerun with --force to overwrite.",
       "Gateway service config",
     );
+  }
+
+  if (serviceRepairExternal) {
+    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway service config");
+    return;
   }
 
   const repair = needsAggressive
@@ -414,10 +428,21 @@ export async function maybeScanExtraGatewayServices(
 
   const legacyServices = extraServices.filter((svc) => svc.legacy === true);
   if (legacyServices.length > 0) {
-    const shouldRemove = await prompter.confirmRuntimeRepair({
-      message: "Remove legacy gateway services now?",
-      initialValue: true,
-    });
+    const serviceRepairPolicy = resolveServiceRepairPolicy();
+    const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
+    if (serviceRepairExternal) {
+      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Legacy gateway cleanup skipped");
+    }
+    const shouldRemove = serviceRepairExternal
+      ? false
+      : await confirmDoctorServiceRepair(
+          prompter,
+          {
+            message: "Remove legacy gateway services now?",
+            initialValue: true,
+          },
+          serviceRepairPolicy,
+        );
     if (shouldRemove) {
       const removed: string[] = [];
       const { darwinUserServices, linuxUserServices, failed } =

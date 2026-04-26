@@ -263,6 +263,10 @@ Now create some channels on your Discord server and start chatting. Your agent c
 
 - Gateway owns the Discord connection.
 - Reply routing is deterministic: Discord inbound replies back to Discord.
+- Discord guild/channel metadata is added to the model prompt as untrusted
+  context, not as a user-visible reply prefix. If a model copies that envelope
+  back, OpenClaw strips the copied metadata from outbound replies and from
+  future replay context.
 - By default (`session.dmScope=main`), direct chats share the agent main session (`agent:main:main`).
 - Guild channels are isolated session keys (`agent:<agentId>:discord:channel:<channelId>`).
 - Group DMs are ignored by default (`channels.discord.dm.groupEnabled=false`).
@@ -961,13 +965,22 @@ Discord has two distinct voice surfaces: realtime **voice channels** (continuous
 
 ### Voice channels
 
-Requirements:
+Setup checklist:
 
-- Enable native commands (`commands.native` or `channels.discord.commands.native`).
-- Configure `channels.discord.voice`.
-- The bot needs Connect + Speak permissions in the target voice channel.
+1. Enable Message Content Intent in the Discord Developer Portal.
+2. Enable Server Members Intent when role/user allowlists are used.
+3. Invite the bot with `bot` and `applications.commands` scopes.
+4. Grant Connect, Speak, Send Messages, and Read Message History in the target voice channel.
+5. Enable native commands (`commands.native` or `channels.discord.commands.native`).
+6. Configure `channels.discord.voice`.
 
 Use `/vc join|leave|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands.
+
+```bash
+/vc join channel:<voice-channel-id>
+/vc status
+/vc leave
+```
 
 Auto-join example:
 
@@ -977,6 +990,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
+        model: "openai/gpt-5.4-mini",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -987,7 +1001,7 @@ Auto-join example:
         decryptionFailureTolerance: 24,
         tts: {
           provider: "openai",
-          openai: { voice: "alloy" },
+          openai: { voice: "onyx" },
         },
       },
     },
@@ -998,12 +1012,24 @@ Auto-join example:
 Notes:
 
 - `voice.tts` overrides `messages.tts` for voice playback only.
+- `voice.model` overrides the LLM used for Discord voice channel responses only. Leave it unset to inherit the routed agent model.
+- STT uses `tools.media.audio`; `voice.model` does not affect transcription.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
 - Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
 - `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
 - OpenClaw also watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.
-- If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)`, this may be the upstream `@discordjs/voice` receive bug tracked in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419).
+- If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)` after updating, collect a dependency report and logs. The bundled `@discordjs/voice` line includes the upstream padding fix from discord.js PR #11449, which closed discord.js issue #11419.
+
+Voice channel pipeline:
+
+- Discord PCM capture is converted to a WAV temp file.
+- `tools.media.audio` handles STT, for example `openai/gpt-4o-mini-transcribe`.
+- The transcript is sent through normal Discord ingress and routing.
+- `voice.model`, when set, overrides only the response LLM for this voice-channel turn.
+- `voice.tts` is merged over `messages.tts`; the resulting audio is played in the joined channel.
+
+Credentials are resolved per component: LLM route auth for `voice.model`, STT auth for `tools.media.audio`, and TTS auth for `messages.tts`/`voice.tts`.
 
 ### Voice messages
 
@@ -1130,7 +1156,7 @@ openclaw logs --follow
     - watch logs for:
       - `discord voice: DAVE decrypt failures detected`
       - `discord voice: repeated decrypt failures; attempting rejoin`
-    - if failures continue after automatic rejoin, collect logs and compare against [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419)
+    - if failures continue after automatic rejoin, collect logs and compare against the upstream DAVE receive history in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419) and [discord.js #11449](https://github.com/discordjs/discord.js/pull/11449)
 
   </Accordion>
 </AccordionGroup>

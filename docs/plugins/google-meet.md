@@ -79,6 +79,8 @@ audio bridge, node pinning, delayed realtime intro, and, when Twilio delegation
 is configured, whether the `voice-call` plugin and Twilio credentials are ready.
 Treat any `ok: false` check as a blocker before asking an agent to join.
 Use `openclaw googlemeet setup --json` for scripts or machine-readable output.
+Use `--transport chrome`, `--transport chrome-node`, or `--transport twilio`
+to preflight a specific transport before an agent tries it.
 
 Join a meeting:
 
@@ -303,11 +305,17 @@ display name, or remote IP.
 
 Common failure checks:
 
+- `Configured Google Meet node ... is not usable: offline`: the pinned node is
+  known to the Gateway but unavailable. Agents should treat that node as
+  diagnostic state, not as a usable Chrome host, and report the setup blocker
+  instead of falling back to another transport unless the user asked for that.
 - `No connected Google Meet-capable node`: start `openclaw node run` in the VM,
   approve pairing, and make sure `openclaw plugins enable google-meet` and
   `openclaw plugins enable browser` were run in the VM. Also confirm the
   Gateway host allows both node commands with
   `gateway.nodes.allowCommands: ["googlemeet.chrome", "browser.proxy"]`.
+- `BlackHole 2ch audio device not found`: install `blackhole-2ch` on the host
+  being checked and reboot before using local Chrome audio.
 - `BlackHole 2ch audio device not found on the node`: install `blackhole-2ch`
   in the VM and reboot the VM.
 - Chrome opens but cannot join: sign in to the browser profile inside the VM, or

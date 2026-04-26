@@ -93,6 +93,7 @@ describe("buildBrowserDoctorReport", () => {
         userDataDir: "/tmp/openclaw",
         color: "#FF4500",
         headless: false,
+        headlessSource: "config",
         noSandbox: false,
         executablePath: null,
         attachOnly: false,
@@ -101,5 +102,44 @@ describe("buildBrowserDoctorReport", () => {
 
     expect(report.ok).toBe(true);
     expect(report.checks.some((check) => check.status === "warn")).toBe(true);
+    expect(report.checks.find((check) => check.id === "display")).toMatchObject({
+      summary: "No DISPLAY or WAYLAND_DISPLAY is set while headed mode is selected (config)",
+    });
+  });
+
+  it("reports Linux no-display fallback without a display warning", () => {
+    const report = buildBrowserDoctorReport({
+      platform: "linux",
+      env: {},
+      uid: 1000,
+      status: {
+        enabled: true,
+        profile: "openclaw",
+        driver: "openclaw",
+        transport: "cdp",
+        running: false,
+        cdpReady: false,
+        cdpHttp: false,
+        pid: null,
+        cdpPort: 18800,
+        cdpUrl: "http://127.0.0.1:18800",
+        chosenBrowser: null,
+        detectedBrowser: "chrome",
+        detectedExecutablePath: "/usr/bin/google-chrome-stable",
+        detectError: null,
+        userDataDir: "/tmp/openclaw",
+        color: "#FF4500",
+        headless: true,
+        headlessSource: "linux-display-fallback",
+        noSandbox: false,
+        executablePath: null,
+        attachOnly: false,
+      },
+    });
+
+    expect(report.checks.find((check) => check.id === "headless-mode")).toMatchObject({
+      status: "pass",
+    });
+    expect(report.checks.find((check) => check.id === "display")).toBeUndefined();
   });
 });

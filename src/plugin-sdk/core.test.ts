@@ -32,7 +32,7 @@ function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi 
 }
 
 describe("defineChannelPluginEntry", () => {
-  it("keeps runtime helpers out of discovery registration", () => {
+  it("wires runtime helpers during discovery registration", () => {
     const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
@@ -51,7 +51,7 @@ describe("defineChannelPluginEntry", () => {
 
     expect(api.registerChannel).toHaveBeenCalledTimes(1);
     expect(registerCliMetadata).toHaveBeenCalledTimes(1);
-    expect(setRuntime).not.toHaveBeenCalled();
+    expect(setRuntime).toHaveBeenCalledWith(api.runtime);
     expect(registerFull).not.toHaveBeenCalled();
   });
 

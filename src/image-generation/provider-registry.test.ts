@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 
 const { resolvePluginCapabilityProvidersMock } = vi.hoisted(() => ({
@@ -40,10 +41,12 @@ describe("image-generation provider registry", () => {
   });
 
   it("delegates provider resolution to the capability provider boundary", () => {
-    expect(listImageGenerationProviders()).toEqual([]);
+    const cfg = {} as OpenClawConfig;
+
+    expect(listImageGenerationProviders(cfg)).toEqual([]);
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "imageGenerationProviders",
-      cfg: undefined,
+      cfg,
     });
   });
 

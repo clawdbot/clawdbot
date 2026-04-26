@@ -31,11 +31,16 @@ function setConfigSnapshot(params: {
   exists: boolean;
   valid: boolean;
   issues?: Array<{ path: string; message: string }>;
+  lastTouchedVersion?: string;
 }) {
+  const config = params.lastTouchedVersion
+    ? { meta: { lastTouchedVersion: params.lastTouchedVersion } }
+    : {};
   readConfigFileSnapshotMock.mockResolvedValue({
     exists: params.exists,
     valid: params.valid,
-    config: {},
+    config,
+    sourceConfig: config,
     issues: params.issues ?? [],
   });
 }
@@ -76,6 +81,19 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("blocks restart from an older binary when config was written by a newer one", async () => {
+    setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
+
+    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.stringContaining("Refusing to restart the gateway service"),
+      }),
+    );
   });
 
   it("proceeds with restart when config is valid", async () => {
@@ -160,5 +178,39 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     await runServiceStart(createServiceRunArgs());
 
     expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runServiceStop future-config guard", () => {
+  let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
+
+  beforeAll(async () => {
+    ({ runServiceStop } = await import("./lifecycle-core.js"));
+  });
+
+  beforeEach(() => {
+    resetLifecycleRuntimeLogs();
+    readConfigFileSnapshotMock.mockReset();
+    setConfigSnapshot({ exists: true, valid: true });
+    resetLifecycleServiceMocks();
+  });
+
+  it("blocks stop from an older binary when config was written by a newer one", async () => {
+    setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
+
+    await expect(
+      runServiceStop({
+        serviceNoun: "Gateway",
+        service,
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(service.stop).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.stringContaining("Refusing to stop the gateway service"),
+      }),
+    );
   });
 });

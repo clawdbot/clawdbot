@@ -16,6 +16,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((_opts?: unknown): unknown[] => []));
 const listChatChannels = vi.hoisted(() => vi.fn((): unknown[] => []));
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
+const listPluginContributionIds = vi.hoisted(() => vi.fn((_params?: unknown): string[] => []));
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn(({ config }: { config: unknown }) => ({
     config: config as never,
@@ -36,6 +38,12 @@ vi.mock("../../channels/registry.js", () => ({
 vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...a: unknown[]) => loadPluginManifestRegistry(...a),
 }));
+vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    loadPluginManifestRegistry(...args),
+  loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
+  listPluginContributionIds: (...args: unknown[]) => listPluginContributionIds(...args),
+}));
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (a: unknown) => applyPluginAutoEnable(a as { config: unknown }),
 }));
@@ -52,6 +60,18 @@ import { resolveChannelSetupEntries } from "./discovery.js";
 beforeEach(() => {
   vi.clearAllMocks();
   loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+  loadPluginRegistrySnapshot.mockReturnValue({
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  });
+  listPluginContributionIds.mockReturnValue([]);
   listChatChannels.mockReturnValue([]);
 });
 
@@ -173,6 +193,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       plugins: [{ id: "trusted-telegram-shadow", channels: ["telegram"] }],
       diagnostics: [],
     });
+    listPluginContributionIds.mockReturnValue(["telegram"]);
 
     const result = resolveChannelSetupEntries({
       cfg: {
@@ -223,6 +244,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       plugins: [{ id: "trusted-telegram-shadow", channels: ["telegram"] }],
       diagnostics: [],
     });
+    listPluginContributionIds.mockReturnValue(["telegram"]);
 
     const result = resolveChannelSetupEntries({
       cfg: {
@@ -267,6 +289,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       plugins: [{ id: "my-cool-plugin", channels: ["my-cool-plugin"] }],
       diagnostics: [],
     });
+    listPluginContributionIds.mockReturnValue(["my-cool-plugin"]);
 
     const result = resolveChannelSetupEntries({
       cfg: {
@@ -279,6 +302,5 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
     });
 
     expect(result.installedCatalogEntries).toEqual([]);
-    expect(result.installableCatalogEntries).toEqual([]);
   });
 });

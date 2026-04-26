@@ -92,6 +92,67 @@ describe("resolvePnpmRunner", () => {
     }
   });
 
+  it("executes pnpm.exe directly on Windows", () => {
+    const npmExecPath =
+      "C:\\Users\\test\\AppData\\Local\\pnpm\\.tools\\@pnpm+exe\\10.32.1\\node_modules\\@pnpm\\exe\\pnpm.exe";
+
+    expect(
+      resolvePnpmRunner({
+        npmExecPath,
+        nodeArgs: ["--no-maglev"],
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: npmExecPath,
+      args: ["exec", "vitest", "run"],
+      shell: false,
+    });
+  });
+
+  it("uses pnpm.cjs through node for Windows-style paths", () => {
+    expect(
+      resolvePnpmRunner({
+        npmExecPath:
+          "C:\\Users\\test\\AppData\\Local\\node\\corepack\\v1\\pnpm\\10.32.1\\bin\\pnpm.cjs",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Users\\test\\AppData\\Local\\node\\corepack\\v1\\pnpm\\10.32.1\\bin\\pnpm.cjs",
+        "exec",
+        "vitest",
+        "run",
+      ],
+      shell: false,
+    });
+  });
+
+  it("wraps an explicit pnpm.cmd path via cmd.exe on Windows", () => {
+    expect(
+      resolvePnpmRunner({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmExecPath: "C:\\Program Files\\pnpm\\pnpm.cmd",
+        pnpmArgs: ["exec", "vitest", "run", "-t", "path with spaces"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '"C:\\Program Files\\pnpm\\pnpm.cmd" exec vitest run -t "path with spaces"',
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
   it("falls back to bare pnpm on non-Windows when npm_execpath is missing", () => {
     expect(
       resolvePnpmRunner({

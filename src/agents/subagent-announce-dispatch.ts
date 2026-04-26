@@ -2,6 +2,7 @@ export type SubagentDeliveryPath =
   | "queued"
   | "steered"
   | "direct"
+  | "direct-fallback"
   | "direct-thread-fallback"
   | "none";
 

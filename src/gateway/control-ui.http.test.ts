@@ -98,7 +98,7 @@ describe("handleControlUiHttpRequest", () => {
 
   async function runAvatarRequest(params: {
     url: string;
-    method: "GET" | "HEAD";
+    method: "GET" | "HEAD" | "POST";
     resolveAvatar: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
     basePath?: string;
     auth?: ResolvedGatewayAuth;
@@ -791,13 +791,41 @@ describe("handleControlUiHttpRequest", () => {
       headers: {
         authorization: "Bearer test-token",
       },
-      resolveAvatar: () => ({ kind: "remote", url: "https://example.com/avatar.png" }),
+      resolveAvatar: () => ({
+        kind: "remote",
+        url: "https://example.com/avatar.png",
+        source: "https://example.com/avatar.png",
+      }),
     });
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
       avatarUrl: "https://example.com/avatar.png",
+      avatarSource: "remote URL",
+      avatarStatus: "remote",
+      avatarReason: null,
+    });
+  });
+
+  it("redacts unsafe avatar source values from metadata", async () => {
+    const { res, end, handled } = await runAvatarRequest({
+      url: "/avatar/main?meta=1",
+      method: "GET",
+      resolveAvatar: () => ({
+        kind: "none",
+        reason: "outside_workspace",
+        source: "/Users/test/private/avatar.png",
+      }),
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+      avatarUrl: null,
+      avatarSource: null,
+      avatarStatus: "none",
+      avatarReason: "outside_workspace",
     });
   });
 

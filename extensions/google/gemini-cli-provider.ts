@@ -85,7 +85,7 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
               configPatch: {
                 agents: {
                   defaults: {
-                    embeddedHarness: { runtime: PROVIDER_ID },
+                    agentRuntime: { id: PROVIDER_ID },
                     models: {
                       [DEFAULT_MODEL]: {},
                     },

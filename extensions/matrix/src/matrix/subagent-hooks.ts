@@ -167,14 +167,18 @@ export async function handleMatrixSubagentSpawning(
     };
   }
 
-  // Verify the thread binding manager is running for this account. The manager
-  // holds the captured Matrix client the SessionBindingAdapter needs to send
-  // the intro message that bootstraps the thread.
-  const manager = getMatrixThreadBindingManager(accountId);
-  if (!manager) {
+  const bindingService = getSessionBindingService();
+  const capabilities = bindingService.getCapabilities({ channel: "matrix", accountId });
+  if (!capabilities.adapterAvailable || !capabilities.bindSupported) {
     return {
       status: "error",
-      error: `No Matrix thread binding manager available for account "${accountId}". Is the Matrix channel running?`,
+      error: `No Matrix session binding adapter available for account "${accountId}". Is the Matrix channel running?`,
+    };
+  }
+  if (!capabilities.placements.includes("child")) {
+    return {
+      status: "error",
+      error: `Matrix session binding adapter for account "${accountId}" does not support child thread bindings.`,
     };
   }
 
@@ -186,7 +190,7 @@ export async function handleMatrixSubagentSpawning(
     //
     // We do NOT call setBindingRecord here — the adapter's bind() handles
     // record creation, thread creation, and persistence atomically.
-    const binding = await getSessionBindingService().bind({
+    const binding = await bindingService.bind({
       targetSessionKey: event.childSessionKey,
       targetKind: "subagent",
       conversation: {

@@ -245,6 +245,8 @@ describe("ensureSandboxBrowser create args", () => {
           cdpPortRangeEnd: 18899,
           remoteCdpTimeoutMs: 1500,
           remoteCdpHandshakeTimeoutMs: 3000,
+          localLaunchTimeoutMs: 15_000,
+          localCdpReadyTimeoutMs: 8_000,
           color: "#FF4500",
           headless: false,
           noSandbox: false,

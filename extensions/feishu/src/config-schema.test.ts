@@ -220,6 +220,45 @@ describe("FeishuConfigSchema optimization flags", () => {
   });
 });
 
+describe("FeishuConfigSchema TTS overrides", () => {
+  it("accepts top-level and account-level TTS overrides", () => {
+    const result = FeishuConfigSchema.parse({
+      tts: {
+        auto: "always",
+        provider: "openai",
+        providers: {
+          openai: {
+            voice: "alloy",
+          },
+        },
+      },
+      accounts: {
+        english: {
+          tts: {
+            providers: {
+              openai: {
+                voice: "shimmer",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.tts).toMatchObject({
+      auto: "always",
+      provider: "openai",
+    });
+    expect(result.accounts?.english?.tts).toMatchObject({
+      providers: {
+        openai: {
+          voice: "shimmer",
+        },
+      },
+    });
+  });
+});
+
 describe("FeishuConfigSchema actions", () => {
   it("accepts top-level reactions action gate", () => {
     const result = FeishuConfigSchema.parse({

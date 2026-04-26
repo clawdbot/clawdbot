@@ -208,6 +208,7 @@ export async function buildChannelsTable(
   const sourceConfig = opts?.sourceConfig ?? cfg;
   for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
+    includeSetupRuntimeFallback: false,
   })) {
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({

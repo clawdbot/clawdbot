@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
+import { loadCronStore, loadCronStoreSync, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
 let fixtureRoot = "";
@@ -122,6 +122,19 @@ describe("cron store", () => {
     await expect(loadCronStore(store.storePath)).resolves.toMatchObject({
       version: 1,
       jobs: [{ id: "job-1", enabled: true }],
+    });
+  });
+
+  it("loads split cron state synchronously for task reconciliation", async () => {
+    const { storePath } = await makeStorePath();
+    await saveCronStore(storePath, makeStore("job-sync", true));
+
+    const loaded = loadCronStoreSync(storePath);
+
+    expect(loaded.jobs[0]).toMatchObject({
+      id: "job-sync",
+      state: expect.any(Object),
+      updatedAtMs: expect.any(Number),
     });
   });
 

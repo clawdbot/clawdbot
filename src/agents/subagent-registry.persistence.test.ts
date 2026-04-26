@@ -712,7 +712,7 @@ describe("subagent registry persistence", () => {
 
     resetSubagentRegistryForTests({ persist: false });
 
-    const resolved = withEnv({ VITEST: undefined, NODE_ENV: "development" }, () =>
+    const resolved = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1" }, () =>
       getSubagentRunByChildSessionKey(childSessionKey),
     );
 
@@ -758,7 +758,7 @@ describe("subagent registry persistence", () => {
 
     resetSubagentRegistryForTests({ persist: false });
 
-    const resolved = withEnv({ VITEST: undefined, NODE_ENV: "development" }, () =>
+    const resolved = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1" }, () =>
       getLatestSubagentRunByChildSessionKey(childSessionKey),
     );
 

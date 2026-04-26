@@ -160,6 +160,7 @@ vi.mock("../plugins/providers.js", () => ({
 }));
 
 vi.mock("./cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
 }));

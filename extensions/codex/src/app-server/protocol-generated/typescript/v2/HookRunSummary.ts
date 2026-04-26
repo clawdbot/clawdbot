@@ -10,4 +10,19 @@ import type { HookRunStatus } from "./HookRunStatus.js";
 import type { HookScope } from "./HookScope.js";
 import type { HookSource } from "./HookSource.js";
 
-export type HookRunSummary = { id: string, eventName: HookEventName, handlerType: HookHandlerType, executionMode: HookExecutionMode, scope: HookScope, sourcePath: AbsolutePathBuf, source: HookSource, displayOrder: bigint, status: HookRunStatus, statusMessage: string | null, startedAt: bigint, completedAt: bigint | null, durationMs: bigint | null, entries: Array<HookOutputEntry>, };
+export type HookRunSummary = {
+  id: string;
+  eventName: HookEventName;
+  handlerType: HookHandlerType;
+  executionMode: HookExecutionMode;
+  scope: HookScope;
+  sourcePath: AbsolutePathBuf;
+  source: HookSource;
+  displayOrder: bigint;
+  status: HookRunStatus;
+  statusMessage: string | null;
+  startedAt: bigint;
+  completedAt: bigint | null;
+  durationMs: bigint | null;
+  entries: Array<HookOutputEntry>;
+};

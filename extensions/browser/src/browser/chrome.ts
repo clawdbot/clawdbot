@@ -46,11 +46,20 @@ import {
   ensureProfileCleanExit,
   isProfileDecorated,
 } from "./chrome.profile-decoration.js";
-import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import {
+  getManagedBrowserMissingDisplayError,
+  resolveManagedBrowserHeadlessMode,
+  type ManagedBrowserHeadlessOptions,
+  type ManagedBrowserHeadlessSource,
+  type ResolvedBrowserConfig,
+  type ResolvedBrowserProfile,
+} from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
+import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
 const CHROME_SINGLETON_LOCK_PATHS = [
@@ -173,14 +182,20 @@ function chromeLaunchHints(params: {
   stderrOutput: string;
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
+  launchOptions?: ManagedBrowserHeadlessOptions;
 }): string {
   const hints: string[] = [];
   if (process.platform === "linux" && !params.resolved.noSandbox) {
     hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
   }
-  if (CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput) && !params.profile.headless) {
+  const headlessMode = resolveManagedBrowserHeadlessMode(
+    params.resolved,
+    params.profile,
+    params.launchOptions,
+  );
+  if (CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput) && !headlessMode.headless) {
     hints.push(
-      "No DISPLAY/X server was detected. Enable browser.headless: true, start Xvfb, or run the Gateway in a desktop session.",
+      "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
     );
   }
   if (CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput)) {
@@ -198,6 +213,8 @@ export type RunningChrome = {
   cdpPort: number;
   startedAt: number;
   proc: ChildProcess;
+  headless?: boolean;
+  headlessSource?: ManagedBrowserHeadlessSource;
 };
 
 function resolveBrowserExecutable(
@@ -222,8 +239,12 @@ export function buildOpenClawChromeLaunchArgs(params: {
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
   userDataDir: string;
+  headlessOverride?: boolean;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): string[] {
   const { resolved, profile, userDataDir } = params;
+  const headlessMode = resolveManagedBrowserHeadlessMode(resolved, profile, params);
   const args: string[] = [
     `--remote-debugging-port=${profile.cdpPort}`,
     `--user-data-dir=${userDataDir}`,
@@ -238,13 +259,12 @@ export function buildOpenClawChromeLaunchArgs(params: {
     "--password-store=basic",
   ];
 
-  if (profile.headless) {
+  if (headlessMode.headless) {
     args.push("--headless=new");
     args.push("--disable-gpu");
   }
   if (resolved.noSandbox) {
     args.push("--no-sandbox");
-    args.push("--disable-setuid-sandbox");
   }
   if (process.platform === "linux") {
     args.push("--disable-dev-shm-usage");
@@ -378,9 +398,19 @@ export async function isChromeCdpReady(
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
+  launchOptions: ManagedBrowserHeadlessOptions = {},
 ): Promise<RunningChrome> {
   if (!profile.cdpIsLoopback) {
     throw new Error(`Profile "${profile.name}" is remote; cannot launch local Chrome.`);
+  }
+  const headlessMode = resolveManagedBrowserHeadlessMode(resolved, profile, launchOptions);
+  const missingDisplayError = getManagedBrowserMissingDisplayError(
+    resolved,
+    profile,
+    launchOptions,
+  );
+  if (missingDisplayError) {
+    throw new BrowserProfileUnavailableError(missingDisplayError);
   }
   await ensurePortAvailable(profile.cdpPort);
 
@@ -393,11 +423,13 @@ export async function launchOpenClawChrome(
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
+  fs.mkdirSync(DEFAULT_DOWNLOAD_DIR, { recursive: true });
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,
     profile.name,
     (profile.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR).toUpperCase(),
+    DEFAULT_DOWNLOAD_DIR,
   );
 
   // First launch to create preference files if missing, then decorate and relaunch.
@@ -406,6 +438,7 @@ export async function launchOpenClawChrome(
       resolved,
       profile,
       userDataDir,
+      ...launchOptions,
     });
     // stdio tuple: discard stdout to prevent buffer saturation in constrained
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
@@ -460,6 +493,7 @@ export async function launchOpenClawChrome(
       decorateOpenClawProfile(userDataDir, {
         name: profile.name,
         color: profile.color,
+        downloadDir: DEFAULT_DOWNLOAD_DIR,
       });
       log.info(`🦞 openclaw browser profile decorated (${profile.color})`);
     } catch (err) {
@@ -486,7 +520,8 @@ export async function launchOpenClawChrome(
     proc.stderr?.on("data", onStderr);
 
     try {
-      const readyDeadline = Date.now() + CHROME_LAUNCH_READY_WINDOW_MS;
+      const readyDeadline =
+        Date.now() + (resolved.localLaunchTimeoutMs ?? CHROME_LAUNCH_READY_WINDOW_MS);
       while (Date.now() < readyDeadline) {
         if (await isChromeReachable(profile.cdpUrl)) {
           break;
@@ -514,7 +549,7 @@ export async function launchOpenClawChrome(
         const stderrHint = stderrOutput
           ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
           : "";
-        const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile });
+        const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
         try {
           proc.kill("SIGKILL");
         } catch {
@@ -537,6 +572,8 @@ export async function launchOpenClawChrome(
         cdpPort: profile.cdpPort,
         startedAt,
         proc,
+        headless: headlessMode.headless,
+        headlessSource: headlessMode.source,
       };
     } finally {
       // Chrome started successfully or launch failed — detach the stderr listener

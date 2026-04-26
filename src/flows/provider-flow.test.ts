@@ -41,10 +41,8 @@ vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders,
 }));
 
-import {
-  resolveProviderModelPickerFlowContributions,
-  resolveProviderSetupFlowContributions,
-} from "./provider-flow.js";
+import { resolveProviderSetupFlowContributions } from "./provider-flow.js";
+import { resolveProviderModelPickerFlowContributions } from "./provider-flow.runtime.js";
 
 describe("provider flow install catalog contributions", () => {
   beforeEach(() => {
@@ -106,9 +104,11 @@ describe("provider flow install catalog contributions", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     );
+    expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 
-  it("prefers manifest setup contributions over duplicate runtime and install-catalog entries", () => {
+  it("prefers manifest setup contributions over duplicate install-catalog entries", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
         pluginId: "openai",
@@ -116,14 +116,6 @@ describe("provider flow install catalog contributions", () => {
         methodId: "api-key",
         choiceId: "openai-api-key",
         choiceLabel: "OpenAI API key",
-      },
-    ]);
-    resolveProviderWizardOptions.mockReturnValue([
-      {
-        value: "openai-api-key",
-        label: "Runtime OpenAI API key",
-        groupId: "openai",
-        groupLabel: "OpenAI",
       },
     ]);
     resolveProviderInstallCatalogEntries.mockReturnValue([
@@ -159,6 +151,7 @@ describe("provider flow install catalog contributions", () => {
         source: "manifest",
       },
     ]);
+    expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
   });
 
   it("surfaces install-catalog provider choices when runtime setup options are absent", () => {
@@ -299,7 +292,7 @@ describe("provider flow install catalog contributions", () => {
     ).toEqual([]);
   });
 
-  it("prefers runtime setup contributions over duplicate install-catalog entries", () => {
+  it("keeps setup contributions on cold metadata instead of runtime wizard options", () => {
     resolveProviderWizardOptions.mockReturnValue([
       {
         value: "openai-api-key",
@@ -331,6 +324,7 @@ describe("provider flow install catalog contributions", () => {
         kind: "provider",
         surface: "setup",
         providerId: "openai",
+        pluginId: "openai",
         option: {
           value: "openai-api-key",
           label: "OpenAI API key",
@@ -339,9 +333,11 @@ describe("provider flow install catalog contributions", () => {
             label: "OpenAI",
           },
         },
-        source: "runtime",
+        source: "install-catalog",
       },
     ]);
+    expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 
   it("keeps docs attached to runtime model-picker contributions", () => {

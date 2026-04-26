@@ -1954,6 +1954,8 @@ describe("createTelegramBot", () => {
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0][0];
       expect(payload.SessionKey).toContain(testCase.expectedSessionKeyFragment);
+      expect(payload.BodyForAgent).toBe(testCase.text);
+      expect(payload.BodyForAgent).not.toContain("t.me/c/");
     }
   });
 
@@ -2686,8 +2688,10 @@ describe("createTelegramBot", () => {
 
       expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
       for (const [index, call] of sendMessageSpy.mock.calls.entries()) {
-        const actual = (call[2] as { reply_to_message_id?: number } | undefined)
-          ?.reply_to_message_id;
+        const params = call[2] as
+          | { reply_to_message_id?: number; reply_parameters?: { message_id?: number } }
+          | undefined;
+        const actual = params?.reply_parameters?.message_id ?? params?.reply_to_message_id;
         if (mode === "all" || index === 0) {
           expect(actual).toBe(messageId);
         } else {
@@ -3365,9 +3369,9 @@ describe("createTelegramBot", () => {
 
   it("retries command pagination callbacks after a bubbled preflight failure", async () => {
     const listSkillCommandsMock = listSkillCommandsForAgents as unknown as ReturnType<typeof vi.fn>;
-    listSkillCommandsMock.mockClear();
 
     createTelegramBot({ token: "tok" });
+    listSkillCommandsMock.mockClear();
     const callbackHandler = getOnHandler("callback_query");
     const middlewares = middlewareUseSpy.mock.calls
       .map((call) => call[0])

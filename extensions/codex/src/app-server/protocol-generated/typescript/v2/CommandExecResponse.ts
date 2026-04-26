@@ -6,19 +6,20 @@
  * Final buffered result for `command/exec`.
  */
 export type CommandExecResponse = {
-/**
- * Process exit code.
- */
-exitCode: number,
-/**
- * Buffered stdout capture.
- *
- * Empty when stdout was streamed via `command/exec/outputDelta`.
- */
-stdout: string,
-/**
- * Buffered stderr capture.
- *
- * Empty when stderr was streamed via `command/exec/outputDelta`.
- */
-stderr: string, };
+  /**
+   * Process exit code.
+   */
+  exitCode: number;
+  /**
+   * Buffered stdout capture.
+   *
+   * Empty when stdout was streamed via `command/exec/outputDelta`.
+   */
+  stdout: string;
+  /**
+   * Buffered stderr capture.
+   *
+   * Empty when stderr was streamed via `command/exec/outputDelta`.
+   */
+  stderr: string;
+};

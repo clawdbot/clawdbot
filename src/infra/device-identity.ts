@@ -122,6 +122,37 @@ export function loadOrCreateDeviceIdentity(
   return identity;
 }
 
+export function loadDeviceIdentityIfPresent(
+  filePath: string = resolveDefaultIdentityPath(),
+): DeviceIdentity | null {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as StoredIdentity;
+    if (
+      parsed?.version !== 1 ||
+      typeof parsed.deviceId !== "string" ||
+      typeof parsed.publicKeyPem !== "string" ||
+      typeof parsed.privateKeyPem !== "string"
+    ) {
+      return null;
+    }
+    const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
+    if (!derivedId || derivedId !== parsed.deviceId) {
+      return null;
+    }
+    return {
+      deviceId: parsed.deviceId,
+      publicKeyPem: parsed.publicKeyPem,
+      privateKeyPem: parsed.privateKeyPem,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function signDevicePayload(privateKeyPem: string, payload: string): string {
   const key = crypto.createPrivateKey(privateKeyPem);
   const sig = crypto.sign(null, Buffer.from(payload, "utf8"), key);

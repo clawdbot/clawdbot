@@ -7,6 +7,7 @@ export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY =
   "Read sanitized message history for a visible session.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Send a message to another visible session.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent or ACP sessions.";
+export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent sessions.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status, usage, and model state.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track a short structured work plan.";
 
@@ -31,13 +32,28 @@ export function describeSessionsSendTool(): string {
   ].join(" ");
 }
 
-export function describeSessionsSpawnTool(): string {
-  return [
+export function describeSessionsSpawnTool(options?: { acpAvailable?: boolean }): string {
+  const baseDescription = [
     'Spawn a clean isolated session by default with `runtime="subagent"` or `runtime="acp"`.',
     '`mode="run"` is one-shot and `mode="session"` is persistent or thread-bound.',
     "Subagents inherit the parent workspace directory automatically.",
     'For native subagents only, set `context="fork"` when the child needs the current transcript context; otherwise omit it or use `context="isolated"`.',
     "Use this when the work should happen in a fresh child session instead of the current one.",
+  ];
+  if (options?.acpAvailable === false) {
+    return baseDescription
+      .map((line) =>
+        line.replace(
+          ' with `runtime="subagent"` or `runtime="acp"`',
+          " with the native subagent runtime",
+        ),
+      )
+      .join(" ");
+  }
+  return [
+    ...baseDescription.slice(0, 3),
+    '`runtime="acp"` is for external ACP harness ids such as codex, claude, gemini, or opencode, or agents configured with `agents.list[].runtime.type="acp"`.',
+    ...baseDescription.slice(3),
   ].join(" ");
 }
 

@@ -44,6 +44,8 @@ function makeState(): BrowserServerState {
       cdpIsLoopback: true,
       remoteCdpTimeoutMs: 1500,
       remoteCdpHandshakeTimeoutMs: 3000,
+      localLaunchTimeoutMs: 15_000,
+      localCdpReadyTimeoutMs: 8_000,
       actionTimeoutMs: 60_000,
       color: "#FF4500",
       headless: false,
@@ -70,6 +72,14 @@ function makeState(): BrowserServerState {
     },
     profiles: new Map(),
   };
+}
+
+function expectChromeLiveProfile() {
+  return expect.objectContaining({
+    name: "chrome-live",
+    driver: "existing-session",
+    userDataDir: "/tmp/brave-profile",
+  });
 }
 
 beforeEach(() => {
@@ -112,12 +122,16 @@ describe("browser server-context existing-session profile", () => {
 
     expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
       "chrome-live",
-      "/tmp/brave-profile",
+      expectChromeLiveProfile(),
       { ephemeral: true, timeoutMs: 300 },
     );
-    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith("chrome-live", "/tmp/brave-profile", {
-      ephemeral: true,
-    });
+    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith(
+      "chrome-live",
+      expectChromeLiveProfile(),
+      {
+        ephemeral: true,
+      },
+    );
   });
 
   it("keeps the next real attach on the normal sticky session path after an idle status probe", async () => {
@@ -144,17 +158,17 @@ describe("browser server-context existing-session profile", () => {
     expect(tabs.map((tab) => tab.targetId)).toEqual(["7"]);
     expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenLastCalledWith(
       "chrome-live",
-      "/tmp/brave-profile",
+      expectChromeLiveProfile(),
     );
     expect(chromeMcp.listChromeMcpTabs).toHaveBeenNthCalledWith(
       1,
       "chrome-live",
-      "/tmp/brave-profile",
+      expectChromeLiveProfile(),
     );
     expect(chromeMcp.listChromeMcpTabs).toHaveBeenNthCalledWith(
       2,
       "chrome-live",
-      "/tmp/brave-profile",
+      expectChromeLiveProfile(),
     );
   });
 
@@ -199,18 +213,21 @@ describe("browser server-context existing-session profile", () => {
 
     expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
       "chrome-live",
-      "/tmp/brave-profile",
+      expectChromeLiveProfile(),
     );
-    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith("chrome-live", "/tmp/brave-profile");
+    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith(
+      "chrome-live",
+      expectChromeLiveProfile(),
+    );
     expect(chromeMcp.openChromeMcpTab).toHaveBeenCalledWith(
       "chrome-live",
       "about:blank",
-      "/tmp/brave-profile",
+      expectChromeLiveProfile(),
     );
     expect(chromeMcp.focusChromeMcpTab).toHaveBeenCalledWith(
       "chrome-live",
       "7",
-      "/tmp/brave-profile",
+      expectChromeLiveProfile(),
     );
     expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith("chrome-live");
   });

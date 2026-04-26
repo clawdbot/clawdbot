@@ -15,27 +15,29 @@ function createDedupe(root: string, overrides?: { ttlMs?: number }) {
 }
 
 describe("createPersistentDedupe", () => {
-  it("deduplicates keys and persists across instances", async () => {
+  it("deduplicates keys, persists across instances, warms up, and checks recent keys", async () => {
     const root = await createTempDir("openclaw-dedupe-");
     const first = createDedupe(root);
     expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(true);
     expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(false);
+    expect(await first.checkAndRecord("m2", { namespace: "a" })).toBe(true);
 
     const second = createDedupe(root);
+    expect(await second.hasRecent("m1", { namespace: "a" })).toBe(true);
+    expect(await second.hasRecent("missing", { namespace: "a" })).toBe(false);
+    expect(await second.warmup("a")).toBe(2);
     expect(await second.checkAndRecord("m1", { namespace: "a" })).toBe(false);
+    expect(await second.checkAndRecord("m2", { namespace: "a" })).toBe(false);
+    expect(await second.checkAndRecord("m3", { namespace: "a" })).toBe(true);
     expect(await second.checkAndRecord("m1", { namespace: "b" })).toBe(true);
-  });
 
-  it("guards concurrent calls for the same key", async () => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const dedupe = createDedupe(root, { ttlMs: 10_000 });
-
-    const [first, second] = await Promise.all([
-      dedupe.checkAndRecord("race-key", { namespace: "feishu" }),
-      dedupe.checkAndRecord("race-key", { namespace: "feishu" }),
+    const raceDedupe = createDedupe(root, { ttlMs: 10_000 });
+    const [raceFirst, raceSecond] = await Promise.all([
+      raceDedupe.checkAndRecord("race-key", { namespace: "feishu" }),
+      raceDedupe.checkAndRecord("race-key", { namespace: "feishu" }),
     ]);
-    expect(first).toBe(true);
-    expect(second).toBe(false);
+    expect(raceFirst).toBe(true);
+    expect(raceSecond).toBe(false);
   });
 
   it("falls back to memory-only behavior on disk errors", async () => {
@@ -50,68 +52,25 @@ describe("createPersistentDedupe", () => {
     expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(false);
   });
 
-  it("warmup loads persisted entries into memory", async () => {
+  it("warms empty namespaces and skips expired disk entries", async () => {
     const root = await createTempDir("openclaw-dedupe-");
-    const writer = createDedupe(root);
-    expect(await writer.checkAndRecord("msg-1", { namespace: "acct" })).toBe(true);
-    expect(await writer.checkAndRecord("msg-2", { namespace: "acct" })).toBe(true);
+    const emptyReader = createDedupe(root, { ttlMs: 10_000 });
+    expect(await emptyReader.warmup("nonexistent")).toBe(0);
 
-    const reader = createDedupe(root);
-    const loaded = await reader.warmup("acct");
-    expect(loaded).toBe(2);
-    expect(await reader.checkAndRecord("msg-1", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("msg-2", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("msg-3", { namespace: "acct" })).toBe(true);
-  });
+    const writer = createDedupe(root, { ttlMs: 1000 });
+    const oldNow = Date.now() - 2000;
+    expect(await writer.checkAndRecord("old-msg", { namespace: "acct", now: oldNow })).toBe(true);
+    expect(await writer.checkAndRecord("new-msg", { namespace: "acct" })).toBe(true);
 
-  it("checks for recent keys without mutating the store", async () => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const writer = createDedupe(root);
-    expect(await writer.checkAndRecord("peek-me", { namespace: "acct" })).toBe(true);
-
-    const reader = createDedupe(root);
-    expect(await reader.hasRecent("peek-me", { namespace: "acct" })).toBe(true);
-    expect(await reader.hasRecent("missing", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("peek-me", { namespace: "acct" })).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "returns 0 when no disk file exists",
-      setup: async (root: string) => createDedupe(root, { ttlMs: 10_000 }),
-      namespace: "nonexistent",
-      expectedLoaded: 0,
-      verify: async () => undefined,
-    },
-    {
-      name: "skips expired entries",
-      setup: async (root: string) => {
-        const writer = createDedupe(root, { ttlMs: 1000 });
-        const oldNow = Date.now() - 2000;
-        expect(await writer.checkAndRecord("old-msg", { namespace: "acct", now: oldNow })).toBe(
-          true,
-        );
-        expect(await writer.checkAndRecord("new-msg", { namespace: "acct" })).toBe(true);
-        return createDedupe(root, { ttlMs: 1000 });
-      },
-      namespace: "acct",
-      expectedLoaded: 1,
-      verify: async (reader: ReturnType<typeof createDedupe>) => {
-        expect(await reader.checkAndRecord("old-msg", { namespace: "acct" })).toBe(true);
-        expect(await reader.checkAndRecord("new-msg", { namespace: "acct" })).toBe(false);
-      },
-    },
-  ])("warmup $name", async ({ setup, namespace, expectedLoaded, verify }) => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const reader = await setup(root);
-    const loaded = await reader.warmup(namespace);
-    expect(loaded).toBe(expectedLoaded);
-    await verify(reader);
+    const reader = createDedupe(root, { ttlMs: 1000 });
+    expect(await reader.warmup("acct")).toBe(1);
+    expect(await reader.checkAndRecord("old-msg", { namespace: "acct" })).toBe(true);
+    expect(await reader.checkAndRecord("new-msg", { namespace: "acct" })).toBe(false);
   });
 });
 
 describe("createClaimableDedupe", () => {
-  it("mirrors concurrent in-flight duplicates and records on commit", async () => {
+  it("mirrors in-flight duplicates, serializes races, and records on commit", async () => {
     const dedupe = createClaimableDedupe({
       ttlMs: 10_000,
       memoryMaxSize: 100,
@@ -127,13 +86,6 @@ describe("createClaimableDedupe", () => {
       await expect(duplicate.pending).resolves.toBe(true);
     }
     await expect(dedupe.claim("line:evt-1")).resolves.toEqual({ kind: "duplicate" });
-  });
-
-  it("serializes concurrent first-claim races onto one in-flight owner", async () => {
-    const dedupe = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
 
     const claims = await Promise.all([dedupe.claim("line:race-1"), dedupe.claim("line:race-1")]);
     expect(claims.filter((claim) => claim.kind === "claimed")).toHaveLength(1);

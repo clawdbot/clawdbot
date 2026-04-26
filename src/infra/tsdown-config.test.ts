@@ -41,6 +41,11 @@ function entryKeys(config: TsdownConfigEntry): string[] {
   return Object.keys(config.entry);
 }
 
+function hasBundledPluginRuntimeEntry(config: TsdownConfigEntry): boolean {
+  const keys = entryKeys(config);
+  return keys.includes("index") || keys.includes("runtime-api");
+}
+
 function bundledEntry(pluginId: string): string {
   return `${bundledPluginRoot(pluginId)}/index`;
 }
@@ -71,7 +76,6 @@ describe("tsdown config", () => {
         "plugin-sdk/compat",
         "plugin-sdk/index",
         bundledEntry("openai"),
-        bundledEntry("msteams"),
         "bundled/boot-md/handler",
       ]),
     );
@@ -83,11 +87,19 @@ describe("tsdown config", () => {
     );
 
     expect(stagedGraphs.length).toBeGreaterThan(0);
-    expect(stagedGraphs.every((config) => entryKeys(config).includes("index"))).toBe(true);
+    expect(stagedGraphs.every(hasBundledPluginRuntimeEntry)).toBe(true);
     expect(stagedGraphs.every((config) => !entryKeys(config).includes("plugin-sdk/index"))).toBe(
       true,
     );
     expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/discord")).toBe(true);
+    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/msteams")).toBe(true);
+    expect(
+      stagedGraphs.some(
+        (config) =>
+          config.outDir === "dist/extensions/media-understanding-core" &&
+          entryKeys(config).includes("image-ops"),
+      ),
+    ).toBe(true);
   });
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {

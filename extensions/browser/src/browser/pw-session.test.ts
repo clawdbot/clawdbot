@@ -1,11 +1,25 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import {
   ensurePageState,
   refLocator,
   rememberRoleRefsForTarget,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
+
+type MutableDownload = {
+  suggestedFilename: () => string;
+  saveAs: ReturnType<typeof vi.fn>;
+  path?: () => Promise<string>;
+};
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function fakePage(): {
   page: Page;
@@ -27,6 +41,7 @@ function fakePage(): {
   const getByRole = vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) }));
   const frameLocator = vi.fn(() => ({
     getByRole: vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) })),
+    locator: vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) })),
   }));
   const locator = vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) }));
 
@@ -72,10 +87,30 @@ describe("pw-session refLocator", () => {
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
   });
 
-  it("rejects axN refs from format=aria snapshots instead of timing out", () => {
+  it("uses backend-marked DOM locators for ax refs", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.roleRefs = { ax12: { role: "button", name: "OK", domMarker: true } };
+
+    refLocator(page, "ax12");
+
+    expect(mocks.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}="ax12"]`);
+  });
+
+  it("falls back to role heuristics for ax refs without backend markers", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.roleRefs = { ax12: { role: "button", name: "OK" } };
+
+    refLocator(page, "ax12");
+
+    expect(mocks.getByRole).toHaveBeenCalledWith("button", { name: "OK", exact: true });
+  });
+
+  it("rejects unknown ax refs instead of timing out on aria-ref locators", () => {
     const { page, mocks } = fakePage();
 
-    expect(() => refLocator(page, "ax12")).toThrow(/format=aria snapshot/);
+    expect(() => refLocator(page, "ax12")).toThrow(/Unknown ref/);
     expect(mocks.locator).not.toHaveBeenCalled();
   });
 });
@@ -101,6 +136,80 @@ describe("pw-session role refs cache", () => {
 });
 
 describe("pw-session ensurePageState", () => {
+  it("stores unmanaged downloads under unique managed paths", async () => {
+    const { page, handlers } = fakePage();
+    const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    ensurePageState(page);
+
+    const saveAsA = vi.fn(async () => {});
+    const saveAsB = vi.fn(async () => {});
+    const downloadA: MutableDownload = {
+      suggestedFilename: () => "report.pdf",
+      saveAs: saveAsA,
+    };
+    const downloadB: MutableDownload = {
+      suggestedFilename: () => "report.pdf",
+      saveAs: saveAsB,
+    };
+
+    handlers.get("download")?.[0]?.(downloadA);
+    handlers.get("download")?.[0]?.(downloadB);
+
+    const managedPathA = await downloadA.path?.();
+    const managedPathB = await downloadB.path?.();
+
+    expect(managedPathA).not.toBe(managedPathB);
+    expect(path.dirname(managedPathA ?? "")).toBe(DEFAULT_DOWNLOAD_DIR);
+    expect(path.dirname(managedPathB ?? "")).toBe(DEFAULT_DOWNLOAD_DIR);
+    expect(path.basename(managedPathA ?? "")).toMatch(/-report\.pdf$/);
+    expect(path.basename(managedPathB ?? "")).toMatch(/-report\.pdf$/);
+    expect(saveAsA).toHaveBeenCalledWith(managedPathA);
+    expect(saveAsB).toHaveBeenCalledWith(managedPathB);
+    expect(mkdirSpy).toHaveBeenCalledWith(DEFAULT_DOWNLOAD_DIR, { recursive: true });
+  });
+
+  it("suppresses unmanaged download save rejections until path is awaited", async () => {
+    const { page, handlers } = fakePage();
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    ensurePageState(page);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+
+    const err = new Error("save failed");
+    const download: MutableDownload = {
+      suggestedFilename: () => "report.pdf",
+      saveAs: vi.fn(async () => {
+        throw err;
+      }),
+    };
+
+    try {
+      handlers.get("download")?.[0]?.(download);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(unhandled).toEqual([]);
+      await expect(download.path?.()).rejects.toThrow("save failed");
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("leaves unmanaged download handling to explicit waiters while armed", () => {
+    const { page, handlers } = fakePage();
+    const state = ensurePageState(page);
+    state.downloadWaiterDepth = 1;
+    const download = {
+      suggestedFilename: () => "report.pdf",
+      saveAs: vi.fn(async () => {}),
+    };
+
+    handlers.get("download")?.[0]?.(download);
+
+    expect(download).not.toHaveProperty("path");
+    expect(download.saveAs).not.toHaveBeenCalled();
+  });
+
   it("tracks page errors and network requests (best-effort)", () => {
     const { page, handlers } = fakePage();
     const state = ensurePageState(page);

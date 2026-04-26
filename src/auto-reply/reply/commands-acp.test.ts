@@ -1637,6 +1637,24 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 
+  it("handles /acp close in a bound thread when text commands are disabled", async () => {
+    mockBoundThreadSession();
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createBoundThreadSession() as SessionBindingRecord,
+    ]);
+
+    const result = await handleAcpCommand(createThreadParams("/acp close", baseCfg), false);
+
+    expect(hoisted.closeMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: defaultAcpSessionKey,
+        reason: "manual",
+      }),
+    );
+    expect(result?.reply?.text).toContain("Removed 1 binding");
+  });
+
   it("lists ACP sessions from the session store", async () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((key: string) =>
       key === defaultAcpSessionKey ? [createBoundThreadSession(key) as SessionBindingRecord] : [],
@@ -1909,6 +1927,25 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("ACP doctor:");
     expect(result?.reply?.text).toContain("healthy: no");
     expect(result?.reply?.text).toContain("next:");
+  });
+
+  it("explains when acpx is blocked by plugins.allow", async () => {
+    hoisted.getAcpRuntimeBackendMock.mockReturnValue(null);
+    hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
+      throw new AcpRuntimeError(
+        "ACP_BACKEND_MISSING",
+        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
+      );
+    });
+
+    const result = await runDiscordAcpCommand("/acp doctor", {
+      ...baseCfg,
+      plugins: { allow: ["discord"] },
+    });
+
+    expect(result?.reply?.text).toContain("pluginActivation: blocked");
+    expect(result?.reply?.text).toContain("acpx");
+    expect(result?.reply?.text).toContain('add "acpx" to plugins.allow');
   });
 
   it("shows deterministic install instructions via /acp install", async () => {

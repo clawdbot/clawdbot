@@ -58,6 +58,8 @@ export type AcpSessionRuntimeOptions = {
   runtimeMode?: string;
   /** ACP runtime config option: model id. */
   model?: string;
+  /** ACP runtime config option: thinking/reasoning effort. */
+  thinking?: string;
   /** Working directory override for ACP session turns. */
   cwd?: string;
   /** ACP runtime config option: permission profile id. */
@@ -145,6 +147,10 @@ export type SessionEntry = {
   subagentControlScope?: "children" | "none";
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Timestamp (ms) when the current sessionId first became active. */
+  sessionStartedAt?: number;
+  /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
+  lastInteractionAt?: number;
   /** Stable first-run start time for subagent sessions, persisted after completion. */
   startedAt?: number;
   /** Latest completed run end time for subagent sessions, persisted after completion. */
@@ -169,6 +175,10 @@ export type SessionEntry = {
   reasoningLevel?: string;
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
+  /** Hash of the latest assistant reply that was sent through `/tts latest`. */
+  lastTtsReadLatestHash?: string;
+  /** Timestamp (ms) when `/tts latest` last sent audio for this session. */
+  lastTtsReadLatestAt?: number;
   execHost?: string;
   execSecurity?: string;
   execAsk?: string;
@@ -381,9 +391,22 @@ export function mergeSessionEntryWithPolicy(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
   if (!existing) {
-    return normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
+    return normalizeSessionRuntimeModelFields({
+      ...patch,
+      sessionId,
+      updatedAt,
+      sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
+    });
   }
-  const next = { ...existing, ...patch, sessionId, updatedAt };
+  const next = {
+    ...existing,
+    ...patch,
+    sessionId,
+    updatedAt,
+    sessionStartedAt:
+      patch.sessionStartedAt ??
+      (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
+  };
 
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.

@@ -6,4 +6,8 @@ import type { RealtimeConversationVersion } from "../RealtimeConversationVersion
 /**
  * EXPERIMENTAL - emitted when thread realtime startup is accepted.
  */
-export type ThreadRealtimeStartedNotification = { threadId: string, sessionId: string | null, version: RealtimeConversationVersion, };
+export type ThreadRealtimeStartedNotification = {
+  threadId: string;
+  sessionId: string | null;
+  version: RealtimeConversationVersion;
+};

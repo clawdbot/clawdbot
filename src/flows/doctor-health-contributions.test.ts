@@ -13,4 +13,11 @@ describe("doctor health contributions", () => {
       ids.indexOf("doctor:startup-channel-maintenance"),
     );
   });
+
+  it("runs plugin registry repair before final config writes", () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+
+    expect(ids.indexOf("doctor:plugin-registry")).toBeGreaterThan(-1);
+    expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
 });

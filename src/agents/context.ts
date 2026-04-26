@@ -375,7 +375,7 @@ function resolveConfiguredProviderContextTokens(
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
-  if (provider !== "anthropic") {
+  if (provider !== "anthropic" && provider !== "claude-cli") {
     return false;
   }
   const modelId = resolveModelFamilyId(model);

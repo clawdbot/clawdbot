@@ -3,8 +3,16 @@ import { closeSync, openSync, readSync } from "node:fs";
 import path from "node:path";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
+function getPortableBasename(value) {
+  return value.split(/[/\\]/).at(-1) ?? value;
+}
+
+function getPortableExtension(value) {
+  return path.posix.extname(getPortableBasename(value)).toLowerCase();
+}
+
 function isPnpmExecPath(value) {
-  return /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/.test(path.basename(value).toLowerCase());
+  return /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/.test(getPortableBasename(value).toLowerCase());
 }
 
 function hasScriptShebang(value) {
@@ -30,7 +38,7 @@ function isNodeRunnablePnpmExecPath(value) {
   if (!isPnpmExecPath(value)) {
     return false;
   }
-  const extension = path.extname(value).toLowerCase();
+  const extension = getPortableExtension(value);
   if (extension === ".js" || extension === ".cjs" || extension === ".mjs") {
     return true;
   }
@@ -48,16 +56,31 @@ export function resolvePnpmRunner(params = {}) {
   const platform = params.platform ?? process.platform;
   const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
 
-  if (
-    typeof npmExecPath === "string" &&
-    npmExecPath.length > 0 &&
-    isNodeRunnablePnpmExecPath(npmExecPath)
-  ) {
-    return {
-      command: nodeExecPath,
-      args: [...nodeArgs, npmExecPath, ...pnpmArgs],
-      shell: false,
-    };
+  if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isPnpmExecPath(npmExecPath)) {
+    if (isNodeRunnablePnpmExecPath(npmExecPath)) {
+      return {
+        command: nodeExecPath,
+        args: [...nodeArgs, npmExecPath, ...pnpmArgs],
+        shell: false,
+      };
+    }
+
+    const npmExecExtension = getPortableExtension(npmExecPath);
+    if (platform === "win32" && npmExecExtension === ".exe") {
+      return {
+        command: npmExecPath,
+        args: pnpmArgs,
+        shell: false,
+      };
+    }
+    if (platform === "win32" && npmExecExtension === ".cmd") {
+      return {
+        command: comSpec,
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmExecPath, pnpmArgs)],
+        shell: false,
+        windowsVerbatimArguments: true,
+      };
+    }
   }
 
   if (platform === "win32") {

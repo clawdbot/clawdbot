@@ -231,6 +231,49 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("blocks --force port cleanup from an older binary with newer config", async () => {
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: { meta: { lastTouchedVersion: "9999.1.1" } },
+      sourceConfig: { meta: { lastTouchedVersion: "9999.1.1" } },
+    };
+
+    await expect(
+      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(forceFreePortAndWait).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Refusing to force-kill gateway port listeners");
+  });
+
+  it("blocks service-mode startup from an older binary with newer config", async () => {
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: { meta: { lastTouchedVersion: "9999.1.1" } },
+      sourceConfig: { meta: { lastTouchedVersion: "9999.1.1" } },
+    };
+    const previousMarker = process.env.OPENCLAW_SERVICE_MARKER;
+    process.env.OPENCLAW_SERVICE_MARKER = "gateway";
+    try {
+      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+        "__exit__:78",
+      );
+    } finally {
+      if (previousMarker === undefined) {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      } else {
+        process.env.OPENCLAW_SERVICE_MARKER = previousMarker;
+      }
+    }
+
+    expect(forceFreePortAndWait).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Refusing to start the gateway service");
+  });
+
   it.each([
     ["--cli-backend-logs", "generic flag"],
     ["--claude-cli-logs", "deprecated alias"],

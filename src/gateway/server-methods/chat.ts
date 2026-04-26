@@ -30,12 +30,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  parseAssistantTextSignature,
-  resolveAssistantMessagePhase,
-} from "../../shared/chat-message-content.js";
-import {
   stripInlineDirectiveTagsForDisplay,
-  stripInlineDirectiveTagsFromMessageForDisplay,
   sanitizeReplyDirectiveId,
 } from "../../utils/directive-tags.js";
 import {
@@ -57,7 +52,13 @@ import {
   parseMessageWithAttachments,
 } from "../chat-attachments.js";
 import { MediaOffloadError } from "../chat-attachments.js";
-import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import {
+  isToolHistoryBlockType,
+  projectChatDisplayMessage,
+  projectRecentChatDisplayMessages,
+  resolveEffectiveChatHistoryMaxChars,
+} from "../chat-display-projection.js";
+import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
@@ -130,6 +131,9 @@ type ChatAbortRequester = {
 
 /** True when a reply payload carries at least one media reference (mediaUrl or mediaUrls). */
 function isMediaBearingPayload(payload: ReplyPayload): boolean {
+  if (payload.isReasoning === true) {
+    return false;
+  }
   if (payload.mediaUrl?.trim()) {
     return true;
   }
@@ -154,7 +158,12 @@ async function buildWebchatAssistantMediaMessage(
   });
 }
 
-export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+export {
+  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  resolveEffectiveChatHistoryMaxChars,
+  sanitizeChatHistoryMessages,
+} from "../chat-display-projection.js";
+
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
@@ -174,19 +183,6 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "topic",
 ]);
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
-
-export function resolveEffectiveChatHistoryMaxChars(
-  cfg: { gateway?: { webchat?: { chatHistoryMaxChars?: number } } },
-  maxChars?: number,
-): number {
-  if (typeof maxChars === "number") {
-    return maxChars;
-  }
-  if (typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number") {
-    return cfg.gateway.webchat.chatHistoryMaxChars;
-  }
-  return DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-}
 
 type ChatSendDeliveryEntry = {
   deliveryContext?: {
@@ -234,6 +230,9 @@ type SideResultPayload = {
 function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
   const chunks = payloads
     .map((payload) => {
+      if (payload.isReasoning === true) {
+        return "";
+      }
       const parts = resolveSendableOutboundReplyParts(payload);
       const lines: string[] = [];
       const replyToId = sanitizeReplyDirectiveId(payload.replyToId);
@@ -308,7 +307,10 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
   onManagedImagePrepareError?: (message: string) => void;
 }): Promise<AssistantDisplayContentBlock[] | undefined> {
   const rawTextPayloadCount = params.payloads.filter(
-    (payload) => typeof payload.text === "string" && payload.text.trim().length > 0,
+    (payload) =>
+      payload.isReasoning !== true &&
+      typeof payload.text === "string" &&
+      payload.text.trim().length > 0,
   ).length;
   const normalized = normalizeReplyPayloadsForDelivery(params.payloads);
   if (normalized.length === 0) {
@@ -832,34 +834,6 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   });
 }
 
-function truncateChatHistoryText(
-  text: string,
-  maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-): { text: string; truncated: boolean } {
-  if (text.length <= maxChars) {
-    return { text, truncated: false };
-  }
-  return {
-    text: `${text.slice(0, maxChars)}\n...(truncated)...`,
-    truncated: true,
-  };
-}
-
-function isToolHistoryBlockType(type: unknown): boolean {
-  if (typeof type !== "string") {
-    return false;
-  }
-  const normalized = type.trim().toLowerCase();
-  return (
-    normalized === "toolcall" ||
-    normalized === "tool_call" ||
-    normalized === "tooluse" ||
-    normalized === "tool_use" ||
-    normalized === "toolresult" ||
-    normalized === "tool_result"
-  );
-}
-
 function extractChatHistoryBlockText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
@@ -884,373 +858,6 @@ function extractChatHistoryBlockText(message: unknown): string | undefined {
     })
     .filter((value): value is string => typeof value === "string");
   return textParts.length > 0 ? textParts.join("\n") : undefined;
-}
-
-function sanitizeChatHistoryContentBlock(
-  block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
-): { block: unknown; changed: boolean } {
-  if (!block || typeof block !== "object") {
-    return { block, changed: false };
-  }
-  const entry = { ...(block as Record<string, unknown>) };
-  let changed = false;
-  const preserveExactToolPayload =
-    opts?.preserveExactToolPayload === true || isToolHistoryBlockType(entry.type);
-  const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    if (preserveExactToolPayload) {
-      entry.text = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
-      entry.text = res.text;
-      changed ||= stripped.changed || res.truncated;
-    }
-  }
-  if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
-    if (preserveExactToolPayload) {
-      entry.content = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
-      entry.content = res.text;
-      changed ||= stripped.changed || res.truncated;
-    }
-  }
-  if (typeof entry.partialJson === "string") {
-    if (!preserveExactToolPayload) {
-      const res = truncateChatHistoryText(entry.partialJson, maxChars);
-      entry.partialJson = res.text;
-      changed ||= res.truncated;
-    }
-  }
-  if (typeof entry.arguments === "string") {
-    if (!preserveExactToolPayload) {
-      const res = truncateChatHistoryText(entry.arguments, maxChars);
-      entry.arguments = res.text;
-      changed ||= res.truncated;
-    }
-  }
-  if (typeof entry.thinking === "string") {
-    const res = truncateChatHistoryText(entry.thinking, maxChars);
-    entry.thinking = res.text;
-    changed ||= res.truncated;
-  }
-  if ("thinkingSignature" in entry) {
-    delete entry.thinkingSignature;
-    changed = true;
-  }
-  const type = typeof entry.type === "string" ? entry.type : "";
-  if (type === "image" && typeof entry.data === "string") {
-    const bytes = Buffer.byteLength(entry.data, "utf8");
-    delete entry.data;
-    entry.omitted = true;
-    entry.bytes = bytes;
-    changed = true;
-  }
-  if (type === "audio" && entry.source && typeof entry.source === "object") {
-    const source = { ...(entry.source as Record<string, unknown>) };
-    if (source.type === "base64" && typeof source.data === "string") {
-      const bytes = Buffer.byteLength(source.data, "utf8");
-      delete source.data;
-      source.omitted = true;
-      source.bytes = bytes;
-      entry.source = source;
-      changed = true;
-    }
-  }
-  return { block: changed ? entry : block, changed };
-}
-
-function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
-  content: unknown[];
-  changed: boolean;
-} {
-  const hasExplicitPhasedText = content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const entry = block as { type?: unknown; textSignature?: unknown };
-    return (
-      entry.type === "text" && Boolean(parseAssistantTextSignature(entry.textSignature)?.phase)
-    );
-  });
-  if (!hasExplicitPhasedText) {
-    return { content, changed: false };
-  }
-  const filtered = content.filter((block) => {
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    const entry = block as { type?: unknown; textSignature?: unknown };
-    if (entry.type !== "text") {
-      return true;
-    }
-    return parseAssistantTextSignature(entry.textSignature)?.phase === "final_answer";
-  });
-  return {
-    content: filtered,
-    changed: filtered.length !== content.length,
-  };
-}
-
-/**
- * Validate that a value is a finite number, returning undefined otherwise.
- */
-function toFiniteNumber(x: unknown): number | undefined {
-  return typeof x === "number" && Number.isFinite(x) ? x : undefined;
-}
-
-/**
- * Sanitize usage metadata to ensure only finite numeric fields are included.
- * Prevents UI crashes from malformed transcript JSON.
- */
-function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const u = raw as Record<string, unknown>;
-  const out: Record<string, number> = {};
-
-  // Whitelist known usage fields and validate they're finite numbers
-  const knownFields = [
-    "input",
-    "output",
-    "totalTokens",
-    "inputTokens",
-    "outputTokens",
-    "cacheRead",
-    "cacheWrite",
-    "cache_read_input_tokens",
-    "cache_creation_input_tokens",
-  ];
-
-  for (const k of knownFields) {
-    const n = toFiniteNumber(u[k]);
-    if (n !== undefined) {
-      out[k] = n;
-    }
-  }
-
-  // Preserve nested usage.cost when present
-  if ("cost" in u && u.cost != null && typeof u.cost === "object") {
-    const sanitizedCost = sanitizeCost(u.cost);
-    if (sanitizedCost) {
-      (out as Record<string, unknown>).cost = sanitizedCost;
-    }
-  }
-
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
-/**
- * Sanitize cost metadata to ensure only finite numeric fields are included.
- * Prevents UI crashes from calling .toFixed() on non-numbers.
- */
-function sanitizeCost(raw: unknown): { total?: number } | undefined {
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const c = raw as Record<string, unknown>;
-  const total = toFiniteNumber(c.total);
-  return total !== undefined ? { total } : undefined;
-}
-
-function sanitizeChatHistoryMessage(
-  message: unknown,
-  maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-): { message: unknown; changed: boolean } {
-  if (!message || typeof message !== "object") {
-    return { message, changed: false };
-  }
-  const entry = { ...(message as Record<string, unknown>) };
-  let changed = false;
-  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
-  const preserveExactToolPayload =
-    role === "toolresult" ||
-    role === "tool_result" ||
-    role === "tool" ||
-    role === "function" ||
-    typeof entry.toolName === "string" ||
-    typeof entry.tool_name === "string" ||
-    typeof entry.toolCallId === "string" ||
-    typeof entry.tool_call_id === "string";
-
-  if ("details" in entry) {
-    delete entry.details;
-    changed = true;
-  }
-
-  // Keep usage/cost so the chat UI can render per-message token and cost badges.
-  // Only retain usage/cost on assistant messages and validate numeric fields to prevent UI crashes.
-  if (entry.role !== "assistant") {
-    if ("usage" in entry) {
-      delete entry.usage;
-      changed = true;
-    }
-    if ("cost" in entry) {
-      delete entry.cost;
-      changed = true;
-    }
-  } else {
-    // Validate and sanitize usage/cost for assistant messages
-    if ("usage" in entry) {
-      const sanitized = sanitizeUsage(entry.usage);
-      if (sanitized) {
-        entry.usage = sanitized;
-      } else {
-        delete entry.usage;
-      }
-      changed = true;
-    }
-    if ("cost" in entry) {
-      const sanitized = sanitizeCost(entry.cost);
-      if (sanitized) {
-        entry.cost = sanitized;
-      } else {
-        delete entry.cost;
-      }
-      changed = true;
-    }
-  }
-
-  if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
-    if (preserveExactToolPayload) {
-      entry.content = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
-      entry.content = res.text;
-      changed ||= stripped.changed || res.truncated;
-    }
-  } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) =>
-      sanitizeChatHistoryContentBlock(block, { preserveExactToolPayload, maxChars }),
-    );
-    if (updated.some((item) => item.changed)) {
-      entry.content = updated.map((item) => item.block);
-      changed = true;
-    }
-    if (entry.role === "assistant" && Array.isArray(entry.content)) {
-      const sanitizedPhases = sanitizeAssistantPhasedContentBlocks(entry.content);
-      if (sanitizedPhases.changed) {
-        entry.content = sanitizedPhases.content;
-        changed = true;
-      }
-    }
-  }
-
-  if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    if (preserveExactToolPayload) {
-      entry.text = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
-      entry.text = res.text;
-      changed ||= stripped.changed || res.truncated;
-    }
-  }
-
-  return { message: changed ? entry : message, changed };
-}
-
-/**
- * Extract the visible text from an assistant history message for silent-token checks.
- * Returns `undefined` for non-assistant messages or messages with no extractable text.
- * When `entry.text` is present it takes precedence over `entry.content` to avoid
- * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
- */
-function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const entry = message as Record<string, unknown>;
-  if (entry.role !== "assistant") {
-    return undefined;
-  }
-  if (typeof entry.text === "string") {
-    return entry.text;
-  }
-  if (typeof entry.content === "string") {
-    return entry.content;
-  }
-  if (!Array.isArray(entry.content) || entry.content.length === 0) {
-    return undefined;
-  }
-
-  const texts: string[] = [];
-  for (const block of entry.content) {
-    if (!block || typeof block !== "object") {
-      return undefined;
-    }
-    const typed = block as { type?: unknown; text?: unknown };
-    if (typed.type !== "text" || typeof typed.text !== "string") {
-      return undefined;
-    }
-    texts.push(typed.text);
-  }
-  return texts.length > 0 ? texts.join("\n") : undefined;
-}
-
-function hasAssistantNonTextContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) => block && typeof block === "object" && (block as { type?: unknown }).type !== "text",
-  );
-}
-
-function shouldDropAssistantHistoryMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as { role?: unknown };
-  if (entry.role !== "assistant") {
-    return false;
-  }
-  if (resolveAssistantMessagePhase(message) === "commentary") {
-    return true;
-  }
-  const text = extractAssistantTextForSilentCheck(message);
-  if (text === undefined || !isSuppressedControlReplyText(text)) {
-    return false;
-  }
-  return !hasAssistantNonTextContent(message);
-}
-
-export function sanitizeChatHistoryMessages(
-  messages: unknown[],
-  maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-): unknown[] {
-  if (messages.length === 0) {
-    return messages;
-  }
-  let changed = false;
-  const next: unknown[] = [];
-  for (const message of messages) {
-    if (shouldDropAssistantHistoryMessage(message)) {
-      changed = true;
-      continue;
-    }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
-    changed ||= res.changed;
-    if (shouldDropAssistantHistoryMessage(res.message)) {
-      changed = true;
-      continue;
-    }
-    next.push(res.message);
-  }
-  return changed ? next : messages;
 }
 
 function appendCanvasBlockToAssistantHistoryMessage(params: {
@@ -1809,15 +1416,12 @@ function broadcastChatFinal(params: {
   message?: Record<string, unknown>;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
-  const strippedEnvelopeMessage = stripEnvelopeFromMessage(params.message) as
-    | Record<string, unknown>
-    | undefined;
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
     seq,
     state: "final" as const,
-    message: stripInlineDirectiveTagsFromMessageForDisplay(strippedEnvelopeMessage),
+    message: projectChatDisplayMessage(params.message),
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
@@ -1904,10 +1508,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-    const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = augmentChatHistoryWithCanvasBlocks(
-      sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
+      projectRecentChatDisplayMessages(rawMessages, {
+        maxChars: effectiveMaxChars,
+        maxMessages: max,
+      }),
     );
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
@@ -2821,14 +2426,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     // Broadcast to webchat for immediate UI update
+    const message = projectChatDisplayMessage(appended.message, {
+      maxChars: resolveEffectiveChatHistoryMaxChars(cfg),
+    });
     const chatPayload = {
       runId: `inject-${appended.messageId}`,
       sessionKey,
       seq: 0,
       state: "final" as const,
-      message: stripInlineDirectiveTagsFromMessageForDisplay(
-        stripEnvelopeFromMessage(appended.message) as Record<string, unknown>,
-      ),
+      message,
     };
     context.broadcast("chat", chatPayload);
     context.nodeSendToSession(sessionKey, "chat", chatPayload);

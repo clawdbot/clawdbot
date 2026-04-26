@@ -51,7 +51,7 @@ describe("buildQaGatewayConfig", () => {
       ...createQaChannelTransportParams(),
     });
 
-    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.4");
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.5");
     expect(cfg.models?.providers?.["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(cfg.models?.providers?.["mock-openai"]?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:44080/v1");
@@ -88,14 +88,14 @@ describe("buildQaGatewayConfig", () => {
       providerBaseUrl: "http://127.0.0.1:44080/v1",
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
       alternateModel: "anthropic/claude-opus-4-6",
     });
 
-    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.4");
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.5");
     expect(cfg.models?.providers?.openai?.api).toBe("openai-responses");
     expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
-    expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain("gpt-5.4");
+    expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain("gpt-5.5");
     expect(cfg.models?.providers?.anthropic?.api).toBe("anthropic-messages");
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
@@ -113,11 +113,11 @@ describe("buildQaGatewayConfig", () => {
       providerBaseUrl: "http://127.0.0.1:45080/v1",
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "aimock",
-      primaryModel: "aimock/gpt-5.4",
-      alternateModel: "aimock/gpt-5.4-alt",
+      primaryModel: "aimock/gpt-5.5",
+      alternateModel: "aimock/gpt-5.5-alt",
     });
 
-    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("aimock/gpt-5.4");
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("aimock/gpt-5.5");
     expect(cfg.agents?.defaults?.imageGenerationModel).toEqual({
       primary: "aimock/gpt-image-1",
     });
@@ -167,17 +167,17 @@ describe("buildQaGatewayConfig", () => {
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "live-frontier",
       fastMode: true,
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       ...createQaChannelTransportParams(),
     });
 
-    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.4");
-    expect(getPrimaryModel(cfg.agents?.list?.[0]?.model)).toBe("openai/gpt-5.4");
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.5");
+    expect(getPrimaryModel(cfg.agents?.list?.[0]?.model)).toBe("openai/gpt-5.5");
     expect(cfg.models).toBeUndefined();
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "openai", "qa-channel"]);
     expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
-    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
       params: { transport: "sse", openaiWsWarmup: false, fastMode: true },
     });
   });
@@ -273,14 +273,14 @@ describe("buildQaGatewayConfig", () => {
       gatewayToken: "token",
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       thinkingDefault: "xhigh",
       ...createQaChannelTransportParams(),
     });
 
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("xhigh");
-    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]?.params).toMatchObject({
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.params).toMatchObject({
       thinking: "xhigh",
     });
   });

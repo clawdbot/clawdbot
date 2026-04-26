@@ -49,6 +49,10 @@ function createProbe(
       scopes: capability === "admin_capable" ? ["operator.admin"] : ["operator.read"],
       capability,
     },
+    server: {
+      version: "2026.4.24",
+      connId: "conn-test",
+    },
     health: null,
     status: null,
     presence: null,

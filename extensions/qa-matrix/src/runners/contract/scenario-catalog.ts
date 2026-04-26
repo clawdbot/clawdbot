@@ -60,6 +60,17 @@ export type MatrixQaScenarioId =
   | "matrix-e2ee-recovery-key-lifecycle"
   | "matrix-e2ee-recovery-owner-verification-required"
   | "matrix-e2ee-cli-self-verification"
+  | "matrix-e2ee-state-loss-external-recovery-key"
+  | "matrix-e2ee-state-loss-stored-recovery-key"
+  | "matrix-e2ee-state-loss-no-recovery-key"
+  | "matrix-e2ee-stale-recovery-key-after-backup-reset"
+  | "matrix-e2ee-server-backup-deleted-local-state-intact"
+  | "matrix-e2ee-server-backup-deleted-local-reupload-restores"
+  | "matrix-e2ee-corrupt-crypto-idb-snapshot"
+  | "matrix-e2ee-server-device-deleted-local-state-intact"
+  | "matrix-e2ee-sync-state-loss-crypto-intact"
+  | "matrix-e2ee-wrong-account-recovery-key"
+  | "matrix-e2ee-history-exists-backup-empty"
   | "matrix-e2ee-device-sas-verification"
   | "matrix-e2ee-qr-verification"
   | "matrix-e2ee-stale-device-hygiene"
@@ -258,7 +269,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       groupsByKey: {
         [MATRIX_QA_MAIN_ROOM_KEY]: {
           tools: {
-            allow: ["sessions_spawn"],
+            allow: ["sessions_spawn", "sessions_yield"],
           },
         },
       },
@@ -590,6 +601,106 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },
   {
+    id: "matrix-e2ee-state-loss-external-recovery-key",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE total state loss restores backup with an external recovery key",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-state-loss-external-recovery-key",
+      name: "Matrix QA E2EE State Loss External Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-state-loss-stored-recovery-key",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE crypto state loss restores backup from a surviving recovery key",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-state-loss-stored-recovery-key",
+      name: "Matrix QA E2EE State Loss Stored Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-state-loss-no-recovery-key",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE total state loss without a recovery key fails closed",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-state-loss-no-recovery-key",
+      name: "Matrix QA E2EE State Loss No Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-stale-recovery-key-after-backup-reset",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE stale recovery key is rejected after server backup reset",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-stale-recovery-key-after-backup-reset",
+      name: "Matrix QA E2EE Stale Recovery Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-server-backup-deleted-local-state-intact",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE local crypto survives server backup deletion",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-server-backup-deleted-local-state-intact",
+      name: "Matrix QA E2EE Server Backup Deleted Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-server-backup-deleted-local-reupload-restores",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE local keys re-upload after server backup deletion",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-server-backup-deleted-local-reupload-restores",
+      name: "Matrix QA E2EE Server Backup Reupload Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-corrupt-crypto-idb-snapshot",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE corrupt crypto snapshot repairs through backup restore",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-corrupt-crypto-idb-snapshot",
+      name: "Matrix QA E2EE Corrupt IDB Snapshot Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-server-device-deleted-local-state-intact",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE server-side device deletion invalidates surviving local state",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-server-device-deleted-local-state-intact",
+      name: "Matrix QA E2EE Server Device Deleted Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-sync-state-loss-crypto-intact",
+    timeoutMs: MATRIX_QA_E2EE_REPLY_TIMEOUT_MS,
+    title: "Matrix E2EE sync cursor loss keeps crypto decryptability intact",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-sync-state-loss-crypto-intact",
+      name: "Matrix QA E2EE Sync State Loss Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-history-exists-backup-empty",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE backup reset preserves encrypted history via local key re-upload",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-history-exists-backup-empty",
+      name: "Matrix QA E2EE Empty Backup Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
     id: "matrix-e2ee-device-sas-verification",
     timeoutMs: 90_000,
     title: "Matrix E2EE device verification completes SAS emoji compare",
@@ -673,6 +784,16 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-key-bootstrap-failure",
       name: "Matrix QA E2EE Key Bootstrap Failure Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-wrong-account-recovery-key",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE rejects a recovery key from a different account",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-wrong-account-recovery-key",
+      name: "Matrix QA E2EE Wrong Account Key Room",
     }),
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },

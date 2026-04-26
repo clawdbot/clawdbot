@@ -7,8 +7,8 @@ import {
 } from "./config-state.js";
 import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
 import type { PluginDocumentExtractorEntry } from "./document-extractor-types.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 function compareExtractors(
   left: PluginDocumentExtractorEntry,
@@ -30,10 +30,11 @@ function resolveBundledDocumentExtractorCompatPluginIds(params: {
 }): string[] {
   const onlyPluginIdSet =
     params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    includeDisabled: true,
   })
     .plugins.filter(
       (plugin) =>
@@ -74,10 +75,11 @@ function resolveEnabledBundledDocumentExtractorPlugins(params: {
   });
   const onlyPluginIdSet =
     params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryForPluginRegistry({
     config: activation.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    includeDisabled: true,
   }).plugins.filter((plugin) => {
     if (
       plugin.origin !== "bundled" ||

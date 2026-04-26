@@ -1,8 +1,11 @@
 export { resolveAckReaction } from "../agents/identity.js";
 export {
+  createAckReactionHandle,
+  removeAckReactionHandleAfterReply,
   removeAckReactionAfterReply,
   shouldAckReaction,
   shouldAckReactionForWhatsApp,
+  type AckReactionHandle,
   type AckReactionGateParams,
   type AckReactionScope,
   type WhatsAppAckReactionMode,

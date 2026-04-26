@@ -93,13 +93,13 @@ describe("music-generation runtime", () => {
       if (providerId === "minimax") {
         return {
           id: "minimax",
-          defaultModel: "music-2.5+",
+          defaultModel: "music-2.6",
           capabilities: {},
           isConfigured: () => true,
           async generateMusic() {
             return {
               tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
-              model: "music-2.5+",
+              model: "music-2.6",
             };
           },
         };
@@ -116,7 +116,7 @@ describe("music-generation runtime", () => {
       },
       {
         id: "minimax",
-        defaultModel: "music-2.5+",
+        defaultModel: "music-2.6",
         capabilities: {},
         isConfigured: () => true,
         generateMusic: async () => ({ tracks: [] }),
@@ -129,7 +129,7 @@ describe("music-generation runtime", () => {
     });
 
     expect(result.provider).toBe("minimax");
-    expect(result.model).toBe("music-2.5+");
+    expect(result.model).toBe("music-2.6");
     expect(result.attempts).toEqual([
       {
         provider: "google",
@@ -302,7 +302,7 @@ describe("music-generation runtime", () => {
           durationSeconds?: number;
         }
       | undefined;
-    mocks.resolveAgentModelPrimaryValue.mockReturnValue("minimax/music-2.5+");
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("minimax/music-2.6");
     mocks.getMusicGenerationProvider.mockReturnValue({
       id: "minimax",
       capabilities: {
@@ -317,7 +317,7 @@ describe("music-generation runtime", () => {
         };
         return {
           tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
-          model: "music-2.5+",
+          model: "music-2.6",
         };
       },
     });
@@ -326,7 +326,7 @@ describe("music-generation runtime", () => {
       cfg: {
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "minimax/music-2.5+" },
+            musicGenerationModel: { primary: "minimax/music-2.6" },
           },
         },
       } as OpenClawConfig,

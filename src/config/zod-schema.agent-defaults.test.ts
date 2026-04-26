@@ -25,6 +25,28 @@ describe("agent defaults schema", () => {
     ).not.toThrow();
   });
 
+  it("accepts imageGenerationModel timeoutMs", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      imageGenerationModel: {
+        primary: "openrouter/openai/gpt-5.4-image-2",
+        timeoutMs: 180_000,
+      },
+    })!;
+
+    expect(defaults.imageGenerationModel).toEqual({
+      primary: "openrouter/openai/gpt-5.4-image-2",
+      timeoutMs: 180_000,
+    });
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        imageGenerationModel: {
+          primary: "openrouter/openai/gpt-5.4-image-2",
+          timeoutMs: 0,
+        },
+      }),
+    ).toThrow();
+  });
+
   it("accepts mediaGenerationAutoProviderFallback", () => {
     expect(() =>
       AgentDefaultsSchema.parse({
@@ -116,6 +138,25 @@ describe("agent defaults schema", () => {
 
     expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
+  });
+
+  it("accepts per-agent TTS overrides", () => {
+    const agent = AgentEntrySchema.parse({
+      id: "reader",
+      tts: {
+        provider: "openai",
+        auto: "always",
+        providers: {
+          openai: {
+            voice: "nova",
+            apiKey: "${OPENAI_API_KEY}",
+          },
+        },
+      },
+    });
+
+    expect(agent.tts?.provider).toBe("openai");
+    expect(agent.tts?.providers?.openai?.voice).toBe("nova");
   });
 
   it("rejects zero heartbeat timeoutSeconds", () => {

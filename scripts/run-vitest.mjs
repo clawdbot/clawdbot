@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
   forwardSignalToVitestProcessGroup,
@@ -40,10 +41,41 @@ export function resolveVitestNoOutputTimeoutMs(env = process.env) {
 
 export function resolveVitestSpawnParams(env = process.env, platform = process.platform) {
   return {
-    env,
+    env: resolveVitestSpawnEnv(env),
     detached: shouldUseDetachedVitestProcessGroup(platform),
     stdio: ["inherit", "pipe", "pipe"],
   };
+}
+
+export function resolveVitestSpawnEnv(env = process.env) {
+  const nextEnv = resolveLocalVitestEnv(env);
+  if (!shouldApplyNativeWorkerBudget(nextEnv)) {
+    return nextEnv;
+  }
+
+  const nativeWorkerCount = String(resolveNativeWorkerCount(nextEnv));
+  return {
+    ...nextEnv,
+    RAYON_NUM_THREADS: nextEnv.RAYON_NUM_THREADS?.trim() || nativeWorkerCount,
+    TOKIO_WORKER_THREADS: nextEnv.TOKIO_WORKER_THREADS?.trim() || nativeWorkerCount,
+  };
+}
+
+function shouldApplyNativeWorkerBudget(env) {
+  if (env.RAYON_NUM_THREADS?.trim() && env.TOKIO_WORKER_THREADS?.trim()) {
+    return false;
+  }
+  return (
+    env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" || resolveExplicitVitestWorkerBudget(env) !== null
+  );
+}
+
+function resolveNativeWorkerCount(env) {
+  return Math.min(resolveExplicitVitestWorkerBudget(env) ?? 1, 4);
+}
+
+function resolveExplicitVitestWorkerBudget(env) {
+  return parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
 }
 
 export function shouldSuppressVitestStderrLine(line) {

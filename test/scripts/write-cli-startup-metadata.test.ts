@@ -32,10 +32,13 @@ describe("write-cli-startup-metadata", () => {
     await writeCliStartupMetadata({ distDir, outputPath, extensionsDir });
 
     const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
+      browserHelpText: string;
       channelOptions: string[];
       rootHelpText: string;
     };
     expect(written.channelOptions).toContain("matrix");
+    expect(written.browserHelpText).toContain("Usage:");
+    expect(written.browserHelpText).toContain("openclaw browser");
     expect(written.rootHelpText).toContain("Usage:");
     expect(written.rootHelpText).toContain("openclaw");
   });

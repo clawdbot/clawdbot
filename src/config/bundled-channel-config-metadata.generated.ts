@@ -1454,6 +1454,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             enabled: {
               type: "boolean",
             },
+            model: {
+              type: "string",
+              minLength: 1,
+            },
             autoJoin: {
               type: "array",
               items: {
@@ -2630,6 +2634,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   enabled: {
                     type: "boolean",
                   },
+                  model: {
+                    type: "string",
+                    minLength: 1,
+                  },
                   autoJoin: {
                     type: "array",
                     items: {
@@ -3166,6 +3174,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       "voice.enabled": {
         label: "Discord Voice Enabled",
         help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+      },
+      "voice.model": {
+        label: "Discord Voice Model",
+        help: "Optional LLM model override for Discord voice channel responses (for example openai/gpt-5.4-mini). Leave unset to inherit the routed agent model.",
       },
       "voice.autoJoin": {
         label: "Discord Voice Auto-Join",
@@ -14574,7 +14586,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       streaming: {
         label: "Telegram Streaming Mode",
-        help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+        help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
       },
       "streaming.mode": {
         label: "Telegram Streaming Mode",

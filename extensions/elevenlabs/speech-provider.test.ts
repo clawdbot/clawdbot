@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { isValidVoiceId } from "./speech-provider.js";
+import { buildElevenLabsSpeechProvider, isValidVoiceId } from "./speech-provider.js";
 
 describe("elevenlabs speech provider", () => {
+  it("exposes the current ElevenLabs TTS model catalog", () => {
+    const provider = buildElevenLabsSpeechProvider();
+
+    expect(provider.models).toEqual(
+      expect.arrayContaining(["eleven_v3", "eleven_multilingual_v2"]),
+    );
+  });
+
   it("validates ElevenLabs voice ID length and character rules", () => {
     const cases = [
       { value: "pMsXgVXv3BLzUgSXRplE", expected: true },

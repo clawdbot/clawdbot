@@ -139,11 +139,12 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   const preferSourceCheckout = Boolean(env.VITEST) || runningSourceTypeScriptProcess();
 
   try {
-    const packageRoots = [
-      resolveOpenClawPackageRootSync({ argv1: process.argv[1] }),
-      resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
-      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
-    ].filter(
+    const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
+    const cwdRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
+    const moduleRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+    const packageRoots = (
+      preferSourceCheckout ? [cwdRoot, argvRoot, moduleRoot] : [argvRoot, cwdRoot, moduleRoot]
+    ).filter(
       (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
     );
     for (const packageRoot of packageRoots) {

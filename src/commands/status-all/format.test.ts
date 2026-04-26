@@ -105,6 +105,16 @@ describe("status-all format", () => {
       resolveStatusDashboardUrl({
         cfg: {
           gateway: {
+            bind: "loopback",
+            tls: { enabled: true },
+          },
+        },
+      }),
+    ).toBe("https://127.0.0.1:18789/");
+    expect(
+      resolveStatusDashboardUrl({
+        cfg: {
+          gateway: {
             controlUi: { enabled: false },
           },
         },
@@ -135,7 +145,7 @@ describe("status-all format", () => {
         includeBackendStateWhenOff: true,
         includeDnsNameWhenOff: true,
       }),
-    ).toBe("off · Stopped · box.tail.ts.net");
+    ).toBe("off · daemon Stopped · box.tail.ts.net");
   });
 
   it("formats service values across short and detailed runtime surfaces", () => {
@@ -291,7 +301,7 @@ describe("status-all format", () => {
     ).toEqual([
       { Item: "Version", Value: "1.0.0" },
       { Item: "Dashboard", Value: "https://openclaw.local" },
-      { Item: "Tailscale", Value: "serve · https://tail.example" },
+      { Item: "Tailscale exposure", Value: "serve · https://tail.example" },
       { Item: "Channel", Value: "stable" },
       { Item: "Git", Value: "main @ v1.0.0" },
       { Item: "Update", Value: "up to date" },
@@ -363,7 +373,7 @@ describe("status-all format", () => {
     ).toEqual([
       { Item: "Version", Value: "1.0.0" },
       { Item: "Dashboard", Value: "http://127.0.0.1:18789/" },
-      { Item: "Tailscale", Value: "serve · box.tail.ts.net · https://box.tail.ts.net" },
+      { Item: "Tailscale exposure", Value: "serve · box.tail.ts.net · https://box.tail.ts.net" },
       { Item: "Channel", Value: "stable (config)" },
       { Item: "Git", Value: "main · tag v1.2.3" },
       { Item: "Update", Value: "available · custom update" },

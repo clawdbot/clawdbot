@@ -56,6 +56,7 @@ async function listChannelSummaryPlugins(params: {
   const { listReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
   return listReadOnlyChannelPluginsForConfig(params.cfg, {
     activationSourceConfig: params.sourceConfig,
+    includeSetupRuntimeFallback: false,
   });
 }
 

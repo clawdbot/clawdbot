@@ -102,6 +102,7 @@ export function buildWhatsAppInboundContext(params: {
   route: ReturnType<typeof resolveAgentRoute>;
   sender: SenderContext;
   transcript?: string;
+  mediaTranscribedIndexes?: number[];
   replyThreading?: ReplyThreadingContext;
   visibleReplyTo?: VisibleReplyTarget;
 }) {
@@ -132,6 +133,7 @@ export function buildWhatsAppInboundContext(params: {
     MediaPath: params.msg.mediaPath,
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,
+    MediaTranscribedIndexes: params.mediaTranscribedIndexes,
     ChatType: params.msg.chatType,
     Timestamp: params.msg.timestamp,
     ConversationLabel: params.msg.chatType === "group" ? params.conversationId : params.msg.from,

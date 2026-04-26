@@ -5,7 +5,8 @@ import {
   resolveThreadBindingLifecycle as resolveSharedThreadBindingLifecycle,
   type ThreadBindingLifecycleRecord,
 } from "../shared/thread-binding-lifecycle.js";
-import { getChannelPlugin } from "./plugins/index.js";
+import { getLoadedChannelPlugin } from "./plugins/index.js";
+import { resolveBundledChannelThreadBindingDefaultPlacement } from "./plugins/thread-binding-api.js";
 
 export {
   resolveThreadBindingLifecycle,
@@ -64,7 +65,11 @@ function resolveDefaultTopLevelPlacement(channel: string): "current" | "child" {
   if (!normalized) {
     return "current";
   }
-  return getChannelPlugin(normalized)?.conversationBindings?.defaultTopLevelPlacement ?? "current";
+  return (
+    getLoadedChannelPlugin(normalized)?.conversationBindings?.defaultTopLevelPlacement ??
+    resolveBundledChannelThreadBindingDefaultPlacement(normalized) ??
+    "current"
+  );
 }
 
 function normalizeBoolean(value: unknown): boolean | undefined {

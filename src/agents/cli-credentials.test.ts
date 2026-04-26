@@ -12,6 +12,7 @@ let resetCliCredentialCachesForTest: typeof import("./cli-credentials.js").reset
 let writeClaudeCliKeychainCredentials: typeof import("./cli-credentials.js").writeClaudeCliKeychainCredentials;
 let writeClaudeCliCredentials: typeof import("./cli-credentials.js").writeClaudeCliCredentials;
 let readCodexCliCredentials: typeof import("./cli-credentials.js").readCodexCliCredentials;
+let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 
 function mockExistingClaudeKeychainItem() {
   execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
@@ -74,6 +75,7 @@ describe("cli credentials", () => {
       writeClaudeCliKeychainCredentials,
       writeClaudeCliCredentials,
       readCodexCliCredentials,
+      readGeminiCliCredentialsCached,
     } = await import("./cli-credentials.js"));
   });
 
@@ -358,6 +360,71 @@ describe("cli credentials", () => {
         refresh: "fresh-refresh",
         expires: secondExpiry * 1000,
       });
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("lifts Google account identity from the Gemini id_token", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gemini-"));
+    try {
+      const credPath = path.join(tempHome, ".gemini", "oauth_creds.json");
+      fs.mkdirSync(path.dirname(credPath), { recursive: true, mode: 0o700 });
+      const idTokenPayload = Buffer.from(
+        JSON.stringify({ sub: "google-account-42", email: "user@example.com" }),
+      ).toString("base64url");
+      const idToken = `header.${idTokenPayload}.signature`;
+      fs.writeFileSync(
+        credPath,
+        JSON.stringify({
+          access_token: "gemini-access",
+          refresh_token: "gemini-refresh",
+          id_token: idToken,
+          expiry_date: Date.parse("2026-04-25T12:00:00Z"),
+        }),
+        "utf8",
+      );
+
+      const creds = readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
+
+      expect(creds).toMatchObject({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "gemini-access",
+        refresh: "gemini-refresh",
+        accountId: "google-account-42",
+        email: "user@example.com",
+      });
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("reads Gemini credentials without identity fields when id_token is absent", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gemini-noid-"));
+    try {
+      const credPath = path.join(tempHome, ".gemini", "oauth_creds.json");
+      fs.mkdirSync(path.dirname(credPath), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(
+        credPath,
+        JSON.stringify({
+          access_token: "gemini-access",
+          refresh_token: "gemini-refresh",
+          expiry_date: Date.parse("2026-04-25T12:00:00Z"),
+        }),
+        "utf8",
+      );
+
+      const creds = readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
+
+      expect(creds).toMatchObject({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "gemini-access",
+        refresh: "gemini-refresh",
+      });
+      expect(creds?.accountId).toBeUndefined();
+      expect(creds?.email).toBeUndefined();
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }

@@ -20,6 +20,7 @@ export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export {
   buildMemoryPromptSection as buildActiveMemoryPromptSection,
   listActiveMemoryPublicArtifacts,
+  getMemoryCapabilityRegistration,
 } from "../plugins/memory-state.js";
 export { parseAgentSessionKey } from "../routing/session-key.js";
 export type { OpenClawConfig } from "../config/config.js";

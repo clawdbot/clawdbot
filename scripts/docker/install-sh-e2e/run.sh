@@ -501,7 +501,7 @@ run_profile() {
   local image_model
   if [[ "$agent_model_provider" == "openai" ]]; then
     agent_model="$(set_agent_model "$profile" \
-      "openai/gpt-5.4" \
+      "openai/gpt-5.5" \
       "openai/gpt-4o-mini" \
       "openai/gpt-4o")"
     image_model="$(set_image_model "$profile" \

@@ -1,3 +1,4 @@
+import AppKit
 import Observation
 
 @MainActor
@@ -17,6 +18,10 @@ final class TalkModeController {
         } else {
             TalkOverlayController.shared.dismiss()
         }
+        TalkSpeechInterruptMonitor.shared.setEnabled(enabled && AppStateStore.shared.talkShiftToStopEnabled)
+        // Talk Mode and Push-to-Talk share the right Option key — disable PTT while Talk Mode is active.
+        let pttEnabled = !enabled && AppStateStore.shared.voicePushToTalkEnabled
+        VoicePushToTalkHotkey.shared.setEnabled(pttEnabled)
         await TalkModeRuntime.shared.setEnabled(enabled)
         // Resume voice wake listener *after* TalkMode audio is fully torn down.
         // Check swabbleEnabled (not voiceWakeTriggersTalkMode) so the paused wake listener
@@ -27,13 +32,39 @@ final class TalkModeController {
     }
 
     func updatePhase(_ phase: TalkModePhase) {
+        let previousPhase = self.phase
         self.phase = phase
         TalkOverlayController.shared.updatePhase(phase)
+
+        // Play distinct system sounds for each phase transition.
+        if phase != previousPhase {
+            Self.playPhaseSound(phase, previousPhase: previousPhase)
+        }
+
         let effectivePhase = self.isPaused ? "paused" : phase.rawValue
         Task {
             await GatewayConnection.shared.talkMode(
                 enabled: AppStateStore.shared.talkEnabled,
                 phase: effectivePhase)
+        }
+    }
+
+    private static func playPhaseSound(_ phase: TalkModePhase, previousPhase: TalkModePhase) {
+        guard AppStateStore.shared.talkPhaseSoundsEnabled else { return }
+        let soundName: String? = switch phase {
+        case .thinking:
+            "Tink" // 생각 중: 짧고 가벼운 소리
+        case .speaking:
+            "Pop" // 대답 시작: 톡 소리
+        case .listening:
+            // 대답 중단(speaking→listening): 부드러운 종료음
+            // 듣기 시작(thinking→listening 등): 잠수함 소리
+            previousPhase == .speaking ? "Bottle" : "Submarine"
+        case .idle:
+            nil
+        }
+        if let soundName {
+            NSSound(named: NSSound.Name(soundName))?.play()
         }
     }
 

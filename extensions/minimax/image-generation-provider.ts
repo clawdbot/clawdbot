@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 
 const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
+const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
 const DEFAULT_MODEL = "image-01";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
@@ -36,20 +37,37 @@ type MinimaxImageApiResponse = {
   };
 };
 
+function isMinimaxCnHost(value: string | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const hostname = new URL(candidate).hostname.toLowerCase();
+    return hostname === "minimaxi.com" || hostname.endsWith(".minimaxi.com");
+  } catch {
+    return false;
+  }
+}
+
 function resolveMinimaxImageBaseUrl(
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
   providerId: string,
 ): string {
-  const direct = cfg?.models?.providers?.[providerId]?.baseUrl?.trim();
-  if (!direct) {
-    return DEFAULT_MINIMAX_IMAGE_BASE_URL;
+  // MiniMax image generation uses dedicated endpoints that are separate from
+  // the text/chat API endpoints. First check MINIMAX_API_HOST env var,
+  // then fall back to the provider's configured baseUrl to determine region.
+  const apiHost = process.env.MINIMAX_API_HOST;
+  if (isMinimaxCnHost(apiHost)) {
+    return CN_MINIMAX_IMAGE_BASE_URL;
   }
-  // Extract origin from the configured base URL (which may include path like /anthropic)
-  try {
-    return new URL(direct).origin;
-  } catch {
-    return DEFAULT_MINIMAX_IMAGE_BASE_URL;
+  // CN onboarding stores region in provider config without requiring env var
+  const providerBaseUrl = cfg?.models?.providers?.[providerId]?.baseUrl;
+  if (isMinimaxCnHost(providerBaseUrl)) {
+    return CN_MINIMAX_IMAGE_BASE_URL;
   }
+  return DEFAULT_MINIMAX_IMAGE_BASE_URL;
 }
 
 function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider {

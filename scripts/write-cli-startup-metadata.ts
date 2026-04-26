@@ -26,6 +26,7 @@ const distDir = path.join(rootDir, "dist");
 const outputPath = path.join(distDir, "cli-startup-metadata.json");
 const extensionsDir = path.join(rootDir, "extensions");
 const ROOT_HELP_RENDER_TIMEOUT_MS = 120_000;
+const BROWSER_HELP_RENDER_TIMEOUT_MS = 120_000;
 const CORE_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",
@@ -68,6 +69,29 @@ function resolveRootHelpBundleIdentity(
     bundleName,
     signature: createHash("sha1").update(raw).digest("hex"),
   };
+}
+
+function updateHashFromFiles(hash: ReturnType<typeof createHash>, files: string[]) {
+  for (const file of files.toSorted()) {
+    hash.update(`${path.relative(rootDir, file)}\0`);
+    hash.update(readFileSync(file));
+    hash.update("\0");
+  }
+}
+
+function resolveBrowserHelpSourceSignature(): string {
+  const hash = createHash("sha1");
+  const browserCliDir = path.join(rootDir, "extensions/browser/src/cli");
+  const browserCliFiles = readdirSync(browserCliDir)
+    .filter((entry) => entry.endsWith(".ts"))
+    .map((entry) => path.join(browserCliDir, entry));
+  updateHashFromFiles(hash, browserCliFiles);
+  updateHashFromFiles(hash, [
+    path.join(rootDir, "src/cli/program/help.ts"),
+    path.join(rootDir, "src/cli/program/context.ts"),
+    path.join(rootDir, "src/cli/banner.ts"),
+  ]);
+  return hash.digest("hex");
 }
 
 export function readBundledChannelCatalog(
@@ -245,6 +269,53 @@ function renderSourceRootHelpText(
   return result.stdout ?? "";
 }
 
+function renderSourceBrowserHelpText(
+  renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
+): string {
+  const browserCliUrl = pathToFileURL(
+    path.join(rootDir, "extensions/browser/src/cli/browser-cli.ts"),
+  ).href;
+  const helpUrl = pathToFileURL(path.join(rootDir, "src/cli/program/help.ts")).href;
+  const contextUrl = pathToFileURL(path.join(rootDir, "src/cli/program/context.ts")).href;
+  const inlineModule = [
+    `const { Command } = await import("commander");`,
+    `const { registerBrowserCli } = await import(${JSON.stringify(browserCliUrl)});`,
+    `const { configureProgramHelp } = await import(${JSON.stringify(helpUrl)});`,
+    `const { createProgramContext } = await import(${JSON.stringify(contextUrl)});`,
+    `const program = new Command();`,
+    `configureProgramHelp(program, createProgramContext());`,
+    `registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);`,
+    `const browser = program.commands.find((cmd) => cmd.name() === "browser");`,
+    `if (!browser) throw new Error("Browser command was not registered.");`,
+    `browser.outputHelp();`,
+    "process.exit(0);",
+  ].join("\n");
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", inlineModule],
+    {
+      cwd: rootDir,
+      encoding: "utf8",
+      env: {
+        ...renderContext.env,
+        OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
+      },
+      timeout: BROWSER_HELP_RENDER_TIMEOUT_MS,
+    },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    const stderr = result.stderr?.trim();
+    throw new Error(
+      "Failed to render source browser help" +
+        (stderr ? `: ${stderr}` : result.signal ? `: terminated by ${result.signal}` : ""),
+    );
+  }
+  return result.stdout ?? "";
+}
+
 export async function writeCliStartupMetadata(options?: {
   distDir?: string;
   outputPath?: string;
@@ -255,6 +326,7 @@ export async function writeCliStartupMetadata(options?: {
   const resolvedExtensionsDir = options?.extensionsDir ?? extensionsDir;
   const channelCatalog = readBundledChannelCatalog(resolvedExtensionsDir);
   const bundleIdentity = resolveRootHelpBundleIdentity(resolvedDistDir);
+  const browserHelpSourceSignature = resolveBrowserHelpSourceSignature();
   const bundledPluginsDir = path.join(resolvedDistDir, "extensions");
   const renderContext = createIsolatedRootHelpRenderContext(
     existsSync(bundledPluginsDir) ? bundledPluginsDir : resolvedExtensionsDir,
@@ -264,12 +336,17 @@ export async function writeCliStartupMetadata(options?: {
   try {
     const existing = JSON.parse(readFileSync(resolvedOutputPath, "utf8")) as {
       rootHelpBundleSignature?: unknown;
+      browserHelpSourceSignature?: unknown;
       channelCatalogSignature?: unknown;
+      browserHelpText?: unknown;
     };
     if (
       bundleIdentity &&
       existing.rootHelpBundleSignature === bundleIdentity.signature &&
-      existing.channelCatalogSignature === channelCatalog.signature
+      existing.browserHelpSourceSignature === browserHelpSourceSignature &&
+      existing.channelCatalogSignature === channelCatalog.signature &&
+      typeof existing.browserHelpText === "string" &&
+      existing.browserHelpText.length > 0
     ) {
       return;
     }
@@ -283,6 +360,7 @@ export async function writeCliStartupMetadata(options?: {
   } catch {
     rootHelpText = renderSourceRootHelpText(renderContext);
   }
+  const browserHelpText = renderSourceBrowserHelpText(renderContext);
 
   mkdirSync(resolvedDistDir, { recursive: true });
   writeFileSync(
@@ -293,6 +371,8 @@ export async function writeCliStartupMetadata(options?: {
         channelOptions,
         channelCatalogSignature: channelCatalog.signature,
         rootHelpBundleSignature: bundleIdentity?.signature ?? null,
+        browserHelpSourceSignature,
+        browserHelpText,
         rootHelpText,
       },
       null,

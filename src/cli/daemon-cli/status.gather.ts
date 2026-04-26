@@ -43,6 +43,7 @@ type GatewayStatusSummary = {
   bindMode: GatewayBindMode;
   bindHost: string;
   customBindHost?: string;
+  tlsEnabled?: boolean;
   port: number;
   portSource: "service args" | "env/config";
   probeUrl: string;
@@ -284,7 +285,8 @@ async function resolveGatewayStatusSummary(params: {
   });
   const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride = trimToUndefined(params.rpcUrlOverride) ?? null;
-  const scheme = params.daemonCfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const tlsEnabled = params.daemonCfg.gateway?.tls?.enabled === true;
+  const scheme = tlsEnabled ? "wss" : "ws";
   const probeUrl = probeUrlOverride ?? `${scheme}://${probeHost}:${daemonPort}`;
   let probeNote =
     !probeUrlOverride && bindMode === "lan"
@@ -300,6 +302,7 @@ async function resolveGatewayStatusSummary(params: {
       bindMode,
       bindHost,
       customBindHost,
+      ...(tlsEnabled ? { tlsEnabled } : {}),
       port: daemonPort,
       portSource,
       probeUrl,

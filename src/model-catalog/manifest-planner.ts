@@ -1,10 +1,10 @@
 import { normalizeModelCatalogProviderRows } from "./normalize.js";
 import { normalizeModelCatalogProviderId } from "./refs.js";
-import type { ModelCatalog, NormalizedModelCatalogRow } from "./types.js";
+import type { ModelCatalog, ModelCatalogDiscovery, NormalizedModelCatalogRow } from "./types.js";
 
 export type ManifestModelCatalogPlugin = {
   id: string;
-  modelCatalog?: Pick<ModelCatalog, "providers">;
+  modelCatalog?: Pick<ModelCatalog, "providers" | "discovery">;
 };
 
 export type ManifestModelCatalogRegistry = {
@@ -14,6 +14,7 @@ export type ManifestModelCatalogRegistry = {
 export type ManifestModelCatalogPlanEntry = {
   pluginId: string;
   provider: string;
+  discovery?: ModelCatalogDiscovery;
   rows: readonly NormalizedModelCatalogRow[];
 };
 
@@ -113,6 +114,7 @@ function planManifestModelCatalogPluginEntries(params: {
       {
         pluginId: params.plugin.id,
         provider: normalizedProvider,
+        discovery: params.plugin.modelCatalog?.discovery?.[normalizedProvider],
         rows,
       },
     ];

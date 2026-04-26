@@ -25,6 +25,29 @@ function requireGatewayTool(agentSessionKey?: string) {
   });
 }
 
+function collectActionValues(schema: unknown, values: Set<string>): void {
+  if (!schema || typeof schema !== "object") {
+    return;
+  }
+
+  const record = schema as Record<string, unknown>;
+  if (typeof record.const === "string") {
+    values.add(record.const);
+  }
+  if (Array.isArray(record.enum)) {
+    for (const value of record.enum) {
+      if (typeof value === "string") {
+        values.add(value);
+      }
+    }
+  }
+  if (Array.isArray(record.anyOf)) {
+    for (const variant of record.anyOf) {
+      collectActionValues(variant, values);
+    }
+  }
+}
+
 function expectConfigMutationCall(params: {
   callGatewayTool: {
     mock: {
@@ -96,8 +119,25 @@ describe("gateway tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
+  it("exposes restart and config actions in the gateway tool schema", async () => {
+    const tool = requireGatewayTool();
+    const parameters = tool.parameters as {
+      properties?: Record<string, unknown>;
+    };
+    const values = new Set<string>();
+    collectActionValues(parameters.properties?.action, values);
+
+    expect([...values]).toEqual(
+      expect.arrayContaining(["restart", "config.get", "config.patch", "config.apply"]),
+    );
+  });
+
   it("schedules SIGUSR1 restart", async () => {
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const restartSignalKillCalls = () =>
+      kill.mock.calls.filter(
+        ([pid, signal]) => pid === process.pid && (signal === "SIGUSR1" || signal === undefined),
+      );
     const sigusr1Handler = vi.fn();
     process.on("SIGUSR1", sigusr1Handler);
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
@@ -119,13 +159,13 @@ describe("gateway tool", () => {
             delayMs: 0,
           });
 
-          expect(kill).not.toHaveBeenCalled();
+          expect(restartSignalKillCalls()).toHaveLength(0);
           expect(sigusr1Handler).not.toHaveBeenCalled();
           await vi.waitFor(() => expect(sigusr1Handler).toHaveBeenCalledTimes(1), {
             interval: 1,
             timeout: 1_000,
           });
-          expect(kill).not.toHaveBeenCalled();
+          expect(restartSignalKillCalls()).toHaveLength(0);
 
           const sentinelPath = path.join(stateDir, "restart-sentinel.json");
           const raw = await fs.readFile(sentinelPath, "utf-8");

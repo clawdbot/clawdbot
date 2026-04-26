@@ -288,7 +288,7 @@ async function writeGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspace,
-        embeddedHarness: { runtime: "codex", fallback: "none" },
+        agentRuntime: { id: "codex", fallback: "none" },
         model: { primary: `codex/${params.model}` },
         skipBootstrap: true,
         sandbox: { mode: "off" },

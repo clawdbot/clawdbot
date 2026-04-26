@@ -268,8 +268,16 @@ function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
 ): unknown[] {
-  if (historyMessages.length === 0 || previousMessages.length === 0) {
+  if (previousMessages.length === 0) {
     return historyMessages;
+  }
+  if (historyMessages.length === 0) {
+    const optimisticMessages = previousMessages.filter(
+      (message) => isLocallyOptimisticHistoryMessage(message) && !shouldHideHistoryMessage(message),
+    );
+    return optimisticMessages.length === previousMessages.length
+      ? previousMessages
+      : historyMessages;
   }
   const historySignatures = new Set(
     historyMessages

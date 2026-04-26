@@ -4,6 +4,7 @@ import type { AgentModelConfig } from "./types.agents-shared.js";
 type AgentModelListLike = {
   primary?: string;
   fallbacks?: string[];
+  timeoutMs?: number;
 };
 
 export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string | undefined {
@@ -15,6 +16,17 @@ export function resolveAgentModelFallbackValues(model?: AgentModelConfig): strin
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
+}
+
+export function resolveAgentModelTimeoutMsValue(model?: AgentModelConfig): number | undefined {
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
+  return typeof model.timeoutMs === "number" &&
+    Number.isFinite(model.timeoutMs) &&
+    model.timeoutMs > 0
+    ? Math.floor(model.timeoutMs)
+    : undefined;
 }
 
 export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLike | undefined {

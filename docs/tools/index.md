@@ -95,6 +95,8 @@ active runtime model label from the latest transcript usage entry.
 
 For partial changes, prefer `config.schema.lookup` then `config.patch`. Use
 `config.apply` only when you intentionally replace the entire config.
+For broader config docs, read [Configuration](/gateway/configuration) and
+[Configuration reference](/gateway/configuration-reference).
 The tool also refuses to change `tools.exec.ask` or `tools.exec.security`;
 legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
@@ -142,6 +144,12 @@ Per-agent override: `agents.list[].tools.profile`.
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
+
+`coding` includes lightweight web tools (`web_search`, `web_fetch`, `x_search`)
+but not the full browser-control tool. Browser automation can drive real
+sessions and logged-in profiles, so add it explicitly with
+`tools.alsoAllow: ["browser"]` or a per-agent
+`agents.list[].tools.alsoAllow: ["browser"]`.
 
 The `coding` and `messaging` profiles also allow configured bundle MCP tools
 under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you

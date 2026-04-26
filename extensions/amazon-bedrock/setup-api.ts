@@ -1,6 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { migrateAmazonBedrockLegacyConfig } from "./config-api.js";
-import { resolveBedrockConfigApiKey } from "./discovery.js";
+import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 
 export default definePluginEntry({
   id: "amazon-bedrock",

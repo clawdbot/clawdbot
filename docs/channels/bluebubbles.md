@@ -5,14 +5,14 @@ read_when:
   - Troubleshooting webhook pairing
   - Configuring iMessage on macOS
 title: "BlueBubbles"
+sidebarTitle: "BlueBubbles"
 ---
 
 Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **Recommended for iMessage integration** due to its richer API and easier setup compared to the legacy imsg channel.
 
-## Bundled plugin
-
-Current OpenClaw releases bundle BlueBubbles, so normal packaged builds do not
-need a separate `openclaw plugins install` step.
+<Note>
+Current OpenClaw releases bundle BlueBubbles, so normal packaged builds do not need a separate `openclaw plugins install` step.
+</Note>
 
 ## Overview
 
@@ -21,111 +21,119 @@ need a separate `openclaw plugins install` step.
 - OpenClaw talks to it through its REST API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
 - Incoming messages arrive via webhooks; outgoing replies, typing indicators, read receipts, and tapbacks are REST calls.
 - Attachments and stickers are ingested as inbound media (and surfaced to the agent when possible).
+- Auto-TTS replies that synthesize MP3 or CAF audio are delivered as iMessage voice memo bubbles instead of plain file attachments.
 - Pairing/allowlist works the same way as other channels (`/channels/pairing` etc) with `channels.bluebubbles.allowFrom` + pairing codes.
 - Reactions are surfaced as system events just like Slack/Telegram so agents can "mention" them before replying.
 - Advanced features: edit, unsend, reply threading, message effects, group management.
 
 ## Quick start
 
-1. Install the BlueBubbles server on your Mac (follow the instructions at [bluebubbles.app/install](https://bluebubbles.app/install)).
-2. In the BlueBubbles config, enable the web API and set a password.
-3. Run `openclaw onboard` and select BlueBubbles, or configure manually:
+<Steps>
+  <Step title="Install BlueBubbles">
+    Install the BlueBubbles server on your Mac (follow the instructions at [bluebubbles.app/install](https://bluebubbles.app/install)).
+  </Step>
+  <Step title="Enable the web API">
+    In the BlueBubbles config, enable the web API and set a password.
+  </Step>
+  <Step title="Configure OpenClaw">
+    Run `openclaw onboard` and select BlueBubbles, or configure manually:
 
-   ```json5
-   {
-     channels: {
-       bluebubbles: {
-         enabled: true,
-         serverUrl: "http://192.168.1.100:1234",
-         password: "example-password",
-         webhookPath: "/bluebubbles-webhook",
-       },
-     },
-   }
-   ```
+    ```json5
+    {
+      channels: {
+        bluebubbles: {
+          enabled: true,
+          serverUrl: "http://192.168.1.100:1234",
+          password: "example-password",
+          webhookPath: "/bluebubbles-webhook",
+        },
+      },
+    }
+    ```
 
-4. Point BlueBubbles webhooks to your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
-5. Start the gateway; it will register the webhook handler and start pairing.
+  </Step>
+  <Step title="Point webhooks at the gateway">
+    Point BlueBubbles webhooks to your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+  </Step>
+  <Step title="Start the gateway">
+    Start the gateway; it will register the webhook handler and start pairing.
+  </Step>
+</Steps>
 
-Security note:
+<Warning>
+**Security**
 
 - Always set a webhook password.
 - Webhook authentication is always required. OpenClaw rejects BlueBubbles webhook requests unless they include a password/guid that matches `channels.bluebubbles.password` (for example `?password=<password>` or `x-password`), regardless of loopback/proxy topology.
 - Password authentication is checked before reading/parsing full webhook bodies.
+  </Warning>
 
 ## Keeping Messages.app alive (VM / headless setups)
 
-Some macOS VM / always-on setups can end up with Messages.app going “idle” (incoming events stop until the app is opened/foregrounded). A simple workaround is to **poke Messages every 5 minutes** using an AppleScript + LaunchAgent.
+Some macOS VM / always-on setups can end up with Messages.app going "idle" (incoming events stop until the app is opened/foregrounded). A simple workaround is to **poke Messages every 5 minutes** using an AppleScript + LaunchAgent.
 
-### 1) Save the AppleScript
+<Steps>
+  <Step title="Save the AppleScript">
+    Save this as `~/Scripts/poke-messages.scpt`:
 
-Save this as:
+    ```applescript
+    try
+      tell application "Messages"
+        if not running then
+          launch
+        end if
 
-- `~/Scripts/poke-messages.scpt`
+        -- Touch the scripting interface to keep the process responsive.
+        set _chatCount to (count of chats)
+      end tell
+    on error
+      -- Ignore transient failures (first-run prompts, locked session, etc).
+    end try
+    ```
 
-Example script (non-interactive; does not steal focus):
+  </Step>
+  <Step title="Install a LaunchAgent">
+    Save this as `~/Library/LaunchAgents/com.user.poke-messages.plist`:
 
-```applescript
-try
-  tell application "Messages"
-    if not running then
-      launch
-    end if
+    ```xml
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+      <dict>
+        <key>Label</key>
+        <string>com.user.poke-messages</string>
 
-    -- Touch the scripting interface to keep the process responsive.
-    set _chatCount to (count of chats)
-  end tell
-on error
-  -- Ignore transient failures (first-run prompts, locked session, etc).
-end try
-```
+        <key>ProgramArguments</key>
+        <array>
+          <string>/bin/bash</string>
+          <string>-lc</string>
+          <string>/usr/bin/osascript &quot;$HOME/Scripts/poke-messages.scpt&quot;</string>
+        </array>
 
-### 2) Install a LaunchAgent
+        <key>RunAtLoad</key>
+        <true/>
 
-Save this as:
+        <key>StartInterval</key>
+        <integer>300</integer>
 
-- `~/Library/LaunchAgents/com.user.poke-messages.plist`
+        <key>StandardOutPath</key>
+        <string>/tmp/poke-messages.log</string>
+        <key>StandardErrorPath</key>
+        <string>/tmp/poke-messages.err</string>
+      </dict>
+    </plist>
+    ```
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>Label</key>
-    <string>com.user.poke-messages</string>
+    This runs **every 300 seconds** and **on login**. The first run may trigger macOS **Automation** prompts (`osascript` → Messages). Approve them in the same user session that runs the LaunchAgent.
 
-    <key>ProgramArguments</key>
-    <array>
-      <string>/bin/bash</string>
-      <string>-lc</string>
-      <string>/usr/bin/osascript &quot;$HOME/Scripts/poke-messages.scpt&quot;</string>
-    </array>
-
-    <key>RunAtLoad</key>
-    <true/>
-
-    <key>StartInterval</key>
-    <integer>300</integer>
-
-    <key>StandardOutPath</key>
-    <string>/tmp/poke-messages.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/poke-messages.err</string>
-  </dict>
-</plist>
-```
-
-Notes:
-
-- This runs **every 300 seconds** and **on login**.
-- The first run may trigger macOS **Automation** prompts (`osascript` → Messages). Approve them in the same user session that runs the LaunchAgent.
-
-Load it:
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.user.poke-messages.plist 2>/dev/null || true
-launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
-```
+  </Step>
+  <Step title="Load it">
+    ```bash
+    launchctl unload ~/Library/LaunchAgents/com.user.poke-messages.plist 2>/dev/null || true
+    launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
+    ```
+  </Step>
+</Steps>
 
 ## Onboarding
 
@@ -137,11 +145,21 @@ openclaw onboard
 
 The wizard prompts for:
 
-- **Server URL** (required): BlueBubbles server address (e.g., `http://192.168.1.100:1234`)
-- **Password** (required): API password from BlueBubbles Server settings
-- **Webhook path** (optional): Defaults to `/bluebubbles-webhook`
-- **DM policy**: pairing, allowlist, open, or disabled
-- **Allow list**: Phone numbers, emails, or chat targets
+<ParamField path="Server URL" type="string" required>
+  BlueBubbles server address (e.g., `http://192.168.1.100:1234`).
+</ParamField>
+<ParamField path="Password" type="string" required>
+  API password from BlueBubbles Server settings.
+</ParamField>
+<ParamField path="Webhook path" type="string" default="/bluebubbles-webhook">
+  Webhook endpoint path.
+</ParamField>
+<ParamField path="DM policy" type="string">
+  `pairing`, `allowlist`, `open`, or `disabled`.
+</ParamField>
+<ParamField path="Allow list" type="string[]">
+  Phone numbers, emails, or chat targets.
+</ParamField>
 
 You can also add BlueBubbles via CLI:
 
@@ -151,19 +169,20 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
 
 ## Access control (DMs + groups)
 
-DMs:
-
-- Default: `channels.bluebubbles.dmPolicy = "pairing"`.
-- Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
-- Approve via:
-  - `openclaw pairing list bluebubbles`
-  - `openclaw pairing approve bluebubbles <CODE>`
-- Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
-
-Groups:
-
-- `channels.bluebubbles.groupPolicy = open | allowlist | disabled` (default: `allowlist`).
-- `channels.bluebubbles.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
+<Tabs>
+  <Tab title="DMs">
+    - Default: `channels.bluebubbles.dmPolicy = "pairing"`.
+    - Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
+    - Approve via:
+      - `openclaw pairing list bluebubbles`
+      - `openclaw pairing approve bluebubbles <CODE>`
+    - Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
+  </Tab>
+  <Tab title="Groups">
+    - `channels.bluebubbles.groupPolicy = open | allowlist | disabled` (default: `allowlist`).
+    - `channels.bluebubbles.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
+  </Tab>
+</Tabs>
 
 ### Contact name enrichment (macOS, optional)
 
@@ -359,21 +378,23 @@ BlueBubbles supports advanced message actions when enabled in config:
 }
 ```
 
-Available actions:
-
-- **react**: Add/remove tapback reactions (`messageId`, `emoji`, `remove`). iMessage's native tapback set is `love`, `like`, `dislike`, `laugh`, `emphasize`, and `question`. When an agent picks an emoji outside that set (for example `👀`), the reaction tool falls back to `love` so the tapback still renders instead of failing the whole request. Configured ack reactions still validate strictly and error on unknown values.
-- **edit**: Edit a sent message (`messageId`, `text`)
-- **unsend**: Unsend a message (`messageId`)
-- **reply**: Reply to a specific message (`messageId`, `text`, `to`)
-- **sendWithEffect**: Send with iMessage effect (`text`, `to`, `effectId`)
-- **renameGroup**: Rename a group chat (`chatGuid`, `displayName`)
-- **setGroupIcon**: Set a group chat's icon/photo (`chatGuid`, `media`) — flaky on macOS 26 Tahoe (API may return success but the icon does not sync).
-- **addParticipant**: Add someone to a group (`chatGuid`, `address`)
-- **removeParticipant**: Remove someone from a group (`chatGuid`, `address`)
-- **leaveGroup**: Leave a group chat (`chatGuid`)
-- **upload-file**: Send media/files (`to`, `buffer`, `filename`, `asVoice`)
-  - Voice memos: set `asVoice: true` with **MP3** or **CAF** audio to send as an iMessage voice message. BlueBubbles converts MP3 → CAF when sending voice memos.
-- Legacy alias: `sendAttachment` still works, but `upload-file` is the canonical action name.
+<AccordionGroup>
+  <Accordion title="Available actions">
+    - **react**: Add/remove tapback reactions (`messageId`, `emoji`, `remove`). iMessage's native tapback set is `love`, `like`, `dislike`, `laugh`, `emphasize`, and `question`. When an agent picks an emoji outside that set (for example `👀`), the reaction tool falls back to `love` so the tapback still renders instead of failing the whole request. Configured ack reactions still validate strictly and error on unknown values.
+    - **edit**: Edit a sent message (`messageId`, `text`).
+    - **unsend**: Unsend a message (`messageId`).
+    - **reply**: Reply to a specific message (`messageId`, `text`, `to`).
+    - **sendWithEffect**: Send with iMessage effect (`text`, `to`, `effectId`).
+    - **renameGroup**: Rename a group chat (`chatGuid`, `displayName`).
+    - **setGroupIcon**: Set a group chat's icon/photo (`chatGuid`, `media`) — flaky on macOS 26 Tahoe (API may return success but the icon does not sync).
+    - **addParticipant**: Add someone to a group (`chatGuid`, `address`).
+    - **removeParticipant**: Remove someone from a group (`chatGuid`, `address`).
+    - **leaveGroup**: Leave a group chat (`chatGuid`).
+    - **upload-file**: Send media/files (`to`, `buffer`, `filename`, `asVoice`).
+      - Voice memos: set `asVoice: true` with **MP3** or **CAF** audio to send as an iMessage voice message. BlueBubbles converts MP3 → CAF when sending voice memos.
+    - Legacy alias: `sendAttachment` still works, but `upload-file` is the canonical action name.
+  </Accordion>
+</AccordionGroup>
 
 ### Message IDs (short vs full)
 
@@ -404,54 +425,56 @@ The two webhooks arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coa
 
 `channels.bluebubbles.coalesceSameSenderDms` opts a DM into merging consecutive same-sender webhooks into a single agent turn. Group chats continue to key per-message so multi-user turn structure is preserved.
 
-### When to enable
+<Tabs>
+  <Tab title="When to enable">
+    Enable when:
 
-Enable when:
+    - You ship skills that expect `command + payload` in one message (dump, paste, save, queue, etc.).
+    - Your users paste URLs, images, or long content alongside commands.
+    - You can accept the added DM turn latency (see below).
 
-- You ship skills that expect `command + payload` in one message (dump, paste, save, queue, etc.).
-- Your users paste URLs, images, or long content alongside commands.
-- You can accept the added DM turn latency (see below).
+    Leave disabled when:
 
-Leave disabled when:
+    - You need minimum command latency for single-word DM triggers.
+    - All your flows are one-shot commands without payload follow-ups.
 
-- You need minimum command latency for single-word DM triggers.
-- All your flows are one-shot commands without payload follow-ups.
-
-### Enabling
-
-```json5
-{
-  channels: {
-    bluebubbles: {
-      coalesceSameSenderDms: true, // opt in (default: false)
-    },
-  },
-}
-```
-
-With the flag on and no explicit `messages.inbound.byChannel.bluebubbles`, the debounce window widens to **2500 ms** (the default for non-coalescing is 500 ms). The wider window is required — Apple's split-send cadence of 0.8-2.0 s does not fit in the tighter default.
-
-To tune the window yourself:
-
-```json5
-{
-  messages: {
-    inbound: {
-      byChannel: {
-        // 2500 ms works for most setups; raise to 4000 ms if your Mac is slow
-        // or under memory pressure (observed gap can stretch past 2 s then).
-        bluebubbles: 2500,
+  </Tab>
+  <Tab title="Enabling">
+    ```json5
+    {
+      channels: {
+        bluebubbles: {
+          coalesceSameSenderDms: true, // opt in (default: false)
+        },
       },
-    },
-  },
-}
-```
+    }
+    ```
 
-### Trade-offs
+    With the flag on and no explicit `messages.inbound.byChannel.bluebubbles`, the debounce window widens to **2500 ms** (the default for non-coalescing is 500 ms). The wider window is required — Apple's split-send cadence of 0.8-2.0 s does not fit in the tighter default.
 
-- **Added latency for DM control commands.** With the flag on, DM control-command messages (like `Dump`, `Save`, etc.) now wait up to the debounce window before dispatching, in case a payload webhook is coming. Group-chat commands keep instant dispatch.
-- **Merged output is bounded** — merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source `messageId` still reaches inbound-dedupe so a later MessagePoller replay of any individual event is recognized as a duplicate.
-- **Opt-in, per-channel.** Other channels (Telegram, WhatsApp, Slack, …) are unaffected.
+    To tune the window yourself:
+
+    ```json5
+    {
+      messages: {
+        inbound: {
+          byChannel: {
+            // 2500 ms works for most setups; raise to 4000 ms if your Mac is slow
+            // or under memory pressure (observed gap can stretch past 2 s then).
+            bluebubbles: 2500,
+          },
+        },
+      },
+    }
+    ```
+
+  </Tab>
+  <Tab title="Trade-offs">
+    - **Added latency for DM control commands.** With the flag on, DM control-command messages (like `Dump`, `Save`, etc.) now wait up to the debounce window before dispatching, in case a payload webhook is coming. Group-chat commands keep instant dispatch.
+    - **Merged output is bounded** — merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source `messageId` still reaches inbound-dedupe so a later MessagePoller replay of any individual event is recognized as a duplicate.
+    - **Opt-in, per-channel.** Other channels (Telegram, WhatsApp, Slack, …) are unaffected.
+  </Tab>
+</Tabs>
 
 ### Scenarios and what the agent sees
 
@@ -468,27 +491,35 @@ To tune the window yourself:
 
 If the flag is on and split-sends still arrive as two turns, check each layer:
 
-1. **Config actually loaded.**
+<AccordionGroup>
+  <Accordion title="Config actually loaded">
+    ```
+    grep coalesceSameSenderDms ~/.openclaw/openclaw.json
+    ```
 
-   ```
-   grep coalesceSameSenderDms ~/.openclaw/openclaw.json
-   ```
+    Then `openclaw gateway restart` — the flag is read at debouncer-registry creation.
 
-   Then `openclaw gateway restart` — the flag is read at debouncer-registry creation.
+  </Accordion>
+  <Accordion title="Debounce window wide enough for your setup">
+    Look at the BlueBubbles server log under `~/Library/Logs/bluebubbles-server/main.log`:
 
-2. **Debounce window wide enough for your setup.** Look at the BlueBubbles server log under `~/Library/Logs/bluebubbles-server/main.log`:
+    ```
+    grep -E "Dispatching event to webhook" main.log | tail -20
+    ```
 
-   ```
-   grep -E "Dispatching event to webhook" main.log | tail -20
-   ```
+    Measure the gap between the `"Dump"`-style text dispatch and the `"https://..."; Attachments:` dispatch that follows. Raise `messages.inbound.byChannel.bluebubbles` to comfortably cover that gap.
 
-   Measure the gap between the `"Dump"`-style text dispatch and the `"https://..."; Attachments:` dispatch that follows. Raise `messages.inbound.byChannel.bluebubbles` to comfortably cover that gap.
-
-3. **Session JSONL timestamps ≠ webhook arrival.** Session event timestamps (`~/.openclaw/agents/<id>/sessions/*.jsonl`) reflect when the gateway hands a message to the agent, **not** when the webhook arrived. A queued-second message tagged `[Queued messages while agent was busy]` means the first turn was still running when the second webhook arrived — the coalesce bucket had already flushed. Tune the window against the BB server log, not the session log.
-
-4. **Memory pressure slowing reply dispatch.** On smaller machines (8 GB), agent turns can take long enough that the coalesce bucket flushes before the reply completes, and the URL lands as a queued second turn. Check `memory_pressure` and `ps -o rss -p $(pgrep openclaw-gateway)`; if the gateway is over ~500 MB RSS and the compressor is active, close other heavy processes or bump to a larger host.
-
-5. **Reply-quote sends are a different path.** If the user tapped `Dump` as a **reply** to an existing URL-balloon (iMessage shows a "1 Reply" badge on the Dump bubble), the URL lives in `replyToBody`, not in a second webhook. Coalescing does not apply — that's a skill/prompt concern, not a debouncer concern.
+  </Accordion>
+  <Accordion title="Session JSONL timestamps ≠ webhook arrival">
+    Session event timestamps (`~/.openclaw/agents/<id>/sessions/*.jsonl`) reflect when the gateway hands a message to the agent, **not** when the webhook arrived. A queued-second message tagged `[Queued messages while agent was busy]` means the first turn was still running when the second webhook arrived — the coalesce bucket had already flushed. Tune the window against the BB server log, not the session log.
+  </Accordion>
+  <Accordion title="Memory pressure slowing reply dispatch">
+    On smaller machines (8 GB), agent turns can take long enough that the coalesce bucket flushes before the reply completes, and the URL lands as a queued second turn. Check `memory_pressure` and `ps -o rss -p $(pgrep openclaw-gateway)`; if the gateway is over ~500 MB RSS and the compressor is active, close other heavy processes or bump to a larger host.
+  </Accordion>
+  <Accordion title="Reply-quote sends are a different path">
+    If the user tapped `Dump` as a **reply** to an existing URL-balloon (iMessage shows a "1 Reply" badge on the Dump bubble), the URL lives in `replyToBody`, not in a second webhook. Coalescing does not apply — that's a skill/prompt concern, not a debouncer concern.
+  </Accordion>
+</AccordionGroup>
 
 ## Block streaming
 
@@ -514,30 +545,40 @@ Control whether responses are sent as a single message or streamed in blocks:
 
 Full configuration: [Configuration](/gateway/configuration)
 
-Provider options:
-
-- `channels.bluebubbles.enabled`: Enable/disable the channel.
-- `channels.bluebubbles.serverUrl`: BlueBubbles REST API base URL.
-- `channels.bluebubbles.password`: API password.
-- `channels.bluebubbles.webhookPath`: Webhook endpoint path (default: `/bluebubbles-webhook`).
-- `channels.bluebubbles.dmPolicy`: `pairing | allowlist | open | disabled` (default: `pairing`).
-- `channels.bluebubbles.allowFrom`: DM allowlist (handles, emails, E.164 numbers, `chat_id:*`, `chat_guid:*`).
-- `channels.bluebubbles.groupPolicy`: `open | allowlist | disabled` (default: `allowlist`).
-- `channels.bluebubbles.groupAllowFrom`: Group sender allowlist.
-- `channels.bluebubbles.enrichGroupParticipantsFromContacts`: On macOS, optionally enrich unnamed group participants from local Contacts after gating passes. Default: `false`.
-- `channels.bluebubbles.groups`: Per-group config (`requireMention`, etc.).
-- `channels.bluebubbles.sendReadReceipts`: Send read receipts (default: `true`).
-- `channels.bluebubbles.blockStreaming`: Enable block streaming (default: `false`; required for streaming replies).
-- `channels.bluebubbles.textChunkLimit`: Outbound chunk size in chars (default: 4000).
-- `channels.bluebubbles.sendTimeoutMs`: Per-request timeout in ms for outbound text sends via `/api/v1/message/text` (default: 30000). Raise on macOS 26 setups where Private API iMessage sends can stall for 60+ seconds inside the iMessage framework; for example `45000` or `60000`. Probes, chat lookups, reactions, edits, and health checks currently keep the shorter 10s default; broadening coverage to reactions and edits is planned as a follow-up. Per-account override: `channels.bluebubbles.accounts.<accountId>.sendTimeoutMs`.
-- `channels.bluebubbles.chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
-- `channels.bluebubbles.mediaMaxMb`: Inbound/outbound media cap in MB (default: 8).
-- `channels.bluebubbles.mediaLocalRoots`: Explicit allowlist of absolute local directories permitted for outbound local media paths. Local path sends are denied by default unless this is configured. Per-account override: `channels.bluebubbles.accounts.<accountId>.mediaLocalRoots`.
-- `channels.bluebubbles.coalesceSameSenderDms`: Merge consecutive same-sender DM webhooks into one agent turn so Apple's text+URL split-send arrives as a single message (default: `false`). See [Coalescing split-send DMs](#coalescing-split-send-dms-command--url-in-one-composition) for scenarios, window tuning, and trade-offs. Widens the default inbound debounce window from 500 ms to 2500 ms when enabled without an explicit `messages.inbound.byChannel.bluebubbles`.
-- `channels.bluebubbles.historyLimit`: Max group messages for context (0 disables).
-- `channels.bluebubbles.dmHistoryLimit`: DM history limit.
-- `channels.bluebubbles.actions`: Enable/disable specific actions.
-- `channels.bluebubbles.accounts`: Multi-account configuration.
+<AccordionGroup>
+  <Accordion title="Connection and webhook">
+    - `channels.bluebubbles.enabled`: Enable/disable the channel.
+    - `channels.bluebubbles.serverUrl`: BlueBubbles REST API base URL.
+    - `channels.bluebubbles.password`: API password.
+    - `channels.bluebubbles.webhookPath`: Webhook endpoint path (default: `/bluebubbles-webhook`).
+  </Accordion>
+  <Accordion title="Access policy">
+    - `channels.bluebubbles.dmPolicy`: `pairing | allowlist | open | disabled` (default: `pairing`).
+    - `channels.bluebubbles.allowFrom`: DM allowlist (handles, emails, E.164 numbers, `chat_id:*`, `chat_guid:*`).
+    - `channels.bluebubbles.groupPolicy`: `open | allowlist | disabled` (default: `allowlist`).
+    - `channels.bluebubbles.groupAllowFrom`: Group sender allowlist.
+    - `channels.bluebubbles.enrichGroupParticipantsFromContacts`: On macOS, optionally enrich unnamed group participants from local Contacts after gating passes. Default: `false`.
+    - `channels.bluebubbles.groups`: Per-group config (`requireMention`, etc.).
+  </Accordion>
+  <Accordion title="Delivery and chunking">
+    - `channels.bluebubbles.sendReadReceipts`: Send read receipts (default: `true`).
+    - `channels.bluebubbles.blockStreaming`: Enable block streaming (default: `false`; required for streaming replies).
+    - `channels.bluebubbles.textChunkLimit`: Outbound chunk size in chars (default: 4000).
+    - `channels.bluebubbles.sendTimeoutMs`: Per-request timeout in ms for outbound text sends via `/api/v1/message/text` (default: 30000). Raise on macOS 26 setups where Private API iMessage sends can stall for 60+ seconds inside the iMessage framework; for example `45000` or `60000`. Probes, chat lookups, reactions, edits, and health checks currently keep the shorter 10s default; broadening coverage to reactions and edits is planned as a follow-up. Per-account override: `channels.bluebubbles.accounts.<accountId>.sendTimeoutMs`.
+    - `channels.bluebubbles.chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
+  </Accordion>
+  <Accordion title="Media and history">
+    - `channels.bluebubbles.mediaMaxMb`: Inbound/outbound media cap in MB (default: 8).
+    - `channels.bluebubbles.mediaLocalRoots`: Explicit allowlist of absolute local directories permitted for outbound local media paths. Local path sends are denied by default unless this is configured. Per-account override: `channels.bluebubbles.accounts.<accountId>.mediaLocalRoots`.
+    - `channels.bluebubbles.coalesceSameSenderDms`: Merge consecutive same-sender DM webhooks into one agent turn so Apple's text+URL split-send arrives as a single message (default: `false`). See [Coalescing split-send DMs](#coalescing-split-send-dms-command--url-in-one-composition) for scenarios, window tuning, and trade-offs. Widens the default inbound debounce window from 500 ms to 2500 ms when enabled without an explicit `messages.inbound.byChannel.bluebubbles`.
+    - `channels.bluebubbles.historyLimit`: Max group messages for context (0 disables).
+    - `channels.bluebubbles.dmHistoryLimit`: DM history limit.
+  </Accordion>
+  <Accordion title="Actions and accounts">
+    - `channels.bluebubbles.actions`: Enable/disable specific actions.
+    - `channels.bluebubbles.accounts`: Multi-account configuration.
+  </Accordion>
+</AccordionGroup>
 
 Related global options:
 
@@ -580,8 +621,8 @@ For general channel workflow reference, see [Channels](/channels) and the [Plugi
 
 ## Related
 
-- [Channels Overview](/channels) — all supported channels
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
-- [Groups](/channels/groups) — group chat behavior and mention gating
 - [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channels Overview](/channels) — all supported channels
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
 - [Security](/gateway/security) — access model and hardening

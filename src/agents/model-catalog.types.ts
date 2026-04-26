@@ -1,4 +1,4 @@
-export type ModelInputType = "text" | "image" | "document";
+export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
 
 export type ModelCatalogEntry = {
   id: string;

@@ -102,21 +102,28 @@ describe("pw-tools-core", () => {
   }
 
   function createDownloadEventHarness() {
-    let downloadHandler: ((download: unknown) => void) | undefined;
+    const downloadHandlers = new Set<(download: unknown) => void>();
     const on = vi.fn((event: string, handler: (download: unknown) => void) => {
       if (event === "download") {
-        downloadHandler = handler;
+        downloadHandlers.add(handler);
       }
     });
-    const off = vi.fn();
+    const off = vi.fn((event: string, handler: (download: unknown) => void) => {
+      if (event === "download") {
+        downloadHandlers.delete(handler);
+      }
+    });
     setPwToolsCoreCurrentPage({ on, off });
     return {
       trigger: (download: unknown) => {
-        downloadHandler?.(download);
+        for (const handler of downloadHandlers) {
+          handler(download);
+        }
       },
       expectArmed: () => {
-        expect(downloadHandler).toBeDefined();
+        expect(downloadHandlers.size).toBeGreaterThan(0);
       },
+      activeHandlerCount: () => downloadHandlers.size,
     };
   }
 
@@ -168,6 +175,31 @@ describe("pw-tools-core", () => {
       await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "file-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
     });
+  });
+
+  it("marks explicit download waiters as owning the next download until cleanup", async () => {
+    const harness = createDownloadEventHarness();
+    const state = sessionMocks.ensurePageState();
+    expect(state.downloadWaiterDepth).toBe(0);
+
+    const p = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    harness.expectArmed();
+    expect(state.downloadWaiterDepth).toBe(1);
+    harness.trigger({
+      url: () => "https://example.com/file.bin",
+      suggestedFilename: () => "file.bin",
+      saveAs: vi.fn(async () => {}),
+    });
+
+    await p;
+    expect(state.downloadWaiterDepth).toBe(0);
+    expect(harness.activeHandlerCount()).toBe(0);
   });
   it("clicks a ref and atomically finalizes explicit download paths", async () => {
     await withTempDir(async (tempDir) => {

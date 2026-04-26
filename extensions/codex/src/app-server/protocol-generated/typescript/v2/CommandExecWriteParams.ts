@@ -7,16 +7,17 @@
  * both.
  */
 export type CommandExecWriteParams = {
-/**
- * Client-supplied, connection-scoped `processId` from the original
- * `command/exec` request.
- */
-processId: string,
-/**
- * Optional base64-encoded stdin bytes to write.
- */
-deltaBase64?: string | null,
-/**
- * Close stdin after writing `deltaBase64`, if present.
- */
-closeStdin?: boolean, };
+  /**
+   * Client-supplied, connection-scoped `processId` from the original
+   * `command/exec` request.
+   */
+  processId: string;
+  /**
+   * Optional base64-encoded stdin bytes to write.
+   */
+  deltaBase64?: string | null;
+  /**
+   * Close stdin after writing `deltaBase64`, if present.
+   */
+  closeStdin?: boolean;
+};

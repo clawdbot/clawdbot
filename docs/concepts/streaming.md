@@ -143,7 +143,7 @@ Slack-only:
 
 Legacy key migration:
 
-- Telegram: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
+- Telegram: legacy `streamMode` and scalar/boolean `streaming` values are detected and migrated by doctor/config compatibility paths to `streaming.mode`.
 - Discord: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
 - Slack: `streamMode` auto-migrates to `streaming.mode`; boolean `streaming` auto-migrates to `streaming.mode` plus `streaming.nativeTransport`; legacy `nativeStreaming` auto-migrates to `streaming.nativeTransport`.
 

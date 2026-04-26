@@ -1,7 +1,21 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../media/mime.js", () => ({
+  detectMime: async (opts: { filePath?: string }) => {
+    if (opts.filePath?.endsWith(".png")) {
+      return "image/png";
+    }
+    if (opts.filePath?.endsWith(".wav")) {
+      return "audio/wav";
+    }
+    return undefined;
+  },
+}));
+
 import {
   buildMultimodalChunkForIndexing,
   buildFileEntry,
@@ -19,21 +33,21 @@ import {
 let sharedTempRoot = "";
 let sharedTempId = 0;
 
-beforeAll(async () => {
-  sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-sdk-tests-"));
+beforeAll(() => {
+  sharedTempRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "memory-host-sdk-tests-"));
 });
 
-afterAll(async () => {
+afterAll(() => {
   if (sharedTempRoot) {
-    await fs.rm(sharedTempRoot, { recursive: true, force: true });
+    fsSync.rmSync(sharedTempRoot, { recursive: true, force: true });
   }
 });
 
 function setupTempDirLifecycle(prefix: string): () => string {
   let tmpDir = "";
-  beforeEach(async () => {
+  beforeEach(() => {
     tmpDir = path.join(sharedTempRoot, `${prefix}${sharedTempId++}`);
-    await fs.mkdir(tmpDir, { recursive: true });
+    fsSync.mkdirSync(tmpDir, { recursive: true });
   });
   return () => tmpDir;
 }
@@ -63,12 +77,12 @@ describe("listMemoryFiles", () => {
 
   it("includes files from additional paths (directory)", async () => {
     const tmpDir = getTmpDir();
-    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     const extraDir = path.join(tmpDir, "extra-notes");
-    await fs.mkdir(extraDir, { recursive: true });
-    await fs.writeFile(path.join(extraDir, "note1.md"), "# Note 1");
-    await fs.writeFile(path.join(extraDir, "note2.md"), "# Note 2");
-    await fs.writeFile(path.join(extraDir, "ignore.txt"), "Not a markdown file");
+    fsSync.mkdirSync(extraDir, { recursive: true });
+    fsSync.writeFileSync(path.join(extraDir, "note1.md"), "# Note 1");
+    fsSync.writeFileSync(path.join(extraDir, "note2.md"), "# Note 2");
+    fsSync.writeFileSync(path.join(extraDir, "ignore.txt"), "Not a markdown file");
 
     const files = await listMemoryFiles(tmpDir, [extraDir]);
     expect(files).toHaveLength(3);
@@ -80,9 +94,9 @@ describe("listMemoryFiles", () => {
 
   it("includes files from additional paths (single file)", async () => {
     const tmpDir = getTmpDir();
-    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     const singleFile = path.join(tmpDir, "standalone.md");
-    await fs.writeFile(singleFile, "# Standalone");
+    fsSync.writeFileSync(singleFile, "# Standalone");
 
     const files = await listMemoryFiles(tmpDir, [singleFile]);
     expect(files).toHaveLength(2);
@@ -91,7 +105,7 @@ describe("listMemoryFiles", () => {
 
   it("ignores lowercase root memory.md when canonical MEMORY.md is absent", async () => {
     const tmpDir = getTmpDir();
-    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
+    fsSync.writeFileSync(path.join(tmpDir, "memory.md"), "# Legacy memory");
 
     const files = await listMemoryFiles(tmpDir, [path.join(tmpDir, "memory.md")]);
 
@@ -152,40 +166,36 @@ describe("listMemoryFiles", () => {
     }
   });
 
-  it("skips root-memory repair backups from extra workspace paths", async () => {
-    const tmpDir = getTmpDir();
-    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
-    const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory", "2026-04-23");
-    await fs.mkdir(repairDir, { recursive: true });
-    await fs.writeFile(path.join(repairDir, "memory.md"), "# Archived legacy memory");
+  it("skips root-memory repair backups from workspace and explicit extra paths", async () => {
+    for (const testCase of [
+      {
+        name: "workspace extra path",
+        extraPaths: (tmpDir: string) => [tmpDir],
+      },
+      {
+        name: "explicit repair root",
+        extraPaths: (tmpDir: string) => [path.join(tmpDir, ".openclaw-repair", "root-memory")],
+      },
+    ] as const) {
+      const tmpDir = getTmpDir();
+      fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+      const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory", "2026-04-23");
+      fsSync.mkdirSync(repairDir, { recursive: true });
+      fsSync.writeFileSync(path.join(repairDir, "memory.md"), "# Archived legacy memory");
 
-    const files = await listMemoryFiles(tmpDir, [tmpDir]);
+      const files = await listMemoryFiles(tmpDir, testCase.extraPaths(tmpDir));
 
-    expect(files).toHaveLength(1);
-    expect(files[0]).toBe(path.join(tmpDir, "MEMORY.md"));
-  });
-
-  it("skips explicit root-memory repair directories from extra paths", async () => {
-    const tmpDir = getTmpDir();
-    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
-    const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory", "2026-04-23");
-    await fs.mkdir(repairDir, { recursive: true });
-    await fs.writeFile(path.join(repairDir, "memory.md"), "# Archived legacy memory");
-
-    const files = await listMemoryFiles(tmpDir, [
-      path.join(tmpDir, ".openclaw-repair", "root-memory"),
-    ]);
-
-    expect(files).toHaveLength(1);
-    expect(files[0]).toBe(path.join(tmpDir, "MEMORY.md"));
+      expect(files, testCase.name).toHaveLength(1);
+      expect(files[0], testCase.name).toBe(path.join(tmpDir, "MEMORY.md"));
+    }
   });
 
   it("handles relative paths in additional paths", async () => {
     const tmpDir = getTmpDir();
-    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     const extraDir = path.join(tmpDir, "subdir");
-    await fs.mkdir(extraDir, { recursive: true });
-    await fs.writeFile(path.join(extraDir, "nested.md"), "# Nested");
+    fsSync.mkdirSync(extraDir, { recursive: true });
+    fsSync.writeFileSync(path.join(extraDir, "nested.md"), "# Nested");
 
     const files = await listMemoryFiles(tmpDir, ["subdir"]);
     expect(files).toHaveLength(2);
@@ -194,7 +204,7 @@ describe("listMemoryFiles", () => {
 
   it("ignores non-existent additional paths", async () => {
     const tmpDir = getTmpDir();
-    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
 
     const files = await listMemoryFiles(tmpDir, ["/does/not/exist"]);
     expect(files).toHaveLength(1);
@@ -202,24 +212,24 @@ describe("listMemoryFiles", () => {
 
   it("ignores symlinked files and directories", async () => {
     const tmpDir = getTmpDir();
-    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     const extraDir = path.join(tmpDir, "extra");
-    await fs.mkdir(extraDir, { recursive: true });
-    await fs.writeFile(path.join(extraDir, "note.md"), "# Note");
+    fsSync.mkdirSync(extraDir, { recursive: true });
+    fsSync.writeFileSync(path.join(extraDir, "note.md"), "# Note");
 
     const targetFile = path.join(tmpDir, "target.md");
-    await fs.writeFile(targetFile, "# Target");
+    fsSync.writeFileSync(targetFile, "# Target");
     const linkFile = path.join(extraDir, "linked.md");
 
     const targetDir = path.join(tmpDir, "target-dir");
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.writeFile(path.join(targetDir, "nested.md"), "# Nested");
+    fsSync.mkdirSync(targetDir, { recursive: true });
+    fsSync.writeFileSync(path.join(targetDir, "nested.md"), "# Nested");
     const linkDir = path.join(tmpDir, "linked-dir");
 
     let symlinksOk = true;
     try {
-      await fs.symlink(targetFile, linkFile, "file");
-      await fs.symlink(targetDir, linkDir, "dir");
+      fsSync.symlinkSync(targetFile, linkFile, "file");
+      fsSync.symlinkSync(targetDir, linkDir, "dir");
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "EPERM" || code === "EACCES") {
@@ -239,7 +249,7 @@ describe("listMemoryFiles", () => {
 
   it("dedupes overlapping extra paths that resolve to the same file", async () => {
     const tmpDir = getTmpDir();
-    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     const files = await listMemoryFiles(tmpDir, [tmpDir, ".", path.join(tmpDir, "MEMORY.md")]);
     const memoryMatches = files.filter((file) => file.endsWith("MEMORY.md"));
     expect(memoryMatches).toHaveLength(1);
@@ -248,10 +258,10 @@ describe("listMemoryFiles", () => {
   it("includes image and audio files from extra paths when multimodal is enabled", async () => {
     const tmpDir = getTmpDir();
     const extraDir = path.join(tmpDir, "media");
-    await fs.mkdir(extraDir, { recursive: true });
-    await fs.writeFile(path.join(extraDir, "diagram.png"), Buffer.from("png"));
-    await fs.writeFile(path.join(extraDir, "note.wav"), Buffer.from("wav"));
-    await fs.writeFile(path.join(extraDir, "ignore.bin"), Buffer.from("bin"));
+    fsSync.mkdirSync(extraDir, { recursive: true });
+    fsSync.writeFileSync(path.join(extraDir, "diagram.png"), Buffer.from("png"));
+    fsSync.writeFileSync(path.join(extraDir, "note.wav"), Buffer.from("wav"));
+    fsSync.writeFileSync(path.join(extraDir, "ignore.bin"), Buffer.from("bin"));
 
     const files = await listMemoryFiles(tmpDir, [extraDir], multimodal);
     expect(files.some((file) => file.endsWith("diagram.png"))).toBe(true);
@@ -277,8 +287,8 @@ describe("buildFileEntry", () => {
   it("returns null when the file disappears before reading", async () => {
     const tmpDir = getTmpDir();
     const target = path.join(tmpDir, "ghost.md");
-    await fs.writeFile(target, "ghost", "utf-8");
-    await fs.rm(target);
+    fsSync.writeFileSync(target, "ghost", "utf-8");
+    fsSync.rmSync(target);
     const entry = await buildFileEntry(target, tmpDir);
     expect(entry).toBeNull();
   });
@@ -286,7 +296,7 @@ describe("buildFileEntry", () => {
   it("returns metadata when the file exists", async () => {
     const tmpDir = getTmpDir();
     const target = path.join(tmpDir, "note.md");
-    await fs.writeFile(target, "hello", "utf-8");
+    fsSync.writeFileSync(target, "hello", "utf-8");
     const entry = await buildFileEntry(target, tmpDir);
     expect(entry).not.toBeNull();
     expect(entry?.path).toBe("note.md");
@@ -296,7 +306,7 @@ describe("buildFileEntry", () => {
   it("returns multimodal metadata for eligible image files", async () => {
     const tmpDir = getTmpDir();
     const target = path.join(tmpDir, "diagram.png");
-    await fs.writeFile(target, Buffer.from("png"));
+    fsSync.writeFileSync(target, Buffer.from("png"));
 
     const entry = await buildFileEntry(target, tmpDir, multimodal);
 
@@ -312,7 +322,7 @@ describe("buildFileEntry", () => {
   it("builds a multimodal chunk lazily for indexing", async () => {
     const tmpDir = getTmpDir();
     const target = path.join(tmpDir, "diagram.png");
-    await fs.writeFile(target, Buffer.from("png"));
+    fsSync.writeFileSync(target, Buffer.from("png"));
 
     const entry = await buildFileEntry(target, tmpDir, multimodal);
     const built = await buildMultimodalChunkForIndexing(entry!);
@@ -324,37 +334,37 @@ describe("buildFileEntry", () => {
     expect(built?.structuredInputBytes).toBeGreaterThan(0);
   });
 
-  it("skips lazy multimodal indexing when the file grows after discovery", async () => {
-    const tmpDir = getTmpDir();
-    const target = path.join(tmpDir, "diagram.png");
-    await fs.writeFile(target, Buffer.from("png"));
+  it("skips lazy multimodal indexing when file state changes after discovery", async () => {
+    for (const testCase of [
+      {
+        name: "grows",
+        mutate: (target: string, entrySize: number) => {
+          fsSync.writeFileSync(target, Buffer.alloc(entrySize + 32, 1));
+        },
+      },
+      {
+        name: "bytes change",
+        mutate: (target: string) => {
+          fsSync.writeFileSync(target, Buffer.from("gif"));
+        },
+      },
+      {
+        name: "disappears",
+        mutate: (target: string) => {
+          fsSync.rmSync(target);
+        },
+      },
+    ] as const) {
+      const tmpDir = getTmpDir();
+      const target = path.join(tmpDir, `${testCase.name}.png`);
+      fsSync.writeFileSync(target, Buffer.from("png"));
 
-    const entry = await buildFileEntry(target, tmpDir, multimodal);
-    await fs.writeFile(target, Buffer.alloc(entry!.size + 32, 1));
+      const entry = await buildFileEntry(target, tmpDir, multimodal);
+      expect(entry, testCase.name).not.toBeNull();
+      testCase.mutate(target, entry!.size);
 
-    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
-  });
-
-  it("skips lazy multimodal indexing when file bytes change after discovery", async () => {
-    const tmpDir = getTmpDir();
-    const target = path.join(tmpDir, "diagram.png");
-    await fs.writeFile(target, Buffer.from("png"));
-
-    const entry = await buildFileEntry(target, tmpDir, multimodal);
-    await fs.writeFile(target, Buffer.from("gif"));
-
-    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
-  });
-
-  it("skips lazy multimodal indexing when the file disappears before loading bytes", async () => {
-    const tmpDir = getTmpDir();
-    const target = path.join(tmpDir, "diagram.png");
-    await fs.writeFile(target, Buffer.from("png"));
-
-    const entry = await buildFileEntry(target, tmpDir, multimodal);
-    await fs.rm(target);
-
-    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
+      await expect(buildMultimodalChunkForIndexing(entry!), testCase.name).resolves.toBeNull();
+    }
   });
 });
 

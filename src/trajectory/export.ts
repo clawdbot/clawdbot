@@ -23,7 +23,7 @@ import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
   safeTrajectorySessionFileName,
-} from "./runtime.js";
+} from "./paths.js";
 import type {
   TrajectoryBundleManifest,
   TrajectoryEvent,

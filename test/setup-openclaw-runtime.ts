@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll } from "vitest";
+import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
@@ -12,12 +12,17 @@ import { installSharedTestSetup } from "./setup.shared.js";
 installSharedTestSetup();
 
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
-const WORKER_RUNTIME_HELPERS = Symbol.for("openclaw.testSetupRuntimeHelpers");
+const WORKER_PLUGIN_RUNTIME_HELPERS = Symbol.for("openclaw.testSetupPluginRuntimeHelpers");
+const WORKER_CLEANUP_HELPERS = Symbol.for("openclaw.testSetupCleanupHelpers");
 type WorkerRuntimeState = {
   defaultPluginRegistry: PluginRegistry | null;
   materializedDefaultPluginRegistry: PluginRegistry | null;
 };
-type WorkerRuntimeHelpers = {
+type WorkerPluginRuntimeHelpers = {
+  resetPluginRuntimeStateForTest: typeof import("../src/plugins/runtime.js").resetPluginRuntimeStateForTest;
+  setActivePluginRegistry: typeof import("../src/plugins/runtime.js").setActivePluginRegistry;
+};
+type WorkerCleanupHelpers = {
   clearPluginDiscoveryCache: typeof import("../src/plugins/discovery.js").clearPluginDiscoveryCache;
   clearPluginManifestRegistryCache: typeof import("../src/plugins/manifest-registry-state.js").clearPluginManifestRegistryCache;
   clearSessionStoreCaches: typeof import("../src/config/sessions/store-cache.js").clearSessionStoreCaches;
@@ -27,9 +32,7 @@ type WorkerRuntimeHelpers = {
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
   resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
   resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.js").resetModelsJsonReadyCacheForTest;
-  resetPluginRuntimeStateForTest: typeof import("../src/plugins/runtime.js").resetPluginRuntimeStateForTest;
   resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").resetSessionWriteLockStateForTest;
-  setActivePluginRegistry: typeof import("../src/plugins/runtime.js").setActivePluginRegistry;
 };
 
 type ReplyToModeResolver = NonNullable<
@@ -49,20 +52,44 @@ const workerRuntimeState = (() => {
   return globalState[WORKER_RUNTIME_STATE];
 })();
 
-function loadWorkerRuntimeHelpers(): Promise<WorkerRuntimeHelpers> {
+function loadWorkerPluginRuntimeHelpers(): Promise<WorkerPluginRuntimeHelpers> {
   const globalState = globalThis as typeof globalThis & {
-    [WORKER_RUNTIME_HELPERS]?: Promise<WorkerRuntimeHelpers>;
+    [WORKER_PLUGIN_RUNTIME_HELPERS]?: Promise<WorkerPluginRuntimeHelpers>;
   };
-  globalState[WORKER_RUNTIME_HELPERS] ??= Promise.all([
-    import("../src/agents/context-runtime-state.js"),
-    import("../src/agents/models-config-state.js"),
-    import("../src/agents/session-write-lock.js"),
-    import("../src/config/sessions/store-cache.js"),
-    import("../src/config/sessions/store-lock-state.js"),
-    import("../src/infra/file-lock.js"),
-    import("../src/plugins/discovery.js"),
-    import("../src/plugins/manifest-registry-state.js"),
-    import("../src/plugins/runtime.js"),
+  globalState[WORKER_PLUGIN_RUNTIME_HELPERS] ??= import("../src/plugins/runtime.js").then(
+    (pluginRuntime) => ({
+      resetPluginRuntimeStateForTest: pluginRuntime.resetPluginRuntimeStateForTest,
+      setActivePluginRegistry: pluginRuntime.setActivePluginRegistry,
+    }),
+  );
+  return globalState[WORKER_PLUGIN_RUNTIME_HELPERS];
+}
+
+function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
+  const globalState = globalThis as typeof globalThis & {
+    [WORKER_CLEANUP_HELPERS]?: Promise<WorkerCleanupHelpers>;
+  };
+  globalState[WORKER_CLEANUP_HELPERS] ??= Promise.all([
+    vi.importActual<typeof import("../src/agents/context-runtime-state.js")>(
+      "../src/agents/context-runtime-state.js",
+    ),
+    vi.importActual<typeof import("../src/agents/models-config-state.js")>(
+      "../src/agents/models-config-state.js",
+    ),
+    vi.importActual<typeof import("../src/agents/session-write-lock.js")>(
+      "../src/agents/session-write-lock.js",
+    ),
+    vi.importActual<typeof import("../src/config/sessions/store-cache.js")>(
+      "../src/config/sessions/store-cache.js",
+    ),
+    vi.importActual<typeof import("../src/config/sessions/store-lock-state.js")>(
+      "../src/config/sessions/store-lock-state.js",
+    ),
+    vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
+    vi.importActual<typeof import("../src/plugins/discovery.js")>("../src/plugins/discovery.js"),
+    vi.importActual<typeof import("../src/plugins/manifest-registry-state.js")>(
+      "../src/plugins/manifest-registry-state.js",
+    ),
   ]).then(
     ([
       contextRuntimeState,
@@ -73,7 +100,6 @@ function loadWorkerRuntimeHelpers(): Promise<WorkerRuntimeHelpers> {
       fileLock,
       discovery,
       manifestRegistryState,
-      pluginRuntime,
     ]) => ({
       clearPluginDiscoveryCache: discovery.clearPluginDiscoveryCache,
       clearPluginManifestRegistryCache: manifestRegistryState.clearPluginManifestRegistryCache,
@@ -84,12 +110,10 @@ function loadWorkerRuntimeHelpers(): Promise<WorkerRuntimeHelpers> {
       resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
       resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
       resetModelsJsonReadyCacheForTest: modelsConfigState.resetModelsJsonReadyCacheForTest,
-      resetPluginRuntimeStateForTest: pluginRuntime.resetPluginRuntimeStateForTest,
       resetSessionWriteLockStateForTest: sessionWriteLock.resetSessionWriteLockStateForTest,
-      setActivePluginRegistry: pluginRuntime.setActivePluginRegistry,
     }),
   );
-  return globalState[WORKER_RUNTIME_HELPERS];
+  return globalState[WORKER_CLEANUP_HELPERS];
 }
 
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
@@ -359,7 +383,7 @@ function resolveDefaultPluginRegistryProxy(): PluginRegistry {
 
 async function installDefaultPluginRegistry(): Promise<void> {
   const { resetPluginRuntimeStateForTest, setActivePluginRegistry } =
-    await loadWorkerRuntimeHelpers();
+    await loadWorkerPluginRuntimeHelpers();
   workerRuntimeState.materializedDefaultPluginRegistry = null;
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(resolveDefaultPluginRegistryProxy());
@@ -386,7 +410,7 @@ afterEach(async () => {
     resetFileLockStateForTest,
     resetModelsJsonReadyCacheForTest,
     resetSessionWriteLockStateForTest,
-  } = await loadWorkerRuntimeHelpers();
+  } = await loadWorkerCleanupHelpers();
   await drainSessionStoreLockQueuesForTest();
   clearSessionStoreCaches();
   await drainFileLockStateForTest();
@@ -407,7 +431,7 @@ afterAll(async () => {
     clearSessionStoreCaches,
     drainFileLockStateForTest,
     drainSessionWriteLockStateForTest,
-  } = await loadWorkerRuntimeHelpers();
+  } = await loadWorkerCleanupHelpers();
   clearSessionStoreCaches();
   await drainFileLockStateForTest();
   await drainSessionWriteLockStateForTest();

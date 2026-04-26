@@ -93,16 +93,20 @@ If your old installation had local-only encrypted history that was never backed 
    openclaw matrix verify backup status
    ```
 
-5. If OpenClaw tells you a recovery key is needed, run:
+5. Put the recovery key for the Matrix account you are repairing in an account-specific environment variable. For a single default account, `MATRIX_RECOVERY_KEY` is fine. For multiple accounts, use one variable per account, for example `MATRIX_RECOVERY_KEY_ASSISTANT`, and add `--account assistant` to the command.
+
+6. If OpenClaw tells you a recovery key is needed, run the command for the matching account:
 
    ```bash
-   openclaw matrix verify backup restore --recovery-key "<your-recovery-key>"
+   printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --recovery-key-stdin
+   printf '%s\n' "$MATRIX_RECOVERY_KEY_ASSISTANT" | openclaw matrix verify backup restore --recovery-key-stdin --account assistant
    ```
 
-6. If this device is still unverified, run:
+7. If this device is still unverified, run the command for the matching account:
 
    ```bash
-   openclaw matrix verify device "<your-recovery-key>"
+   printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify device --recovery-key-stdin
+   printf '%s\n' "$MATRIX_RECOVERY_KEY_ASSISTANT" | openclaw matrix verify device --recovery-key-stdin --account assistant
    ```
 
    If the recovery key is accepted and backup is usable, but `Cross-signing verified`
@@ -116,13 +120,13 @@ If your old installation had local-only encrypted history that was never backed 
    and type `yes` only when they match. The command exits successfully only
    after `Cross-signing verified` becomes `yes`.
 
-7. If you are intentionally abandoning unrecoverable old history and want a fresh backup baseline for future messages, run:
+8. If you are intentionally abandoning unrecoverable old history and want a fresh backup baseline for future messages, run:
 
    ```bash
    openclaw matrix verify backup reset --yes
    ```
 
-8. If no server-side key backup exists yet, create one for future recoveries:
+9. If no server-side key backup exists yet, create one for future recoveries:
 
    ```bash
    openclaw matrix verify bootstrap
@@ -242,15 +246,15 @@ If the old store reports room keys that were never backed up, OpenClaw warns ins
 - Meaning: some old room keys existed only in the old local store and had never been uploaded to Matrix backup.
 - What to do: expect some old encrypted history to remain unavailable unless you can recover those keys manually from another verified client.
 
-`Legacy Matrix encrypted state for account "..." has backed-up room keys, but no local backup decryption key was found. Ask the operator to run "openclaw matrix verify backup restore --recovery-key <key>" after upgrade if they have the recovery key.`
+`Legacy Matrix encrypted state for account "..." has backed-up room keys, but no local backup decryption key was found. Ask the operator to run "openclaw matrix verify backup restore --recovery-key-stdin" after upgrade if they have the recovery key.`
 
 - Meaning: backup exists, but OpenClaw could not recover the recovery key automatically.
-- What to do: run `openclaw matrix verify backup restore --recovery-key "<your-recovery-key>"`.
+- What to do: run `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --recovery-key-stdin`.
 
 `Failed inspecting legacy Matrix encrypted state for account "..." (...): ...`
 
 - Meaning: OpenClaw found the old encrypted store, but it could not inspect it safely enough to prepare recovery.
-- What to do: rerun `openclaw doctor --fix`. If it repeats, keep the old state directory intact and recover using another verified Matrix client plus `openclaw matrix verify backup restore --recovery-key "<your-recovery-key>"`.
+- What to do: rerun `openclaw doctor --fix`. If it repeats, keep the old state directory intact and recover using another verified Matrix client plus `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --recovery-key-stdin`.
 
 `Legacy Matrix backup key was found for account "...", but .../recovery-key.json already contains a different recovery key. Leaving the existing file unchanged.`
 
@@ -265,39 +269,39 @@ If the old store reports room keys that were never backed up, OpenClaw warns ins
 `matrix: failed restoring room keys from legacy encrypted-state backup: ...`
 
 - Meaning: the new plugin attempted restore but Matrix returned an error.
-- What to do: run `openclaw matrix verify backup status`, then retry with `openclaw matrix verify backup restore --recovery-key "<your-recovery-key>"` if needed.
+- What to do: run `openclaw matrix verify backup status`, then retry with `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --recovery-key-stdin` if needed.
 
 ### Manual recovery messages
 
 `Backup key is not loaded on this device. Run 'openclaw matrix verify backup restore' to load it and restore old room keys.`
 
 - Meaning: OpenClaw knows you should have a backup key, but it is not active on this device.
-- What to do: run `openclaw matrix verify backup restore`, or pass `--recovery-key` if needed.
+- What to do: run `openclaw matrix verify backup restore`, or set `MATRIX_RECOVERY_KEY` and run `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --recovery-key-stdin` if needed.
 
-`Store a recovery key with 'openclaw matrix verify device <key>', then run 'openclaw matrix verify backup restore'.`
+`Store a recovery key with 'openclaw matrix verify device --recovery-key-stdin', then run 'openclaw matrix verify backup restore'.`
 
 - Meaning: this device does not currently have the recovery key stored.
-- What to do: verify the device with your recovery key first, then restore the backup.
+- What to do: set `MATRIX_RECOVERY_KEY`, run `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify device --recovery-key-stdin`, then restore the backup.
 
-`Backup key mismatch on this device. Re-run 'openclaw matrix verify device <key>' with the matching recovery key.`
+`Backup key mismatch on this device. Re-run 'openclaw matrix verify device --recovery-key-stdin' with the matching recovery key.`
 
 - Meaning: the stored key does not match the active Matrix backup.
-- What to do: rerun `openclaw matrix verify device "<your-recovery-key>"` with the correct key.
+- What to do: set `MATRIX_RECOVERY_KEY` to the correct key and run `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify device --recovery-key-stdin`.
 
 If you accept losing unrecoverable old encrypted history, you can instead reset the
 current backup baseline with `openclaw matrix verify backup reset --yes`. When the
 stored backup secret is broken, that reset may also recreate secret storage so the
 new backup key can load correctly after restart.
 
-`Backup trust chain is not verified on this device. Re-run 'openclaw matrix verify device <key>'.`
+`Backup trust chain is not verified on this device. Re-run 'openclaw matrix verify device --recovery-key-stdin'.`
 
 - Meaning: the backup exists, but this device does not trust the cross-signing chain strongly enough yet.
-- What to do: rerun `openclaw matrix verify device "<your-recovery-key>"`.
+- What to do: set `MATRIX_RECOVERY_KEY` and run `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify device --recovery-key-stdin`.
 
 `Matrix recovery key is required`
 
 - Meaning: you tried a recovery step without supplying a recovery key when one was required.
-- What to do: rerun the command with your recovery key.
+- What to do: rerun the command with `--recovery-key-stdin`, for example `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify device --recovery-key-stdin`.
 
 `Invalid Matrix recovery key: ...`
 
@@ -313,7 +317,7 @@ new backup key can load correctly after restart.
 - What to do: run `openclaw matrix verify self`, accept the request in another
   Matrix client, compare the SAS, and type `yes` only when it matches. The
   command waits for full Matrix identity trust before reporting success. Use
-  `openclaw matrix verify bootstrap --recovery-key "<your-recovery-key>" --force-reset-cross-signing`
+  `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify bootstrap --recovery-key-stdin --force-reset-cross-signing`
   only when you intentionally want to replace the current cross-signing identity.
 
 `Matrix key backup is not active on this device after loading from secret storage.`
@@ -321,10 +325,10 @@ new backup key can load correctly after restart.
 - Meaning: secret storage did not produce an active backup session on this device.
 - What to do: verify the device first, then recheck with `openclaw matrix verify backup status`.
 
-`Matrix crypto backend cannot load backup keys from secret storage. Verify this device with 'openclaw matrix verify device <key>' first.`
+`Matrix crypto backend cannot load backup keys from secret storage. Verify this device with 'openclaw matrix verify device --recovery-key-stdin' first.`
 
 - Meaning: this device cannot restore from secret storage until device verification is complete.
-- What to do: run `openclaw matrix verify device "<your-recovery-key>"` first.
+- What to do: run `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify device --recovery-key-stdin` first.
 
 ### Custom plugin install messages
 
@@ -340,7 +344,7 @@ Run these checks in order:
 ```bash
 openclaw matrix verify status --verbose
 openclaw matrix verify backup status --verbose
-openclaw matrix verify backup restore --recovery-key "<your-recovery-key>" --verbose
+printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --recovery-key-stdin --verbose
 ```
 
 If the backup restores successfully but some old rooms are still missing history, those missing keys were probably never backed up by the previous plugin.

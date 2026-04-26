@@ -10,7 +10,7 @@ export type MockQaProviderDefinitionParams = {
 };
 
 function mockModelRef(providerId: string, alternate?: boolean) {
-  return `${providerId}/${alternate ? "gpt-5.4-alt" : "gpt-5.4"}`;
+  return `${providerId}/${alternate ? "gpt-5.5-alt" : "gpt-5.5"}`;
 }
 
 export function createMockQaProviderDefinition(

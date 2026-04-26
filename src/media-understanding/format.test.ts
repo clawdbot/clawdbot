@@ -88,4 +88,29 @@ describe("formatMediaUnderstandingBody", () => {
     });
     expect(body).toBe("[Image]\nDescription:\na cat");
   });
+
+  it("labels audio transcripts by their attachment order", () => {
+    const body = formatMediaUnderstandingBody({
+      outputs: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "first clip was silent",
+          provider: "openclaw",
+        },
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 1,
+          text: "second clip has speech",
+          provider: "groq",
+        },
+      ],
+    });
+    expect(body).toBe(
+      [
+        "[Audio 1/2]\nTranscript:\nfirst clip was silent",
+        "[Audio 2/2]\nTranscript:\nsecond clip has speech",
+      ].join("\n\n"),
+    );
+  });
 });

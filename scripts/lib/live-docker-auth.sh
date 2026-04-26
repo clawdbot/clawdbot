@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.gemini .minimax)
+OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.factory .gemini .minimax)
 OPENCLAW_DOCKER_LIVE_AUTH_FILES_ALL=(
   .codex/auth.json
   .codex/config.toml
@@ -49,6 +49,9 @@ openclaw_live_should_include_auth_dir_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
+    droid | factory | factory-droid)
+      printf '%s\n' ".factory"
+      ;;
     gemini | gemini-cli | google-gemini-cli)
       printf '%s\n' ".gemini"
       ;;

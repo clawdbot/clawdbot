@@ -40,6 +40,10 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase(input, { mediaUrls: undefined });
   }
 
+  function expectRejectedRemoteMediaUrlCase(input: string) {
+    expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: input });
+  }
+
   it.each([
     ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
     ["/Users/pete/My File.png", 'MEDIA:"/Users/pete/My File.png"'],
@@ -61,6 +65,24 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:./foo/../../../etc/shadow",
   ] as const)("rejects traversal and home-dir path: %s", (input) => {
     expectRejectedMediaPathCase(input);
+  });
+
+  it.each([
+    "MEDIA:http://example.com/a.png",
+    "MEDIA:https://intranet/a.png",
+    "MEDIA:https://printer/a.png",
+    "MEDIA:https://localhost/a.png",
+    "MEDIA:https://localhost../a.png",
+    "MEDIA:https://127.0.0.1/a.png",
+    "MEDIA:https://127.0.0.1../a.png",
+    "MEDIA:https://169.254.169.254/latest/meta-data",
+    "MEDIA:https://[::1]/a.png",
+    "MEDIA:https://metadata.google.internal/a.png",
+    "MEDIA:https://metadata.google.internal../a.png",
+    "MEDIA:https://example..com/a.png",
+    "MEDIA:https://media.local/a.png",
+  ] as const)("rejects unsafe remote media URL: %s", (input) => {
+    expectRejectedRemoteMediaUrlCase(input);
   });
 
   it.each([
@@ -149,6 +171,8 @@ describe("splitMediaFromOutput", () => {
     "![x](file:///etc/passwd)",
     "![x](/var/run/secrets/kubernetes.io/serviceaccount/token)",
     "![x](C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts)",
+    "![x](http://example.com/a.png)",
+    "![x](https://127.0.0.1/a.png)",
   ] as const)("does not lift local markdown image target: %s", (input) => {
     expectParsedMediaOutputCase(input, {
       text: input,

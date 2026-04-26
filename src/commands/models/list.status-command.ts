@@ -12,6 +12,7 @@ import {
 } from "../../agents/auth-health.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
@@ -29,6 +30,8 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
+import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
+import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -57,6 +60,14 @@ let listProbeRuntimePromise: Promise<ListProbeRuntime> | undefined;
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
+type StatusSyntheticAuth = {
+  value: string;
+  source: string;
+  credential?: string;
+  mode?: ProviderSyntheticAuthResult["mode"];
+  expiresAt?: number;
+};
+
 function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
   providerUsageRuntimePromise ??= import("../../infra/provider-usage.js");
   return providerUsageRuntimePromise;
@@ -75,6 +86,56 @@ function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
 function loadListProbeRuntime(): Promise<ListProbeRuntime> {
   listProbeRuntimePromise ??= import("./list.probe.js");
   return listProbeRuntimePromise;
+}
+
+function resolveProviderConfigForStatus(
+  cfg: Awaited<ReturnType<typeof loadModelsConfig>>,
+  provider: string,
+) {
+  const providers = cfg.models?.providers ?? {};
+  const direct = providers[provider];
+  if (direct) {
+    return direct;
+  }
+  const normalized = normalizeProviderId(provider);
+  return (
+    providers[normalized] ??
+    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
+  );
+}
+
+function syntheticAuthCredential(
+  provider: string,
+  auth: StatusSyntheticAuth,
+): AuthProfileCredential | undefined {
+  if (!auth.mode) {
+    return undefined;
+  }
+  if (auth.mode === "api-key") {
+    return {
+      type: "api_key",
+      provider,
+      key: auth.credential,
+    };
+  }
+  if (auth.mode === "token") {
+    return {
+      type: "token",
+      provider,
+      token: auth.credential,
+      expires: auth.expiresAt,
+    };
+  }
+  if (auth.expiresAt === undefined) {
+    return undefined;
+  }
+  return {
+    type: "oauth",
+    provider,
+    access: auth.credential ?? "",
+    refresh: "",
+    expires: auth.expiresAt,
+  };
 }
 
 export async function modelsStatusCommand(
@@ -185,14 +246,30 @@ export async function modelsStatusCommand(
       providersFromEnv.add(provider);
     }
   }
-  const syntheticAuthByProvider = new Map(
-    resolveRuntimeSyntheticAuthProviderRefs().map((provider) => [
-      normalizeProviderId(provider),
-      {
-        value: "plugin-owned",
-        source: "plugin synthetic auth",
+  const syntheticAuthByProvider = new Map<string, StatusSyntheticAuth>();
+  for (const provider of resolveRuntimeSyntheticAuthProviderRefs()) {
+    const normalized = normalizeProviderId(provider);
+    const resolved = resolveProviderSyntheticAuthWithPlugin({
+      provider: normalized,
+      config: cfg,
+      context: {
+        config: cfg,
+        provider: normalized,
+        providerConfig: resolveProviderConfigForStatus(cfg, normalized),
       },
-    ]),
+    });
+    syntheticAuthByProvider.set(normalized, {
+      value: "plugin-owned",
+      source: resolved?.source ?? "plugin synthetic auth",
+      credential: resolved?.apiKey,
+      mode: resolved?.mode,
+      expiresAt: resolved?.expiresAt,
+    });
+  }
+  const runtimeCredentialsByProvider = new Map(
+    Array.from(syntheticAuthByProvider.entries())
+      .map(([provider, auth]) => [provider, syntheticAuthCredential(provider, auth)] as const)
+      .filter((entry): entry is readonly [string, AuthProfileCredential] => Boolean(entry[1])),
   );
 
   const providers = Array.from(
@@ -325,6 +402,7 @@ export async function modelsStatusCommand(
     store,
     cfg,
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    runtimeCredentialsByProvider,
   });
   const oauthProfiles = authHealth.profiles.filter(
     (profile) => profile.type === "oauth" || profile.type === "token",

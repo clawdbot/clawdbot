@@ -22,6 +22,9 @@ export function resolveCodexAppServerSpawnInvocation(
   options: CodexAppServerStartOptions,
   runtime: CodexAppServerSpawnRuntime = DEFAULT_SPAWN_RUNTIME,
 ): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  if (options.commandSource === "managed") {
+    throw new Error("Managed Codex app-server start options must be resolved before spawn.");
+  }
   const program = resolveWindowsSpawnProgram({
     command: options.command,
     platform: runtime.platform,

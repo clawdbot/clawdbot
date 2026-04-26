@@ -1,6 +1,7 @@
 export {
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
   parseCommandArgs,
@@ -16,3 +17,4 @@ export {
   resolveCommandAuthorization,
   type CommandAuthorization,
 } from "../auto-reply/command-auth.js";
+export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";

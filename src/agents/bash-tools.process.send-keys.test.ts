@@ -17,6 +17,16 @@ function currentEnv(): Record<string, string> {
   return env;
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
+}
+
+function currentNodeEvalCommand(source: string): string {
+  const node = shellQuote(process.execPath);
+  const script = shellQuote(source);
+  return process.platform === "win32" ? `& ${node} -e ${script}` : `${node} -e ${script}`;
+}
+
 async function startPtySession(command: string) {
   const processTool = createProcessTool();
   const run = await runExecProcess({
@@ -64,7 +74,9 @@ async function waitForSessionCompletion(params: {
 
 test("process send-keys encodes Enter for pty sessions", async () => {
   const { processTool, sessionId } = await startPtySession(
-    'node -e "const dataEvent=String.fromCharCode(100,97,116,97);process.stdin.on(dataEvent,d=>{process.stdout.write(d);if(d.includes(10)||d.includes(13))process.exit(0);});"',
+    currentNodeEvalCommand(
+      "const dataEvent=String.fromCharCode(100,97,116,97);process.stdin.on(dataEvent,d=>{process.stdout.write(d);if(d.includes(10)||d.includes(13))process.exit(0);});",
+    ),
   );
 
   await processTool.execute("toolcall", {
@@ -78,7 +90,9 @@ test("process send-keys encodes Enter for pty sessions", async () => {
 
 test("process submit sends Enter for pty sessions", async () => {
   const { processTool, sessionId } = await startPtySession(
-    'node -e "const dataEvent=String.fromCharCode(100,97,116,97);const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);process.stdin.on(dataEvent,d=>{if(d.includes(10)||d.includes(13)){process.stdout.write(submitted);process.exit(0);}});"',
+    currentNodeEvalCommand(
+      "const dataEvent=String.fromCharCode(100,97,116,97);const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);process.stdin.on(dataEvent,d=>{if(d.includes(10)||d.includes(13)){process.stdout.write(submitted);process.exit(0);}});",
+    ),
   );
 
   await processTool.execute("toolcall", {

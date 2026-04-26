@@ -1,14 +1,10 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path, { resolve } from "node:path";
+import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
 
-const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
-const tsgoBin = path.join(
-  path.dirname(require.resolve("@typescript/native-preview/package.json")),
-  "bin/tsgo.js",
-);
+const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
 
@@ -167,7 +163,7 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, args, {
       cwd: repoRoot,
-      env: process.env,
+      env: params.env ? { ...process.env, ...params.env } : process.env,
       signal: abortController?.signal,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -231,11 +227,24 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
 export async function runNodeStepsInParallel(steps) {
   const abortController = new AbortController();
   const results = await Promise.allSettled(
-    steps.map((step) => runNodeStep(step.label, step.args, step.timeoutMs, { abortController })),
+    steps.map((step) =>
+      runNodeStep(step.label, step.args, step.timeoutMs, { abortController, env: step.env }),
+    ),
   );
   const firstFailure = results.find((result) => result.status === "rejected");
   if (firstFailure) {
     throw firstFailure.reason;
+  }
+}
+
+export async function runNodeSteps(steps, env = process.env) {
+  if (!isLocalCheckEnabled(env)) {
+    await runNodeStepsInParallel(steps);
+    return;
+  }
+
+  for (const step of steps) {
+    await runNodeStep(step.label, step.args, step.timeoutMs, { env: step.env });
   }
 }
 
@@ -272,7 +281,8 @@ export async function main(argv = process.argv.slice(2)) {
         });
         pendingSteps.push({
           label: "plugin-sdk boundary dts",
-          args: [tsgoBin, "-p", "tsconfig.plugin-sdk.dts.json"],
+          args: [runTsgoScript, "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stampPath: ROOT_DTS_STAMP,
         });
@@ -287,7 +297,8 @@ export async function main(argv = process.argv.slice(2)) {
       });
       pendingSteps.push({
         label: "plugin-sdk package boundary dts",
-        args: [tsgoBin, "-p", "packages/plugin-sdk/tsconfig.json"],
+        args: [runTsgoScript, "-p", "packages/plugin-sdk/tsconfig.json", "--declaration", "true"],
+        env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
         timeoutMs: 300_000,
         stampPath: PACKAGE_DTS_STAMP,
       });
@@ -296,7 +307,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
 
     if (pendingSteps.length > 0) {
-      await runNodeStepsInParallel(pendingSteps);
+      await runNodeSteps(pendingSteps);
       for (const step of pendingSteps) {
         if (step.stampPath) {
           writeStampFile(step.stampPath);

@@ -90,6 +90,25 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
   return explicitPhases.size === 1 ? [...explicitPhases][0] : undefined;
 }
 
+export function resolveAssistantEventPhase(data: unknown): AssistantPhase | undefined {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  const record = data as {
+    phase?: unknown;
+    message?: unknown;
+    partial?: unknown;
+    item?: unknown;
+  };
+  return (
+    normalizeAssistantPhase(record.phase) ??
+    resolveAssistantMessagePhase(record.message) ??
+    resolveAssistantMessagePhase(record.partial) ??
+    resolveAssistantMessagePhase(record.item) ??
+    resolveAssistantMessagePhase(record)
+  );
+}
+
 export function extractAssistantTextForPhase(
   message: unknown,
   options?: {

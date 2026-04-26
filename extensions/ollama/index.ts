@@ -1,7 +1,4 @@
-import {
-  resolvePluginConfigObject,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+import { resolvePluginConfigObject, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   definePluginEntry,
   type OpenClawPluginApi,

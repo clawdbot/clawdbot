@@ -638,6 +638,77 @@ describe("device pairing tokens", () => {
     expect(after?.approvedScopes).toEqual(["operator.read"]);
   });
 
+  test("rejects omitted-scope rotation when caller cannot hold the current token scopes", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
+    const before = await getPairedDevice("device-1", baseDir);
+
+    const rotated = await rotateDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      callerScopes: ["operator.pairing"],
+      baseDir,
+    });
+    expect(rotated).toEqual({
+      ok: false,
+      reason: "caller-missing-scope",
+      scope: "operator.admin",
+    });
+
+    const after = await getPairedDevice("device-1", baseDir);
+    expect(after?.tokens?.operator?.token).toEqual(before?.tokens?.operator?.token);
+    expect(after?.tokens?.operator?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+    expect(after?.tokens?.operator?.revokedAtMs).toBeUndefined();
+  });
+
+  test("rejects token revocation when caller cannot hold the target token scopes", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
+    const before = await getPairedDevice("device-1", baseDir);
+
+    const revoked = await revokeDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      callerScopes: ["operator.pairing"],
+      baseDir,
+    });
+    expect(revoked).toEqual({
+      ok: false,
+      reason: "caller-missing-scope",
+      scope: "operator.admin",
+    });
+
+    const after = await getPairedDevice("device-1", baseDir);
+    expect(after?.tokens?.operator?.token).toEqual(before?.tokens?.operator?.token);
+    expect(after?.tokens?.operator?.revokedAtMs).toBeUndefined();
+  });
+
+  test("allows token revocation when caller holds the target token scopes", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
+
+    const revoked = await revokeDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      callerScopes: ["operator.admin"],
+      baseDir,
+    });
+    expect(revoked).toEqual({
+      ok: true,
+      entry: expect.objectContaining({
+        role: "operator",
+        revokedAtMs: expect.any(Number),
+      }),
+    });
+
+    const after = await getPairedDevice("device-1", baseDir);
+    expect(after?.tokens?.operator?.revokedAtMs).toBeTypeOf("number");
+  });
+
   test("rejects scope escalation when ensuring a token and leaves state unchanged", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);
@@ -1051,6 +1122,26 @@ describe("device pairing tokens", () => {
       ),
     ).resolves.toBeNull();
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
+  });
+
+  test("refuses to overwrite corrupt paired device state", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    const { pairedPath } = resolvePairingPaths(baseDir, "devices");
+    await writeFile(pairedPath, "{not-json}", "utf8");
+
+    await expect(
+      approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir),
+    ).rejects.toThrow(/paired\.json/);
+    await expect(readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
   });
 
   test("clears paired device state by device id", async () => {

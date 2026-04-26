@@ -21,6 +21,11 @@ If the file is missing, OpenClaw uses safe defaults. Common reasons to add a con
 
 See the [full reference](/gateway/configuration-reference) for every available field.
 
+Agents and automation should use `config.schema.lookup` for exact field-level
+docs before editing config. Use this page for task-oriented guidance and
+[Configuration reference](/gateway/configuration-reference) for the broader
+field map and defaults.
+
 <Tip>
 **New to configuration?** Start with `openclaw onboard` for interactive setup, or check out the [Configuration Examples](/gateway/configuration-examples) guide for complete copy-paste configs.
 </Tip>
@@ -574,6 +579,11 @@ For tooling that writes config over the gateway API, prefer this flow:
   deletes, arrays replace)
 - `config.apply` only when you intend to replace the entire config
 - `update.run` for explicit self-update plus restart
+
+Agents should treat `config.schema.lookup` as the first stop for exact
+field-level docs and constraints. Use [Configuration reference](/gateway/configuration-reference)
+when they need the broader config map, defaults, or links to dedicated
+subsystem references.
 
 <Note>
 Control-plane writes (`config.apply`, `config.patch`, `update.run`) are

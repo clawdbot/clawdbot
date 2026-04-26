@@ -1,10 +1,9 @@
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import { createReplyToFanout, type ReplyToResolution } from "openclaw/plugin-sdk/outbound-runtime";
 import {
-  createReplyToFanout,
   resolveOutboundSendDep,
-  type ReplyToResolution,
   type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-runtime";
+} from "openclaw/plugin-sdk/outbound-send-deps";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
 import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 

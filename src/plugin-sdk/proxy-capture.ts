@@ -4,7 +4,9 @@ export {
   resolveEffectiveDebugProxyUrl,
 } from "../proxy-capture/env.js";
 export {
+  acquireDebugProxyCaptureStore,
   DebugProxyCaptureStore,
+  closeDebugProxyCaptureStore,
   getDebugProxyCaptureStore,
 } from "../proxy-capture/store.sqlite.js";
 export {

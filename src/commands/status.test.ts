@@ -740,6 +740,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
     }),
   ),
   resolveStatusUsageSummary: vi.fn(async () => undefined),
@@ -759,6 +760,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
                 deep: false,
                 includeFilesystem: true,
                 includeChannelSecurity: true,
+                loadPluginSecurityCollectors: false,
               }))
           )({
             config: params.config,

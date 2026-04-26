@@ -139,6 +139,18 @@ export function parseMessageContent(content: string, messageType: string): strin
     if (messageType === "text") {
       return parsed.text || "";
     }
+    if (["image", "file", "audio", "video", "media", "sticker"].includes(messageType)) {
+      if (messageType === "audio") {
+        const speechToText =
+          typeof parsed.speech_to_text === "string" ? parsed.speech_to_text.trim() : "";
+        if (speechToText) {
+          return speechToText;
+        }
+      }
+      const placeholder = inferPlaceholder(messageType);
+      const fileName = typeof parsed.file_name === "string" ? parsed.file_name.trim() : "";
+      return fileName ? `${placeholder} (${fileName})` : placeholder;
+    }
     if (messageType === "share_chat") {
       if (parsed && typeof parsed === "object") {
         const share = parsed as { body?: unknown; summary?: unknown; share_chat_id?: unknown };

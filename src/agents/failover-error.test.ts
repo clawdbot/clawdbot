@@ -441,7 +441,12 @@ describe("failover-error", () => {
     ).toBeNull();
   });
 
-  it("classifies provider-scoped generic upstream errors for failover", () => {
+  it("classifies bare pi-ai stream wrapper as timeout regardless of provider (#71620)", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({
         provider: "anthropic",
@@ -450,24 +455,28 @@ describe("failover-error", () => {
     ).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({
+        provider: "google",
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+  });
+
+  it("classifies openrouter-scoped upstream errors for failover", () => {
+    expect(
+      resolveFailoverReasonFromError({
         provider: "openrouter",
         message: "Provider returned error",
       }),
     ).toBe("timeout");
   });
 
-  it("does not classify provider-scoped upstream errors without the matching provider", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        message: "An unknown error occurred",
-      }),
-    ).toBeNull();
-    expect(
-      resolveFailoverReasonFromError({
-        provider: "openrouter",
-        message: "An unknown error occurred",
-      }),
-    ).toBeNull();
+  it("does not classify openrouter-scoped upstream errors without the matching provider", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "Provider returned error",

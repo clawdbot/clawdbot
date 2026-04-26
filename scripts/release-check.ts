@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  realpathSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -14,9 +15,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  isBundledRuntimeDepsInstallStagePath,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
+import {
+  resolveBundledRuntimeDependencyInstallRoot,
+  resolveBundledRuntimeDependencyPackageInstallRoot,
+} from "../src/plugins/bundled-runtime-deps.ts";
 import {
   collectBundledExtensionManifestErrors,
   type BundledExtension,
@@ -317,28 +323,48 @@ function bundledRuntimeDependencySentinelPath(
   );
 }
 
-function bundledRuntimeDependencySentinelCandidates(
+export function bundledRuntimeDependencySentinelCandidates(
   packageRoot: string,
   pluginId: string,
   dependencyName: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const dependencyParts = dependencyName.split("/");
+  const packageRoots = [
+    packageRoot,
+    (() => {
+      try {
+        return realpathSync(packageRoot);
+      } catch {
+        return packageRoot;
+      }
+    })(),
+  ];
+  const runtimeRoots = packageRoots.flatMap((root) => [
+    resolveBundledRuntimeDependencyPackageInstallRoot(root, { env }),
+    resolveBundledRuntimeDependencyInstallRoot(join(root, "dist", "extensions", pluginId), {
+      env,
+    }),
+  ]);
   return [
     bundledRuntimeDependencySentinelPath(packageRoot, pluginId, dependencyName),
     join(packageRoot, "dist", "extensions", "node_modules", ...dependencyParts, "package.json"),
     join(packageRoot, "node_modules", ...dependencyParts, "package.json"),
-  ];
+    ...runtimeRoots.map((root) => join(root, "node_modules", ...dependencyParts, "package.json")),
+  ].filter((candidate, index, candidates) => candidates.indexOf(candidate) === index);
 }
 
 function assertBundledRuntimeDependencyAbsent(params: {
   packageRoot: string;
   pluginId: string;
   dependencyName: string;
+  env?: NodeJS.ProcessEnv;
 }): void {
   const sentinelPath = bundledRuntimeDependencySentinelCandidates(
     params.packageRoot,
     params.pluginId,
     params.dependencyName,
+    params.env,
   ).find((candidate) => existsSync(candidate));
   if (sentinelPath) {
     throw new Error(
@@ -351,11 +377,13 @@ function assertBundledRuntimeDependencyPresent(params: {
   packageRoot: string;
   pluginId: string;
   dependencyName: string;
+  env?: NodeJS.ProcessEnv;
 }): void {
   const sentinelPath = bundledRuntimeDependencySentinelCandidates(
     params.packageRoot,
     params.pluginId,
     params.dependencyName,
+    params.env,
   ).find((candidate) => existsSync(candidate));
   if (sentinelPath) {
     return;
@@ -413,24 +441,25 @@ function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: str
     { pluginId: "feishu", dependencyName: "@larksuiteoapi/node-sdk" },
   ] as const;
 
-  for (const dep of lazyDeps) {
-    assertBundledRuntimeDependencyAbsent({ packageRoot, ...dep });
-  }
-
   const homeDir = join(tmpRoot, "activation-home");
   mkdirSync(homeDir, { recursive: true });
+  const env = createPackedCliSmokeEnv(process.env, {
+    HOME: homeDir,
+    OPENAI_API_KEY: "sk-openclaw-release-check",
+  });
+  for (const dep of lazyDeps) {
+    assertBundledRuntimeDependencyAbsent({ packageRoot, env, ...dep });
+  }
+
   writePackedBundledPluginActivationConfig(homeDir);
   execFileSync(process.execPath, [join(packageRoot, "openclaw.mjs"), "plugins", "doctor"], {
     cwd: packageRoot,
     stdio: "inherit",
-    env: createPackedCliSmokeEnv(process.env, {
-      HOME: homeDir,
-      OPENAI_API_KEY: "sk-openclaw-release-check",
-    }),
+    env,
   });
 
   for (const dep of lazyDeps) {
-    assertBundledRuntimeDependencyPresent({ packageRoot, ...dep });
+    assertBundledRuntimeDependencyPresent({ packageRoot, env, ...dep });
   }
 }
 
@@ -557,6 +586,7 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   return [...paths]
     .filter(
       (path) =>
+        isBundledRuntimeDepsInstallStagePath(path) ||
         forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
         /(^|\/)\.openclaw-runtime-deps-[^/]+(\/|$)/u.test(path) ||
         path.endsWith("/.openclaw-runtime-deps-stamp.json") ||

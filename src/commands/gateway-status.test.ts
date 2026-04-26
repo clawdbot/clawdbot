@@ -60,6 +60,10 @@ const mocks = vi.hoisted(() => {
             scopes: ["operator.read"],
             capability: "read_only",
           },
+          server: {
+            version: "2026.4.24",
+            connId: "local",
+          },
           health: { ok: true },
           status: {
             linkChannel: {
@@ -102,6 +106,10 @@ const mocks = vi.hoisted(() => {
           role: "operator",
           scopes: ["operator.admin"],
           capability: "admin_capable",
+        },
+        server: {
+          version: "2026.4.24",
+          connId: "remote",
         },
         health: { ok: true },
         status: {

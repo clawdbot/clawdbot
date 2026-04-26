@@ -216,10 +216,16 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-core-top-level",
       },
       {
-        checkName: "checks-node-auto-reply-reply-agent-dispatch",
+        checkName: "checks-node-auto-reply-reply-agent-runner",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
-        shardName: "auto-reply-reply-agent-dispatch",
+        shardName: "auto-reply-reply-agent-runner",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-dispatch",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-dispatch",
       },
       {
         checkName: "checks-node-auto-reply-reply-commands-state-routing",

@@ -1,6 +1,5 @@
-import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 
 export type CrestodianRescueDecision =
   | {
@@ -33,9 +32,27 @@ function resolvePendingTtlMinutes(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 15;
 }
 
+function resolveAgentEntry(cfg: OpenClawConfig, agentId?: string) {
+  if (!agentId) {
+    return undefined;
+  }
+  const id = normalizeAgentId(agentId);
+  return cfg.agents?.list?.find(
+    (entry) => entry !== null && typeof entry === "object" && normalizeAgentId(entry.id) === id,
+  );
+}
+
 function resolveScopedExecConfig(cfg: OpenClawConfig, agentId?: string) {
-  const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-  return agentConfig?.tools?.exec;
+  return resolveAgentEntry(cfg, agentId)?.tools?.exec;
+}
+
+function resolveScopedSandboxMode(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): "off" | "non-main" | "all" {
+  return (
+    resolveAgentEntry(cfg, agentId)?.sandbox?.mode ?? cfg.agents?.defaults?.sandbox?.mode ?? "off"
+  );
 }
 
 function isYoloHostPosture(cfg: OpenClawConfig, agentId?: string): boolean {
@@ -53,8 +70,7 @@ export function resolveCrestodianRescuePolicy(
   const configuredEnabled = rescue?.enabled ?? "auto";
   const ownerDmOnly = rescue?.ownerDmOnly ?? true;
   const pendingTtlMinutes = resolvePendingTtlMinutes(rescue?.pendingTtlMinutes);
-  const sandbox = resolveSandboxConfigForAgent(input.cfg, input.agentId);
-  const sandboxActive = sandbox.mode !== "off";
+  const sandboxActive = resolveScopedSandboxMode(input.cfg, input.agentId) !== "off";
   const yolo = !sandboxActive && isYoloHostPosture(input.cfg, input.agentId);
   const enabled = configuredEnabled === "auto" ? yolo : configuredEnabled;
 

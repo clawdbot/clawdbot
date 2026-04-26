@@ -5,4 +5,7 @@
 /**
  * Platform protection class for a controller-local device key.
  */
-export type DeviceKeyProtectionClass = "hardware_secure_enclave" | "hardware_tpm" | "os_protected_nonextractable";
+export type DeviceKeyProtectionClass =
+  | "hardware_secure_enclave"
+  | "hardware_tpm"
+  | "os_protected_nonextractable";

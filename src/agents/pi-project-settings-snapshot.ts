@@ -7,10 +7,11 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import {
-  normalizePluginsConfig,
+  normalizePluginsConfigWithResolver,
   resolveEffectivePluginActivationState,
-} from "../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+} from "../plugins/config-policy.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { isRecord } from "../utils.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 
@@ -68,6 +69,33 @@ function loadBundleSettingsFile(params: {
   }
 }
 
+function buildRegistryPluginIdAliases(
+  registry: PluginManifestRegistry,
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    registry.plugins
+      .flatMap((record) => [
+        ...(record.providers ?? [])
+          .filter((providerId) => providerId !== record.id)
+          .map((providerId) => [providerId, record.id] as const),
+        ...(record.legacyPluginIds ?? []).map(
+          (legacyPluginId) => [legacyPluginId, record.id] as const,
+        ),
+      ])
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function createRegistryPluginIdNormalizer(
+  registry: PluginManifestRegistry,
+): (id: string) => string {
+  const aliases = buildRegistryPluginIdAliases(registry);
+  return (id: string) => {
+    const trimmed = id.trim();
+    return aliases[trimmed] ?? trimmed;
+  };
+}
+
 export function loadEnabledBundlePiSettingsSnapshot(params: {
   cwd: string;
   cfg?: OpenClawConfig;
@@ -76,15 +104,19 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
   if (!workspaceDir) {
     return {};
   }
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir,
     config: params.cfg,
+    includeDisabled: true,
   });
   if (registry.plugins.length === 0) {
     return {};
   }
 
-  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
+  const normalizedPlugins = normalizePluginsConfigWithResolver(
+    params.cfg?.plugins,
+    createRegistryPluginIdNormalizer(registry),
+  );
   let snapshot: PiSettingsSnapshot = {};
 
   for (const record of registry.plugins) {

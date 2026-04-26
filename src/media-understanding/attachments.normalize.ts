@@ -28,6 +28,11 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
   const urlsFromArray = Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls : undefined;
   const typesFromArray = Array.isArray(ctx.MediaTypes) ? ctx.MediaTypes : undefined;
+  const transcribedIndexes = new Set(
+    Array.isArray(ctx.MediaTranscribedIndexes)
+      ? ctx.MediaTranscribedIndexes.filter((index) => Number.isInteger(index) && index >= 0)
+      : [],
+  );
   const resolveMime = (count: number, index: number) => {
     const typeHint = normalizeOptionalString(typesFromArray?.[index]);
     if (typeHint) {
@@ -45,6 +50,7 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
         url: urls?.[index] ?? ctx.MediaUrl,
         mime: resolveMime(count, index),
         index,
+        alreadyTranscribed: transcribedIndexes.has(index),
       }))
       .filter((entry) => Boolean(entry.path ?? normalizeOptionalString(entry.url)));
   }
@@ -57,6 +63,7 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
         url: normalizeOptionalString(value),
         mime: resolveMime(count, index),
         index,
+        alreadyTranscribed: transcribedIndexes.has(index),
       }))
       .filter((entry) => Boolean(entry.url));
   }
@@ -72,6 +79,7 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
       url: url || undefined,
       mime: ctx.MediaType,
       index: 0,
+      alreadyTranscribed: transcribedIndexes.has(0),
     },
   ];
 }

@@ -18,7 +18,7 @@ function looksLikeConnectionBoundId(id: string): boolean {
 }
 
 function deriveReplacementId(type: string | undefined, originalId: string): string {
-  const prefix = type === "reasoning" ? "rs" : type === "function_call" ? "fc" : "msg";
+  const prefix = type === "function_call" ? "fc" : "msg";
   const hex = createHash("sha256").update(originalId).digest("hex").slice(0, 16);
   return `${prefix}_${hex}`;
 }
@@ -35,7 +35,11 @@ export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolea
     if (typeof id !== "string" || id.length === 0) {
       continue;
     }
-    if (item.type === "reasoning" && typeof item.encrypted_content === "string") {
+    // Reasoning items always reference server-side encrypted state bound to the
+    // original item ID. Rewriting the ID — even when encrypted_content is absent
+    // or null — breaks Copilot's server-side lookup and causes a 400 validation
+    // failure regardless of whether the client included encrypted_content.
+    if (item.type === "reasoning") {
       continue;
     }
     if (looksLikeConnectionBoundId(id)) {

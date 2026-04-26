@@ -13,6 +13,7 @@ export const THINKING_TAG_CASES = [
   { tag: "thinking", open: "<thinking>", close: "</thinking>" },
   { tag: "thought", open: "<thought>", close: "</thought>" },
   { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
+  { tag: "antml:thinking", open: "<antml:thinking>", close: "</antml:thinking>" },
 ] as const;
 
 export function createStubSessionHarness(): {

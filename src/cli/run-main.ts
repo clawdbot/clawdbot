@@ -33,6 +33,7 @@ import {
 import { shouldEnsureCliPathForCommandPath } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { createCliProgress } from "./progress.js";
 import { tryRouteCli } from "./route.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
@@ -68,7 +69,22 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 }
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
-  return resolveCliArgvInvocation(argv).isRootHelpInvocation;
+  return (
+    process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH !== "1" &&
+    resolveCliArgvInvocation(argv).isRootHelpInvocation
+  );
+}
+
+export function shouldUseBrowserHelpFastPath(argv: string[]): boolean {
+  if (process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath.length === 1 &&
+    invocation.commandPath[0] === "browser" &&
+    invocation.hasHelpOrVersion
+  );
 }
 
 export function shouldStartCrestodianForBareRoot(argv: string[]): boolean {
@@ -217,6 +233,13 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
+    if (shouldUseBrowserHelpFastPath(normalizedArgv)) {
+      const { outputPrecomputedBrowserHelpText } = await import("./root-help-metadata.js");
+      if (outputPrecomputedBrowserHelpText()) {
+        return;
+      }
+    }
+
     if (shouldStartCrestodianForBareRoot(normalizedArgv)) {
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.error(
@@ -226,7 +249,25 @@ export async function runCli(argv: string[] = process.argv) {
         return;
       }
       const { runCrestodian } = await import("../crestodian/crestodian.js");
-      await runCrestodian();
+      const progress = createCliProgress({
+        label: "Starting Crestodian…",
+        indeterminate: true,
+        delayMs: 0,
+        fallback: "none",
+      });
+      let progressStopped = false;
+      const stopProgress = () => {
+        if (progressStopped) {
+          return;
+        }
+        progressStopped = true;
+        progress.done();
+      };
+      try {
+        await runCrestodian({ onReady: stopProgress });
+      } finally {
+        stopProgress();
+      }
       return;
     }
 
@@ -246,95 +287,116 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    // Capture all console output into structured logs while keeping stdout/stderr behavior.
-    enableConsoleCapture();
-
-    const [
-      { buildProgram },
-      { runFatalErrorHooks },
-      { installUnhandledRejectionHandler },
-      { restoreTerminalState },
-    ] = await Promise.all([
-      import("./program.js"),
-      import("../infra/fatal-error-hooks.js"),
-      import("../infra/unhandled-rejections.js"),
-      import("../terminal/restore.js"),
-    ]);
-    const program = buildProgram();
-
-    // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
-    // These log the error and exit gracefully instead of crashing without trace.
-    installUnhandledRejectionHandler();
-
-    process.on("uncaughtException", (error) => {
-      console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
-      for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
-        console.error("[openclaw]", message);
-      }
-      restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-      process.exit(1);
+    const startupProgress = createCliProgress({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+      fallback: "none",
     });
-
-    const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
-    const invocation = resolveCliArgvInvocation(parseArgv);
-    // Register the primary command (builtin or subcli) so help and command parsing
-    // are correct even with lazy command registration.
-    const { primary } = invocation;
-    if (primary && shouldRegisterPrimaryCommandOnly(parseArgv)) {
-      const { getProgramContext } = await import("./program/program-context.js");
-      const ctx = getProgramContext(program);
-      if (ctx) {
-        const { registerCoreCliByName } = await import("./program/command-registry.js");
-        await registerCoreCliByName(program, ctx, primary, parseArgv);
+    let startupProgressStopped = false;
+    const stopStartupProgress = () => {
+      if (startupProgressStopped) {
+        return;
       }
-      const { registerSubCliByName } = await import("./program/register.subclis.js");
-      await registerSubCliByName(program, primary);
-    }
+      startupProgressStopped = true;
+      startupProgress.done();
+    };
 
-    const hasBuiltinPrimary =
-      primary !== null &&
-      program.commands.some(
-        (command) => command.name() === primary || command.aliases().includes(primary),
-      );
-    const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
-      argv: parseArgv,
-      primary,
-      hasBuiltinPrimary,
-    });
-    if (!shouldSkipPluginRegistration) {
-      // Register plugin CLI commands before parsing
-      const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
-      const config = await registerPluginCliCommandsFromValidatedConfig(
-        program,
-        undefined,
-        undefined,
-        {
-          mode: "lazy",
-          primary,
-        },
-      );
-      if (config) {
-        if (
-          primary &&
-          !program.commands.some(
-            (command) => command.name() === primary || command.aliases().includes(primary),
-          )
-        ) {
-          const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
-          if (missingPluginCommandMessage) {
-            throw new Error(missingPluginCommandMessage);
+    try {
+      // Capture all console output into structured logs while keeping stdout/stderr behavior.
+      enableConsoleCapture();
+
+      const [
+        { buildProgram },
+        { runFatalErrorHooks },
+        { installUnhandledRejectionHandler },
+        { restoreTerminalState },
+      ] = await Promise.all([
+        import("./program.js"),
+        import("../infra/fatal-error-hooks.js"),
+        import("../infra/unhandled-rejections.js"),
+        import("../terminal/restore.js"),
+      ]);
+      const program = buildProgram();
+
+      // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
+      // These log the error and exit gracefully instead of crashing without trace.
+      installUnhandledRejectionHandler();
+
+      process.on("uncaughtException", (error) => {
+        console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+        for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
+          console.error("[openclaw]", message);
+        }
+        restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+        process.exit(1);
+      });
+
+      const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
+      const invocation = resolveCliArgvInvocation(parseArgv);
+      // Register the primary command (builtin or subcli) so help and command parsing
+      // are correct even with lazy command registration.
+      const { primary } = invocation;
+      if (primary && shouldRegisterPrimaryCommandOnly(parseArgv)) {
+        const { getProgramContext } = await import("./program/program-context.js");
+        const ctx = getProgramContext(program);
+        if (ctx) {
+          const { registerCoreCliByName } = await import("./program/command-registry.js");
+          await registerCoreCliByName(program, ctx, primary, parseArgv);
+        }
+        const { registerSubCliByName } = await import("./program/register.subclis.js");
+        await registerSubCliByName(program, primary);
+      }
+
+      const hasBuiltinPrimary =
+        primary !== null &&
+        program.commands.some(
+          (command) => command.name() === primary || command.aliases().includes(primary),
+        );
+      const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
+        argv: parseArgv,
+        primary,
+        hasBuiltinPrimary,
+      });
+      if (!shouldSkipPluginRegistration) {
+        // Register plugin CLI commands before parsing
+        const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
+        const config = await registerPluginCliCommandsFromValidatedConfig(
+          program,
+          undefined,
+          undefined,
+          {
+            mode: "lazy",
+            primary,
+          },
+        );
+        if (config) {
+          if (
+            primary &&
+            !program.commands.some(
+              (command) => command.name() === primary || command.aliases().includes(primary),
+            )
+          ) {
+            const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
+            if (missingPluginCommandMessage) {
+              throw new Error(missingPluginCommandMessage);
+            }
           }
         }
       }
-    }
 
-    try {
-      await program.parseAsync(parseArgv);
-    } catch (error) {
-      if (!(error instanceof CommanderError)) {
-        throw error;
+      stopStartupProgress();
+
+      try {
+        await program.parseAsync(parseArgv);
+      } catch (error) {
+        if (!(error instanceof CommanderError)) {
+          throw error;
+        }
+        process.exitCode = error.exitCode;
       }
-      process.exitCode = error.exitCode;
+    } finally {
+      stopStartupProgress();
     }
   } finally {
     await closeCliMemoryManagers();

@@ -301,6 +301,12 @@ function canPromptForMessageTool(params: {
   return !params.toolsAllow?.length || params.toolsAllow.includes("message");
 }
 
+function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
+  return Boolean(
+    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId || plan.accountId,
+  );
+}
+
 async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
@@ -321,6 +327,24 @@ async function resolveCronDeliveryContext(params: {
       deliveryPlan,
       deliveryRequested: deliveryPlan.requested,
       resolvedDelivery,
+      toolPolicy: resolveCronToolPolicy({
+        deliveryMode: deliveryPlan.mode,
+      }),
+    };
+  }
+  if (deliveryPlan.mode === "none" && !hasExplicitCronDeliveryTarget(deliveryPlan)) {
+    return {
+      deliveryPlan,
+      deliveryRequested: false,
+      resolvedDelivery: {
+        ok: false as const,
+        channel: undefined,
+        to: undefined,
+        accountId: undefined,
+        threadId: undefined,
+        mode: "implicit" as const,
+        error: new Error("delivery is disabled"),
+      },
       toolPolicy: resolveCronToolPolicy({
         deliveryMode: deliveryPlan.mode,
       }),

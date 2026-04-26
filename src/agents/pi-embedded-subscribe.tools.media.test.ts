@@ -51,6 +51,33 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
+  it("extracts audioAsVoice from text MEDIA directives", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "Generated audio\n[[audio_as_voice]]\nMEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps audioAsVoice when the tag and MEDIA path are in separate text blocks", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "[[audio_as_voice]]" },
+          { type: "text", text: "MEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
   it("extracts structured media trust markers", () => {
     expect(
       extractToolResultMediaArtifact({

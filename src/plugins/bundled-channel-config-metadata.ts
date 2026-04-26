@@ -176,6 +176,9 @@ export function collectBundledChannelConfigs(params: {
         : preferOver.length > 0
           ? { preferOver }
           : {}),
+      ...((existing?.commands ?? channelMeta?.commands)
+        ? { commands: existing?.commands ?? channelMeta?.commands }
+        : {}),
     };
   }
 

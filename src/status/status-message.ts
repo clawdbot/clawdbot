@@ -451,6 +451,7 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
 const formatVoiceModeLine = (
   config?: OpenClawConfig,
   sessionEntry?: SessionEntry,
+  agentId?: string,
 ): string | null => {
   if (!config) {
     return null;
@@ -458,11 +459,33 @@ const formatVoiceModeLine = (
   const snapshot = resolveStatusTtsSnapshot({
     cfg: config,
     sessionAuto: sessionEntry?.ttsAuto,
+    agentId,
   });
   if (!snapshot) {
     return null;
   }
-  return `🔊 Voice: ${snapshot.autoMode} · provider=${snapshot.provider} · limit=${snapshot.maxLength} · summary=${snapshot.summarize ? "on" : "off"}`;
+  const parts = [`🔊 Voice: ${snapshot.autoMode}`, `provider=${snapshot.provider}`];
+  if (snapshot.persona) {
+    parts.push(`persona=${snapshot.persona}`);
+  }
+  if (snapshot.displayName) {
+    parts.push(`name=${snapshot.displayName}`);
+  }
+  if (snapshot.model) {
+    parts.push(`model=${snapshot.model}`);
+  }
+  if (snapshot.voice) {
+    parts.push(`voice=${snapshot.voice}`);
+  }
+  if (snapshot.baseUrl) {
+    parts.push(
+      snapshot.customBaseUrl
+        ? `endpoint=custom(${snapshot.baseUrl})`
+        : `endpoint=${snapshot.baseUrl}`,
+    );
+  }
+  parts.push(`limit=${snapshot.maxLength}`, `summary=${snapshot.summarize ? "on" : "off"}`);
+  return parts.join(" · ");
 };
 
 export function buildStatusMessage(args: StatusArgs): string {
@@ -890,7 +913,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
-  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
+  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
   return [
     versionLine,

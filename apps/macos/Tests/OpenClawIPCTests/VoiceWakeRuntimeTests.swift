@@ -35,6 +35,80 @@ struct VoiceWakeRuntimeTests {
         #expect(VoiceWakeRuntime._testHasContentAfterTrigger(text, triggers: triggers))
     }
 
+    @Test func `trigger only allows filler before trigger`() {
+        let triggers = ["openclaw"]
+        let text = "uh openclaw"
+        #expect(VoiceWakeRuntime._testIsTriggerOnly(text, triggers: triggers))
+    }
+
+    @Test func `trigger only rejects trailing wake word mentions in ordinary speech`() {
+        let triggers = ["openclaw"]
+        let text = "tell me about openclaw"
+        #expect(!VoiceWakeRuntime._testIsTriggerOnly(text, triggers: triggers))
+    }
+
+    @Test func `matched trigger finds trigger not at transcript start`() {
+        let triggers = ["openclaw"]
+        let text = "uh openclaw"
+        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == "openclaw")
+    }
+
+    @Test func `matched trigger rejects larger word suffix matches`() {
+        let triggers = ["computer"]
+        let text = "uh computers"
+        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == nil)
+    }
+
+    @Test func `matched trigger prefers most specific overlapping phrase`() {
+        let triggers = ["openclaw", "hey openclaw"]
+        let text = "hey openclaw"
+        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == "hey openclaw")
+    }
+
+    @Test func `matched trigger handles width insensitive forms without whitespace tokens`() {
+        let triggers = ["openclaw"]
+        let text = "ＯｐｅｎＣｌａｗ"
+        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == "openclaw")
+    }
+
+    @Test func `matched trigger handles chinese forms without whitespace tokens`() {
+        let triggers = ["小爪"]
+        let text = "嘿小爪"
+        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == "小爪")
+    }
+
+    @Test func `text only fallback populates matched trigger`() {
+        let transcript = "hey openclaw do thing"
+        let config = WakeWordGateConfig(triggers: ["openclaw"], minCommandLength: 1)
+        let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
+            transcript: transcript,
+            triggers: ["openclaw"],
+            config: config,
+            trimWake: VoiceWakeRuntime._testTrimmedAfterTrigger)
+        #expect(match?.trigger == "openclaw")
+    }
+
+    @Test func `text only fallback keeps the first trigger phrase when later words match another trigger`() {
+        let transcript = "openclaw tell me about computer vision"
+        let config = WakeWordGateConfig(triggers: ["openclaw", "computer"], minCommandLength: 1)
+        let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
+            transcript: transcript,
+            triggers: ["openclaw", "computer"],
+            config: config,
+            trimWake: VoiceWakeRuntime._testTrimmedAfterTrigger)
+        #expect(match?.trigger == "openclaw")
+    }
+
+    @Test func `text only fallback rejects filler prefixed larger word suffix matches`() {
+        let transcript = "uh computers"
+        let config = WakeWordGateConfig(triggers: ["computer"], minCommandLength: 1)
+        let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
+            transcript: transcript,
+            triggers: ["computer"],
+            config: config,
+            trimWake: VoiceWakeRuntime._testTrimmedAfterTrigger)
+        #expect(match == nil)
+    }
     @Test func `trims after chinese trigger keeps post speech`() {
         let triggers = ["小爪", "openclaw"]
         let text = "嘿 小爪 帮我打开设置"

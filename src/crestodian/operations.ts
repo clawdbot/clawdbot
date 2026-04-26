@@ -1,18 +1,15 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
-import { doctorCommand } from "../commands/doctor.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
-import { healthCommand } from "../commands/health.js";
-import { applyDefaultModelPrimaryUpdate } from "../commands/models/shared.js";
-import { statusCommand } from "../commands/status.command.js";
-import { mutateConfigFile, readConfigFileSnapshot } from "../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { appendCrestodianAuditEntry, resolveCrestodianAuditPath } from "./audit.js";
-import { formatCrestodianOverview, loadCrestodianOverview } from "./overview.js";
+import type { CrestodianOverview } from "./overview.js";
+
+type ConfigModule = typeof import("../config/config.js");
+type ConfigFileSnapshot = Awaited<ReturnType<ConfigModule["readConfigFileSnapshot"]>>;
 
 export type CrestodianOperation =
   | { kind: "none"; message: string }
@@ -294,9 +291,12 @@ function formatSetupPlanDescription(
 }
 
 function chooseSetupModel(
-  overview: Awaited<ReturnType<typeof loadCrestodianOverview>>,
+  overview: CrestodianOverview,
   requestedModel: string | undefined,
-): { model?: string; source: string } {
+): {
+  model?: string;
+  source: string;
+} {
   if (requestedModel?.trim()) {
     return { model: requestedModel.trim(), source: "requested" };
   }
@@ -323,9 +323,7 @@ function logQueued(runtime: RuntimeEnv, operation: string): void {
   runtime.log(`[crestodian] running: ${operation}`);
 }
 
-function formatGatewayStatusLine(
-  overview: Awaited<ReturnType<typeof loadCrestodianOverview>>,
-): string {
+function formatGatewayStatusLine(overview: CrestodianOverview): string {
   return [
     `Gateway: ${overview.gateway.reachable ? "reachable" : "not reachable"}`,
     `URL: ${overview.gateway.url}`,
@@ -349,9 +347,20 @@ async function runGatewayLifecycle(operation: "start" | "stop" | "restart"): Pro
   await lifecycle.runDaemonRestart();
 }
 
-function formatConfigValidationLine(
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
-): string {
+async function readConfigFileSnapshotLazy(): Promise<ConfigFileSnapshot> {
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  return await readConfigFileSnapshot();
+}
+
+async function loadConfigFileMutationHelpers(): Promise<{
+  mutateConfigFile: ConfigModule["mutateConfigFile"];
+  readConfigFileSnapshot: ConfigModule["readConfigFileSnapshot"];
+}> {
+  const { mutateConfigFile, readConfigFileSnapshot } = await import("../config/config.js");
+  return { mutateConfigFile, readConfigFileSnapshot };
+}
+
+function formatConfigValidationLine(snapshot: ConfigFileSnapshot): string {
   if (!snapshot.exists) {
     return `Config missing: ${shortenHomePath(snapshot.path)}`;
   }
@@ -380,6 +389,7 @@ async function resolveTuiAgentId(params: {
   requestedAgentId: string | undefined;
   requestedWorkspace?: string;
 }): Promise<string | undefined> {
+  const { loadCrestodianOverview } = await import("./overview.js");
   const overview = await loadCrestodianOverview();
   const workspace = params.requestedWorkspace
     ? resolveUserPath(params.requestedWorkspace)
@@ -419,11 +429,13 @@ export async function executeCrestodianOperation(
     return { applied: false, exitsInteractive: operation.message.includes("Bye.") };
   }
   if (operation.kind === "overview") {
+    const { formatCrestodianOverview, loadCrestodianOverview } = await import("./overview.js");
     const overview = await loadCrestodianOverview();
     runtime.log(formatCrestodianOverview(overview));
     return { applied: false };
   }
   if (operation.kind === "agents") {
+    const { loadCrestodianOverview } = await import("./overview.js");
     const overview = await loadCrestodianOverview();
     runtime.log(
       [
@@ -444,6 +456,7 @@ export async function executeCrestodianOperation(
     return { applied: false };
   }
   if (operation.kind === "models") {
+    const { loadCrestodianOverview } = await import("./overview.js");
     const overview = await loadCrestodianOverview();
     runtime.log(
       [
@@ -462,11 +475,12 @@ export async function executeCrestodianOperation(
     return { applied: false };
   }
   if (operation.kind === "config-validate") {
-    const snapshot = await readConfigFileSnapshot();
+    const snapshot = await readConfigFileSnapshotLazy();
     runtime.log(formatConfigValidationLine(snapshot));
     return { applied: false };
   }
   if (operation.kind === "setup") {
+    const { loadCrestodianOverview } = await import("./overview.js");
     const overview = await loadCrestodianOverview();
     const setupModel = chooseSetupModel(overview, operation.model);
     if (!opts.approved) {
@@ -482,13 +496,17 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "crestodian.setup");
+    const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigFileMutationHelpers();
     const before = await readConfigFileSnapshot();
     const workspace = resolveUserPath(operation.workspace ?? process.cwd());
+    const applyDefaultModelPrimaryUpdate = setupModel.model
+      ? (await import("../commands/models/shared.js")).applyDefaultModelPrimaryUpdate
+      : undefined;
     const result = await mutateConfigFile({
       base: "source",
       mutate: (cfg) => {
         let next = cfg;
-        if (setupModel.model) {
+        if (setupModel.model && applyDefaultModelPrimaryUpdate) {
           next = applyDefaultModelPrimaryUpdate({
             cfg: next,
             modelRaw: setupModel.model,
@@ -543,6 +561,7 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "config.set");
+    const { readConfigFileSnapshot } = await import("../config/config.js");
     const before = await readConfigFileSnapshot();
     const runConfigSet =
       opts.deps?.runConfigSet ??
@@ -580,6 +599,7 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "config.setRef");
+    const { readConfigFileSnapshot } = await import("../config/config.js");
     const before = await readConfigFileSnapshot();
     const runConfigSet =
       opts.deps?.runConfigSet ??
@@ -622,6 +642,7 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "agents.create");
+    const { readConfigFileSnapshot } = await import("../config/config.js");
     const before = await readConfigFileSnapshot();
     const workspace = resolveUserPath(operation.workspace ?? process.cwd());
     const runAgentsAdd =
@@ -656,7 +677,7 @@ export async function executeCrestodianOperation(
   }
   if (operation.kind === "doctor") {
     logQueued(runtime, "doctor");
-    const runDoctor = opts.deps?.runDoctor ?? doctorCommand;
+    const runDoctor = opts.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
     await runDoctor(runtime, { nonInteractive: true });
     runtime.log("[crestodian] done: doctor");
     return { applied: false };
@@ -668,8 +689,9 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "doctor.fix");
+    const { readConfigFileSnapshot } = await import("../config/config.js");
     const before = await readConfigFileSnapshot();
-    const runDoctor = opts.deps?.runDoctor ?? doctorCommand;
+    const runDoctor = opts.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
     await runDoctor(runtime, { nonInteractive: true, repair: true, yes: true });
     const after = await readConfigFileSnapshot();
     await appendCrestodianAuditEntry({
@@ -685,17 +707,20 @@ export async function executeCrestodianOperation(
   }
   if (operation.kind === "status") {
     logQueued(runtime, "status.check");
+    const { statusCommand } = await import("../commands/status.command.js");
     await statusCommand({ timeoutMs: 10_000 }, runtime);
     runtime.log("[crestodian] done: status.check");
     return { applied: false };
   }
   if (operation.kind === "health") {
     logQueued(runtime, "health.check");
+    const { healthCommand } = await import("../commands/health.js");
     await healthCommand({ timeoutMs: 10_000 }, runtime);
     runtime.log("[crestodian] done: health.check");
     return { applied: false };
   }
   if (operation.kind === "gateway-status") {
+    const { loadCrestodianOverview } = await import("./overview.js");
     const overview = await loadCrestodianOverview();
     runtime.log(formatGatewayStatusLine(overview));
     return { applied: false };
@@ -781,7 +806,9 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "config.setDefaultModel");
+    const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigFileMutationHelpers();
     const before = await readConfigFileSnapshot();
+    const { applyDefaultModelPrimaryUpdate } = await import("../commands/models/shared.js");
     const result = await mutateConfigFile({
       base: "source",
       mutate: (cfg) => {
@@ -794,6 +821,8 @@ export async function executeCrestodianOperation(
       },
     });
     const after = await readConfigFileSnapshot();
+    const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
+    const effectiveModel = resolveAgentModelPrimaryValue(result.nextConfig.agents?.defaults?.model);
     await appendCrestodianAuditEntry({
       operation: "config.setDefaultModel",
       summary: `Set default model to ${operation.model}`,
@@ -803,13 +832,11 @@ export async function executeCrestodianOperation(
       details: {
         ...opts.auditDetails,
         requestedModel: operation.model,
-        effectiveModel: resolveAgentModelPrimaryValue(result.nextConfig.agents?.defaults?.model),
+        effectiveModel,
       },
     });
     runtime.log(`Updated ${result.path}`);
-    runtime.log(
-      `Default model: ${resolveAgentModelPrimaryValue(result.nextConfig.agents?.defaults?.model) ?? operation.model}`,
-    );
+    runtime.log(`Default model: ${effectiveModel ?? operation.model}`);
     runtime.log("[crestodian] done: config.setDefaultModel");
     return { applied: true };
   }

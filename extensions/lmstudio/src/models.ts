@@ -269,7 +269,7 @@ export type LmstudioModelBase = {
   trainedForToolUse: boolean;
   loaded: boolean;
   reasoning: boolean;
-  input: ModelDefinitionConfig["input"];
+  input: Array<"text" | "image">;
   cost: ModelDefinitionConfig["cost"];
   contextWindow: number;
   contextTokens: number;

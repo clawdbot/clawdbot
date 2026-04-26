@@ -285,8 +285,10 @@ export function resolveCommandArgMenu(params: {
   command: ChatCommandDefinition;
   args?: CommandArgs;
   cfg?: OpenClawConfig;
+  provider?: string;
+  model?: string;
 }): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
-  const { command, args, cfg } = params;
+  const { command, args, cfg, provider, model } = params;
   if (!command.args || !command.argsMenu) {
     return null;
   }
@@ -296,7 +298,9 @@ export function resolveCommandArgMenu(params: {
   const argSpec = command.argsMenu;
   const argName =
     argSpec === "auto"
-      ? command.args.find((arg) => resolveCommandArgChoices({ command, arg, cfg }).length > 0)?.name
+      ? command.args.find(
+          (arg) => resolveCommandArgChoices({ command, arg, cfg, provider, model }).length > 0,
+        )?.name
       : argSpec.arg;
   if (!argName) {
     return null;
@@ -311,12 +315,34 @@ export function resolveCommandArgMenu(params: {
   if (!arg) {
     return null;
   }
-  const choices = resolveCommandArgChoices({ command, arg, cfg });
+  const choices = resolveCommandArgChoices({ command, arg, cfg, provider, model });
   if (choices.length === 0) {
     return null;
   }
   const title = argSpec !== "auto" ? argSpec.title : undefined;
   return { arg, choices, title };
+}
+
+export function formatCommandArgMenuTitle(params: {
+  command: ChatCommandDefinition;
+  menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
+}): string {
+  const { command, menu } = params;
+  if (menu.title) {
+    return menu.title;
+  }
+  const commandLabel = command.nativeName ?? command.key;
+  if (typeof menu.arg.choices === "function") {
+    const options = menu.choices
+      .map((choice) => choice.label.trim())
+      .filter(Boolean)
+      .join(", ");
+    if (options.length > 0 && options.length <= 160) {
+      return `Choose ${menu.arg.name} for /${commandLabel}.\nOptions: ${options}.`;
+    }
+    return `Choose ${menu.arg.name} for /${commandLabel}.`;
+  }
+  return `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
 }
 
 export function isCommandMessage(raw: string): boolean {

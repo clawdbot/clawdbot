@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyProviderNativeStreamingUsageCompat,
+  readConfiguredProviderCatalogEntries,
   supportsNativeStreamingUsageCompat,
 } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig } from "./provider-model-shared.js";
@@ -52,5 +53,45 @@ describe("provider-catalog-shared native streaming usage compat", () => {
 
     expect(provider.models?.[0]?.compat?.supportsUsageInStreaming).toBe(true);
     expect(provider.models?.[1]?.compat?.supportsUsageInStreaming).toBe(false);
+  });
+});
+
+describe("provider-catalog-shared configured catalog entries", () => {
+  it("preserves configured audio and video input modalities", () => {
+    expect(
+      readConfiguredProviderCatalogEntries({
+        providerId: "kilocode",
+        config: {
+          models: {
+            providers: {
+              kilocode: {
+                baseUrl: "https://api.kilo.ai/api/gateway/",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "google/gemini-3-pro-preview",
+                    name: "Gemini 3 Pro Preview",
+                    input: ["text", "image", "video", "audio"],
+                    reasoning: true,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1048576,
+                    maxTokens: 65536,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        provider: "kilocode",
+        id: "google/gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        input: ["text", "image", "video", "audio"],
+        reasoning: true,
+        contextWindow: 1048576,
+      },
+    ]);
   });
 });

@@ -9,6 +9,9 @@ describe("manifest model catalog planner", () => {
           {
             id: "moonshot",
             modelCatalog: {
+              discovery: {
+                moonshot: "static",
+              },
               providers: {
                 Moonshot: {
                   api: "openai-responses",
@@ -32,6 +35,7 @@ describe("manifest model catalog planner", () => {
       {
         pluginId: "moonshot",
         provider: "moonshot",
+        discovery: "static",
         rows: [
           {
             provider: "moonshot",

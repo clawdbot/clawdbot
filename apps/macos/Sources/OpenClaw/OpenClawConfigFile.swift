@@ -192,20 +192,17 @@ enum OpenClawConfigFile {
     }
 
     static func remoteGatewayPort(matchingHost sshHost: String) -> Int? {
-        let trimmedSshHost = sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedSshHost.isEmpty,
+        guard let normalizedSshHost = canonicalHostForComparison(sshHost),
               let url = self.remoteGatewayUrl(),
               let port = url.port,
               port > 0,
-              let urlHost = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !urlHost.isEmpty
+              let urlHost = url.host,
+              let normalizedUrlHost = canonicalHostForComparison(urlHost)
         else {
             return nil
         }
 
-        let sshKey = Self.hostKey(trimmedSshHost)
-        let urlKey = Self.hostKey(urlHost)
-        guard !sshKey.isEmpty, !urlKey.isEmpty, sshKey == urlKey else { return nil }
+        guard normalizedSshHost == normalizedUrlHost else { return nil }
         return port
     }
 
@@ -219,6 +216,16 @@ enum OpenClawConfigFile {
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let scheme = URL(string: existingUrl)?.scheme ?? "ws"
             remote["url"] = "\(scheme)://\(trimmedHost):\(port)"
+            gateway["remote"] = remote
+        }
+    }
+
+    static func setRemoteGatewayUrlString(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        self.updateGatewayDict { gateway in
+            var remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote["url"] = trimmed
             gateway["remote"] = remote
         }
     }
@@ -249,15 +256,17 @@ enum OpenClawConfigFile {
         return url
     }
 
-    static func hostKey(_ host: String) -> String {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmed.isEmpty else { return "" }
-        if trimmed.contains(":") { return trimmed }
-        let digits = CharacterSet(charactersIn: "0123456789.")
-        if trimmed.rangeOfCharacter(from: digits.inverted) == nil {
-            return trimmed
+    static func canonicalHostForComparison(_ raw: String?) -> String? {
+        guard var host = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !host.isEmpty
+        else {
+            return nil
         }
-        return trimmed.split(separator: ".").first.map(String.init) ?? trimmed
+        host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        while host.hasSuffix(".") {
+            host.removeLast()
+        }
+        return host.isEmpty ? nil : host
     }
 
     private static func parseConfigData(_ data: Data) -> [String: Any]? {

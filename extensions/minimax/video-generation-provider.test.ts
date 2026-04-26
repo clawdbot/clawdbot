@@ -6,14 +6,23 @@ import {
   loadMinimaxVideoGenerationProviderModule,
 } from "./provider-http.test-helpers.js";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getMinimaxProviderHttpMocks();
+const {
+  resolveApiKeyForProviderMock,
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  resolveProviderHttpRequestConfigMock,
+} = getMinimaxProviderHttpMocks();
 
 let buildMinimaxVideoGenerationProvider: Awaited<
   ReturnType<typeof loadMinimaxVideoGenerationProviderModule>
 >["buildMinimaxVideoGenerationProvider"];
+let buildMinimaxPortalVideoGenerationProvider: Awaited<
+  ReturnType<typeof loadMinimaxVideoGenerationProviderModule>
+>["buildMinimaxPortalVideoGenerationProvider"];
 
 beforeAll(async () => {
-  ({ buildMinimaxVideoGenerationProvider } = await loadMinimaxVideoGenerationProviderModule());
+  ({ buildMinimaxVideoGenerationProvider, buildMinimaxPortalVideoGenerationProvider } =
+    await loadMinimaxVideoGenerationProviderModule());
 });
 
 installMinimaxProviderHttpMockCleanup();
@@ -141,6 +150,80 @@ describe("minimax video generation provider", () => {
         fileId: "file-9",
         videoUrl: undefined,
       }),
+    );
+  });
+
+  it("routes portal video generation through minimax-portal auth and HTTP config", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          task_id: "task-portal",
+          base_resp: { status_code: 0 },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          task_id: "task-portal",
+          status: "Success",
+          video_url: "https://example.com/portal.mp4",
+          base_resp: { status_code: 0 },
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildMinimaxPortalVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "minimax-portal",
+      model: "MiniMax-Hailuo-2.3",
+      prompt: "A neon city street at night",
+      cfg: {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://wrong.example/anthropic",
+              models: [],
+            },
+            "minimax-portal": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax-portal",
+      }),
+    );
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "https://api.minimaxi.com",
+        provider: "minimax-portal",
+        capability: "video",
+        transport: "http",
+      }),
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.minimaxi.com/v1/video_generation",
+      }),
+    );
+    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
+      1,
+      "https://api.minimaxi.com/v1/query/video_generation?task_id=task-portal",
+      expect.objectContaining({
+        method: "GET",
+      }),
+      expect.any(Number),
+      expect.any(Function),
     );
   });
 });

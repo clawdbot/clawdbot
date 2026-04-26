@@ -15,6 +15,7 @@ import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
+import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
@@ -276,6 +277,14 @@ export function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey ?? params.sessionId,
   });
+  const agentRuntimeOverride = params.sessionEntry?.agentRuntimeOverride?.trim();
+  const cliExecutionProvider =
+    resolveCliRuntimeExecutionProvider({
+      provider: params.providerOverride,
+      cfg: params.cfg,
+      agentId: params.sessionAgentId,
+      runtimeOverride: agentRuntimeOverride,
+    }) ?? params.providerOverride;
   const agentHarnessPolicy = resolveAgentHarnessPolicy({
     provider: params.providerOverride,
     modelId: params.modelOverride,
@@ -291,14 +300,14 @@ export function runAgentAttempt(params: {
     workspaceDir: params.workspaceDir,
     harnessId: sessionPinnedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
-    allowHarnessAuthProfileForwarding: !isCliProvider(params.providerOverride, params.cfg),
+    allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
   });
   const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
-  if (isCliProvider(params.providerOverride, params.cfg)) {
-    const cliSessionBinding = getCliSessionBinding(params.sessionEntry, params.providerOverride);
+  if (isCliProvider(cliExecutionProvider, params.cfg)) {
+    const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const resolveReusableCliSessionBinding = async () => {
       if (
-        !isClaudeCliProvider(params.providerOverride) ||
+        !isClaudeCliProvider(cliExecutionProvider) ||
         !cliSessionBinding?.sessionId ||
         (await claudeCliSessionTranscriptHasContent({ sessionId: cliSessionBinding.sessionId }))
       ) {
@@ -306,13 +315,13 @@ export function runAgentAttempt(params: {
       }
 
       log.warn(
-        `cli session reset: provider=${sanitizeForLog(params.providerOverride)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
+        `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
       );
 
       if (params.sessionKey && params.sessionStore && params.storePath) {
         params.sessionEntry =
           (await clearCliSessionInStore({
-            provider: params.providerOverride,
+            provider: cliExecutionProvider,
             sessionKey: params.sessionKey,
             sessionStore: params.sessionStore,
             storePath: params.storePath,
@@ -334,7 +343,7 @@ export function runAgentAttempt(params: {
         workspaceDir: params.workspaceDir,
         config: params.cfg,
         prompt: effectivePrompt,
-        provider: params.providerOverride,
+        provider: cliExecutionProvider,
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,
         timeoutMs: params.timeoutMs,
@@ -370,12 +379,12 @@ export function runAgentAttempt(params: {
           params.storePath
         ) {
           log.warn(
-            `CLI session expired, clearing from session store: provider=${sanitizeForLog(params.providerOverride)} sessionKey=${params.sessionKey}`,
+            `CLI session expired, clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
           );
 
           params.sessionEntry =
             (await clearCliSessionInStore({
-              provider: params.providerOverride,
+              provider: cliExecutionProvider,
               sessionKey: params.sessionKey,
               sessionStore: params.sessionStore,
               storePath: params.storePath,
@@ -393,7 +402,7 @@ export function runAgentAttempt(params: {
                 const updatedEntry = { ...entry };
                 setCliSessionBinding(
                   updatedEntry,
-                  params.providerOverride,
+                  cliExecutionProvider,
                   result.meta.agentMeta.cliSessionBinding,
                 );
                 updatedEntry.updatedAt = Date.now();
@@ -460,6 +469,9 @@ export function runAgentAttempt(params: {
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+    modelRun: params.opts.modelRun,
+    promptMode: params.opts.promptMode,
+    disableTools: params.opts.modelRun === true,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
@@ -500,7 +512,10 @@ function resolveConfiguredAgentHarnessId(params: {
     agentId: params.sessionAgentId,
     sessionKey: params.sessionKey,
   });
-  return policy.runtime === "auto" ? undefined : policy.runtime;
+  if (policy.runtime === "auto" || isCliRuntimeAlias(policy.runtime)) {
+    return undefined;
+  }
+  return policy.runtime;
 }
 
 export function buildAcpResult(params: {

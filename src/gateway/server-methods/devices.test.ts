@@ -181,7 +181,10 @@ describe("deviceHandlers", () => {
   });
 
   it("disconnects active clients after revoking a device token", async () => {
-    revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { role: "operator", revokedAtMs: 456 },
+    });
     const opts = createOptions("device.token.revoke", {
       deviceId: " device-1 ",
       role: " operator ",
@@ -193,6 +196,7 @@ describe("deviceHandlers", () => {
     expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: " device-1 ",
       role: " operator ",
+      callerScopes: [],
     });
     expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1", {
       role: "operator",
@@ -205,7 +209,10 @@ describe("deviceHandlers", () => {
   });
 
   it("allows admin-scoped callers to revoke another device's token", async () => {
-    revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { role: "operator", revokedAtMs: 456 },
+    });
     const opts = createOptions(
       "device.token.revoke",
       { deviceId: "device-2", role: "operator" },
@@ -217,6 +224,7 @@ describe("deviceHandlers", () => {
     expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: "device-2",
       role: "operator",
+      callerScopes: ["operator.admin"],
     });
     expect(opts.respond).toHaveBeenCalledWith(
       true,
@@ -226,7 +234,10 @@ describe("deviceHandlers", () => {
   });
 
   it("treats normalized device ids as self-owned for token revocation", async () => {
-    revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { role: "operator", revokedAtMs: 456 },
+    });
     const opts = createOptions(
       "device.token.revoke",
       { deviceId: " device-1 ", role: "operator" },
@@ -238,6 +249,7 @@ describe("deviceHandlers", () => {
     expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: " device-1 ",
       role: "operator",
+      callerScopes: ["operator.pairing"],
     });
     expect(opts.respond).toHaveBeenCalledWith(
       true,
@@ -272,6 +284,7 @@ describe("deviceHandlers", () => {
       deviceId: " device-1 ",
       role: " operator ",
       scopes: ["operator.pairing"],
+      callerScopes: ["operator.pairing"],
     });
     expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1", {
       role: "operator",
@@ -308,6 +321,7 @@ describe("deviceHandlers", () => {
       deviceId: " device-1 ",
       role: "operator",
       scopes: ["operator.pairing"],
+      callerScopes: ["operator.pairing"],
     });
     expect(opts.respond).toHaveBeenCalledWith(
       true,
@@ -324,6 +338,7 @@ describe("deviceHandlers", () => {
 
   it("rejects rotating a token for a role that was never approved", async () => {
     mockPairedOperatorDevice();
+    rotateDeviceTokenMock.mockResolvedValue({ ok: false, reason: "unknown-device-or-role" });
     const opts = createOptions(
       "device.token.rotate",
       {
@@ -341,7 +356,12 @@ describe("deviceHandlers", () => {
 
     await deviceHandlers["device.token.rotate"](opts);
 
-    expect(rotateDeviceTokenMock).not.toHaveBeenCalled();
+    expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: "device-1",
+      role: "node",
+      scopes: undefined,
+      callerScopes: ["operator.pairing"],
+    });
     expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
     expect(opts.respond).toHaveBeenCalledWith(
       false,
@@ -351,7 +371,7 @@ describe("deviceHandlers", () => {
   });
 
   it("does not disconnect clients when token revocation fails", async () => {
-    revokeDeviceTokenMock.mockResolvedValue(null);
+    revokeDeviceTokenMock.mockResolvedValue({ ok: false, reason: "unknown-device-or-role" });
     const opts = createOptions("device.token.revoke", {
       deviceId: "device-1",
       role: "operator",
@@ -363,7 +383,7 @@ describe("deviceHandlers", () => {
     expect(opts.respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: "unknown deviceId/role" }),
+      expect.objectContaining({ message: "device token revocation denied" }),
     );
   });
 

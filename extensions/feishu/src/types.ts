@@ -40,6 +40,8 @@ export type FeishuIdType = "open_id" | "user_id" | "union_id" | "chat_id";
 export type FeishuMessageContext = {
   chatId: string;
   messageId: string;
+  replyTargetMessageId?: string;
+  suppressReplyTarget?: boolean;
   senderId: string;
   senderOpenId: string;
   senderName?: string;

@@ -27,6 +27,23 @@ function restoreEnv(name: keyof typeof previousEnv): void {
   }
 }
 
+function generatedCodexPaths(stateDir: string): {
+  configPath: string;
+  wrapperPath: string;
+} {
+  const baseDir = path.join(stateDir, "acpx");
+  const codexHome = path.join(baseDir, "codex-home");
+  return {
+    configPath: path.join(codexHome, "config.toml"),
+    wrapperPath: path.join(baseDir, "codex-acp-wrapper.mjs"),
+  };
+}
+
+function expectCodexWrapperCommand(command: string | undefined, wrapperPath: string): void {
+  expect(command).toContain(process.execPath);
+  expect(command).toContain(wrapperPath);
+}
+
 afterEach(async () => {
   restoreEnv("CODEX_HOME");
   restoreEnv("OPENCLAW_AGENT_DIR");
@@ -37,10 +54,11 @@ afterEach(async () => {
 });
 
 describe("prepareAcpxCodexAuthConfig", () => {
-  it("does not synthesize a Codex ACP auth home from canonical OpenClaw OAuth", async () => {
+  it("installs an isolated Codex ACP wrapper without synthesizing auth from canonical OpenClaw OAuth", async () => {
     const root = await makeTempDir();
     const agentDir = path.join(root, "agent");
     const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     delete process.env.PI_CODING_AGENT_DIR;
 
@@ -53,10 +71,10 @@ describe("prepareAcpxCodexAuthConfig", () => {
       stateDir,
     });
 
-    expect(resolved.agents.codex).toBeUndefined();
-    await expect(
-      fs.access(path.join(stateDir, "acpx", "codex-acp-wrapper.mjs")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
+    await expect(fs.access(generated.wrapperPath)).resolves.toBeUndefined();
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain('"--", "codex-acp"');
     await expect(
       fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -66,10 +84,16 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
     const agentDir = path.join(root, "agent");
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
     await fs.mkdir(sourceCodexHome, { recursive: true });
     await fs.writeFile(
       path.join(sourceCodexHome, "auth.json"),
       `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "test-api-key" }, null, 2)}\n`,
+    );
+    await fs.writeFile(
+      path.join(sourceCodexHome, "config.toml"),
+      'notify = ["SkyComputerUseClient", "turn-ended"]\n',
     );
     process.env.CODEX_HOME = sourceCodexHome;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
@@ -81,10 +105,16 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
     const resolved = await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      stateDir: path.join(root, "state"),
+      stateDir,
     });
 
-    expect(resolved.agents.codex).toBeUndefined();
+    expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
+    const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).not.toContain("notify");
+    expect(isolatedConfig).not.toContain("SkyComputerUseClient");
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain("CODEX_HOME: codexHome");
+    expect(wrapper).not.toContain(sourceCodexHome);
     await expect(
       fs.access(path.join(agentDir, "acp-auth", "codex-source", "auth.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -93,13 +123,22 @@ describe("prepareAcpxCodexAuthConfig", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("does not override an explicitly configured Codex agent command", async () => {
+  it("wraps an explicitly configured Codex agent command with isolated CODEX_HOME", async () => {
     const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceCodexHome, "config.toml"),
+      'notify = ["SkyComputerUseClient", "turn-ended"]\n',
+    );
+    process.env.CODEX_HOME = sourceCodexHome;
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {
         agents: {
           codex: {
-            command: "custom-codex-acp",
+            command: "npx @zed-industries/codex-acp@^0.11.1 -c 'model=\"gpt-5.4\"'",
           },
         },
       },
@@ -108,9 +147,18 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const resolved = await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      stateDir: path.join(root, "state"),
+      stateDir,
     });
 
-    expect(resolved.agents.codex).toBe("custom-codex-acp");
+    expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
+    expect(resolved.agents.codex).toContain("npx @zed-industries/codex-acp@^0.11.1");
+    expect(resolved.agents.codex).toContain("-c 'model=\"gpt-5.4\"'");
+    const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).not.toContain("notify");
+    expect(isolatedConfig).not.toContain("SkyComputerUseClient");
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain("process.argv.slice(2)");
+    expect(wrapper).toContain("CODEX_HOME: codexHome");
+    expect(wrapper).not.toContain(sourceCodexHome);
   });
 });

@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getFileExtension } from "openclaw/plugin-sdk/media-mime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 type DiscordPreflightAudioRuntime = typeof import("./preflight-audio.runtime.js");
 
@@ -12,8 +14,38 @@ function loadDiscordPreflightAudioRuntime(): Promise<DiscordPreflightAudioRuntim
 
 type DiscordAudioAttachment = {
   content_type?: string;
+  duration_secs?: number;
+  filename?: string;
   url?: string;
+  waveform?: string;
 };
+
+const AUDIO_ATTACHMENT_MIME_BY_EXT = new Map([
+  [".aac", "audio/aac"],
+  [".caf", "audio/x-caf"],
+  [".flac", "audio/flac"],
+  [".m4a", "audio/mp4"],
+  [".mp3", "audio/mpeg"],
+  [".oga", "audio/ogg"],
+  [".ogg", "audio/ogg"],
+  [".opus", "audio/opus"],
+  [".wav", "audio/wav"],
+]);
+
+function inferAudioAttachmentMime(attachment: DiscordAudioAttachment): string | undefined {
+  const contentType = normalizeOptionalString(attachment.content_type);
+  if (contentType?.startsWith("audio/")) {
+    return contentType;
+  }
+  if (
+    typeof attachment.duration_secs === "number" ||
+    typeof normalizeOptionalString(attachment.waveform) === "string"
+  ) {
+    return "audio/ogg";
+  }
+  const ext = getFileExtension(attachment.filename ?? attachment.url);
+  return ext ? AUDIO_ATTACHMENT_MIME_BY_EXT.get(ext) : undefined;
+}
 
 function collectAudioAttachments(
   attachments: DiscordAudioAttachment[] | undefined,
@@ -21,7 +53,9 @@ function collectAudioAttachments(
   if (!Array.isArray(attachments)) {
     return [];
   }
-  return attachments.filter((att) => att.content_type?.startsWith("audio/"));
+  return attachments.filter(
+    (att) => normalizeOptionalString(att.url) && inferAudioAttachmentMime(att),
+  );
 }
 
 export async function resolveDiscordPreflightAudioMentionContext(params: {
@@ -43,12 +77,10 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   const hasAudioAttachment = audioAttachments.length > 0;
   const hasTypedText = Boolean(params.message.content?.trim());
   const needsPreflightTranscription =
-    !params.isDirectMessage &&
-    params.shouldRequireMention &&
     hasAudioAttachment &&
     // `baseText` includes media placeholders; gate on typed text only.
     !hasTypedText &&
-    params.mentionRegexes.length > 0;
+    (params.isDirectMessage || (params.shouldRequireMention && params.mentionRegexes.length > 0));
 
   let transcript: string | undefined;
   if (needsPreflightTranscription) {
@@ -68,13 +100,14 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
       }
       const audioUrls = audioAttachments
         .map((att) => att.url)
-        .filter((url): url is string => typeof url === "string" && url.length > 0);
+        .map((url) => normalizeOptionalString(url))
+        .filter((url): url is string => Boolean(url));
       if (audioUrls.length > 0) {
         transcript = await transcribeFirstAudio({
           ctx: {
             MediaUrls: audioUrls,
             MediaTypes: audioAttachments
-              .map((att) => att.content_type)
+              .map((att) => inferAudioAttachmentMime(att))
               .filter((contentType): contentType is string => Boolean(contentType)),
           },
           cfg: params.cfg,

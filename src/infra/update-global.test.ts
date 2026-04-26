@@ -425,6 +425,34 @@ describe("update global helpers", () => {
     });
   });
 
+  it("ignores bundled plugin install stages during installed dist verification", async () => {
+    await withTempDir({ prefix: "openclaw-update-global-plugin-stage-" }, async (packageRoot) => {
+      await writeGlobalPackageJson(packageRoot);
+      await writeCompatSidecars(packageRoot);
+      await fs.mkdir(path.join(packageRoot, "dist", "extensions", "brave"), { recursive: true });
+      await writePackageDistInventory(packageRoot);
+
+      for (const stageDir of [".openclaw-install-stage", ".openclaw-install-stage-retry"]) {
+        const stagedFile = path.join(
+          packageRoot,
+          "dist",
+          "extensions",
+          "brave",
+          stageDir,
+          "node_modules",
+          "typebox",
+          "build",
+          "compile",
+          "code.mjs",
+        );
+        await fs.mkdir(path.dirname(stagedFile), { recursive: true });
+        await fs.writeFile(stagedFile, "export {};\n", "utf8");
+      }
+
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+    });
+  });
+
   it("does not require private QA sidecars when the inventory is missing", async () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);

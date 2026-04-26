@@ -1,14 +1,27 @@
-import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_LOCALE,
-  SUPPORTED_LOCALES,
-  loadLazyLocaleTranslation,
-  resolveNavigatorLocale,
-} from "../../ui/src/i18n/lib/registry.ts";
-import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import { beforeAll, describe, expect, it } from "vitest";
 
-function getNestedTranslation(map: TranslationMap | null, ...path: string[]): string | undefined {
-  let value: string | TranslationMap | undefined = map ?? undefined;
+type TranslationTree = {
+  readonly [key: string]: string | TranslationTree | undefined;
+};
+
+type LocaleRegistry = {
+  DEFAULT_LOCALE: string;
+  SUPPORTED_LOCALES: readonly string[];
+  loadLazyLocaleTranslation(locale: string): Promise<TranslationTree | null>;
+  resolveNavigatorLocale(locale: string): string;
+};
+
+const registryModuleUrl = new URL("../../ui/src/i18n/lib/registry.ts", import.meta.url);
+const describeWhenUiI18nPresent = fs.existsSync(fileURLToPath(registryModuleUrl))
+  ? describe
+  : describe.skip;
+
+let registry: LocaleRegistry;
+
+function getNestedTranslation(map: TranslationTree | null, ...path: string[]): string | undefined {
+  let value: string | TranslationTree | undefined = map ?? undefined;
   for (const key of path) {
     if (value === undefined || typeof value === "string") {
       return undefined;
@@ -18,9 +31,13 @@ function getNestedTranslation(map: TranslationMap | null, ...path: string[]): st
   return typeof value === "string" ? value : undefined;
 }
 
-describe("ui i18n locale registry", () => {
+describeWhenUiI18nPresent("ui i18n locale registry", () => {
+  beforeAll(async () => {
+    registry = (await import("../../ui/src/i18n/lib/registry.ts")) as LocaleRegistry;
+  });
+
   it("lists supported locales", () => {
-    expect(SUPPORTED_LOCALES).toEqual([
+    expect(registry.SUPPORTED_LOCALES).toEqual([
       "en",
       "zh-CN",
       "zh-TW",
@@ -36,32 +53,35 @@ describe("ui i18n locale registry", () => {
       "pl",
       "th",
     ]);
-    expect(DEFAULT_LOCALE).toBe("en");
+    expect(registry.DEFAULT_LOCALE).toBe("en");
   });
 
   it("resolves browser locale fallbacks", () => {
-    expect(resolveNavigatorLocale("de-DE")).toBe("de");
-    expect(resolveNavigatorLocale("es-ES")).toBe("es");
-    expect(resolveNavigatorLocale("es-MX")).toBe("es");
-    expect(resolveNavigatorLocale("pt-PT")).toBe("pt-BR");
-    expect(resolveNavigatorLocale("zh-HK")).toBe("zh-TW");
-    expect(resolveNavigatorLocale("en-US")).toBe("en");
-    expect(resolveNavigatorLocale("ja-JP")).toBe("ja-JP");
-    expect(resolveNavigatorLocale("ko-KR")).toBe("ko");
-    expect(resolveNavigatorLocale("fr-CA")).toBe("fr");
-    expect(resolveNavigatorLocale("tr-TR")).toBe("tr");
-    expect(resolveNavigatorLocale("uk-UA")).toBe("uk");
-    expect(resolveNavigatorLocale("id-ID")).toBe("id");
-    expect(resolveNavigatorLocale("pl-PL")).toBe("pl");
-    expect(resolveNavigatorLocale("th-TH")).toBe("th");
+    expect(registry.resolveNavigatorLocale("de-DE")).toBe("de");
+    expect(registry.resolveNavigatorLocale("es-ES")).toBe("es");
+    expect(registry.resolveNavigatorLocale("es-MX")).toBe("es");
+    expect(registry.resolveNavigatorLocale("pt-PT")).toBe("pt-BR");
+    expect(registry.resolveNavigatorLocale("zh-HK")).toBe("zh-TW");
+    expect(registry.resolveNavigatorLocale("en-US")).toBe("en");
+    expect(registry.resolveNavigatorLocale("ja-JP")).toBe("ja-JP");
+    expect(registry.resolveNavigatorLocale("ko-KR")).toBe("ko");
+    expect(registry.resolveNavigatorLocale("fr-CA")).toBe("fr");
+    expect(registry.resolveNavigatorLocale("tr-TR")).toBe("tr");
+    expect(registry.resolveNavigatorLocale("uk-UA")).toBe("uk");
+    expect(registry.resolveNavigatorLocale("id-ID")).toBe("id");
+    expect(registry.resolveNavigatorLocale("pl-PL")).toBe("pl");
+    expect(registry.resolveNavigatorLocale("th-TH")).toBe("th");
   });
 
   it("loads lazy locale translations from the registry", async () => {
-    const de = await loadLazyLocaleTranslation("de");
-    const es = await loadLazyLocaleTranslation("es");
-    const ptBR = await loadLazyLocaleTranslation("pt-BR");
-    const zhCN = await loadLazyLocaleTranslation("zh-CN");
-    const th = await loadLazyLocaleTranslation("th");
+    const [de, es, ptBR, zhCN, th, en] = await Promise.all([
+      registry.loadLazyLocaleTranslation("de"),
+      registry.loadLazyLocaleTranslation("es"),
+      registry.loadLazyLocaleTranslation("pt-BR"),
+      registry.loadLazyLocaleTranslation("zh-CN"),
+      registry.loadLazyLocaleTranslation("th"),
+      registry.loadLazyLocaleTranslation("en"),
+    ]);
 
     expect(getNestedTranslation(de, "common", "health")).toBe("Status");
     expect(getNestedTranslation(es, "common", "health")).toBe("Estado");
@@ -69,6 +89,6 @@ describe("ui i18n locale registry", () => {
     expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
     expect(getNestedTranslation(zhCN, "common", "health")).toBe("\u5065\u5eb7\u72b6\u51b5");
     expect(getNestedTranslation(th, "languages", "en")).toBeTruthy();
-    expect(await loadLazyLocaleTranslation("en")).toBeNull();
+    expect(en).toBeNull();
   });
 });

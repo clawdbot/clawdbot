@@ -42,7 +42,11 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
-import { loadCliSessionHistoryMessages } from "./session-history.js";
+import {
+  buildCliSessionHistoryPrompt,
+  loadCliSessionHistoryMessages,
+  loadCliSessionReseedMessages,
+} from "./session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const prepareDeps = {
@@ -259,6 +263,17 @@ export async function prepareCliRunContext(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
     );
   }
+  let openClawHistoryMessages: unknown[] | undefined;
+  const loadOpenClawHistoryMessages = () => {
+    openClawHistoryMessages ??= loadCliSessionHistoryMessages({
+      sessionId: params.sessionId,
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      config: params.config,
+    });
+    return openClawHistoryMessages;
+  };
   const heartbeatPrompt = resolveHeartbeatPromptForSystemPrompt({
     config: params.config,
     agentId: sessionAgentId,
@@ -313,13 +328,7 @@ export async function prepareCliRunContext(
     try {
       const hookResult = await resolvePromptBuildHookResult({
         prompt: params.prompt,
-        messages: loadCliSessionHistoryMessages({
-          sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          config: params.config,
-        }),
+        messages: loadOpenClawHistoryMessages(),
         hookCtx: {
           runId: params.runId,
           agentId: sessionAgentId,
@@ -355,6 +364,18 @@ export async function prepareCliRunContext(
       cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
     }
   }
+  const openClawHistoryPrompt = reusableCliSession.sessionId
+    ? undefined
+    : buildCliSessionHistoryPrompt({
+        messages: loadCliSessionReseedMessages({
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
+        }),
+        prompt: preparedPrompt,
+      });
   systemPrompt = applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input);
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
@@ -392,6 +413,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     systemPromptReport,
     bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
+    ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
     heartbeatPrompt,
     authEpoch,
     authEpochVersion: CLI_AUTH_EPOCH_VERSION,

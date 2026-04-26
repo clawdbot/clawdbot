@@ -50,11 +50,14 @@ type AnnounceQueueState = {
   droppedCount: number;
   summaryLines: string[];
   send: (item: AnnounceQueueItem) => Promise<void>;
+  /** Return true while the target parent session is still busy and delivery should wait. */
+  shouldDefer?: (item: AnnounceQueueItem) => boolean;
   /** Consecutive drain failures — drives exponential backoff on errors. */
   consecutiveFailures: number;
 };
 
 const ANNOUNCE_QUEUES = new Map<string, AnnounceQueueState>();
+const MAX_DEFER_WHILE_BUSY_MS = 15_000;
 
 export function resetAnnounceQueuesForTests() {
   // Test isolation: other suites may leave a draining queue behind in the worker.
@@ -72,6 +75,7 @@ function getAnnounceQueue(
   key: string,
   settings: AnnounceQueueSettings,
   send: (item: AnnounceQueueItem) => Promise<void>,
+  shouldDefer?: (item: AnnounceQueueItem) => boolean,
 ) {
   const existing = ANNOUNCE_QUEUES.get(key);
   if (existing) {
@@ -80,6 +84,9 @@ function getAnnounceQueue(
       settings,
     });
     existing.send = send;
+    if (shouldDefer !== undefined) {
+      existing.shouldDefer = shouldDefer;
+    }
     return existing;
   }
   const created: AnnounceQueueState = {
@@ -93,6 +100,7 @@ function getAnnounceQueue(
     droppedCount: 0,
     summaryLines: [],
     send,
+    shouldDefer,
     consecutiveFailures: 0,
   };
   applyQueueRuntimeSettings({
@@ -115,6 +123,20 @@ function hasAnnounceCrossChannelItems(items: AnnounceQueueItem[]): boolean {
   });
 }
 
+function shouldDeferAnnounceQueueItem(queue: AnnounceQueueState, item: AnnounceQueueItem): boolean {
+  if (!queue.shouldDefer?.(item)) {
+    return false;
+  }
+  return Date.now() - item.enqueuedAt < MAX_DEFER_WHILE_BUSY_MS;
+}
+
+function waitBeforeDeferredAnnounceRetry(queue: AnnounceQueueState): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, Math.max(250, queue.debounceMs));
+    timer.unref?.();
+  });
+}
+
 function scheduleAnnounceDrain(key: string) {
   const queue = beginQueueDrain(ANNOUNCE_QUEUES, key);
   if (!queue) {
@@ -128,6 +150,12 @@ function scheduleAnnounceDrain(key: string) {
           break;
         }
         await waitForQueueDebounce(queue);
+        const nextItem = queue.items[0];
+        if (nextItem && shouldDeferAnnounceQueueItem(queue, nextItem)) {
+          await waitBeforeDeferredAnnounceRetry(queue);
+          queue.lastEnqueuedAt = Date.now() - queue.debounceMs;
+          continue;
+        }
         if (queue.mode === "collect") {
           const collectDrainResult = await drainCollectQueueStep({
             collectState,
@@ -211,8 +239,9 @@ export function enqueueAnnounce(params: {
   item: AnnounceQueueItem;
   settings: AnnounceQueueSettings;
   send: (item: AnnounceQueueItem) => Promise<void>;
+  shouldDefer?: (item: AnnounceQueueItem) => boolean;
 }): boolean {
-  const queue = getAnnounceQueue(params.key, params.settings, params.send);
+  const queue = getAnnounceQueue(params.key, params.settings, params.send, params.shouldDefer);
   // Preserve any retry backoff marker already encoded in lastEnqueuedAt.
   queue.lastEnqueuedAt = Math.max(queue.lastEnqueuedAt, Date.now());
 

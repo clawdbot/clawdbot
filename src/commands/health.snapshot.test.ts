@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { HealthSummary } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
@@ -315,6 +316,57 @@ describe("getHealthSnapshot", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it("includes active plugin load errors in the health snapshot", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+    setActivePluginRegistry({
+      ...createTestRegistry([]),
+      plugins: [
+        createPluginRecord({ id: "telegram", origin: "bundled", status: "loaded" }),
+        createPluginRecord({
+          id: "whatsapp",
+          origin: "bundled",
+          status: "error",
+          activated: true,
+          activationSource: "explicit",
+          activationReason: "bundled-channel-enabled-in-config",
+          failurePhase: "load",
+          error: "failed to install bundled runtime deps: ENOSPC",
+        }),
+        createPluginRecord({
+          id: "optional-broken",
+          origin: "workspace",
+          enabled: false,
+          activated: false,
+          status: "error",
+          error: "disabled plugin ignored",
+        }),
+      ],
+    });
+
+    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+
+    expect(snap.plugins?.loaded).toEqual(["telegram"]);
+    expect(snap.plugins?.errors).toEqual([
+      {
+        id: "optional-broken",
+        origin: "workspace",
+        activated: false,
+        activationSource: "disabled",
+        error: "disabled plugin ignored",
+      },
+      {
+        id: "whatsapp",
+        origin: "bundled",
+        activated: true,
+        activationSource: "explicit",
+        activationReason: "bundled-channel-enabled-in-config",
+        failurePhase: "load",
+        error: "failed to install bundled runtime deps: ENOSPC",
+      },
+    ]);
   });
 
   it("skips telegram probe when not configured", async () => {

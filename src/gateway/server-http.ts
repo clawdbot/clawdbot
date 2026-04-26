@@ -946,6 +946,19 @@ export function createGatewayHttpServer(opts: {
       const resolvedAuth = getResolvedAuth();
       const requestStages: GatewayHttpRequestStage[] = [
         {
+          name: "gateway-probes",
+          run: () =>
+            handleGatewayProbeRequest(
+              req,
+              res,
+              requestPath,
+              resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              getReadiness,
+            ),
+        },
+        {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
         },
@@ -1149,20 +1162,6 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-
-      requestStages.push({
-        name: "gateway-probes",
-        run: () =>
-          handleGatewayProbeRequest(
-            req,
-            res,
-            requestPath,
-            resolvedAuth,
-            trustedProxies,
-            allowRealIpFallback,
-            getReadiness,
-          ),
-      });
 
       if (await runGatewayHttpRequestStages(requestStages)) {
         return;

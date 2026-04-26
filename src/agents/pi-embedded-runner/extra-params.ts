@@ -442,6 +442,87 @@ function resolveExtraBodyParam(rawExtraBody: unknown): Record<string, unknown> |
   return Object.keys(extraBody).length > 0 ? extraBody : undefined;
 }
 
+function resolveChatTemplateKwargsParam(
+  rawChatTemplateKwargs: unknown,
+): Record<string, unknown> | undefined {
+  if (rawChatTemplateKwargs === undefined || rawChatTemplateKwargs === null) {
+    return undefined;
+  }
+  if (typeof rawChatTemplateKwargs !== "object" || Array.isArray(rawChatTemplateKwargs)) {
+    const summary =
+      typeof rawChatTemplateKwargs === "string"
+        ? rawChatTemplateKwargs
+        : typeof rawChatTemplateKwargs;
+    log.warn(`ignoring invalid chat_template_kwargs param: ${summary}`);
+    return undefined;
+  }
+  const chatTemplateKwargs = sanitizeExtraBodyRecord(
+    rawChatTemplateKwargs as Record<string, unknown>,
+  );
+  return Object.keys(chatTemplateKwargs).length > 0 ? chatTemplateKwargs : undefined;
+}
+
+function isVllmNemotronModel(model: ProviderRuntimeModel): boolean {
+  return (
+    model.api === "openai-completions" &&
+    typeof model.provider === "string" &&
+    model.provider.toLowerCase() === "vllm" &&
+    typeof model.id === "string" &&
+    /\bnemotron-3(?:[-_](?:nano|super|ultra))?\b/i.test(model.id)
+  );
+}
+
+function resolveOpenAICompletionsChatTemplateKwargs(params: {
+  model: ProviderRuntimeModel;
+  thinkingLevel?: ThinkLevel;
+  configured?: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+  const defaults =
+    params.thinkingLevel === "off" && isVllmNemotronModel(params.model)
+      ? {
+          enable_thinking: false,
+          force_nonempty_content: true,
+        }
+      : undefined;
+  const merged = {
+    ...defaults,
+    ...params.configured,
+  };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
+  baseStreamFn: StreamFn | undefined;
+  configured?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
+}): StreamFn {
+  const underlying = params.baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    const chatTemplateKwargs = resolveOpenAICompletionsChatTemplateKwargs({
+      model: model as ProviderRuntimeModel,
+      thinkingLevel: params.thinkingLevel,
+      configured: params.configured,
+    });
+    if (!chatTemplateKwargs) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      const existing = payloadObj.chat_template_kwargs;
+      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+        payloadObj.chat_template_kwargs = {
+          ...(existing as Record<string, unknown>),
+          ...chatTemplateKwargs,
+        };
+        return;
+      }
+      payloadObj.chat_template_kwargs = chatTemplateKwargs;
+    });
+  };
+}
+
 function createOpenAICompletionsExtraBodyWrapper(
   baseStreamFn: StreamFn | undefined,
   extraBody: Record<string, unknown>,
@@ -526,6 +607,20 @@ function applyPostPluginStreamWrappers(
   // visible reply path because it does not emit native Anthropic thinking
   // blocks. Disable thinking unless an earlier wrapper already set it.
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
+
+  const rawChatTemplateKwargs = resolveAliasedParamValue(
+    [ctx.effectiveExtraParams, ctx.override],
+    "chat_template_kwargs",
+    "chatTemplateKwargs",
+  );
+  const configuredChatTemplateKwargs = resolveChatTemplateKwargsParam(rawChatTemplateKwargs);
+  if (configuredChatTemplateKwargs || ctx.thinkingLevel === "off") {
+    ctx.agent.streamFn = createOpenAICompletionsChatTemplateKwargsWrapper({
+      baseStreamFn: ctx.agent.streamFn,
+      configured: configuredChatTemplateKwargs,
+      thinkingLevel: ctx.thinkingLevel,
+    });
+  }
 
   const rawExtraBody = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],

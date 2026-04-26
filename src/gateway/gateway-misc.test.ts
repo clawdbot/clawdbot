@@ -354,6 +354,7 @@ describe("gateway broadcaster", () => {
     broadcast("cron", { jobId: "job-1" });
     broadcast("talk.mode", { enabled: true });
     broadcast("voicewake.changed", { triggers: ["hello"] });
+    broadcast("voicewake.routing.changed", { config: { routes: [] } });
     broadcast("heartbeat", { ts: 1 });
     broadcast("presence", { presence: [] });
     broadcast("health", { ok: true });
@@ -372,6 +373,7 @@ describe("gateway broadcaster", () => {
     ]);
     expect(nodeSocket.sent.map((frame) => frame.event)).toEqual([
       "voicewake.changed",
+      "voicewake.routing.changed",
       "heartbeat",
       "presence",
       "health",
@@ -382,6 +384,7 @@ describe("gateway broadcaster", () => {
     expect(readSocket.sent.map((frame) => frame.event)).toEqual([
       "cron",
       "voicewake.changed",
+      "voicewake.routing.changed",
       "heartbeat",
       "presence",
       "health",
@@ -393,6 +396,7 @@ describe("gateway broadcaster", () => {
       "cron",
       "talk.mode",
       "voicewake.changed",
+      "voicewake.routing.changed",
       "heartbeat",
       "presence",
       "health",
@@ -404,6 +408,7 @@ describe("gateway broadcaster", () => {
       "cron",
       "talk.mode",
       "voicewake.changed",
+      "voicewake.routing.changed",
       "heartbeat",
       "presence",
       "health",

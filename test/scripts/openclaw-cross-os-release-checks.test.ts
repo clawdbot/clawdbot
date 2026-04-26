@@ -35,6 +35,7 @@ import {
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
+  writePackageDistInventoryForCandidate,
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
 describe("scripts/openclaw-cross-os-release-checks", () => {
@@ -413,6 +414,30 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
       expect(packageHasScript(packageRoot, "build")).toBe(true);
       expect(packageHasScript(packageRoot, "ui:build")).toBe(false);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects bundled runtime-deps staging debris before candidate inventory generation", async () => {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-stage-debris-"));
+    try {
+      mkdirSync(
+        join(packageRoot, "dist", "Extensions", "demo", ".OpenClaw-Install-Stage", "node_modules"),
+        { recursive: true },
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "Extensions", "demo", ".OpenClaw-Install-Stage", "package.json"),
+        "{}\n",
+        "utf8",
+      );
+
+      await expect(
+        writePackageDistInventoryForCandidate({
+          sourceDir: packageRoot,
+          logPath: join(packageRoot, "npm-pack-dry-run.log"),
+        }),
+      ).rejects.toThrow("unexpected bundled-runtime-deps install staging debris");
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

@@ -72,6 +72,7 @@ export interface InboundContext {
   uniqueVoicePaths: string[];
   uniqueVoiceUrls: string[];
   uniqueVoiceAsrReferTexts: string[];
+  voiceMediaTypes: string[];
   hasAsrReferFallback: boolean;
   voiceTranscriptSources: string[];
 

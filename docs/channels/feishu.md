@@ -16,7 +16,7 @@ Feishu/Lark is an all-in-one collaboration platform where teams chat, share docu
 
 ## Quick start
 
-> **Requires OpenClaw 2026.4.24 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
+> **Requires OpenClaw 2026.4.25 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
 
 <Steps>
   <Step title="Run the channel setup wizard">
@@ -213,6 +213,11 @@ openclaw pairing list feishu
           appId: "cli_xxx",
           appSecret: "xxx",
           name: "Primary bot",
+          tts: {
+            providers: {
+              openai: { voice: "shimmer" },
+            },
+          },
         },
         backup: {
           appId: "cli_yyy",
@@ -227,6 +232,10 @@ openclaw pairing list feishu
 ```
 
 `defaultAccount` controls which account is used when outbound APIs do not specify an `accountId`.
+`accounts.<id>.tts` uses the same shape as `messages.tts` and deep-merges over
+global TTS config, so multi-bot Feishu setups can keep shared provider
+credentials globally while overriding only voice, model, persona, or auto mode
+per account.
 
 ### Message limits
 
@@ -386,6 +395,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appId`             | App ID                                     | —                |
 | `channels.feishu.accounts.<id>.appSecret`         | App Secret                                 | —                |
 | `channels.feishu.accounts.<id>.domain`            | Per-account domain override                | `feishu`         |
+| `channels.feishu.accounts.<id>.tts`               | Per-account TTS override                   | `messages.tts`   |
 | `channels.feishu.dmPolicy`                        | DM policy                                  | `allowlist`      |
 | `channels.feishu.allowFrom`                       | DM allowlist (open_id list)                | [BotOwnerId]     |
 | `channels.feishu.groupPolicy`                     | Group policy                               | `allowlist`      |
@@ -413,6 +423,15 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 - ✅ Audio
 - ✅ Video/media
 - ✅ Stickers
+
+Inbound Feishu/Lark audio messages are normalized as media placeholders instead
+of raw `file_key` JSON. When `tools.media.audio` is configured, OpenClaw
+downloads the voice-note resource and runs shared audio transcription before the
+agent turn, so the agent receives the spoken transcript. If Feishu includes
+transcript text directly in the audio payload, that text is used without another
+ASR call. Without an audio transcription provider, the agent still receives a
+`<media:audio>` placeholder plus the saved attachment, not the raw Feishu
+resource payload.
 
 ### Send
 

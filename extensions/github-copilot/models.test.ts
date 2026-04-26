@@ -135,6 +135,50 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
   });
 
+  it("clones gpt-5.3-codex template for gpt-5.3-codex when not in registry", () => {
+    const template = {
+      id: "gpt-5.2-codex",
+      name: "gpt-5.2-codex",
+      provider: "github-copilot",
+      api: "openai-responses",
+      reasoning: true,
+      contextWindow: 200_000,
+    };
+    const ctx = createMockCtx("gpt-5.3-codex", {
+      "github-copilot/gpt-5.2-codex": template,
+    });
+    const result = requireResolvedModel(ctx);
+    expect(result.id).toBe("gpt-5.3-codex");
+    expect(result.name).toBe("gpt-5.3-codex");
+    expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
+  });
+
+  it("prefers gpt-5.3-codex as template source over gpt-5.2-codex for gpt-5.4", () => {
+    const template53 = {
+      id: "gpt-5.3-codex",
+      name: "gpt-5.3-codex",
+      provider: "github-copilot",
+      api: "openai-responses",
+      reasoning: true,
+      contextWindow: 300_000,
+    };
+    const template52 = {
+      id: "gpt-5.2-codex",
+      name: "gpt-5.2-codex",
+      provider: "github-copilot",
+      api: "openai-responses",
+      reasoning: true,
+      contextWindow: 200_000,
+    };
+    const ctx = createMockCtx("gpt-5.4", {
+      "github-copilot/gpt-5.3-codex": template53,
+      "github-copilot/gpt-5.2-codex": template52,
+    });
+    const result = requireResolvedModel(ctx);
+    expect(result.id).toBe("gpt-5.4");
+    expect((result as unknown as Record<string, unknown>).contextWindow).toBe(300_000);
+  });
+
   it("falls through to synthetic catch-all when codex template is missing", () => {
     const ctx = createMockCtx("gpt-5.4");
     const result = requireResolvedModel(ctx);
@@ -158,11 +202,20 @@ describe("resolveCopilotForwardCompatModel", () => {
     }
   });
 
+  it("infers reasoning=true for Codex model IDs", () => {
+    for (const id of ["gpt-5.4-codex", "gpt-5.5-codex", "gpt-5.4-codex-mini", "gpt-5.3-codex"]) {
+      const ctx = createMockCtx(id);
+      const result = requireResolvedModel(ctx);
+      expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
+    }
+  });
+
   it("sets reasoning=false for non-reasoning model IDs including mid-string o1/o3", () => {
     for (const id of [
       "gpt-5.4-mini",
       "claude-sonnet-4.6",
       "gpt-4o",
+      "mycodexmodel",
       "audio-o1-hd",
       "turbo-o3-voice",
     ]) {

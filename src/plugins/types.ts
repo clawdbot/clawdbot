@@ -27,6 +27,11 @@ import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
+import type {
+  DiagnosticEventInput,
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
@@ -60,6 +65,8 @@ import type {
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
+  SpeechProviderPrepareSynthesisContext,
+  SpeechProviderPreparedSynthesis,
   SpeechProviderId,
   SpeechSynthesisRequest,
   SpeechSynthesisResult,
@@ -1719,6 +1726,12 @@ export type SpeechProviderPlugin = {
   resolveTalkOverrides?: (
     ctx: SpeechProviderResolveTalkOverridesContext,
   ) => SpeechProviderConfig | undefined;
+  prepareSynthesis?: (
+    ctx: SpeechProviderPrepareSynthesisContext,
+  ) =>
+    | SpeechProviderPreparedSynthesis
+    | undefined
+    | Promise<SpeechProviderPreparedSynthesis | undefined>;
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
   synthesizeTelephony?: (
@@ -1971,6 +1984,12 @@ export type OpenClawPluginServiceContext = {
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  internalDiagnostics?: {
+    emit: (event: DiagnosticEventInput) => void;
+    onEvent: (
+      listener: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => void,
+    ) => () => void;
+  };
 };
 
 /** Background service registered by a plugin during `register(api)`. */

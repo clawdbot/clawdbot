@@ -69,36 +69,44 @@ exit 0
   }
 
   function expectWindowsRestartWaitOrdering(content: string, port = 18789) {
-    const endCommand = 'schtasks /End /TN "';
-    const pollAttemptsInit = "set /a attempts=0";
-    const pollLabel = ":wait_for_port_release";
-    const pollAttemptIncrement = "set /a attempts+=1";
-    const pollNetstatCheck = `netstat -ano | findstr /R /C:":${port} .*LISTENING" >nul`;
-    const forceKillLabel = ":force_kill_listener";
-    const forceKillCommand = "taskkill /F /PID %%P >>";
-    const portReleasedLabel = ":port_released";
-    const runCommand = 'schtasks /Run /TN "';
-    const endIndex = content.indexOf(endCommand);
-    const attemptsInitIndex = content.indexOf(pollAttemptsInit, endIndex);
-    const pollLabelIndex = content.indexOf(pollLabel, attemptsInitIndex);
-    const pollAttemptIncrementIndex = content.indexOf(pollAttemptIncrement, pollLabelIndex);
-    const pollNetstatCheckIndex = content.indexOf(pollNetstatCheck, pollAttemptIncrementIndex);
-    const forceKillLabelIndex = content.indexOf(forceKillLabel, pollNetstatCheckIndex);
-    const forceKillCommandIndex = content.indexOf(forceKillCommand, forceKillLabelIndex);
-    const portReleasedLabelIndex = content.indexOf(portReleasedLabel, forceKillCommandIndex);
-    const runIndex = content.indexOf(runCommand, portReleasedLabelIndex);
+    const stateCheck = "$taskState = Get-OpenClawScheduledTaskState -TaskName $taskName";
+    const runningGuard = 'if ($taskState -eq "Running")';
+    const endCommand =
+      'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/End", "/TN", $taskName) -TimeoutSeconds 10';
+    const skipEndLog = "openclaw restart skipped schtasks end";
+    const pollLoop = "for ($attempt = 1; $attempt -le 10; $attempt++)";
+    const pollCall = `Get-OpenClawListenerPids -Port $port`;
+    const forceKillBranch = "if ($attempt -eq 10)";
+    const forceKillCommand = "Stop-Process -Id $listenerPid -Force";
+    const runCommand =
+      'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $taskName) -TimeoutSeconds 30';
+    const portAssignment = `$port = ${port}`;
+    const stateCheckIndex = content.indexOf(stateCheck);
+    const runningGuardIndex = content.indexOf(runningGuard, stateCheckIndex);
+    const endIndex = content.indexOf(endCommand, runningGuardIndex);
+    const skipEndLogIndex = content.indexOf(skipEndLog, endIndex);
+    const portAssignmentIndex = content.indexOf(portAssignment);
+    const pollLoopIndex = content.indexOf(pollLoop, skipEndLogIndex);
+    const pollCallIndex = content.indexOf(pollCall, pollLoopIndex);
+    const forceKillBranchIndex = content.indexOf(forceKillBranch, pollCallIndex);
+    const forceKillCommandIndex = content.indexOf(forceKillCommand, forceKillBranchIndex);
+    const runIndex = content.indexOf(runCommand, forceKillCommandIndex);
 
-    expect(endIndex).toBeGreaterThanOrEqual(0);
-    expect(attemptsInitIndex).toBeGreaterThan(endIndex);
-    expect(pollLabelIndex).toBeGreaterThan(attemptsInitIndex);
-    expect(pollAttemptIncrementIndex).toBeGreaterThan(pollLabelIndex);
-    expect(pollNetstatCheckIndex).toBeGreaterThan(pollAttemptIncrementIndex);
-    expect(forceKillLabelIndex).toBeGreaterThan(pollNetstatCheckIndex);
-    expect(forceKillCommandIndex).toBeGreaterThan(forceKillLabelIndex);
-    expect(portReleasedLabelIndex).toBeGreaterThan(forceKillCommandIndex);
-    expect(runIndex).toBeGreaterThan(portReleasedLabelIndex);
+    expect(stateCheckIndex).toBeGreaterThanOrEqual(0);
+    expect(runningGuardIndex).toBeGreaterThan(stateCheckIndex);
+    expect(endIndex).toBeGreaterThan(runningGuardIndex);
+    expect(skipEndLogIndex).toBeGreaterThan(endIndex);
+    expect(portAssignmentIndex).toBeGreaterThanOrEqual(0);
+    expect(pollLoopIndex).toBeGreaterThan(skipEndLogIndex);
+    expect(pollCallIndex).toBeGreaterThan(pollLoopIndex);
+    expect(forceKillBranchIndex).toBeGreaterThan(pollCallIndex);
+    expect(forceKillCommandIndex).toBeGreaterThan(forceKillBranchIndex);
+    expect(runIndex).toBeGreaterThan(forceKillCommandIndex);
 
     expect(content).not.toContain("timeout /t 3 /nobreak >nul");
+    expect(content).not.toContain("findstr");
+    expect(content).not.toContain("netstat -ano |");
+    expect(content).not.toContain("schtasks /End /TN");
   }
 
   beforeEach(() => {
@@ -296,21 +304,25 @@ exit 0
       await cleanupScript(scriptPath);
     });
 
-    it("creates a schtasks restart script on Windows", async () => {
+    it("creates a guarded schtasks restart script on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
 
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "default",
       });
-      expect(scriptPath.endsWith(".bat")).toBe(true);
+      expect(scriptPath.endsWith(".cmd")).toBe(true);
       expect(content).toContain("@echo off");
+      expect(content).toContain("powershell -NoProfile -ExecutionPolicy Bypass -Command");
+      expect(content).not.toContain("-File");
+      expect(content).toContain('$ErrorActionPreference = "Continue"');
       expect(content).toContain("gateway-restart.log");
-      expect(content).toContain("openclaw restart attempt source=update target=OpenClaw Gateway");
-      expect(content).toContain('schtasks /End /TN "OpenClaw Gateway"');
-      expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway" >>');
+      expect(content).toContain("$taskName = 'OpenClaw Gateway'");
+      expect(content).toContain("function Invoke-OpenClawSchtasksWithTimeout");
+      expect(content).toContain("function Get-OpenClawScheduledTaskState");
+      expect(content).toContain("Get-ScheduledTask -TaskName $TaskName");
+      expect(content).toContain("openclaw restart skipped schtasks end");
       expectWindowsRestartWaitOrdering(content);
-      // Batch self-cleanup
-      expect(content).toContain('del "%~f0"');
+      expect(content).toContain('del "%~f0" >nul 2>&1');
       await cleanupScript(scriptPath);
     });
 
@@ -321,8 +333,11 @@ exit 0
         OPENCLAW_PROFILE: "default",
         OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (custom)",
       });
-      expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (custom)"');
-      expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)"');
+      expect(content).toContain("$taskName = 'OpenClaw Gateway (custom)'");
+      expect(content).toContain("Get-OpenClawScheduledTaskState -TaskName $taskName");
+      expect(content).toContain(
+        'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/End", "/TN", $taskName) -TimeoutSeconds 10',
+      );
       expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });
@@ -337,10 +352,10 @@ exit 0
         },
         customPort,
       );
-      expect(content).toContain(`netstat -ano | findstr /R /C:":${customPort} .*LISTENING" >nul`);
-      expect(content).toContain(
-        `for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${customPort} .*LISTENING"') do (`,
-      );
+      expect(content).toContain(`$port = ${customPort}`);
+      expect(content).toContain("Get-NetTCPConnection -LocalPort $Port -State Listen");
+      expect(content).toContain("& netstat.exe -ano -p tcp");
+      expect(content).not.toContain("findstr");
       expectWindowsRestartWaitOrdering(content, customPort);
       await cleanupScript(scriptPath);
     });
@@ -371,7 +386,7 @@ exit 0
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "production",
       });
-      expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (production)"');
+      expect(content).toContain("$taskName = 'OpenClaw Gateway (production)'");
       expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });

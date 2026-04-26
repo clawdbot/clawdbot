@@ -314,6 +314,7 @@ export function createFollowupRunner(params: {
                 extraSystemPrompt: run.extraSystemPrompt,
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
+                allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                 provider,
                 model,
                 ...authProfile,

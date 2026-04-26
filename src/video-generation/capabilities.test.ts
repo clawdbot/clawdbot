@@ -75,4 +75,85 @@ describe("video-generation capabilities", () => {
       capabilities: undefined,
     });
   });
+
+  it("uses explicit video-to-video capabilities for mixed reference requests", () => {
+    const provider = createProvider({
+      imageToVideo: {
+        enabled: true,
+        maxInputImages: 2,
+      },
+      videoToVideo: {
+        enabled: true,
+        maxInputImages: 2,
+        maxInputVideos: 3,
+        maxInputAudios: 1,
+      },
+    });
+
+    expect(resolveVideoGenerationMode({ inputImageCount: 1, inputVideoCount: 1 })).toBeNull();
+    expect(
+      resolveVideoGenerationModeCapabilities({
+        provider,
+        inputImageCount: 1,
+        inputVideoCount: 1,
+      }),
+    ).toEqual({
+      mode: null,
+      capabilities: {
+        enabled: true,
+        maxInputImages: 2,
+        maxInputVideos: 3,
+        maxInputAudios: 1,
+      },
+    });
+  });
+
+  it("applies model-specific reference input limits", () => {
+    const provider = createProvider({
+      imageToVideo: {
+        enabled: true,
+        maxInputImages: 1,
+        maxInputImagesByModel: {
+          "vendor/reference-to-video": 9,
+        },
+      },
+      videoToVideo: {
+        enabled: true,
+        maxInputImages: 0,
+        maxInputImagesByModel: {
+          "vendor/reference-to-video": 9,
+        },
+        maxInputVideos: 0,
+        maxInputVideosByModel: {
+          "vendor/reference-to-video": 3,
+        },
+      },
+    });
+
+    expect(
+      resolveVideoGenerationModeCapabilities({
+        provider,
+        model: "vendor/text-to-video",
+        inputImageCount: 2,
+      }).capabilities?.maxInputImages,
+    ).toBe(1);
+    expect(
+      resolveVideoGenerationModeCapabilities({
+        provider,
+        model: "vendor/reference-to-video",
+        inputImageCount: 2,
+      }).capabilities?.maxInputImages,
+    ).toBe(9);
+    expect(
+      resolveVideoGenerationModeCapabilities({
+        provider,
+        model: "vendor/reference-to-video",
+        inputImageCount: 1,
+        inputVideoCount: 1,
+      }).capabilities,
+    ).toMatchObject({
+      maxInputImages: 9,
+      maxInputVideos: 3,
+    });
+  });
 });

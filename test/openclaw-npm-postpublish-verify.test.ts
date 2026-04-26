@@ -545,7 +545,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       writeFileSync(
         join(packageRoot, "dist", "string-only.js"),
         [
-          'export const help = "run import(\'fake-package\') after setup";',
+          "export const help = \"run import('fake-package') after setup\";",
           'export const note = "from \\"fake-package-two\\"";',
           "",
         ].join("\n"),

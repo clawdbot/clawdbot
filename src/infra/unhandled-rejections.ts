@@ -11,7 +11,20 @@ import { runFatalErrorHooks } from "./fatal-error-hooks.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
-const handlers = new Set<UnhandledRejectionHandler>();
+// Plugins resolve `openclaw/plugin-sdk/runtime` through their own staged
+// `node_modules`, which loads a separate copy of this module. To keep registry
+// state shared across instances, anchor the handlers Set on globalThis.
+const HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.unhandledRejection.handlers");
+const handlers: Set<UnhandledRejectionHandler> = (() => {
+  const g = globalThis as unknown as Record<symbol, Set<UnhandledRejectionHandler>>;
+  const existing = g[HANDLERS_GLOBAL_KEY];
+  if (existing instanceof Set) {
+    return existing;
+  }
+  const created = new Set<UnhandledRejectionHandler>();
+  g[HANDLERS_GLOBAL_KEY] = created;
+  return created;
+})();
 
 const FATAL_ERROR_CODES = new Set([
   "ERR_OUT_OF_MEMORY",

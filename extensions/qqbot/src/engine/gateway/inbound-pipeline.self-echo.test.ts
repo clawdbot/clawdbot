@@ -1,0 +1,166 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QQBOT_ACCESS_REASON } from "../access/index.js";
+import type { RefIndexEntry } from "../ref/types.js";
+import type { InboundPipelineDeps } from "./inbound-context.js";
+import { buildInboundContext } from "./inbound-pipeline.js";
+import type { QueuedMessage } from "./message-queue.js";
+import type { GatewayAccount, GatewayPluginRuntime, ProcessedAttachments } from "./types.js";
+
+const getRefIndexMock = vi.hoisted(() => vi.fn<(refIdx: string) => RefIndexEntry | null>());
+const setRefIndexMock = vi.hoisted(() => vi.fn<(refIdx: string, entry: RefIndexEntry) => void>());
+const formatRefEntryForAgentMock = vi.hoisted(() => vi.fn<(entry: RefIndexEntry) => string>());
+const processAttachmentsMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      attachments: QueuedMessage["attachments"],
+      ctx: { accountId: string; cfg: unknown; log?: unknown },
+    ) => Promise<ProcessedAttachments>
+  >(),
+);
+
+vi.mock("../ref/store.js", () => ({
+  getRefIndex: getRefIndexMock,
+  setRefIndex: setRefIndexMock,
+  formatRefEntryForAgent: formatRefEntryForAgentMock,
+}));
+
+vi.mock("./inbound-attachments.js", () => ({
+  processAttachments: processAttachmentsMock,
+}));
+
+const emptyProcessedAttachments: ProcessedAttachments = {
+  attachmentInfo: "",
+  imageUrls: [],
+  imageMediaTypes: [],
+  voiceAttachmentPaths: [],
+  voiceAttachmentUrls: [],
+  voiceAsrReferTexts: [],
+  voiceTranscripts: [],
+  voiceTranscriptSources: [],
+  attachmentLocalPaths: [],
+};
+
+const account: GatewayAccount = {
+  accountId: "qq-main",
+  appId: "app",
+  clientSecret: "secret",
+  markdownSupport: false,
+  config: {},
+};
+
+function makeRuntime(): GatewayPluginRuntime {
+  return {
+    channel: {
+      activity: { record: vi.fn() },
+      routing: {
+        resolveAgentRoute: vi.fn(() => ({
+          sessionKey: "qqbot:c2c:user-openid",
+          accountId: "qq-main",
+        })),
+      },
+      reply: {
+        dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
+        finalizeInboundContext: vi.fn((fields: Record<string, unknown>) => fields),
+        formatInboundEnvelope: vi.fn(() => "formatted inbound"),
+        resolveEffectiveMessagesConfig: vi.fn(() => ({})),
+        resolveEnvelopeFormatOptions: vi.fn(() => ({})),
+      },
+      text: {
+        chunkMarkdownText: (text: string) => [text],
+      },
+    },
+    tts: {
+      textToSpeech: vi.fn(),
+    },
+  };
+}
+
+function makeEvent(overrides: Partial<QueuedMessage> = {}): QueuedMessage {
+  return {
+    type: "c2c",
+    senderId: "user-openid",
+    messageId: "msg-1",
+    content: "hello",
+    timestamp: "2026-04-25T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function makeDeps(overrides: Partial<InboundPipelineDeps> = {}): InboundPipelineDeps {
+  return {
+    account,
+    cfg: {},
+    log: { info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    runtime: makeRuntime(),
+    startTyping: vi.fn(async () => ({ keepAlive: null })),
+    ...overrides,
+  };
+}
+
+describe("buildInboundContext bot self-echo suppression", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getRefIndexMock.mockReturnValue(null);
+    formatRefEntryForAgentMock.mockReturnValue("bot reply");
+    processAttachmentsMock.mockResolvedValue(emptyProcessedAttachments);
+  });
+
+  it("blocks inbound events whose current msgIdx matches this bot's outbound ref", async () => {
+    getRefIndexMock.mockReturnValue({
+      content: "mirrored reply",
+      senderId: "qq-main",
+      timestamp: 1,
+      isBot: true,
+    });
+    const deps = makeDeps();
+
+    const inbound = await buildInboundContext(makeEvent({ msgIdx: "REF_BOT" }), deps);
+
+    expect(getRefIndexMock).toHaveBeenCalledWith("REF_BOT");
+    expect(inbound.blocked).toBe(true);
+    expect(inbound.blockReasonCode).toBe(QQBOT_ACCESS_REASON.BOT_SELF_ECHO);
+    expect(inbound.body).toBe("");
+    expect(deps.startTyping).not.toHaveBeenCalled();
+    expect(processAttachmentsMock).not.toHaveBeenCalled();
+    expect(setRefIndexMock).not.toHaveBeenCalled();
+  });
+
+  it("does not block a user message that quotes a bot-authored ref", async () => {
+    getRefIndexMock.mockReturnValue({
+      content: "previous bot reply",
+      senderId: "qq-main",
+      timestamp: 1,
+      isBot: true,
+    });
+    const deps = makeDeps();
+
+    const inbound = await buildInboundContext(makeEvent({ refMsgIdx: "REF_BOT" }), deps);
+
+    expect(getRefIndexMock).toHaveBeenCalledWith("REF_BOT");
+    expect(formatRefEntryForAgentMock).toHaveBeenCalled();
+    expect(inbound.blocked).toBe(false);
+    expect(inbound.replyTo).toMatchObject({
+      id: "REF_BOT",
+      body: "bot reply",
+      isQuote: true,
+    });
+    expect(deps.startTyping).toHaveBeenCalledTimes(1);
+    expect(processAttachmentsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not block matching refs from another QQ Bot account", async () => {
+    getRefIndexMock.mockReturnValue({
+      content: "other bot reply",
+      senderId: "qq-other",
+      timestamp: 1,
+      isBot: true,
+    });
+    const deps = makeDeps();
+
+    const inbound = await buildInboundContext(makeEvent({ msgIdx: "REF_BOT" }), deps);
+
+    expect(inbound.blocked).toBe(false);
+    expect(deps.startTyping).toHaveBeenCalledTimes(1);
+    expect(processAttachmentsMock).toHaveBeenCalledTimes(1);
+  });
+});

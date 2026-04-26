@@ -82,11 +82,18 @@ export async function browserStatus(
 
 export async function browserDoctor(
   baseUrl?: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; deep?: boolean },
 ): Promise<BrowserDoctorReport> {
-  const q = buildProfileQuery(opts?.profile);
+  const params = new URLSearchParams();
+  if (opts?.profile) {
+    params.set("profile", opts.profile);
+  }
+  if (opts?.deep) {
+    params.set("deep", "true");
+  }
+  const q = params.size ? `?${params.toString()}` : "";
   return await fetchBrowserJson<BrowserDoctorReport>(withBaseUrl(baseUrl, `/doctor${q}`), {
-    timeoutMs: 3000,
+    timeoutMs: opts?.deep ? 10000 : 3000,
   });
 }
 

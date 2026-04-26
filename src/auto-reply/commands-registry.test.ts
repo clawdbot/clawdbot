@@ -5,6 +5,7 @@ import {
   buildCommandText,
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   getCommandDetection,
   listChatCommands,
   listChatCommandsForConfig,
@@ -484,6 +485,9 @@ describe("commands registry args", () => {
       { label: "low", value: "low" },
       { label: "high", value: "high" },
     ]);
+    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
+      "Choose level for /think.\nOptions: low, high.",
+    );
     const seenChoice = seen as {
       provider?: string;
       model?: string;

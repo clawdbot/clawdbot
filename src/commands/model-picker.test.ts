@@ -434,6 +434,179 @@ describe("promptModelAllowlist", () => {
       "openai/gpt-5.4-mini",
     ]);
   });
+
+  it("seeds existing model fallbacks into unscoped allowlist selections", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const multiselect = vi.fn(async (params) => params.initialValues ?? []);
+    const prompter = makePrompter({ multiselect });
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+          models: {
+            "openai/gpt-5.5": { alias: "gpt" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({ config, prompter });
+    const call = multiselect.mock.calls[0]?.[0];
+    expect(call?.options.map((option: { value: string }) => option.value)).toEqual([
+      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4-6",
+    ]);
+    expect(call?.initialValues).toEqual(["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"]);
+    expect(result.models).toEqual(["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"]);
+  });
+
+  it("resolves bare fallback seeds against the primary model provider", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "anthropic",
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.5",
+      },
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.5",
+      },
+      {
+        provider: "openai",
+        id: "claude-sonnet-4-6",
+        name: "Wrong provider",
+      },
+    ]);
+
+    const multiselect = vi.fn(async (params) => params.initialValues ?? []);
+    const prompter = makePrompter({ multiselect });
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["claude-sonnet-4-6"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({ config, prompter });
+    const call = multiselect.mock.calls[0]?.[0];
+
+    expect(call?.initialValues).toEqual([
+      "anthropic/claude-opus-4-6",
+      "anthropic/claude-sonnet-4-6",
+    ]);
+    expect(result.models).toEqual(["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"]);
+  });
+
+  it("keeps the no-catalog allowlist prompt blank when no allowlist exists", async () => {
+    loadModelCatalog.mockResolvedValue([]);
+
+    const text = vi.fn(async (params) => params.initialValue ?? "");
+    const prompter = makePrompter({ text });
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({ config, prompter });
+
+    expect(text.mock.calls[0]?.[0]?.initialValue).toBe("");
+    expect(result).toEqual({});
+  });
+
+  it("shows existing fallbacks in the no-catalog allowlist prompt when an allowlist exists", async () => {
+    loadModelCatalog.mockResolvedValue([]);
+
+    const text = vi.fn(async (params) => params.initialValue ?? "");
+    const prompter = makePrompter({ text });
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+          models: {
+            "openai/gpt-5.5": { alias: "gpt" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({ config, prompter });
+
+    expect(text.mock.calls[0]?.[0]?.initialValue).toBe(
+      "openai/gpt-5.5, anthropic/claude-sonnet-4-6",
+    );
+    expect(result.models).toEqual(["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"]);
+  });
+
+  it("keeps provider-scoped fallback supplements within scope", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      },
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.5",
+      },
+    ]);
+
+    const multiselect = vi.fn(async (params) => params.initialValues ?? []);
+    const prompter = makePrompter({ multiselect });
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({
+      config,
+      prompter,
+      preferredProvider: "openai",
+    });
+
+    const call = multiselect.mock.calls[0]?.[0];
+    expect(call?.options.map((option: { value: string }) => option.value)).toEqual([
+      "openai/gpt-5.5",
+      "openai/gpt-5.4",
+    ]);
+    expect(call?.initialValues).toEqual(["openai/gpt-5.5"]);
+    expect(result).toEqual({
+      models: ["openai/gpt-5.5"],
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4"],
+    });
+  });
 });
 
 describe("runtime model picker visibility", () => {
@@ -599,6 +772,186 @@ describe("applyModelFallbacksFromSelection", () => {
       fallbacks: ["anthropic/claude-sonnet-4-6"],
     });
     expect(next.agents?.defaults?.model).not.toHaveProperty("primary");
+  });
+
+  it("does not write an empty model object for singleton default selections", () => {
+    const config = {
+      agents: {
+        defaults: {},
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.5"]);
+    expect(next).toBe(config);
+  });
+
+  it("clears existing fallbacks when only the primary remains selected", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, ["anthropic/claude-opus-4-6"]);
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+    });
+  });
+
+  it("drops malformed fallback refs instead of preserving raw strings", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["openai/"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.5"]);
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+    });
+  });
+
+  it("preserves hidden fallbacks during unscoped selections", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["claude-cli/claude-sonnet-4-6", "anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.5"]);
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["claude-cli/claude-sonnet-4-6"],
+    });
+  });
+
+  it("preserves out-of-scope fallbacks during scoped selections", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.5"], {
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4"],
+    });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+  });
+
+  it("removes scoped fallbacks for empty scoped selections", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-5.5", "google/gemini-3-pro-preview"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, [], {
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4"],
+    });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: ["google/gemini-3-pro-preview"],
+    });
+  });
+
+  it("does not add new scoped fallbacks when the primary is outside scope", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.5", "openai/gpt-5.4"], {
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4"],
+    });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: ["openai/gpt-5.5"],
+    });
+  });
+
+  it("removes existing scoped fallback aliases when deselected", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["mini"],
+          },
+          models: {
+            "openai/gpt-5.4-mini": { alias: "mini" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.5"], {
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
+    });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+    });
+  });
+
+  it("canonicalizes existing scoped fallback aliases when kept selected", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["mini"],
+          },
+          models: {
+            "openai/gpt-5.4-mini": { alias: "mini" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(
+      config,
+      ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
+      {
+        scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
+      },
+    );
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.4-mini"],
+    });
   });
 
   it("keeps existing fallbacks when the primary is not selected", () => {

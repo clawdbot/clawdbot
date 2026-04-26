@@ -50,10 +50,15 @@ The bundled `fal` image-generation provider defaults to
 | Size overrides | Supported                  |
 | Aspect ratio   | Supported                  |
 | Resolution     | Supported                  |
+| Output format  | `png` or `jpeg`            |
 
 <Warning>
 The fal image edit endpoint does **not** support `aspectRatio` overrides.
 </Warning>
+
+Use `outputFormat: "png"` when you want PNG output. fal does not declare an
+explicit transparent-background control in OpenClaw, so `background:
+"transparent"` is reported as an ignored override for fal models.
 
 To use fal as the default image provider:
 
@@ -74,10 +79,10 @@ To use fal as the default image provider:
 The bundled `fal` video-generation provider defaults to
 `fal/fal-ai/minimax/video-01-live`.
 
-| Capability | Value                                                        |
-| ---------- | ------------------------------------------------------------ |
-| Modes      | Text-to-video, single-image reference                        |
-| Runtime    | Queue-backed submit/status/result flow for long-running jobs |
+| Capability | Value                                                              |
+| ---------- | ------------------------------------------------------------------ |
+| Modes      | Text-to-video, single-image reference, Seedance reference-to-video |
+| Runtime    | Queue-backed submit/status/result flow for long-running jobs       |
 
 <AccordionGroup>
   <Accordion title="Available video models">
@@ -89,8 +94,10 @@ The bundled `fal` video-generation provider defaults to
 
     - `fal/bytedance/seedance-2.0/fast/text-to-video`
     - `fal/bytedance/seedance-2.0/fast/image-to-video`
+    - `fal/bytedance/seedance-2.0/fast/reference-to-video`
     - `fal/bytedance/seedance-2.0/text-to-video`
     - `fal/bytedance/seedance-2.0/image-to-video`
+    - `fal/bytedance/seedance-2.0/reference-to-video`
 
   </Accordion>
 
@@ -106,6 +113,25 @@ The bundled `fal` video-generation provider defaults to
       },
     }
     ```
+  </Accordion>
+
+  <Accordion title="Seedance 2.0 reference-to-video config example">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          videoGenerationModel: {
+            primary: "fal/bytedance/seedance-2.0/fast/reference-to-video",
+          },
+        },
+      },
+    }
+    ```
+
+    Reference-to-video accepts up to 9 images, 3 videos, and 3 audio references
+    through the shared `video_generate` `images`, `videos`, and `audioRefs`
+    parameters, with at most 12 total reference files.
+
   </Accordion>
 
   <Accordion title="HeyGen video-agent config example">

@@ -24,11 +24,14 @@ export function makeState(
       cdpIsLoopback: profile !== "remote",
       remoteCdpTimeoutMs: 1500,
       remoteCdpHandshakeTimeoutMs: 3000,
+      localLaunchTimeoutMs: 15_000,
+      localCdpReadyTimeoutMs: 8_000,
       actionTimeoutMs: 60_000,
       evaluateEnabled: false,
       extraArgs: [],
       color: "#FF4500",
       headless: true,
+      headlessSource: "config",
       noSandbox: false,
       attachOnly: false,
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -85,6 +88,8 @@ function resolveProfileForTest(
     color: rawProfile.color ?? state.resolved.color,
     driver: rawProfile.driver === "existing-session" ? "existing-session" : "openclaw",
     headless: rawProfile.headless ?? state.resolved.headless,
+    headlessSource:
+      typeof rawProfile.headless === "boolean" ? "profile" : state.resolved.headlessSource,
     attachOnly: rawProfile.attachOnly ?? state.resolved.attachOnly,
     userDataDir: rawProfile.userDataDir,
   };

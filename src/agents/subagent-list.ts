@@ -126,8 +126,8 @@ export function buildLatestSubagentRunIndex(
     }
     childSessionsByController.set(controllerSessionKey, [childSessionKey]);
   }
-  for (const childSessions of childSessionsByController.values()) {
-    childSessions.sort();
+  for (const [controllerSessionKey, childSessions] of childSessionsByController) {
+    childSessionsByController.set(controllerSessionKey, childSessions.toSorted());
   }
 
   return {

@@ -80,7 +80,7 @@ export type ModelDefinitionConfig = {
   api?: ModelApi;
   baseUrl?: string;
   reasoning: boolean;
-  input: Array<"text" | "image">;
+  input: Array<"text" | "image" | "video" | "audio">;
   cost: {
     input: number;
     output: number;

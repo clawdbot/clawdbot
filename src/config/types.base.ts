@@ -221,7 +221,7 @@ export type SessionMaintenanceConfig = {
 export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   file?: string;
-  /** Maximum size of a single log file in bytes before writes are suppressed. Default: 500 MB. */
+  /** Maximum size of a single log file in bytes before rotation. Default: 100 MB. */
   maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
@@ -234,6 +234,9 @@ export type LoggingConfig = {
 export type DiagnosticsOtelConfig = {
   enabled?: boolean;
   endpoint?: string;
+  tracesEndpoint?: string;
+  metricsEndpoint?: string;
+  logsEndpoint?: string;
   protocol?: "http/protobuf" | "grpc";
   headers?: Record<string, string>;
   serviceName?: string;

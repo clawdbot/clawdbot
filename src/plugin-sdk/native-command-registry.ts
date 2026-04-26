@@ -1,6 +1,7 @@
 export {
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   listChatCommands,
   listNativeCommandSpecsForConfig,
   parseCommandArgs,

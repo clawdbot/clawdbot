@@ -325,6 +325,23 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it("blocks install from an older binary when config was written by a newer one", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: { meta: { lastTouchedVersion: "9999.1.1" } },
+      sourceConfig: { meta: { lastTouchedVersion: "9999.1.1" } },
+    });
+
+    await runDaemonInstall({ json: true, force: true });
+
+    expect(actionState.failed[0]?.message).toContain(
+      "Refusing to install or rewrite the gateway service",
+    );
+    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
   it("returns already-installed when the service already has the expected TLS env", async () => {
     service.isLoaded.mockResolvedValue(true);
     resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
@@ -335,6 +352,89 @@ describe("runDaemonInstall", () => {
       programArguments: ["openclaw", "gateway", "run"],
       environment: {
         NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
+      },
+    } as never);
+
+    await runDaemonInstall({ json: true });
+
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+  });
+
+  it("reinstalls when the loaded service still embeds OPENCLAW_GATEWAY_TOKEN", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "stale-service-token",
+      },
+    } as never);
+
+    await runDaemonInstall({ json: true });
+
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(actionState.warnings).toContain(
+      "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.",
+    );
+  });
+
+  it("returns already-installed when the embedded gateway token matches the install plan", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "durable-token",
+      },
+    } as never);
+    buildGatewayInstallPlanMock.mockResolvedValueOnce({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "durable-token",
+      },
+    });
+
+    await runDaemonInstall({ json: true });
+
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+  });
+
+  it("reinstalls when the embedded gateway token differs from the install plan", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "stale-service-token",
+      },
+    } as never);
+    buildGatewayInstallPlanMock.mockResolvedValueOnce({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "fresh-token",
+      },
+    });
+
+    await runDaemonInstall({ json: true });
+
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(actionState.warnings).toContain(
+      "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.",
+    );
+  });
+
+  it("does not reinstall when OPENCLAW_GATEWAY_TOKEN comes from an env file", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "env-file-token",
+      },
+      environmentValueSources: {
+        OPENCLAW_GATEWAY_TOKEN: "file",
       },
     } as never);
 

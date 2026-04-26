@@ -93,6 +93,7 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
 
 export class DebugProxyCaptureStore {
   readonly db: DatabaseSync;
+  private closed = false;
 
   constructor(
     readonly dbPath: string,
@@ -102,7 +103,15 @@ export class DebugProxyCaptureStore {
   }
 
   close(): void {
+    if (this.closed) {
+      return;
+    }
     this.db.close();
+    this.closed = true;
+  }
+
+  get isClosed(): boolean {
+    return this.closed;
   }
 
   upsertSession(session: CaptureSessionRecord): void {
@@ -448,12 +457,14 @@ export class DebugProxyCaptureStore {
 
 let cachedStore: DebugProxyCaptureStore | null = null;
 let cachedKey = "";
+let cachedStoreLeases = 0;
 
 export function getDebugProxyCaptureStore(dbPath: string, blobDir: string): DebugProxyCaptureStore {
   const key = `${dbPath}:${blobDir}`;
-  if (!cachedStore || cachedKey !== key) {
+  if (!cachedStore || cachedStore.isClosed || cachedKey !== key) {
     cachedStore = new DebugProxyCaptureStore(dbPath, blobDir);
     cachedKey = key;
+    cachedStoreLeases = 0;
   }
   return cachedStore;
 }
@@ -465,6 +476,30 @@ export function closeDebugProxyCaptureStore(): void {
   cachedStore.close();
   cachedStore = null;
   cachedKey = "";
+  cachedStoreLeases = 0;
+}
+
+export function acquireDebugProxyCaptureStore(
+  dbPath: string,
+  blobDir: string,
+): { store: DebugProxyCaptureStore; release: () => void } {
+  const store = getDebugProxyCaptureStore(dbPath, blobDir);
+  const key = cachedKey;
+  cachedStoreLeases += 1;
+  let released = false;
+  return {
+    store,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      cachedStoreLeases = Math.max(0, cachedStoreLeases - 1);
+      if (cachedStoreLeases === 0 && cachedStore === store && cachedKey === key) {
+        closeDebugProxyCaptureStore();
+      }
+    },
+  };
 }
 
 export function persistEventPayload(

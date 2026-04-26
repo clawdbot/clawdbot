@@ -10,6 +10,7 @@ import {
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
+  runPluginRegistryPostinstallMigration,
   restoreLegacyUpdaterCompatSidecars,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
 import { NPM_UPDATE_COMPAT_SIDECARS } from "../../src/infra/npm-update-compat-sidecars.ts";
@@ -247,6 +248,134 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).resolves.toBeTruthy();
   });
 
+  it("migrates the plugin registry during postinstall from built dist contracts", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-postinstall-registry-");
+    const log = { log: vi.fn(), warn: vi.fn() };
+    const migratePluginRegistryForInstall = vi.fn(async () => ({
+      status: "migrated",
+      migrated: true,
+      preflight: {
+        deprecationWarnings: [],
+      },
+      current: {
+        plugins: [{ pluginId: "demo" }],
+      },
+    }));
+    const importModule = vi.fn(async (specifier: string) => {
+      if (specifier.endsWith("/dist/commands/doctor/shared/plugin-registry-migration.js")) {
+        return { migratePluginRegistryForInstall };
+      }
+      throw new Error(`unexpected import: ${specifier}`);
+    });
+
+    const result = await runPluginRegistryPostinstallMigration({
+      packageRoot,
+      existsSync: vi.fn((filePath: string) =>
+        filePath.endsWith(
+          path.join("dist", "commands", "doctor", "shared", "plugin-registry-migration.js"),
+        ),
+      ),
+      importModule,
+      env: { OPENCLAW_HOME: "/tmp/home" },
+      log,
+    });
+
+    expect(result).toMatchObject({ status: "migrated" });
+    expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
+      env: { OPENCLAW_HOME: "/tmp/home" },
+      packageRoot,
+    });
+    expect(log.log).toHaveBeenCalledWith(
+      "[postinstall] migrated plugin registry: 1 plugin(s) indexed",
+    );
+  });
+
+  it("surfaces deprecated plugin registry migration break-glass warnings", async () => {
+    const warn = vi.fn();
+    const migratePluginRegistryForInstall = vi.fn(async () => ({
+      status: "skip-existing",
+      migrated: false,
+      preflight: {
+        deprecationWarnings: ["OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated"],
+      },
+    }));
+    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
+
+    await runPluginRegistryPostinstallMigration({
+      packageRoot: "/pkg",
+      existsSync: vi.fn(() => true),
+      importModule,
+      log: { log: vi.fn(), warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[postinstall] OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated",
+    );
+  });
+
+  it("keeps plugin registry postinstall migration non-fatal when dist entries are unavailable", async () => {
+    const warn = vi.fn();
+
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot: "/pkg",
+        existsSync: vi.fn(() => false),
+        log: { log: vi.fn(), warn },
+      }),
+    ).resolves.toEqual({
+      status: "skipped",
+      reason: "missing-dist-entry",
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("honors plugin registry postinstall migration disable env", async () => {
+    const importModule = vi.fn(async () => {
+      throw new Error("dist migration module should not import when migration is disabled");
+    });
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot: "/pkg",
+        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "1" },
+        existsSync: vi.fn(() => true),
+        importModule,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).resolves.toMatchObject({
+      status: "disabled",
+      migrated: false,
+      reason: "disabled-env",
+    });
+    expect(importModule).not.toHaveBeenCalled();
+  });
+
+  it("does not disable plugin registry migration for falsey env flag strings", async () => {
+    const migratePluginRegistryForInstall = vi.fn(async () => ({
+      status: "skip-existing",
+      migrated: false,
+      preflight: {},
+    }));
+    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
+
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot: "/pkg",
+        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
+        existsSync: vi.fn(() => true),
+        importModule,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).resolves.toMatchObject({
+      status: "skip-existing",
+      migrated: false,
+    });
+    expect(importModule).toHaveBeenCalledOnce();
+    expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
+      env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
+      packageRoot: "/pkg",
+    });
+  });
+
   it("prunes stale dist files from packaged installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-");
     const currentFile = path.join(packageRoot, "dist", "channel-BOa4MfoC.js");
@@ -421,11 +550,39 @@ describe("bundled plugin postinstall", () => {
     const staleFile = path.join(packageRoot, "dist", "stale-runtime.js");
     const packageJson = path.join(packageRoot, "dist", "extensions", "slack", "package.json");
     const binDir = path.join(packageRoot, "dist", "extensions", "slack", "node_modules", ".bin");
+    const installStageFile = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "slack",
+      ".openclaw-install-stage",
+      "node_modules",
+      "typebox",
+      "build",
+      "compile",
+      "code.mjs",
+    );
+    const retryInstallStageFile = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "slack",
+      ".openclaw-install-stage-retry",
+      "node_modules",
+      "typebox",
+      "build",
+      "compile",
+      "code.mjs",
+    );
     await fs.mkdir(path.dirname(staleFile), { recursive: true });
     await fs.mkdir(path.dirname(packageJson), { recursive: true });
     await fs.mkdir(binDir, { recursive: true });
+    await fs.mkdir(path.dirname(installStageFile), { recursive: true });
+    await fs.mkdir(path.dirname(retryInstallStageFile), { recursive: true });
     await fs.writeFile(staleFile, "export {};\n");
     await fs.writeFile(packageJson, "{}\n");
+    await fs.writeFile(installStageFile, "export {};\n");
+    await fs.writeFile(retryInstallStageFile, "export {};\n");
     await fs.symlink("../fxparser/bin.js", path.join(binDir, "fxparser"));
 
     expect(
@@ -435,6 +592,8 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn: vi.fn() },
       }),
     ).toEqual(["dist/stale-runtime.js"]);
+    await expect(fs.stat(installStageFile)).resolves.toBeDefined();
+    await expect(fs.stat(retryInstallStageFile)).resolves.toBeDefined();
   });
 
   it("unlinks stale files instead of recursive pruning them", () => {

@@ -2,6 +2,8 @@ export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
 const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
+const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
+  /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 
 function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
   const marker = `.${reason}.`;
@@ -24,11 +26,28 @@ export function isSessionArchiveArtifactName(fileName: string): boolean {
   );
 }
 
+export function parseCompactionCheckpointTranscriptFileName(fileName: string): {
+  sessionId: string;
+  checkpointId: string;
+} | null {
+  const match = COMPACTION_CHECKPOINT_TRANSCRIPT_RE.exec(fileName);
+  const sessionId = match?.[1];
+  const checkpointId = match?.[2];
+  return sessionId && checkpointId ? { sessionId, checkpointId } : null;
+}
+
+export function isCompactionCheckpointTranscriptFileName(fileName: string): boolean {
+  return parseCompactionCheckpointTranscriptFileName(fileName) !== null;
+}
+
 export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (fileName === "sessions.json") {
     return false;
   }
   if (!fileName.endsWith(".jsonl")) {
+    return false;
+  }
+  if (isCompactionCheckpointTranscriptFileName(fileName)) {
     return false;
   }
   return !isSessionArchiveArtifactName(fileName);

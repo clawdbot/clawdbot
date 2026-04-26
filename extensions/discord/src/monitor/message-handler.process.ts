@@ -148,6 +148,7 @@ export async function processDiscordMessage(
     isGroupDm,
     baseText,
     messageText,
+    preflightAudioTranscript,
     shouldRequireMention,
     canDetectMention,
     effectiveWasMentioned,
@@ -428,6 +429,10 @@ export async function processDiscordMessage(
     }
   }
   const mediaPayload = buildDiscordMediaPayload(mediaList);
+  const preflightAudioIndex =
+    preflightAudioTranscript === undefined
+      ? -1
+      : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId: threadChannel ? messageChannelId : undefined,
@@ -487,10 +492,11 @@ export async function processDiscordMessage(
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    BodyForAgent: baseText ?? text,
+    BodyForAgent: preflightAudioTranscript ?? baseText ?? text,
     InboundHistory: inboundHistory,
-    RawBody: baseText,
-    CommandBody: baseText,
+    RawBody: preflightAudioTranscript ?? baseText,
+    CommandBody: preflightAudioTranscript ?? baseText,
+    ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
     From: effectiveFrom,
     To: effectiveTo,
     SessionKey: boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
@@ -521,6 +527,7 @@ export async function processDiscordMessage(
     ThreadLabel: threadLabel,
     Timestamp: resolveTimestampMs(message.timestamp),
     ...mediaPayload,
+    ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
     CommandAuthorized: commandAuthorized,
     CommandSource: "text" as const,
     // Originating channel for reply routing.

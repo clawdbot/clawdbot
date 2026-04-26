@@ -58,6 +58,15 @@ const mediaRuntimeMocks = vi.hoisted(() => {
     resolveEnvApiKey: vi.fn(() => undefined),
     resolveAgentModelFallbackValues: vi.fn<(value: unknown) => string[]>(() => []),
     resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
+    resolveAgentModelTimeoutMsValue: vi.fn<(value: unknown) => number | undefined>((value) => {
+      if (!value || typeof value !== "object" || !("timeoutMs" in value)) {
+        return undefined;
+      }
+      const timeoutMs = (value as { timeoutMs?: unknown }).timeoutMs;
+      return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? Math.floor(timeoutMs)
+        : undefined;
+    }),
     resolveProviderAuthEnvVarCandidates: vi.fn(() => ({})),
     debug,
     warn,
@@ -81,6 +90,7 @@ vi.mock("../../../src/agents/model-auth-env.js", () => ({
 vi.mock("../../../src/config/model-input.js", () => ({
   resolveAgentModelFallbackValues: mediaRuntimeMocks.resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue: mediaRuntimeMocks.resolveAgentModelPrimaryValue,
+  resolveAgentModelTimeoutMsValue: mediaRuntimeMocks.resolveAgentModelTimeoutMsValue,
 }));
 vi.mock("../../../src/logging/subsystem.js", () => ({
   createSubsystemLogger: mediaRuntimeMocks.createSubsystemLogger,

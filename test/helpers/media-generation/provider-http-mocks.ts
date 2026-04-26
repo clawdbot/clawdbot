@@ -1,6 +1,7 @@
 import type {
   pollProviderOperationJson,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, vi } from "vitest";
 
@@ -8,6 +9,9 @@ type ResolveProviderHttpRequestConfigParams = Parameters<
   typeof resolveProviderHttpRequestConfig
 >[0];
 type PollProviderOperationJsonParams = Parameters<typeof pollProviderOperationJson>[0];
+type SanitizeConfiguredModelProviderRequestParams = Parameters<
+  typeof sanitizeConfiguredModelProviderRequest
+>[0];
 
 const providerHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
@@ -15,9 +19,13 @@ const providerHttpMocks = vi.hoisted(() => ({
   fetchWithTimeoutMock: vi.fn(),
   pollProviderOperationJsonMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
+  assertOkOrThrowProviderErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
+  sanitizeConfiguredModelProviderRequestMock: vi.fn(
+    (request: SanitizeConfiguredModelProviderRequestParams) => request,
+  ),
   resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
+    allowPrivateNetwork: params.allowPrivateNetwork === true,
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined,
   })),
@@ -55,6 +63,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
+  assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
   createProviderOperationDeadline: ({
     label,
     timeoutMs,
@@ -71,6 +80,8 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequest:
+    providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
   waitProviderOperationPollInterval: async () => {},
 }));
 
@@ -85,6 +96,8 @@ export function installProviderHttpMockCleanup(): void {
     providerHttpMocks.fetchWithTimeoutMock.mockReset();
     providerHttpMocks.pollProviderOperationJsonMock.mockClear();
     providerHttpMocks.assertOkOrThrowHttpErrorMock.mockClear();
+    providerHttpMocks.assertOkOrThrowProviderErrorMock.mockClear();
+    providerHttpMocks.sanitizeConfiguredModelProviderRequestMock.mockClear();
     providerHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
   });
 }

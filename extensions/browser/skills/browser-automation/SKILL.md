@@ -22,7 +22,7 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 3. Read before you click:
    - Use `action="snapshot"` on the intended `targetId`.
    - Use the same `targetId` for follow-up actions so refs stay on the same tab.
-   - For durable Playwright refs, request `refs="aria"` when supported.
+   - For durable Playwright refs, request `refs="aria"` when supported. If you receive `axN` refs from `snapshotFormat="aria"`, use them only after that same snapshot call; stale or unbound `axN` refs fail fast and need a fresh snapshot.
    - Use `urls=true` when link text is ambiguous or a direct navigation target would avoid brittle clicks.
    - Use `labels=true` on snapshot or screenshot when visual position matters.
 4. Act narrowly:

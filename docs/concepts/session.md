@@ -3,6 +3,7 @@ summary: "How OpenClaw manages conversation sessions"
 read_when:
   - You want to understand session routing and isolation
   - You want to configure DM scope for multi-user setups
+  - You are debugging daily or idle session resets
 title: "Session management"
 ---
 
@@ -59,13 +60,21 @@ Verify your setup with `openclaw security audit`.
 Sessions are reused until they expire:
 
 - **Daily reset** (default) -- new session at 4:00 AM local time on the gateway
-  host.
+  host. Daily freshness is based on when the current `sessionId` started, not
+  on later metadata writes.
 - **Idle reset** (optional) -- new session after a period of inactivity. Set
-  `session.reset.idleMinutes`.
+  `session.reset.idleMinutes`. Idle freshness is based on the last real
+  user/channel interaction, so heartbeat, cron, and exec system events do not
+  keep the session alive.
 - **Manual reset** -- type `/new` or `/reset` in chat. `/new <model>` also
   switches the model.
 
 When both daily and idle resets are configured, whichever expires first wins.
+Heartbeat, cron, exec, and other system-event turns may write session metadata,
+but those writes do not extend daily or idle reset freshness. When a reset
+rolls the session, queued system-event notices for the old session are
+discarded so stale background updates are not prepended to the first prompt in
+the new session.
 
 Sessions with an active provider-owned CLI session are not cut by the implicit
 daily default. Use `/reset` or configure `session.reset` explicitly when those
@@ -78,6 +87,18 @@ session data.
 
 - **Store:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 - **Transcripts:** `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
+
+`sessions.json` keeps separate lifecycle timestamps:
+
+- `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
+- `lastInteractionAt`: last user/channel interaction that extends idle lifetime.
+- `updatedAt`: last store-row mutation; useful for listing and pruning, but not
+  authoritative for daily/idle reset freshness.
+
+Older rows without `sessionStartedAt` are resolved from the transcript JSONL
+session header when available. If an older row also lacks `lastInteractionAt`,
+idle freshness falls back to that session start time, not to later bookkeeping
+writes.
 
 ## Session maintenance
 

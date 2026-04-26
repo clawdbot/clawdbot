@@ -1498,7 +1498,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
       logProgress(`[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`);
     }
-    const sessionKey = `agent:${agentId}:${params.label}`;
     const failures: Array<{ model: string; error: string }> = [];
     let skippedCount = 0;
     const total = params.candidates.length;
@@ -1506,6 +1505,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     for (const [index, model] of params.candidates.entries()) {
       const modelKey = `${model.provider}/${model.id}`;
       const progressLabel = `[${params.label}] ${index + 1}/${total} ${modelKey}`;
+      // Use a separate session per model: live providers can finalize late after
+      // skip/retry paths, and a reset on a reused key does not isolate those
+      // delayed transcript writes from the next model probe.
+      const sessionKey = `agent:${agentId}:${params.label}:model-${index + 1}`;
 
       const attemptMax =
         model.provider === "anthropic" && anthropicKeys.length > 0 ? anthropicKeys.length : 1;

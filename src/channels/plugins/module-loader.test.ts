@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
+import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../../test-utils/jiti-runtime.js";
 import {
   isJavaScriptModulePath,
   resolveCompiledBundledModulePath,
@@ -92,7 +93,7 @@ describe("channel plugin module loader helpers", () => {
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("keeps Windows dist loads off Jiti native import", async () => {
+  it("uses the runtime-supported Jiti boundary for Windows dist loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: true })));
     vi.doMock("jiti", () => ({
       createJiti,
@@ -119,7 +120,7 @@ describe("channel plugin module loader helpers", () => {
       expect(createJiti).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          tryNative: false,
+          tryNative: shouldExpectNativeJitiForJavaScriptTestRuntime(),
         }),
       );
     } finally {

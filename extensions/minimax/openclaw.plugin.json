@@ -65,8 +65,8 @@
     "speechProviders": ["minimax"],
     "mediaUnderstandingProviders": ["minimax", "minimax-portal"],
     "imageGenerationProviders": ["minimax", "minimax-portal"],
-    "musicGenerationProviders": ["minimax"],
-    "videoGenerationProviders": ["minimax"],
+    "musicGenerationProviders": ["minimax", "minimax-portal"],
+    "videoGenerationProviders": ["minimax", "minimax-portal"],
     "webSearchProviders": ["minimax"]
   },
   "configContracts": {

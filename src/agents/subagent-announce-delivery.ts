@@ -11,6 +11,7 @@ import {
 } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
   isGatewayMessageChannel,
   isInternalMessageChannel,
   normalizeMessageChannel,
@@ -355,6 +356,14 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+  const deliveryTarget = !requesterIsSubagent
+    ? resolveExternalBestEffortDeliveryTarget({
+        channel: origin?.channel,
+        to: origin?.to,
+        accountId: origin?.accountId,
+        threadId,
+      })
+    : { deliver: false };
   const idempotencyKey = buildAnnounceIdempotencyKey(
     resolveQueueAnnounceId({
       announceId: item.announceId,
@@ -367,11 +376,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
-      channel: requesterIsSubagent ? undefined : origin?.channel,
-      accountId: requesterIsSubagent ? undefined : origin?.accountId,
-      to: requesterIsSubagent ? undefined : origin?.to,
-      threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      channel: deliveryTarget.deliver ? deliveryTarget.channel : undefined,
+      accountId: deliveryTarget.deliver ? deliveryTarget.accountId : undefined,
+      to: deliveryTarget.deliver ? deliveryTarget.to : undefined,
+      threadId: deliveryTarget.deliver ? deliveryTarget.threadId : undefined,
+      deliver: deliveryTarget.deliver,
       internalEvents: item.internalEvents,
       inputProvenance: {
         kind: "inter_session",
@@ -474,6 +483,7 @@ async function maybeQueueSubagentAnnounce(params: {
       },
       settings: queueSettings,
       send: sendAnnounce,
+      shouldDefer: (item) => resolveRequesterSessionActivity(item.sessionKey).isActive,
     });
     return didQueue ? "queued" : "dropped";
   }
@@ -548,7 +558,7 @@ function hasVisibleGatewayAgentPayload(response: unknown): boolean {
   });
 }
 
-async function sendThreadCompletionFallback(params: {
+async function sendCompletionFallback(params: {
   cfg: OpenClawConfig;
   channel?: string;
   to?: string;
@@ -563,11 +573,13 @@ async function sendThreadCompletionFallback(params: {
   const channel = params.channel?.trim();
   const to = params.to?.trim();
   const content = params.content.trim();
-  if (!channel || !to || !params.threadId || !content) {
+  if (!channel || !to || !content) {
     return false;
   }
   await runAnnounceDeliveryWithRetry({
-    operation: "completion direct thread fallback send",
+    operation: params.threadId
+      ? "completion direct thread fallback send"
+      : "completion direct fallback send",
     signal: params.signal,
     run: async () =>
       await subagentAnnounceDeliveryDeps.sendMessage({
@@ -584,6 +596,25 @@ async function sendThreadCompletionFallback(params: {
       }),
   });
   return true;
+}
+
+function resolveCompletionFallbackPath(threadId: string | undefined) {
+  return threadId ? ("direct-thread-fallback" as const) : ("direct-fallback" as const);
+}
+
+function stripNonDeliverableChannelForCompletionOrigin(
+  context?: DeliveryContext,
+): DeliveryContext | undefined {
+  const normalized = normalizeDeliveryContext(context);
+  if (!normalized?.channel) {
+    return normalized;
+  }
+  const channel = normalizeMessageChannel(normalized.channel);
+  if (!channel || isDeliverableMessageChannel(channel)) {
+    return normalized;
+  }
+  const { channel: _channel, ...rest } = normalized;
+  return normalizeDeliveryContext(rest);
 }
 
 async function sendSubagentAnnounceDirectly(params: {
@@ -622,10 +653,15 @@ async function sendSubagentAnnounceDirectly(params: {
     // (channel, to, accountId) fall back to the originating session's
     // lastChannel / lastTo. Without this, a completion origin that carries a
     // channel but not a `to` would prevent external delivery.
-    const effectiveDirectOrigin =
-      params.expectsCompletionMessage && completionDirectOrigin
-        ? mergeDeliveryContext(completionDirectOrigin, directOrigin)
-        : directOrigin;
+    const externalCompletionDirectOrigin =
+      stripNonDeliverableChannelForCompletionOrigin(completionDirectOrigin);
+    const completionExternalFallbackOrigin = mergeDeliveryContext(
+      directOrigin,
+      requesterSessionOrigin,
+    );
+    const effectiveDirectOrigin = params.expectsCompletionMessage
+      ? mergeDeliveryContext(externalCompletionDirectOrigin, completionExternalFallbackOrigin)
+      : directOrigin;
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
@@ -673,8 +709,8 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
-    const threadCompletionFallbackText =
-      params.expectsCompletionMessage && deliveryTarget.deliver && deliveryTarget.threadId
+    const completionFallbackText =
+      params.expectsCompletionMessage && deliveryTarget.deliver
         ? extractThreadCompletionFallbackText(params.internalEvents)
         : "";
     let directAnnounceResponse: unknown;
@@ -722,13 +758,13 @@ async function sendSubagentAnnounceDirectly(params: {
           }),
       });
     } catch (err) {
-      const didFallback = await sendThreadCompletionFallback({
+      const didFallback = await sendCompletionFallback({
         cfg,
         channel: deliveryTarget.channel,
         to: deliveryTarget.to,
         accountId: deliveryTarget.accountId,
         threadId: deliveryTarget.threadId,
-        content: threadCompletionFallbackText,
+        content: deliveryTarget.threadId ? completionFallbackText : "",
         requesterSessionKey: canonicalRequesterSessionKey,
         bestEffortDeliver: params.bestEffortDeliver,
         idempotencyKey: params.directIdempotencyKey,
@@ -743,14 +779,14 @@ async function sendSubagentAnnounceDirectly(params: {
       throw err;
     }
 
-    if (threadCompletionFallbackText && !hasVisibleGatewayAgentPayload(directAnnounceResponse)) {
-      const didFallback = await sendThreadCompletionFallback({
+    if (completionFallbackText && !hasVisibleGatewayAgentPayload(directAnnounceResponse)) {
+      const didFallback = await sendCompletionFallback({
         cfg,
         channel: deliveryTarget.channel,
         to: deliveryTarget.to,
         accountId: deliveryTarget.accountId,
         threadId: deliveryTarget.threadId,
-        content: threadCompletionFallbackText,
+        content: completionFallbackText,
         requesterSessionKey: canonicalRequesterSessionKey,
         bestEffortDeliver: params.bestEffortDeliver,
         idempotencyKey: params.directIdempotencyKey,
@@ -759,7 +795,7 @@ async function sendSubagentAnnounceDirectly(params: {
       if (didFallback) {
         return {
           delivered: true,
-          path: "direct-thread-fallback",
+          path: resolveCompletionFallbackPath(deliveryTarget.threadId),
         };
       }
     }

@@ -3,6 +3,8 @@ import path from "node:path";
 import {
   ensureBundledPluginRuntimeDeps,
   resolveBundledRuntimeDependencyInstallRoot,
+  resolveBundledRuntimeDependencyPackageRoot,
+  registerBundledRuntimeDependencyNodePath,
 } from "./bundled-runtime-deps.js";
 
 const bundledRuntimeDepsRetainSpecsByInstallRoot = new Map<string, readonly string[]>();
@@ -44,6 +46,11 @@ export function prepareBundledPluginRuntimeRoot(params: {
   if (path.resolve(installRoot) === path.resolve(params.pluginRoot)) {
     return { pluginRoot: params.pluginRoot, modulePath: params.modulePath };
   }
+  const packageRoot = resolveBundledRuntimeDependencyPackageRoot(params.pluginRoot);
+  if (packageRoot) {
+    registerBundledRuntimeDependencyNodePath(packageRoot);
+  }
+  registerBundledRuntimeDependencyNodePath(installRoot);
   const mirrorRoot = mirrorBundledPluginRuntimeRoot({
     pluginId: params.pluginId,
     pluginRoot: params.pluginRoot,
@@ -115,6 +122,7 @@ function prepareBundledPluginRuntimeDistMirror(params: {
   const mirrorDistRoot = path.join(params.installRoot, "dist");
   const mirrorExtensionsRoot = path.join(mirrorDistRoot, "extensions");
   fs.mkdirSync(mirrorExtensionsRoot, { recursive: true, mode: 0o755 });
+  ensureBundledRuntimeDistPackageJson(mirrorDistRoot);
   for (const entry of fs.readdirSync(sourceDistRoot, { withFileTypes: true })) {
     if (entry.name === "extensions") {
       continue;
@@ -136,6 +144,14 @@ function prepareBundledPluginRuntimeDistMirror(params: {
   }
   ensureOpenClawPluginSdkAlias(mirrorDistRoot);
   return mirrorExtensionsRoot;
+}
+
+function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
+  const packageJsonPath = path.join(mirrorDistRoot, "package.json");
+  if (fs.existsSync(packageJsonPath)) {
+    return;
+  }
+  writeRuntimeJsonFile(packageJsonPath, { type: "module" });
 }
 
 function copyBundledPluginRuntimeRoot(sourceRoot: string, targetRoot: string): void {

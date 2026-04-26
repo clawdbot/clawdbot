@@ -1,3 +1,4 @@
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -365,7 +366,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripInternalRuntimeContext(stripFinalTagsFromText(raw));
+  const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";

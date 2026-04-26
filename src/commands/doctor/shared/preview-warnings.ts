@@ -139,6 +139,9 @@ export async function collectDoctorPreviewWarnings(params: {
         }).join("\n"),
       );
     }
+
+    const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
+    warnings.push(...collectCodexRouteWarnings({ cfg: params.cfg, env }));
   }
 
   if (hasPluginLoadPaths(params.cfg)) {

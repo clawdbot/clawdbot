@@ -26,6 +26,11 @@ vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
       description: "Mistral API key",
       optionKey: "mistralApiKey",
     },
+    {
+      cliOption: "--openai-api-key <key>",
+      description: "OpenAI API key (core fallback)",
+      optionKey: "openaiApiKey",
+    },
   ] as Array<{ cliOption: string; description: string; optionKey: string }>,
 }));
 
@@ -151,6 +156,16 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mistralApiKey: "sk-mistral-test", // pragma: allowlist secret
+      }),
+      runtime,
+    );
+  });
+
+  it("dedupes provider auth flags before registering command options", async () => {
+    await runCli(["onboard", "--openai-api-key", "sk-openai-test"]);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openaiApiKey: "sk-openai-test", // pragma: allowlist secret
       }),
       runtime,
     );

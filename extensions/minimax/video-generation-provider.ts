@@ -54,8 +54,9 @@ type MinimaxFileRetrieveResponse = {
 
 function resolveMinimaxVideoBaseUrl(
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
+  providerId: string,
 ): string {
-  const direct = normalizeOptionalString(cfg?.models?.providers?.minimax?.baseUrl);
+  const direct = normalizeOptionalString(cfg?.models?.providers?.[providerId]?.baseUrl);
   if (!direct) {
     return DEFAULT_MINIMAX_VIDEO_BASE_URL;
   }
@@ -222,9 +223,9 @@ async function downloadVideoFromFileId(params: {
   };
 }
 
-export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
+function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider {
   return {
-    id: "minimax",
+    id: providerId,
     label: "MiniMax",
     defaultModel: DEFAULT_MINIMAX_VIDEO_MODEL,
     models: [
@@ -237,7 +238,7 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
     ],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
-        provider: "minimax",
+        provider: providerId,
         agentDir,
       }),
     capabilities: {
@@ -266,7 +267,7 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
         throw new Error("MiniMax video generation does not support video reference inputs.");
       }
       const auth = await resolveApiKeyForProvider({
-        provider: "minimax",
+        provider: providerId,
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
@@ -282,14 +283,14 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
       });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolveMinimaxVideoBaseUrl(req.cfg),
+          baseUrl: resolveMinimaxVideoBaseUrl(req.cfg, providerId),
           defaultBaseUrl: DEFAULT_MINIMAX_VIDEO_BASE_URL,
           allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",
           },
-          provider: "minimax",
+          provider: providerId,
           capability: "video",
           transport: "http",
         });
@@ -384,4 +385,12 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
       }
     },
   };
+}
+
+export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
+  return buildMinimaxVideoProvider("minimax");
+}
+
+export function buildMinimaxPortalVideoGenerationProvider(): VideoGenerationProvider {
+  return buildMinimaxVideoProvider("minimax-portal");
 }

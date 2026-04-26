@@ -64,4 +64,81 @@ import type { WindowsWorldWritableWarningNotification } from "./v2/WindowsWorldW
 /**
  * Notification sent from the server to the client.
  */
-export type ServerNotification = { "method": "error", "params": ErrorNotification } | { "method": "thread/started", "params": ThreadStartedNotification } | { "method": "thread/status/changed", "params": ThreadStatusChangedNotification } | { "method": "thread/archived", "params": ThreadArchivedNotification } | { "method": "thread/unarchived", "params": ThreadUnarchivedNotification } | { "method": "thread/closed", "params": ThreadClosedNotification } | { "method": "skills/changed", "params": SkillsChangedNotification } | { "method": "thread/name/updated", "params": ThreadNameUpdatedNotification } | { "method": "thread/tokenUsage/updated", "params": ThreadTokenUsageUpdatedNotification } | { "method": "turn/started", "params": TurnStartedNotification } | { "method": "hook/started", "params": HookStartedNotification } | { "method": "turn/completed", "params": TurnCompletedNotification } | { "method": "hook/completed", "params": HookCompletedNotification } | { "method": "turn/diff/updated", "params": TurnDiffUpdatedNotification } | { "method": "turn/plan/updated", "params": TurnPlanUpdatedNotification } | { "method": "item/started", "params": ItemStartedNotification } | { "method": "item/autoApprovalReview/started", "params": ItemGuardianApprovalReviewStartedNotification } | { "method": "item/autoApprovalReview/completed", "params": ItemGuardianApprovalReviewCompletedNotification } | { "method": "item/completed", "params": ItemCompletedNotification } | { "method": "rawResponseItem/completed", "params": RawResponseItemCompletedNotification } | { "method": "item/agentMessage/delta", "params": AgentMessageDeltaNotification } | { "method": "item/plan/delta", "params": PlanDeltaNotification } | { "method": "command/exec/outputDelta", "params": CommandExecOutputDeltaNotification } | { "method": "item/commandExecution/outputDelta", "params": CommandExecutionOutputDeltaNotification } | { "method": "item/commandExecution/terminalInteraction", "params": TerminalInteractionNotification } | { "method": "item/fileChange/outputDelta", "params": FileChangeOutputDeltaNotification } | { "method": "item/fileChange/patchUpdated", "params": FileChangePatchUpdatedNotification } | { "method": "serverRequest/resolved", "params": ServerRequestResolvedNotification } | { "method": "item/mcpToolCall/progress", "params": McpToolCallProgressNotification } | { "method": "mcpServer/oauthLogin/completed", "params": McpServerOauthLoginCompletedNotification } | { "method": "mcpServer/startupStatus/updated", "params": McpServerStatusUpdatedNotification } | { "method": "account/updated", "params": AccountUpdatedNotification } | { "method": "account/rateLimits/updated", "params": AccountRateLimitsUpdatedNotification } | { "method": "app/list/updated", "params": AppListUpdatedNotification } | { "method": "externalAgentConfig/import/completed", "params": ExternalAgentConfigImportCompletedNotification } | { "method": "fs/changed", "params": FsChangedNotification } | { "method": "item/reasoning/summaryTextDelta", "params": ReasoningSummaryTextDeltaNotification } | { "method": "item/reasoning/summaryPartAdded", "params": ReasoningSummaryPartAddedNotification } | { "method": "item/reasoning/textDelta", "params": ReasoningTextDeltaNotification } | { "method": "thread/compacted", "params": ContextCompactedNotification } | { "method": "model/rerouted", "params": ModelReroutedNotification } | { "method": "model/verification", "params": ModelVerificationNotification } | { "method": "warning", "params": WarningNotification } | { "method": "guardianWarning", "params": GuardianWarningNotification } | { "method": "deprecationNotice", "params": DeprecationNoticeNotification } | { "method": "configWarning", "params": ConfigWarningNotification } | { "method": "fuzzyFileSearch/sessionUpdated", "params": FuzzyFileSearchSessionUpdatedNotification } | { "method": "fuzzyFileSearch/sessionCompleted", "params": FuzzyFileSearchSessionCompletedNotification } | { "method": "thread/realtime/started", "params": ThreadRealtimeStartedNotification } | { "method": "thread/realtime/itemAdded", "params": ThreadRealtimeItemAddedNotification } | { "method": "thread/realtime/transcript/delta", "params": ThreadRealtimeTranscriptDeltaNotification } | { "method": "thread/realtime/transcript/done", "params": ThreadRealtimeTranscriptDoneNotification } | { "method": "thread/realtime/outputAudio/delta", "params": ThreadRealtimeOutputAudioDeltaNotification } | { "method": "thread/realtime/sdp", "params": ThreadRealtimeSdpNotification } | { "method": "thread/realtime/error", "params": ThreadRealtimeErrorNotification } | { "method": "thread/realtime/closed", "params": ThreadRealtimeClosedNotification } | { "method": "windows/worldWritableWarning", "params": WindowsWorldWritableWarningNotification } | { "method": "windowsSandbox/setupCompleted", "params": WindowsSandboxSetupCompletedNotification } | { "method": "account/login/completed", "params": AccountLoginCompletedNotification };
+export type ServerNotification =
+  | { method: "error"; params: ErrorNotification }
+  | { method: "thread/started"; params: ThreadStartedNotification }
+  | { method: "thread/status/changed"; params: ThreadStatusChangedNotification }
+  | { method: "thread/archived"; params: ThreadArchivedNotification }
+  | { method: "thread/unarchived"; params: ThreadUnarchivedNotification }
+  | { method: "thread/closed"; params: ThreadClosedNotification }
+  | { method: "skills/changed"; params: SkillsChangedNotification }
+  | { method: "thread/name/updated"; params: ThreadNameUpdatedNotification }
+  | { method: "thread/tokenUsage/updated"; params: ThreadTokenUsageUpdatedNotification }
+  | { method: "turn/started"; params: TurnStartedNotification }
+  | { method: "hook/started"; params: HookStartedNotification }
+  | { method: "turn/completed"; params: TurnCompletedNotification }
+  | { method: "hook/completed"; params: HookCompletedNotification }
+  | { method: "turn/diff/updated"; params: TurnDiffUpdatedNotification }
+  | { method: "turn/plan/updated"; params: TurnPlanUpdatedNotification }
+  | { method: "item/started"; params: ItemStartedNotification }
+  | {
+      method: "item/autoApprovalReview/started";
+      params: ItemGuardianApprovalReviewStartedNotification;
+    }
+  | {
+      method: "item/autoApprovalReview/completed";
+      params: ItemGuardianApprovalReviewCompletedNotification;
+    }
+  | { method: "item/completed"; params: ItemCompletedNotification }
+  | { method: "rawResponseItem/completed"; params: RawResponseItemCompletedNotification }
+  | { method: "item/agentMessage/delta"; params: AgentMessageDeltaNotification }
+  | { method: "item/plan/delta"; params: PlanDeltaNotification }
+  | { method: "command/exec/outputDelta"; params: CommandExecOutputDeltaNotification }
+  | { method: "item/commandExecution/outputDelta"; params: CommandExecutionOutputDeltaNotification }
+  | { method: "item/commandExecution/terminalInteraction"; params: TerminalInteractionNotification }
+  | { method: "item/fileChange/outputDelta"; params: FileChangeOutputDeltaNotification }
+  | { method: "item/fileChange/patchUpdated"; params: FileChangePatchUpdatedNotification }
+  | { method: "serverRequest/resolved"; params: ServerRequestResolvedNotification }
+  | { method: "item/mcpToolCall/progress"; params: McpToolCallProgressNotification }
+  | { method: "mcpServer/oauthLogin/completed"; params: McpServerOauthLoginCompletedNotification }
+  | { method: "mcpServer/startupStatus/updated"; params: McpServerStatusUpdatedNotification }
+  | { method: "account/updated"; params: AccountUpdatedNotification }
+  | { method: "account/rateLimits/updated"; params: AccountRateLimitsUpdatedNotification }
+  | { method: "app/list/updated"; params: AppListUpdatedNotification }
+  | {
+      method: "externalAgentConfig/import/completed";
+      params: ExternalAgentConfigImportCompletedNotification;
+    }
+  | { method: "fs/changed"; params: FsChangedNotification }
+  | { method: "item/reasoning/summaryTextDelta"; params: ReasoningSummaryTextDeltaNotification }
+  | { method: "item/reasoning/summaryPartAdded"; params: ReasoningSummaryPartAddedNotification }
+  | { method: "item/reasoning/textDelta"; params: ReasoningTextDeltaNotification }
+  | { method: "thread/compacted"; params: ContextCompactedNotification }
+  | { method: "model/rerouted"; params: ModelReroutedNotification }
+  | { method: "model/verification"; params: ModelVerificationNotification }
+  | { method: "warning"; params: WarningNotification }
+  | { method: "guardianWarning"; params: GuardianWarningNotification }
+  | { method: "deprecationNotice"; params: DeprecationNoticeNotification }
+  | { method: "configWarning"; params: ConfigWarningNotification }
+  | { method: "fuzzyFileSearch/sessionUpdated"; params: FuzzyFileSearchSessionUpdatedNotification }
+  | {
+      method: "fuzzyFileSearch/sessionCompleted";
+      params: FuzzyFileSearchSessionCompletedNotification;
+    }
+  | { method: "thread/realtime/started"; params: ThreadRealtimeStartedNotification }
+  | { method: "thread/realtime/itemAdded"; params: ThreadRealtimeItemAddedNotification }
+  | {
+      method: "thread/realtime/transcript/delta";
+      params: ThreadRealtimeTranscriptDeltaNotification;
+    }
+  | { method: "thread/realtime/transcript/done"; params: ThreadRealtimeTranscriptDoneNotification }
+  | {
+      method: "thread/realtime/outputAudio/delta";
+      params: ThreadRealtimeOutputAudioDeltaNotification;
+    }
+  | { method: "thread/realtime/sdp"; params: ThreadRealtimeSdpNotification }
+  | { method: "thread/realtime/error"; params: ThreadRealtimeErrorNotification }
+  | { method: "thread/realtime/closed"; params: ThreadRealtimeClosedNotification }
+  | { method: "windows/worldWritableWarning"; params: WindowsWorldWritableWarningNotification }
+  | { method: "windowsSandbox/setupCompleted"; params: WindowsSandboxSetupCompletedNotification }
+  | { method: "account/login/completed"; params: AccountLoginCompletedNotification };

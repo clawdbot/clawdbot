@@ -1,11 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { Module } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLowDiskSpaceWarning } from "../infra/disk-space.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { createNpmProjectInstallEnv } from "../infra/npm-install-env.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { satisfies, validRange, validSemver } from "./semver.runtime.js";
@@ -25,8 +28,10 @@ export type RuntimeDepConflict = {
 export type BundledRuntimeDepsInstallParams = {
   installRoot: string;
   installExecutionRoot?: string;
+  linkNodeModulesFromExecutionRoot?: boolean;
   missingSpecs: string[];
   installSpecs?: string[];
+  warn?: (message: string) => void;
 };
 
 export type BundledRuntimeDepsEnsureResult = {
@@ -54,6 +59,9 @@ const BUNDLED_RUNTIME_DEPS_LOCK_OWNER_FILE = "owner.json";
 const BUNDLED_RUNTIME_DEPS_LOCK_WAIT_MS = 100;
 const BUNDLED_RUNTIME_DEPS_LOCK_TIMEOUT_MS = 5 * 60_000;
 const BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS = 10 * 60_000;
+const BUNDLED_RUNTIME_DEPS_OWNERLESS_LOCK_STALE_MS = 30_000;
+
+const registeredBundledRuntimeDepNodePaths = new Set<string>();
 
 export type BundledRuntimeDepsNpmRunner = {
   command: string;
@@ -186,21 +194,80 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 
-function readRuntimeDepsLockOwner(lockDir: string): { pid?: number; createdAtMs?: number } {
-  const owner = readJsonObject(path.join(lockDir, BUNDLED_RUNTIME_DEPS_LOCK_OWNER_FILE));
+type RuntimeDepsLockOwner = {
+  pid?: number;
+  createdAtMs?: number;
+  ownerFileState: "ok" | "missing" | "invalid";
+  ownerFilePath: string;
+  ownerFileMtimeMs?: number;
+  ownerFileIsSymlink?: boolean;
+  lockDirMtimeMs?: number;
+};
+
+function readRuntimeDepsLockOwner(lockDir: string): RuntimeDepsLockOwner {
+  const ownerFilePath = path.join(lockDir, BUNDLED_RUNTIME_DEPS_LOCK_OWNER_FILE);
+  let owner: JsonObject | null = null;
+  let ownerFileState: RuntimeDepsLockOwner["ownerFileState"] = "missing";
+  let ownerFileMtimeMs: number | undefined;
+  let ownerFileIsSymlink: boolean | undefined;
+  try {
+    const ownerFileStat = fs.lstatSync(ownerFilePath);
+    ownerFileMtimeMs = ownerFileStat.mtimeMs;
+    ownerFileIsSymlink = ownerFileStat.isSymbolicLink();
+  } catch {
+    // The owner file may not exist yet, or may have been removed by the lock owner.
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(ownerFilePath, "utf8")) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      owner = parsed as JsonObject;
+      ownerFileState = "ok";
+    } else {
+      ownerFileState = "invalid";
+    }
+  } catch (error) {
+    ownerFileState =
+      (error as NodeJS.ErrnoException).code === "ENOENT" && ownerFileMtimeMs === undefined
+        ? "missing"
+        : "invalid";
+  }
+  let lockDirMtimeMs: number | undefined;
+  try {
+    lockDirMtimeMs = fs.statSync(lockDir).mtimeMs;
+  } catch {
+    // The lock may have disappeared between the mkdir failure and diagnostics.
+  }
   return {
     pid: typeof owner?.pid === "number" ? owner.pid : undefined,
     createdAtMs: typeof owner?.createdAtMs === "number" ? owner.createdAtMs : undefined,
+    ownerFileState,
+    ownerFilePath,
+    ownerFileMtimeMs,
+    ownerFileIsSymlink,
+    lockDirMtimeMs,
   };
 }
 
+function latestFiniteMs(values: readonly (number | undefined)[]): number | undefined {
+  let latest: number | undefined;
+  for (const value of values) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      continue;
+    }
+    if (latest === undefined || value > latest) {
+      latest = value;
+    }
+  }
+  return latest;
+}
+
 function shouldRemoveRuntimeDepsLock(
-  owner: { pid?: number; createdAtMs?: number },
+  owner: Pick<RuntimeDepsLockOwner, "pid" | "createdAtMs" | "lockDirMtimeMs" | "ownerFileMtimeMs">,
   nowMs: number,
   isAlive: (pid: number) => boolean = isProcessAlive,
 ): boolean {
@@ -208,13 +275,55 @@ function shouldRemoveRuntimeDepsLock(
     return !isAlive(owner.pid);
   }
 
+  if (typeof owner.createdAtMs === "number") {
+    return nowMs - owner.createdAtMs > BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS;
+  }
+
+  const ownerlessObservedAtMs = latestFiniteMs([owner.lockDirMtimeMs, owner.ownerFileMtimeMs]);
   return (
-    typeof owner.createdAtMs === "number" &&
-    nowMs - owner.createdAtMs > BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS
+    typeof ownerlessObservedAtMs === "number" &&
+    nowMs - ownerlessObservedAtMs > BUNDLED_RUNTIME_DEPS_OWNERLESS_LOCK_STALE_MS
+  );
+}
+
+function formatDurationMs(ms: number | undefined): string {
+  return typeof ms === "number" && Number.isFinite(ms) ? `${Math.max(0, Math.round(ms))}ms` : "n/a";
+}
+
+function formatRuntimeDepsLockTimeoutMessage(params: {
+  lockDir: string;
+  owner: RuntimeDepsLockOwner;
+  waitedMs: number;
+  nowMs: number;
+}): string {
+  const ownerAgeMs =
+    typeof params.owner.createdAtMs === "number"
+      ? params.nowMs - params.owner.createdAtMs
+      : undefined;
+  const lockAgeMs =
+    typeof params.owner.lockDirMtimeMs === "number"
+      ? params.nowMs - params.owner.lockDirMtimeMs
+      : undefined;
+  const ownerFileAgeMs =
+    typeof params.owner.ownerFileMtimeMs === "number"
+      ? params.nowMs - params.owner.ownerFileMtimeMs
+      : undefined;
+  const pidDetail =
+    typeof params.owner.pid === "number"
+      ? `pid=${params.owner.pid} alive=${isProcessAlive(params.owner.pid)}`
+      : "pid=missing";
+  const ownerFileSymlink =
+    typeof params.owner.ownerFileIsSymlink === "boolean" ? params.owner.ownerFileIsSymlink : "n/a";
+  return (
+    `Timed out waiting for bundled runtime deps lock at ${params.lockDir} ` +
+    `(waited=${formatDurationMs(params.waitedMs)}, ownerFile=${params.owner.ownerFileState}, ownerFileSymlink=${ownerFileSymlink}, ` +
+    `${pidDetail}, ownerAge=${formatDurationMs(ownerAgeMs)}, ownerFileAge=${formatDurationMs(ownerFileAgeMs)}, lockAge=${formatDurationMs(lockAgeMs)}, ` +
+    `ownerFilePath=${params.owner.ownerFilePath}). If no OpenClaw/npm install is running, remove the lock directory and retry.`
   );
 }
 
 export const __testing = {
+  formatRuntimeDepsLockTimeoutMessage,
   shouldRemoveRuntimeDepsLock,
 };
 
@@ -240,11 +349,16 @@ function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () =
   while (!locked) {
     try {
       fs.mkdirSync(lockDir);
-      fs.writeFileSync(
-        path.join(lockDir, BUNDLED_RUNTIME_DEPS_LOCK_OWNER_FILE),
-        `${JSON.stringify({ pid: process.pid, createdAtMs: Date.now() }, null, 2)}\n`,
-        "utf8",
-      );
+      try {
+        fs.writeFileSync(
+          path.join(lockDir, BUNDLED_RUNTIME_DEPS_LOCK_OWNER_FILE),
+          `${JSON.stringify({ pid: process.pid, createdAtMs: Date.now() }, null, 2)}\n`,
+          "utf8",
+        );
+      } catch (ownerWriteError) {
+        fs.rmSync(lockDir, { recursive: true, force: true });
+        throw ownerWriteError;
+      }
       locked = true;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -252,10 +366,19 @@ function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () =
         throw error;
       }
       removeRuntimeDepsLockIfStale(lockDir, Date.now());
-      if (Date.now() - startedAt > BUNDLED_RUNTIME_DEPS_LOCK_TIMEOUT_MS) {
-        throw new Error(`Timed out waiting for bundled runtime deps lock at ${lockDir}`, {
-          cause: error,
-        });
+      const nowMs = Date.now();
+      if (nowMs - startedAt > BUNDLED_RUNTIME_DEPS_LOCK_TIMEOUT_MS) {
+        throw new Error(
+          formatRuntimeDepsLockTimeoutMessage({
+            lockDir,
+            owner: readRuntimeDepsLockOwner(lockDir),
+            waitedMs: nowMs - startedAt,
+            nowMs,
+          }),
+          {
+            cause: error,
+          },
+        );
       }
       sleepSync(BUNDLED_RUNTIME_DEPS_LOCK_WAIT_MS);
     }
@@ -322,6 +445,43 @@ function resolveBundledPluginPackageRoot(pluginRoot: string): string | null {
     return null;
   }
   return path.dirname(buildDir);
+}
+
+export function resolveBundledRuntimeDependencyPackageRoot(pluginRoot: string): string | null {
+  return resolveBundledPluginPackageRoot(pluginRoot);
+}
+
+export function registerBundledRuntimeDependencyNodePath(rootDir: string): void {
+  const nodeModulesDir = path.join(rootDir, "node_modules");
+  if (registeredBundledRuntimeDepNodePaths.has(nodeModulesDir) || !fs.existsSync(nodeModulesDir)) {
+    return;
+  }
+  const currentPaths = (process.env.NODE_PATH ?? "")
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  process.env.NODE_PATH = [
+    nodeModulesDir,
+    ...currentPaths.filter((entry) => entry !== nodeModulesDir),
+  ].join(path.delimiter);
+  (Module as unknown as { _initPaths?: () => void })._initPaths?.();
+  registeredBundledRuntimeDepNodePaths.add(nodeModulesDir);
+}
+
+export function clearBundledRuntimeDependencyNodePaths(): void {
+  if (registeredBundledRuntimeDepNodePaths.size === 0) {
+    return;
+  }
+  const retainedPaths = (process.env.NODE_PATH ?? "")
+    .split(path.delimiter)
+    .filter((entry) => entry.length > 0 && !registeredBundledRuntimeDepNodePaths.has(entry));
+  if (retainedPaths.length > 0) {
+    process.env.NODE_PATH = retainedPaths.join(path.delimiter);
+  } else {
+    delete process.env.NODE_PATH;
+  }
+  registeredBundledRuntimeDepNodePaths.clear();
+  (Module as unknown as { _initPaths?: () => void })._initPaths?.();
 }
 
 function isPackagedBundledPluginRoot(pluginRoot: string): boolean {
@@ -451,9 +611,34 @@ function resolveExternalBundledRuntimeDepsInstallRoot(params: {
   env: NodeJS.ProcessEnv;
 }): string {
   const packageRoot = resolveBundledPluginPackageRoot(params.pluginRoot) ?? params.pluginRoot;
+  const existingExternalRoot = resolveExistingExternalBundledRuntimeDepsRoot({
+    packageRoot,
+    env: params.env,
+  });
+  if (existingExternalRoot) {
+    return existingExternalRoot;
+  }
   const version = sanitizePathSegment(readPackageVersion(packageRoot));
   const packageKey = `openclaw-${version}-${createPathHash(packageRoot)}`;
   return path.join(resolveBundledRuntimeDepsExternalBaseDir(params.env), packageKey);
+}
+
+function resolveExistingExternalBundledRuntimeDepsRoot(params: {
+  packageRoot: string;
+  env: NodeJS.ProcessEnv;
+}): string | null {
+  const externalBaseDir = path.resolve(resolveBundledRuntimeDepsExternalBaseDir(params.env));
+  const packageRoot = path.resolve(params.packageRoot);
+  const relative = path.relative(externalBaseDir, packageRoot);
+  if (
+    relative === "" ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative) ||
+    relative.includes(path.sep)
+  ) {
+    return null;
+  }
+  return path.basename(packageRoot).startsWith("openclaw-") ? packageRoot : null;
 }
 
 function resolveSourceCheckoutRuntimeDepsCacheDir(params: {
@@ -501,6 +686,19 @@ function hasDependencySentinel(
   });
 }
 
+function assertBundledRuntimeDepsInstalled(rootDir: string, specs: readonly string[]): void {
+  const missingSpecs = specs.filter((spec) => {
+    const dep = parseInstallableRuntimeDepSpec(spec);
+    return !hasDependencySentinel([rootDir], dep);
+  });
+  if (missingSpecs.length === 0) {
+    return;
+  }
+  throw new Error(
+    `npm install did not place bundled runtime deps in ${rootDir}: ${missingSpecs.join(", ")}`,
+  );
+}
+
 function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
   const parentDir = path.dirname(targetDir);
   const tempDir = fs.mkdtempSync(path.join(parentDir, ".openclaw-runtime-deps-copy-"));
@@ -519,6 +717,31 @@ function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
   }
 }
 
+function linkNodeModulesDir(targetDir: string, sourceDir: string): boolean {
+  const parentDir = path.dirname(targetDir);
+  const tempLink = path.join(parentDir, `.openclaw-runtime-deps-link-${process.pid}-${Date.now()}`);
+  try {
+    fs.symlinkSync(sourceDir, tempLink, process.platform === "win32" ? "junction" : "dir");
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    fs.renameSync(tempLink, targetDir);
+    return true;
+  } catch {
+    try {
+      fs.rmSync(tempLink, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup; caller falls back to copying.
+    }
+    return false;
+  }
+}
+
+function replaceNodeModulesDirFromCache(targetDir: string, sourceDir: string): void {
+  if (linkNodeModulesDir(targetDir, sourceDir)) {
+    return;
+  }
+  replaceNodeModulesDir(targetDir, sourceDir);
+}
+
 function restoreSourceCheckoutRuntimeDepsFromCache(params: {
   cacheDir: string | null;
   deps: readonly { name: string }[];
@@ -532,7 +755,10 @@ function restoreSourceCheckoutRuntimeDepsFromCache(params: {
     return false;
   }
   try {
-    replaceNodeModulesDir(path.join(params.installRoot, "node_modules"), cachedNodeModulesDir);
+    replaceNodeModulesDirFromCache(
+      path.join(params.installRoot, "node_modules"),
+      cachedNodeModulesDir,
+    );
     return true;
   } catch {
     return false;
@@ -564,26 +790,13 @@ function storeSourceCheckoutRuntimeDepsCache(params: {
   }
 }
 
-function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const nextEnv = { ...env };
-  delete nextEnv.NPM_CONFIG_CACHE;
-  delete nextEnv.npm_config_cache;
-  delete nextEnv.npm_config_global;
-  delete nextEnv.npm_config_location;
-  delete nextEnv.npm_config_prefix;
-  return nextEnv;
-}
-
 export function createBundledRuntimeDepsInstallEnv(
   env: NodeJS.ProcessEnv,
   options: { cacheDir?: string } = {},
 ): NodeJS.ProcessEnv {
   return {
-    ...createNestedNpmInstallEnv(env),
+    ...createNpmProjectInstallEnv(env, options),
     npm_config_legacy_peer_deps: "true",
-    npm_config_package_lock: "false",
-    npm_config_save: "false",
-    ...(options.cacheDir ? { npm_config_cache: options.cacheDir } : {}),
   };
 }
 
@@ -970,11 +1183,24 @@ function shouldCleanBundledRuntimeDepsInstallExecutionRoot(params: {
   return installExecutionRoot.startsWith(`${installRoot}${path.sep}`);
 }
 
+function ensureNpmInstallExecutionManifest(installExecutionRoot: string): void {
+  const manifestPath = path.join(installExecutionRoot, "package.json");
+  if (fs.existsSync(manifestPath)) {
+    return;
+  }
+  fs.writeFileSync(
+    manifestPath,
+    `${JSON.stringify({ name: "openclaw-runtime-deps-install", private: true }, null, 2)}\n`,
+    "utf8",
+  );
+}
 export function installBundledRuntimeDeps(params: {
   installRoot: string;
   installExecutionRoot?: string;
+  linkNodeModulesFromExecutionRoot?: boolean;
   missingSpecs: string[];
   env: NodeJS.ProcessEnv;
+  warn?: (message: string) => void;
 }): void {
   const installExecutionRoot = params.installExecutionRoot ?? params.installRoot;
   const isolatedExecutionRoot =
@@ -988,13 +1214,18 @@ export function installBundledRuntimeDeps(params: {
   try {
     fs.mkdirSync(params.installRoot, { recursive: true });
     fs.mkdirSync(installExecutionRoot, { recursive: true });
-    if (isolatedExecutionRoot) {
-      fs.writeFileSync(
-        path.join(installExecutionRoot, "package.json"),
-        `${JSON.stringify({ name: "openclaw-runtime-deps-install", private: true }, null, 2)}\n`,
-        "utf8",
-      );
+    const diskWarning = createLowDiskSpaceWarning({
+      targetPath: installExecutionRoot,
+      purpose: "bundled plugin runtime dependency staging",
+    });
+    if (diskWarning) {
+      params.warn?.(diskWarning);
     }
+    // Always make npm see an OpenClaw-owned package root. The package-level
+    // doctor repair path installs directly in the external stage dir; without a
+    // manifest, npm can honor a user's global prefix config and write under
+    // $HOME/node_modules instead of our managed stage.
+    ensureNpmInstallExecutionManifest(installExecutionRoot);
     const installEnv = createBundledRuntimeDepsInstallEnv(params.env, {
       cacheDir: path.join(installExecutionRoot, ".openclaw-npm-cache"),
     });
@@ -1015,12 +1246,19 @@ export function installBundledRuntimeDeps(params: {
         .trim();
       throw new Error(output || "npm install failed");
     }
+    assertBundledRuntimeDepsInstalled(installExecutionRoot, params.missingSpecs);
     if (isolatedExecutionRoot) {
       const stagedNodeModulesDir = path.join(installExecutionRoot, "node_modules");
       if (!fs.existsSync(stagedNodeModulesDir)) {
         throw new Error("npm install did not produce node_modules");
       }
-      replaceNodeModulesDir(path.join(params.installRoot, "node_modules"), stagedNodeModulesDir);
+      const targetNodeModulesDir = path.join(params.installRoot, "node_modules");
+      if (params.linkNodeModulesFromExecutionRoot) {
+        replaceNodeModulesDirFromCache(targetNodeModulesDir, stagedNodeModulesDir);
+      } else {
+        replaceNodeModulesDir(targetNodeModulesDir, stagedNodeModulesDir);
+      }
+      assertBundledRuntimeDepsInstalled(params.installRoot, params.missingSpecs);
     }
   } finally {
     if (cleanInstallExecutionRoot) {
@@ -1035,6 +1273,7 @@ export function repairBundledRuntimeDepsInstallRoot(params: {
   installSpecs: string[];
   env: NodeJS.ProcessEnv;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
+  warn?: (message: string) => void;
 }): { installSpecs: string[] } {
   return withBundledRuntimeDepsInstallRootLock(params.installRoot, () => {
     const retainedManifestSpecs = readRetainedRuntimeDepsManifest(params.installRoot);
@@ -1048,6 +1287,7 @@ export function repairBundledRuntimeDepsInstallRoot(params: {
           installRoot: installParams.installRoot,
           missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
           env: params.env,
+          warn: params.warn,
         }));
     install({
       installRoot: params.installRoot,
@@ -1136,9 +1376,7 @@ export function ensureBundledPluginRuntimeDeps(params: {
     });
     const isPluginRootInstall = path.resolve(installRoot) === path.resolve(params.pluginRoot);
     const sourceCheckoutCacheStage =
-      cacheDir &&
-      isPluginRootInstall &&
-      resolveSourceCheckoutBundledPluginPackageRoot(params.pluginRoot)
+      cacheDir && isPluginRootInstall && resolveSourceCheckoutPackageRoot(params.pluginRoot)
         ? cacheDir
         : undefined;
     const installExecutionRoot =
@@ -1160,14 +1398,26 @@ export function ensureBundledPluginRuntimeDeps(params: {
         installBundledRuntimeDeps({
           installRoot: installParams.installRoot,
           installExecutionRoot: installParams.installExecutionRoot,
+          linkNodeModulesFromExecutionRoot: installParams.linkNodeModulesFromExecutionRoot,
           missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
           env: params.env,
         }));
-    install({ installRoot, installExecutionRoot, missingSpecs, installSpecs });
+    install({
+      installRoot,
+      installExecutionRoot,
+      ...(sourceCheckoutCacheStage ? { linkNodeModulesFromExecutionRoot: true } : {}),
+      missingSpecs,
+      installSpecs,
+    });
+    const cacheAlreadyPopulated = Boolean(
+      sourceCheckoutCacheStage && hasAllDependencySentinels(sourceCheckoutCacheStage, deps),
+    );
     if (persistRetainedManifest) {
       writeRetainedRuntimeDepsManifest(installRoot, installSpecs);
     }
-    storeSourceCheckoutRuntimeDepsCache({ cacheDir, installRoot });
+    if (!cacheAlreadyPopulated) {
+      storeSourceCheckoutRuntimeDepsCache({ cacheDir, installRoot });
+    }
     return { installedSpecs: missingSpecs, retainSpecs: installSpecs };
   });
 }

@@ -25,23 +25,43 @@ type MockManifestRegistry = {
   diagnostics: unknown[];
 };
 
-const loadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn<() => MockManifestRegistry>(() => ({ plugins: [], diagnostics: [] })),
-);
+const pluginRegistryMocks = vi.hoisted(() => {
+  const loadManifestRegistry = vi.fn<() => MockManifestRegistry>(() => ({
+    plugins: [],
+    diagnostics: [],
+  }));
+  return {
+    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
+    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
+    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  };
+});
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("../plugins/manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex:
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+}));
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
 describe("provider env vars dynamic manifest metadata", () => {
   beforeEach(() => {
-    loadPluginManifestRegistry.mockReset();
-    loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
     __testing.resetProviderEnvVarCachesForTests();
   });
 
   it("includes later-installed plugin env vars without a bundled generated map", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "external-fireworks",
@@ -64,7 +84,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("includes setup provider env vars without loading setup runtime", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "external-model-studio",
@@ -88,7 +108,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("appends setup provider env vars after explicit provider auth env vars", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "external-fireworks",
@@ -113,7 +133,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("keeps lazy manifest-backed exports cold until accessed and resolves them once", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "external-fireworks",
@@ -126,19 +146,22 @@ describe("provider env vars dynamic manifest metadata", () => {
       diagnostics: [],
     });
 
-    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
     expect(PROVIDER_ENV_VARS.fireworks).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(PROVIDER_AUTH_ENV_VAR_CANDIDATES.fireworks).toEqual(["FIREWORKS_ALT_API_KEY"]);
-    const initialLoads = loadPluginManifestRegistry.mock.calls.length;
+    const initialLoads =
+      pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mock.calls.length;
     expect(initialLoads).toBeGreaterThan(0);
 
     void PROVIDER_ENV_VARS.fireworks;
     void PROVIDER_AUTH_ENV_VAR_CANDIDATES.fireworks;
-    expect(loadPluginManifestRegistry).toHaveBeenCalledTimes(initialLoads);
+    expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(
+      initialLoads,
+    );
   });
 
   it("reuses the lazy default lookup cache for repeated provider env var reads", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "external-fireworks",
@@ -152,14 +175,17 @@ describe("provider env vars dynamic manifest metadata", () => {
     });
 
     expect(getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
-    const initialLoads = loadPluginManifestRegistry.mock.calls.length;
+    const initialLoads =
+      pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mock.calls.length;
     expect(initialLoads).toBeGreaterThan(0);
     expect(getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
-    expect(loadPluginManifestRegistry).toHaveBeenCalledTimes(initialLoads);
+    expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(
+      initialLoads,
+    );
   });
 
   it("keeps workspace plugin env vars in default lookups", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "workspace-audio",
@@ -179,7 +205,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("excludes untrusted workspace plugin env vars when requested", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "workspace-audio",
@@ -229,7 +255,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("keeps explicitly trusted workspace plugin env vars when requested", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "workspace-audio",
@@ -257,7 +283,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("does not trust arbitrary workspace plugin ids from the context engine slot", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "workspace-audio",
@@ -287,7 +313,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("keeps selected workspace context engine env vars when requested", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "workspace-engine",

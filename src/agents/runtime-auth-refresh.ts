@@ -1,9 +1,9 @@
-const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 
 export function clampRuntimeAuthRefreshDelayMs(params: {
   refreshAt: number;
   now: number;
   minDelayMs: number;
 }): number {
-  return Math.min(MAX_SAFE_TIMEOUT_MS, Math.max(params.minDelayMs, params.refreshAt - params.now));
+  return resolveSafeTimeoutDelayMs(params.refreshAt - params.now, { minMs: params.minDelayMs });
 }

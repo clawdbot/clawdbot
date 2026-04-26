@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
+  resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
@@ -147,7 +148,10 @@ async function prepareExtensionPackageBoundaryArtifacts(env) {
 }
 
 export async function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
-  const { args: policyArgs, env } = applyLocalOxlintPolicy(argv, runtimeEnv);
+  const { args: policyArgs, env } = applyLocalOxlintPolicy(
+    argv,
+    resolveLocalHeavyCheckEnv(runtimeEnv),
+  );
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
   const finalArgs = sparseTargets.args;
   if (sparseTargets.skippedTargets.length > 0) {

@@ -198,6 +198,52 @@ describe("promptAuthConfig", () => {
     });
   });
 
+  it("resolves fallback aliases before scoped allowlist pruning", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("token");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.5",
+              fallbacks: ["mini"],
+            },
+            models: {
+              "openai/gpt-5.5": { alias: "GPT" },
+              "openai/gpt-5.4-mini": { alias: "mini" },
+              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+            },
+          },
+        },
+      },
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: ["openai/gpt-5.5"],
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
+    });
+    mocks.resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "openai", label: "OpenAI", auth: [] },
+      method: { id: "setup-token", label: "setup-token", kind: "token" },
+      wizard: {
+        modelAllowlist: {
+          allowedKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
+          initialSelections: ["openai/gpt-5.5"],
+        },
+      },
+    });
+
+    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(result.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+    });
+    expect(result.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "GPT" },
+      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+    });
+  });
+
   it("scopes the allowlist picker to the selected provider when available", async () => {
     mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
     mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");

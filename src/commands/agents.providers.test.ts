@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildProviderStatusIndex } from "./agents.providers.js";
 
 const mocks = vi.hoisted(() => ({
-  listChannelPlugins: vi.fn(),
+  listReadOnlyChannelPluginsForConfig: vi.fn(),
   getChannelPlugin: vi.fn(),
   normalizeChannelId: vi.fn((value: unknown) =>
     typeof value === "string" && value.trim().length > 0 ? value : null,
@@ -13,12 +13,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: (...args: Parameters<typeof mocks.listChannelPlugins>) =>
-    mocks.listChannelPlugins(...args),
   getChannelPlugin: (...args: Parameters<typeof mocks.getChannelPlugin>) =>
     mocks.getChannelPlugin(...args),
   normalizeChannelId: (...args: Parameters<typeof mocks.normalizeChannelId>) =>
     mocks.normalizeChannelId(...args),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: (
+    ...args: Parameters<typeof mocks.listReadOnlyChannelPluginsForConfig>
+  ) => mocks.listReadOnlyChannelPluginsForConfig(...args),
 }));
 
 vi.mock("../channels/plugins/helpers.js", () => ({
@@ -55,11 +59,15 @@ describe("buildProviderStatusIndex", () => {
       status: {},
     } as never;
 
-    mocks.listChannelPlugins.mockReturnValue([plugin]);
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
     mocks.getChannelPlugin.mockReturnValue(plugin);
 
     const map = await buildProviderStatusIndex({} as OpenClawConfig);
 
+    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
+      {},
+      { includeSetupRuntimeFallback: false },
+    );
     expect(resolveAccount).not.toHaveBeenCalled();
     expect(inspectAccount).toHaveBeenCalledWith({}, "work");
     expect(map.get("workchat:work")).toMatchObject({
@@ -85,7 +93,7 @@ describe("buildProviderStatusIndex", () => {
       status: {},
     } as never;
 
-    mocks.listChannelPlugins.mockReturnValue([plugin]);
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
     mocks.getChannelPlugin.mockReturnValue(plugin);
 
     await expect(buildProviderStatusIndex({} as OpenClawConfig)).resolves.toEqual(
@@ -116,7 +124,7 @@ describe("buildProviderStatusIndex", () => {
       status: {},
     } as never;
 
-    mocks.listChannelPlugins.mockReturnValue([plugin]);
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
     mocks.getChannelPlugin.mockReturnValue(plugin);
 
     await expect(buildProviderStatusIndex({} as OpenClawConfig)).rejects.toThrow("plugin crash");

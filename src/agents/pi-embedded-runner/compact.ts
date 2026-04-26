@@ -7,6 +7,7 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -721,7 +722,9 @@ export async function compactEmbeddedPiSessionDirect(
       cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
-    const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ttsHint = params.config
+      ? buildTtsSystemPromptHint(params.config, sessionAgentId)
+      : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const promptContributionContext: Parameters<
       AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
@@ -763,7 +766,10 @@ export async function compactEmbeddedPiSessionDirect(
           sourcePath: openClawReferences.sourcePath ?? undefined,
           ttsHint,
           promptMode,
-          acpEnabled: params.config?.acp?.enabled !== false,
+          acpEnabled: isAcpRuntimeSpawnAvailable({
+            config: params.config,
+            sandboxed: sandboxInfo?.enabled === true,
+          }),
           runtimeInfo,
           reactionGuidance,
           messageToolHints,

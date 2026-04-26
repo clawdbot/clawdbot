@@ -5,8 +5,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }
@@ -107,9 +107,10 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     return { config: params.createEmptyConfig(), diagnostics: [] };
   }
 
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    includeDisabled: true,
   });
   const diagnostics: TDiagnostic[] = [];
   let merged = params.createEmptyConfig();

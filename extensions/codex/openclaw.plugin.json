@@ -57,10 +57,7 @@
             "enum": ["stdio", "websocket"],
             "default": "stdio"
           },
-          "command": {
-            "type": "string",
-            "default": "codex"
-          },
+          "command": { "type": "string" },
           "args": {
             "oneOf": [
               {
@@ -132,7 +129,7 @@
     },
     "appServer.command": {
       "label": "Command",
-      "help": "Executable used for stdio transport.",
+      "help": "Executable used for stdio transport. Leave unset to use OpenClaw's managed Codex binary.",
       "advanced": true
     },
     "appServer.args": {

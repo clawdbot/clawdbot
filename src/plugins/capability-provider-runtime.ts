@@ -6,7 +6,7 @@ import {
 } from "./bundled-compat.js";
 import { hasExplicitPluginConfig } from "./config-policy.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 type CapabilityProviderRegistryKey =
@@ -49,9 +49,10 @@ function resolveBundledCapabilityCompatPluginIds(params: {
   providerId?: string;
 }): string[] {
   const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryForPluginRegistry({
     config: params.cfg,
     env: process.env,
+    includeDisabled: true,
   })
     .plugins.filter(
       (plugin) =>

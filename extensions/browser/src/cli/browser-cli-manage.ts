@@ -24,8 +24,18 @@ type BrowserDoctorCheck = {
   detail?: string;
 };
 
-function resolveProfileQuery(profile?: string) {
-  return profile ? { profile } : undefined;
+function resolveProfileQuery(
+  profile?: string,
+  extra?: Record<string, string | number | boolean | undefined>,
+) {
+  const query: Record<string, string | number | boolean | undefined> = {};
+  if (profile) {
+    query.profile = profile;
+  }
+  if (extra) {
+    Object.assign(query, extra);
+  }
+  return Object.keys(query).length > 0 ? query : undefined;
 }
 
 function printJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
@@ -75,19 +85,24 @@ async function fetchBrowserStatus(
 
 async function runBrowserToggle(
   parent: BrowserParentOpts,
-  params: { profile?: string; path: string },
+  params: {
+    profile?: string;
+    path: string;
+    query?: Record<string, string | number | boolean | undefined>;
+  },
 ) {
   await callBrowserRequest(parent, {
     method: "POST",
     path: params.path,
-    query: resolveProfileQuery(params.profile),
+    query: resolveProfileQuery(params.profile, params.query),
   });
   const status = await fetchBrowserStatus(parent, params.profile);
   if (printJsonResult(parent, status)) {
     return;
   }
   const name = status.profile ?? "openclaw";
-  defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}`));
+  const headlessLabel = params.path === "/start" && status.headless ? " (headless)" : "";
+  defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}${headlessLabel}`));
 }
 
 function runBrowserCommand(action: () => Promise<void>) {
@@ -120,7 +135,7 @@ function formatDoctorLine(check: BrowserDoctorCheck): string {
   return `${check.ok ? "OK" : "FAIL"} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
-async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string) {
+async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
   let status: BrowserStatus | null = null;
 
@@ -203,6 +218,42 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string) {
     }
   }
 
+  if (deep && status.running) {
+    try {
+      const result = await callBrowserRequest<
+        | { ok: true; format: "aria"; nodes?: unknown[] }
+        | { ok: true; format: "ai"; snapshot?: string }
+      >(
+        parent,
+        {
+          method: "GET",
+          path: "/snapshot",
+          query: resolveProfileQuery(profile, { format: "aria", limit: 25 }),
+        },
+        { timeoutMs: 10_000 },
+      );
+      const count =
+        result.format === "aria"
+          ? Array.isArray(result.nodes)
+            ? result.nodes.length
+            : 0
+          : typeof result.snapshot === "string"
+            ? result.snapshot.split("\n").length
+            : 0;
+      checks.push({
+        name: "live-snapshot",
+        ok: count > 0,
+        detail: count > 0 ? `${count} nodes/lines` : "snapshot returned no content",
+      });
+    } catch (err) {
+      checks.push({
+        name: "live-snapshot",
+        ok: false,
+        detail: String(err),
+      });
+    }
+  }
+
   return { ok: checks.every((check) => check.ok), checks, status };
 }
 
@@ -268,6 +319,9 @@ export function registerBrowserManageCommands(
             `browser: ${status.chosenBrowser ?? "unknown"}`,
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
+            `headless: ${status.headless}${
+              status.headlessSource ? ` (${status.headlessSource})` : ""
+            }`,
             `profileColor: ${status.color}`,
             ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
           ].join("\n"),
@@ -278,11 +332,12 @@ export function registerBrowserManageCommands(
   browser
     .command("doctor")
     .description("Check browser plugin readiness")
-    .action(async (_opts, cmd) => {
+    .option("--deep", "Run a live snapshot probe")
+    .action(async (opts: { deep?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const result = await runBrowserDoctor(parent, profile);
+        const result = await runBrowserDoctor(parent, profile, opts.deep === true);
         if (printJsonResult(parent, result)) {
           return;
         }
@@ -296,11 +351,16 @@ export function registerBrowserManageCommands(
   browser
     .command("start")
     .description("Start the browser (no-op if already running)")
-    .action(async (_opts, cmd) => {
+    .option("--headless", "Launch a local managed browser headless for this start")
+    .action(async (opts: { headless?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        await runBrowserToggle(parent, { profile, path: "/start" });
+        await runBrowserToggle(parent, {
+          profile,
+          path: "/start",
+          query: opts.headless ? { headless: true } : undefined,
+        });
       });
     });
 

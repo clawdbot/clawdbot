@@ -7,6 +7,7 @@ import {
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
+export { escapeRegExp } from "./shared/regexp.js";
 
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
@@ -34,13 +35,6 @@ export function clampInt(value: number, min: number, max: number): number {
 
 /** Alias for clampNumber (shorter, more common name) */
 export const clamp = clampNumber;
-
-/**
- * Escapes special regex characters in a string so it can be used in a RegExp constructor.
- */
-export function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 /**
  * Safely parse JSON, returning null on error instead of throwing.

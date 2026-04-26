@@ -5,9 +5,13 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf.js";
 import type { MarketplaceInterface } from "./MarketplaceInterface.js";
 import type { PluginSummary } from "./PluginSummary.js";
 
-export type PluginMarketplaceEntry = { name: string,
-/**
- * Local marketplace file path when the marketplace is backed by a local file.
- * Remote-only catalog marketplaces do not have a local path.
- */
-path: AbsolutePathBuf | null, interface: MarketplaceInterface | null, plugins: Array<PluginSummary>, };
+export type PluginMarketplaceEntry = {
+  name: string;
+  /**
+   * Local marketplace file path when the marketplace is backed by a local file.
+   * Remote-only catalog marketplaces do not have a local path.
+   */
+  path: AbsolutePathBuf | null;
+  interface: MarketplaceInterface | null;
+  plugins: Array<PluginSummary>;
+};

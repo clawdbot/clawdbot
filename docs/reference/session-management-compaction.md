@@ -136,6 +136,7 @@ Rules of thumb:
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
 - **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
+- **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Thread parent fork guard** (`session.parentForkMaxTokens`, default `100000`) skips parent transcript forking when the parent session is already too large; the new thread starts fresh. Set `0` to disable.
 
 Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.
@@ -149,7 +150,14 @@ The store’s value type is `SessionEntry` in `src/config/sessions.ts`.
 Key fields (not exhaustive):
 
 - `sessionId`: current transcript id (filename is derived from this unless `sessionFile` is set)
-- `updatedAt`: last activity timestamp
+- `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset
+  freshness uses this. Legacy rows may derive it from the JSONL session header.
+- `lastInteractionAt`: last real user/channel interaction timestamp; idle reset
+  freshness uses this so heartbeat, cron, and exec events do not keep sessions
+  alive. Legacy rows without this field fall back to the recovered session start
+  time for idle freshness.
+- `updatedAt`: last store-row mutation timestamp, used for listing, pruning, and
+  bookkeeping. It is not the authority for daily/idle reset freshness.
 - `sessionFile`: optional explicit transcript path override
 - `chatType`: `direct | group | room` (helps UIs and send policy)
 - `provider`, `subject`, `room`, `space`, `displayName`: metadata for group/channel labeling

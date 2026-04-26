@@ -25,6 +25,7 @@ const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
 const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
 const DEFAULT_OUTPUT_FORMAT = "png";
+const FAL_OUTPUT_FORMATS = ["png", "jpeg"] as const;
 const FAL_SUPPORTED_SIZES = [
   "1024x1024",
   "1024x1536",
@@ -292,6 +293,9 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         aspectRatios: [...FAL_SUPPORTED_ASPECT_RATIOS],
         resolutions: ["1K", "2K", "4K"],
       },
+      output: {
+        formats: [...FAL_OUTPUT_FORMATS],
+      },
     },
     async generateImage(req) {
       const auth = await resolveApiKeyForProvider({
@@ -333,7 +337,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         num_images: req.count ?? 1,
-        output_format: DEFAULT_OUTPUT_FORMAT,
+        output_format: req.outputFormat ?? DEFAULT_OUTPUT_FORMAT,
       };
       if (imageSize !== undefined) {
         requestBody.image_size = imageSize;

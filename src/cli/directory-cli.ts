@@ -15,6 +15,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatHelpExamples } from "./help-format.js";
+import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
 function parseLimit(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -120,10 +121,11 @@ export function registerDirectoryCli(program: Command) {
       : null;
     if (resolvedExplicit?.configChanged) {
       cfg = resolvedExplicit.cfg;
-      await replaceConfigFile({
+      const committed = await commitConfigWithPendingPluginInstalls({
         nextConfig: cfg,
         baseHash: (await sourceSnapshotPromise)?.hash,
       });
+      cfg = committed.config;
     } else if (autoEnabled.changes.length > 0) {
       await replaceConfigFile({
         nextConfig: cfg,

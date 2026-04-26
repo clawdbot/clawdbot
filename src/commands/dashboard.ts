@@ -38,6 +38,7 @@ export async function dashboardCommand(
     bind: bind === "lan" ? "loopback" : bind,
     customBindHost,
     basePath,
+    tlsEnabled: cfg.gateway?.tls?.enabled === true,
   });
   // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
   const includeTokenInUrl = token.length > 0 && !resolvedToken.secretRefConfigured;

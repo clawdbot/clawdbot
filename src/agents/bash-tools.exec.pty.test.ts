@@ -12,6 +12,16 @@ function currentEnv(): Record<string, string> {
   );
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
+}
+
+function currentNodeEvalCommand(source: string): string {
+  const node = shellQuote(process.execPath);
+  const script = shellQuote(source);
+  return process.platform === "win32" ? `& ${node} -e ${script}` : `${node} -e ${script}`;
+}
+
 async function runPtyCommand(command: string) {
   const handle = await runExecProcess({
     command,
@@ -29,7 +39,7 @@ async function runPtyCommand(command: string) {
 
 test("exec supports pty output", async () => {
   const result = await runPtyCommand(
-    'node -e "process.stdout.write(String.fromCharCode(111,107))"',
+    currentNodeEvalCommand("process.stdout.write(String.fromCharCode(111,107))"),
   );
 
   expect(result.status).toBe("completed");
@@ -38,7 +48,7 @@ test("exec supports pty output", async () => {
 
 test("exec sets OPENCLAW_SHELL in pty mode", async () => {
   const result = await runPtyCommand(
-    "node -e \"process.stdout.write(process.env.OPENCLAW_SHELL || '')\"",
+    currentNodeEvalCommand('process.stdout.write(process.env.OPENCLAW_SHELL || "")'),
   );
 
   expect(result.status).toBe("completed");

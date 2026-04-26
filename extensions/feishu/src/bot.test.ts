@@ -231,6 +231,7 @@ const {
   mockResolveBoundConversation,
   mockTouchBinding,
   mockResolveFeishuReasoningPreviewEnabled,
+  mockTranscribeFirstAudio,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: createReplyDispatcher(),
@@ -265,6 +266,7 @@ const {
   mockResolveBoundConversation: vi.fn((_ref?: unknown) => null as BoundConversation),
   mockTouchBinding: vi.fn(),
   mockResolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
+  mockTranscribeFirstAudio: vi.fn(),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -283,6 +285,10 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./media.js", () => ({
   downloadMessageResourceFeishu: mockDownloadMessageResourceFeishu,
+}));
+
+vi.mock("./audio-preflight.runtime.js", () => ({
+  transcribeFirstAudio: mockTranscribeFirstAudio,
 }));
 
 vi.mock("./client.js", () => ({
@@ -357,6 +363,7 @@ describe("handleFeishuMessage ACP routing", () => {
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
     mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
+    mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
     mockResolveAgentRoute.mockReset().mockReturnValue({
       ...buildDefaultResolveRoute(),
       sessionKey: "agent:main:feishu:direct:ou_sender_1",
@@ -555,6 +562,7 @@ describe("handleFeishuMessage command authorization", () => {
     mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
+    mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
     mockResolveAgentRoute.mockReturnValue(buildDefaultResolveRoute());
     mockCreateFeishuClient.mockReturnValue({
       contact: {
@@ -1436,6 +1444,79 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("transcribes inbound audio before building the agent turn", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "voice.ogg",
+    });
+    mockSaveMediaBuffer.mockResolvedValueOnce({
+      id: "inbound-voice.ogg",
+      path: "/tmp/inbound-voice.ogg",
+      size: Buffer.byteLength("voice"),
+      contentType: "audio/ogg",
+    });
+    mockTranscribeFirstAudio.mockResolvedValueOnce("voice transcript");
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-voice",
+        },
+      },
+      message: {
+        message_id: "msg-audio-inbound",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "audio",
+        content: JSON.stringify({
+          file_key: "file_audio_payload",
+          duration: 1200,
+        }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-audio-inbound",
+        fileKey: "file_audio_payload",
+        type: "file",
+      }),
+    );
+    expect(mockTranscribeFirstAudio).toHaveBeenCalledWith({
+      ctx: {
+        MediaPaths: ["/tmp/inbound-voice.ogg"],
+        MediaTypes: ["audio/ogg"],
+        ChatType: "direct",
+      },
+      cfg,
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: "[message_id: msg-audio-inbound]\nou-voice: voice transcript",
+        RawBody: "voice transcript",
+        CommandBody: "voice transcript",
+        Transcript: "voice transcript",
+        MediaPaths: ["/tmp/inbound-voice.ogg"],
+        MediaTypes: ["audio/ogg"],
+        MediaTranscribedIndexes: [0],
+      }),
+    );
+    const finalized = mockFinalizeInboundContext.mock.calls[0]?.[0];
+    expect(finalized.BodyForAgent).not.toContain("file_audio_payload");
   });
 
   it("uses video file_key (not thumbnail image_key) for inbound video download", async () => {

@@ -487,11 +487,11 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
       profile("bundled-register:registerChannel", () =>
         api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
       );
+      profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
       if (api.registrationMode === "discovery") {
         profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
         return;
       }
-      profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
       if (api.registrationMode !== "full") {
         return;
       }

@@ -73,7 +73,7 @@ async function runQaCli(
     "gateway" | "repoRoot" | "primaryModel" | "alternateModel" | "providerMode"
   >,
   args: string[],
-  opts?: { timeoutMs?: number; json?: boolean },
+  opts?: { timeoutMs?: number; json?: boolean; env?: NodeJS.ProcessEnv },
 ) {
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
@@ -82,7 +82,10 @@ async function runQaCli(
   await new Promise<void>((resolve, reject) => {
     const child = spawn(nodeExecPath, [distEntryPath, ...args], {
       cwd: env.gateway.tempRoot,
-      env: env.gateway.runtimeEnv,
+      env: {
+        ...env.gateway.runtimeEnv,
+        ...opts?.env,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timeout = setTimeout(() => {

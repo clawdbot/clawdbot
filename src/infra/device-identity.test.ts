@@ -1,8 +1,10 @@
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   deriveDeviceIdFromPublicKey,
+  loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
   normalizeDevicePublicKeyBase64Url,
   publicKeyRawBase64UrlFromPem,
@@ -20,6 +22,36 @@ async function withIdentity(
 }
 
 describe("device identity crypto helpers", () => {
+  it("loads an existing identity without creating a missing file", async () => {
+    await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+
+      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      expect(fs.existsSync(identityPath)).toBe(false);
+
+      const created = loadOrCreateDeviceIdentity(identityPath);
+
+      expect(loadDeviceIdentityIfPresent(identityPath)).toEqual(created);
+    });
+  });
+
+  it("does not repair mismatched stored device ids in read-only mode", async () => {
+    await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+      loadOrCreateDeviceIdentity(identityPath);
+      const stored = JSON.parse(fs.readFileSync(identityPath, "utf8")) as Record<string, unknown>;
+      fs.writeFileSync(
+        identityPath,
+        `${JSON.stringify({ ...stored, deviceId: "mismatched" }, null, 2)}\n`,
+        "utf8",
+      );
+      const before = fs.readFileSync(identityPath, "utf8");
+
+      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
+    });
+  });
+
   it("derives the same canonical raw key and device id from pem and encoded public keys", async () => {
     await withIdentity((identity) => {
       const publicKeyRaw = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);

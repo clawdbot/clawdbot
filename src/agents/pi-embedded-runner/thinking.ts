@@ -9,6 +9,7 @@ type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
 type RecoverySessionMeta = { id: string; recoveredAnthropicThinking?: boolean };
 
 const THINKING_BLOCK_ERROR_PATTERN = /thinking or redacted_thinking blocks?.* cannot be modified/i;
+export const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
   return (
@@ -55,6 +56,72 @@ function hasMeaningfulText(block: AssistantContentBlock): boolean {
     : false;
 }
 
+function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
+  // Provider converters drop blank text blocks; keep this neutral text non-empty so the assistant turn survives replay.
+  return [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT } as AssistantContentBlock];
+}
+
+function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
+  if (!isThinkingBlock(block)) {
+    return false;
+  }
+  const record = block as {
+    data?: unknown;
+    signature?: unknown;
+    thinkingSignature?: unknown;
+    thought_signature?: unknown;
+  };
+  const candidates =
+    (block as { type?: unknown }).type === "redacted_thinking"
+      ? [record.data, record.signature, record.thinkingSignature, record.thought_signature]
+      : [record.signature, record.thinkingSignature, record.thought_signature];
+  return candidates.some((signature) => {
+    return typeof signature === "string" && signature.trim().length > 0;
+  });
+}
+
+/**
+ * Strip thinking blocks with clearly invalid replay signatures.
+ *
+ * Anthropic and Bedrock reject persisted thinking blocks when the signature is
+ * absent, empty, or blank. They are also the authority for opaque signature
+ * validity, so this intentionally avoids local length or shape heuristics.
+ */
+export function stripInvalidThinkingSignatures(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+
+  for (const message of messages) {
+    if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+
+    const nextContent: AssistantContentBlock[] = [];
+    let changed = false;
+    for (const block of message.content) {
+      if (!isThinkingBlock(block) || hasReplayableThinkingSignature(block)) {
+        nextContent.push(block);
+        continue;
+      }
+      changed = true;
+      touched = true;
+    }
+
+    if (!changed) {
+      out.push(message);
+      continue;
+    }
+
+    out.push({
+      ...message,
+      content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
+    });
+  }
+
+  return touched ? out : messages;
+}
+
 /**
  * Strip `type: "thinking"` and `type: "redacted_thinking"` content blocks from
  * all assistant messages except the latest one.
@@ -63,8 +130,8 @@ function hasMeaningfulText(block: AssistantContentBlock): boolean {
  * providers that require replay signatures can continue the conversation.
  *
  * If a non-latest assistant message becomes empty after stripping, it is
- * replaced with a synthetic `{ type: "text", text: "" }` block to preserve
- * turn structure (some providers require strict user/assistant alternation).
+ * replaced with a synthetic non-empty text block to preserve turn structure
+ * through provider adapters that filter blank text blocks.
  *
  * Returns the original array reference when nothing was changed (callers can
  * use reference equality to skip downstream work).
@@ -104,9 +171,7 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
       out.push(msg);
       continue;
     }
-    // Preserve the assistant turn even if all blocks were thinking-only.
-    const content =
-      nextContent.length > 0 ? nextContent : [{ type: "text", text: "" } as AssistantContentBlock];
+    const content = nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent();
     out.push({ ...msg, content });
   }
   return touched ? out : messages;
@@ -130,10 +195,7 @@ function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
     touched = true;
     out.push({
       ...message,
-      content:
-        nextContent.length > 0
-          ? nextContent
-          : ([{ type: "text", text: "" }] as AssistantContentBlock[]),
+      content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
     });
   }
   return touched ? out : messages;

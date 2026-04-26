@@ -10,7 +10,7 @@ import type { PluginDiagnostic } from "./manifest-types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
 
 function resolveBundledChannelMeta(id: string): ChannelMeta | undefined {
-  return listChatChannels().find((meta) => meta.id === id);
+  return listChatChannels().find((meta) => meta?.id === id);
 }
 
 function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): string[] {

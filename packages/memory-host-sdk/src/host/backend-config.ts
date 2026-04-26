@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope-config.js";
 import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";

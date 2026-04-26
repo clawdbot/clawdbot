@@ -54,6 +54,27 @@ export function hasEnvHttpProxyConfigured(
   return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
 }
 
+export function shouldUseEnvHttpProxyForUrl(
+  targetUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  let protocol: "http" | "https";
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol === "http:") {
+      protocol = "http";
+    } else if (parsed.protocol === "https:") {
+      protocol = "https";
+    } else {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return hasEnvHttpProxyConfigured(protocol, env) && !matchesNoProxy(targetUrl, env);
+}
+
 /**
  * Check whether a target URL should bypass the HTTP proxy per NO_PROXY env var.
  *

@@ -52,6 +52,12 @@ import {
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
+import { getTelegramTextParts, resolveTelegramReplyId } from "./bot/helpers.js";
+import {
+  addTelegramNativeQuoteCandidate,
+  buildTelegramNativeQuoteCandidate,
+  type TelegramNativeQuoteCandidateByMessageId,
+} from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -340,11 +346,64 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const previewStreamingEnabled = streamMode !== "off";
+  const rawReplyQuoteText =
+    ctxPayload.ReplyToIsQuote && typeof ctxPayload.ReplyToQuoteText === "string"
+      ? ctxPayload.ReplyToQuoteText
+      : undefined;
+  const replyQuoteText = ctxPayload.ReplyToIsQuote
+    ? rawReplyQuoteText?.trim()
+      ? rawReplyQuoteText
+      : ctxPayload.ReplyToBody?.trim() || undefined
+    : undefined;
+  const replyQuoteMessageId =
+    replyQuoteText && !ctxPayload.ReplyToIsExternal
+      ? resolveTelegramReplyId(ctxPayload.ReplyToId)
+      : undefined;
+  const replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId = {};
+  if (replyToMode !== "off") {
+    if (replyQuoteText && replyQuoteMessageId != null) {
+      addTelegramNativeQuoteCandidate(replyQuoteByMessageId, replyQuoteMessageId, {
+        text: replyQuoteText,
+        ...(typeof ctxPayload.ReplyToQuotePosition === "number"
+          ? { position: ctxPayload.ReplyToQuotePosition }
+          : {}),
+        ...(Array.isArray(ctxPayload.ReplyToQuoteEntities)
+          ? { entities: ctxPayload.ReplyToQuoteEntities }
+          : {}),
+      });
+    }
+
+    addTelegramNativeQuoteCandidate(
+      replyQuoteByMessageId,
+      ctxPayload.MessageSid ?? msg.message_id,
+      buildTelegramNativeQuoteCandidate(getTelegramTextParts(msg)),
+    );
+
+    if (!ctxPayload.ReplyToIsExternal && typeof ctxPayload.ReplyToQuoteSourceText === "string") {
+      addTelegramNativeQuoteCandidate(
+        replyQuoteByMessageId,
+        ctxPayload.ReplyToId,
+        buildTelegramNativeQuoteCandidate({
+          text: ctxPayload.ReplyToQuoteSourceText,
+          entities: Array.isArray(ctxPayload.ReplyToQuoteSourceEntities)
+            ? ctxPayload.ReplyToQuoteSourceEntities
+            : undefined,
+        }),
+      );
+    }
+  }
+  const hasNativeQuoteReply =
+    replyToMode !== "off" && Object.keys(replyQuoteByMessageId).length > 0;
   const canStreamAnswerDraft =
-    previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
+    previewStreamingEnabled &&
+    !hasNativeQuoteReply &&
+    !accountBlockStreamingEnabled &&
+    !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = streamReasoningDraft;
   const draftReplyToMessageId =
-    replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
+    replyToMode !== "off" && typeof msg.message_id === "number"
+      ? (replyQuoteMessageId ?? msg.message_id)
+      : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
   // DM draft previews still duplicate briefly at materialize time.
   const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
@@ -558,10 +617,17 @@ export const dispatchTelegramMessage = async ({
     supersede: shouldSupersedeAbortFence,
   });
 
-  const replyQuoteText =
-    ctxPayload.ReplyToIsQuote && ctxPayload.ReplyToBody
-      ? ctxPayload.ReplyToBody.trim() || undefined
+  const implicitQuoteReplyTargetId =
+    replyQuoteMessageId != null ? String(replyQuoteMessageId) : undefined;
+  const currentMessageIdForQuoteReply =
+    implicitQuoteReplyTargetId && ctxPayload.MessageSid ? ctxPayload.MessageSid : undefined;
+  const replyQuotePosition =
+    typeof ctxPayload.ReplyToQuotePosition === "number"
+      ? ctxPayload.ReplyToQuotePosition
       : undefined;
+  const replyQuoteEntities = Array.isArray(ctxPayload.ReplyToQuoteEntities)
+    ? ctxPayload.ReplyToQuoteEntities
+    : undefined;
   const deliveryState = createLaneDeliveryStateTracker();
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
@@ -588,7 +654,11 @@ export const dispatchTelegramMessage = async ({
     tableMode,
     chunkMode,
     linkPreview: telegramCfg.linkPreview,
+    replyQuoteMessageId,
     replyQuoteText,
+    replyQuotePosition,
+    replyQuoteEntities,
+    replyQuoteByMessageId,
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
@@ -644,13 +714,25 @@ export const dispatchTelegramMessage = async ({
       }
       return { ...payload, text };
     };
+    const applyQuoteReplyTarget = (payload: ReplyPayload): ReplyPayload => {
+      if (
+        !implicitQuoteReplyTargetId ||
+        !currentMessageIdForQuoteReply ||
+        payload.replyToId !== currentMessageIdForQuoteReply ||
+        payload.replyToTag ||
+        payload.replyToCurrent
+      ) {
+        return payload;
+      }
+      return { ...payload, replyToId: implicitQuoteReplyTargetId };
+    };
     const sendPayload = async (payload: ReplyPayload) => {
       if (isDispatchSuperseded()) {
         return false;
       }
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
-        replies: [payload],
+        replies: [applyQuoteReplyTarget(payload)],
         onVoiceRecording: sendRecordVoice,
         silent: silentErrorReplies && payload.isError === true,
         mediaLoader: telegramDeps.loadWebMedia,
@@ -983,7 +1065,7 @@ export const dispatchTelegramMessage = async ({
                   previewToolProgressLines = [];
                 })
             : undefined,
-          suppressDefaultToolProgressMessages: true,
+          suppressDefaultToolProgressMessages: Boolean(answerLane.stream),
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
             if (statusReactionController && toolName) {

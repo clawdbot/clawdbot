@@ -182,7 +182,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         try {
           running = await profileCtx.isTransportAvailable(300);
           if (running) {
-            const tabs = await listChromeMcpTabs(profile.name, profile.userDataDir, {
+            const tabs = await listChromeMcpTabs(profile.name, profile, {
               ephemeral: true,
             }).catch(() => [] as BrowserTab[]);
             tabCount = tabs.filter((t) => t.type === "page").length;

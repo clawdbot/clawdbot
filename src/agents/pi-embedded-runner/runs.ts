@@ -273,16 +273,22 @@ export function consumeEmbeddedRunModelSwitch(
 /**
  * Wait for active embedded runs to drain.
  *
- * Used during restarts so in-flight compaction runs can release session write
- * locks before the next lifecycle starts.
+ * Used during restarts so in-flight runs can release session write locks before
+ * the next lifecycle starts. If no timeout is passed, waits indefinitely.
  */
 export async function waitForActiveEmbeddedRuns(
-  timeoutMs = 15_000,
+  timeoutMs?: number,
   opts?: { pollMs?: number },
 ): Promise<{ drained: boolean }> {
   const pollMsRaw = opts?.pollMs ?? 250;
   const pollMs = Math.max(10, Math.floor(pollMsRaw));
-  const maxWaitMs = Math.max(pollMs, Math.floor(timeoutMs));
+  if (timeoutMs !== undefined && timeoutMs <= 0) {
+    return { drained: getActiveEmbeddedRunCount() === 0 };
+  }
+  const maxWaitMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? Math.max(pollMs, Math.floor(timeoutMs))
+      : undefined;
 
   const startedAt = Date.now();
   while (true) {
@@ -290,7 +296,7 @@ export async function waitForActiveEmbeddedRuns(
       return { drained: true };
     }
     const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= maxWaitMs) {
+    if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
       diag.warn(
         `wait for active embedded runs timed out: activeRuns=${getActiveEmbeddedRunCount()} timeoutMs=${maxWaitMs}`,
       );

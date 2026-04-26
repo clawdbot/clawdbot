@@ -7,7 +7,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { getChannelPlugin, getLoadedChannelPlugin, normalizeChannelId } from "./plugins/index.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "./plugins/index.js";
 import { parseExplicitTargetForChannel } from "./plugins/target-parsing.js";
 import {
   resolveBundledChannelThreadBindingDefaultPlacement,
@@ -233,11 +233,7 @@ export function resolveChannelDefaultBindingPlacement(
   }
   const pluginPlacement =
     resolveRuntimeChannelPlugin(channel)?.conversationBindings?.defaultTopLevelPlacement;
-  return (
-    pluginPlacement ??
-    resolveBundledChannelThreadBindingDefaultPlacement(channel) ??
-    getChannelPlugin(channel)?.conversationBindings?.defaultTopLevelPlacement
-  );
+  return pluginPlacement ?? resolveBundledChannelThreadBindingDefaultPlacement(channel);
 }
 
 export function resolveCommandConversationResolution(
@@ -403,23 +399,6 @@ export function resolveInboundConversationResolution(
   });
   if (artifactResolution || artifactConversation === null) {
     return artifactResolution;
-  }
-
-  const bundledPlugin = getChannelPlugin(channel);
-  const bundledConversation =
-    bundledPlugin !== plugin
-      ? bundledPlugin?.messaging?.resolveInboundConversation?.(resolverParams)
-      : undefined;
-  const bundledResolution = normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: bundledConversation,
-    source: "inbound-bundled-plugin",
-    threadId,
-    plugin: bundledPlugin ?? plugin,
-  });
-  if (bundledResolution || bundledConversation === null) {
-    return bundledResolution;
   }
 
   const parentConversationId =

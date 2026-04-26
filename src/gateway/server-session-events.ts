@@ -1,5 +1,6 @@
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
@@ -110,22 +111,25 @@ export function createTranscriptUpdateBroadcastHandler(params: {
       sessionRow: loadGatewaySessionRow(sessionKey),
       includeSession: true,
     });
-    const message = attachOpenClawTranscriptMeta(update.message, {
+    const rawMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
     });
-    params.broadcastToConnIds(
-      "session.message",
-      {
-        sessionKey,
-        message,
-        ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-        ...(typeof messageSeq === "number" ? { messageSeq } : {}),
-        ...sessionSnapshot,
-      },
-      connIds,
-      { dropIfSlow: true },
-    );
+    const message = projectChatDisplayMessage(rawMessage);
+    if (message) {
+      params.broadcastToConnIds(
+        "session.message",
+        {
+          sessionKey,
+          message,
+          ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+          ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+          ...sessionSnapshot,
+        },
+        connIds,
+        { dropIfSlow: true },
+      );
+    }
 
     const sessionEventConnIds = params.sessionEventSubscribers.getAll();
     if (sessionEventConnIds.size === 0) {

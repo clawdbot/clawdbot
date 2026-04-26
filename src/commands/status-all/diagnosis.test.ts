@@ -63,6 +63,18 @@ function createBaseParams(
 }
 
 describe("status-all diagnosis port checks", () => {
+  it("labels OpenClaw Tailscale exposure separately from daemon state", async () => {
+    const params = createBaseParams([]);
+    params.tailscale.backendState = "Running";
+    params.tailscale.dnsName = "box.tail.ts.net";
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("✓ Tailscale exposure: off · daemon Running · box.tail.ts.net");
+    expect(output).not.toContain("Tailscale: off");
+  });
+
   it("treats same-process dual-stack loopback listeners as healthy", async () => {
     const params = createBaseParams([
       { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },

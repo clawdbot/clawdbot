@@ -9,9 +9,8 @@ import {
   A2UI_PATH,
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
-  handleA2uiHttpRequest,
   injectCanvasLiveReload,
-} from "./a2ui.js";
+} from "./a2ui-shared.js";
 
 type MockWatcher = {
   on: (event: string, cb: (...args: unknown[]) => void) => MockWatcher;
@@ -106,6 +105,7 @@ async function captureHandlerResponse(
 }
 
 async function captureA2uiResponse(url: string, method = "GET"): Promise<CapturedResponse> {
+  const { handleA2uiHttpRequest } = await import("./a2ui.js");
   return await captureHttpResponse(handleA2uiHttpRequest, url, method);
 }
 

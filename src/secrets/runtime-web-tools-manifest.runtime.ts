@@ -2,4 +2,4 @@ export {
   resolveManifestContractOwnerPluginId,
   resolveManifestContractPluginIds,
   resolveManifestContractPluginIdsByCompatibilityRuntimePath,
-} from "../plugins/manifest-registry.js";
+} from "../plugins/plugin-registry.js";

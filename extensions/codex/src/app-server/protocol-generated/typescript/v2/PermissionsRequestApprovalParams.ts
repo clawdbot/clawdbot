@@ -4,4 +4,11 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf.js";
 import type { RequestPermissionProfile } from "./RequestPermissionProfile.js";
 
-export type PermissionsRequestApprovalParams = { threadId: string, turnId: string, itemId: string, cwd: AbsolutePathBuf, reason: string | null, permissions: RequestPermissionProfile, };
+export type PermissionsRequestApprovalParams = {
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  cwd: AbsolutePathBuf;
+  reason: string | null;
+  permissions: RequestPermissionProfile;
+};

@@ -10,7 +10,6 @@ import {
 } from "../cli-output.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
-import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -53,9 +52,9 @@ type ClaudeLiveRunResult = {
 
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const CLAUDE_LIVE_MAX_SESSIONS = 16;
-const CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS = 256 * 1024;
 const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_MAX_TURN_RAW_CHARS = 2 * 1024 * 1024;
+const CLAUDE_LIVE_MAX_PENDING_LINE_CHARS = CLAUDE_LIVE_MAX_TURN_RAW_CHARS;
 const CLAUDE_LIVE_MAX_TURN_LINES = 5_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, Promise<ClaudeLiveSession>>();
@@ -70,6 +69,15 @@ export function resetClaudeLiveSessionsForTest(): void {
   }
   liveSessions.clear();
   liveSessionCreates.clear();
+}
+
+export function closeClaudeLiveSessionForContext(context: PreparedCliRunContext): void {
+  const key = buildClaudeLiveKey(context);
+  const session = liveSessions.get(key);
+  if (session) {
+    closeLiveSession(session, "restart");
+  }
+  liveSessionCreates.delete(key);
 }
 
 export function shouldUseClaudeLiveSession(context: PreparedCliRunContext): boolean {
@@ -102,11 +110,18 @@ function appendArg(args: string[], flag: string): string[] {
   return args.includes(flag) ? args : [...args, flag];
 }
 
-function stripLiveProcessArgs(args: string[], backend: CliBackendConfig): string[] {
+function stripLiveProcessArgs(
+  args: string[],
+  backend: CliBackendConfig,
+  stripSystemPrompt: boolean,
+): string[] {
   const liveProcessFlags = new Set(
-    [backend.sessionArg, backend.systemPromptArg, "--session-id"].filter(
-      (entry): entry is string => typeof entry === "string" && entry.length > 0,
-    ),
+    [
+      backend.sessionArg,
+      "--session-id",
+      stripSystemPrompt ? backend.systemPromptArg : undefined,
+      stripSystemPrompt ? backend.systemPromptFileArg : undefined,
+    ].filter((entry): entry is string => typeof entry === "string" && entry.length > 0),
   );
   const stripped: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -123,18 +138,6 @@ function stripLiveProcessArgs(args: string[], backend: CliBackendConfig): string
   return stripped;
 }
 
-function appendSystemPromptArg(
-  args: string[],
-  backend: CliBackendConfig,
-  systemPrompt: string,
-): string[] {
-  const prompt = systemPrompt.trim();
-  if (!backend.systemPromptArg || !prompt) {
-    return args;
-  }
-  return upsertArgValue(args, backend.systemPromptArg, stripSystemPromptCacheBoundary(prompt));
-}
-
 export function buildClaudeLiveArgs(params: {
   args: string[];
   backend: CliBackendConfig;
@@ -144,13 +147,7 @@ export function buildClaudeLiveArgs(params: {
   return appendArg(
     upsertArgValue(
       upsertArgValue(
-        params.useResume
-          ? stripLiveProcessArgs(params.args, params.backend)
-          : appendSystemPromptArg(
-              stripLiveProcessArgs(params.args, params.backend),
-              params.backend,
-              params.systemPrompt,
-            ),
+        stripLiveProcessArgs(params.args, params.backend, params.useResume),
         "--input-format",
         "stream-json",
       ),
@@ -198,9 +195,12 @@ function buildClaudeLiveFingerprint(params: {
     : undefined;
   const normalizePluginDir = Boolean(skillsFingerprint);
   const omittedValueFlags = new Set(
-    [params.context.preparedBackend.backend.systemPromptArg, "--resume", "-r"].filter(
-      (entry): entry is string => typeof entry === "string" && entry.length > 0,
-    ),
+    [
+      params.context.preparedBackend.backend.systemPromptArg,
+      params.context.preparedBackend.backend.systemPromptFileArg,
+      "--resume",
+      "-r",
+    ].filter((entry): entry is string => typeof entry === "string" && entry.length > 0),
   );
   const unstableValueFlags = new Set(
     [
@@ -415,7 +415,7 @@ function parseClaudeLiveJsonLine(
   session: ClaudeLiveSession,
   trimmed: string,
 ): Record<string, unknown> | null {
-  if (trimmed.length > CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS) {
+  if (trimmed.length > CLAUDE_LIVE_MAX_PENDING_LINE_CHARS) {
     closeLiveSession(
       session,
       "abort",
@@ -513,11 +513,11 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
   resetNoOutputTimer(session);
   session.stdoutBuffer += chunk;
-  if (session.stdoutBuffer.length > CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS) {
+  if (session.stdoutBuffer.length > CLAUDE_LIVE_MAX_PENDING_LINE_CHARS) {
     closeLiveSession(
       session,
       "abort",
-      createOutputLimitError(session, "Claude CLI stdout buffer exceeded limit."),
+      createOutputLimitError(session, "Claude CLI JSONL line exceeded output limit."),
     );
     return;
   }

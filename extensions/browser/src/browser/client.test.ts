@@ -53,9 +53,9 @@ describe("browser client", () => {
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/sandboxed session/i);
   });
 
-  it("adds useful timeout messaging for abort-like failures", async () => {
+  it("adds useful cancellation messaging for abort-like failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
-    await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/timed out/i);
+    await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/cancelled/i);
   });
 
   it("surfaces non-2xx responses with body text", async () => {
@@ -226,7 +226,7 @@ describe("browser client", () => {
             }),
           } as unknown as Response;
         }
-        if (url.endsWith("/doctor")) {
+        if (url.includes("/doctor")) {
           return {
             ok: true,
             json: async () => ({
@@ -270,6 +270,12 @@ describe("browser client", () => {
       ok: true,
       profile: "openclaw",
     });
+    await expect(
+      browserDoctor("http://127.0.0.1:18791", { profile: "openclaw", deep: true }),
+    ).resolves.toMatchObject({
+      ok: true,
+      profile: "openclaw",
+    });
 
     await expect(browserTabs("http://127.0.0.1:18791")).resolves.toHaveLength(1);
     await expect(
@@ -310,6 +316,7 @@ describe("browser client", () => {
 
     expect(calls.some((c) => c.url.endsWith("/tabs"))).toBe(true);
     expect(calls.some((c) => c.url.endsWith("/doctor"))).toBe(true);
+    expect(calls.some((c) => c.url.endsWith("/doctor?profile=openclaw&deep=true"))).toBe(true);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
 

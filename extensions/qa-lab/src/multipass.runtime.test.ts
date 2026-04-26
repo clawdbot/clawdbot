@@ -115,8 +115,8 @@ describe("qa multipass runtime", () => {
       repoRoot: process.cwd(),
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-live-test"),
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       fastMode: true,
       scenarioIds: ["channel-chat-baseline"],
     });
@@ -128,9 +128,9 @@ describe("qa multipass runtime", () => {
         "--provider-mode",
         "live-frontier",
         "--model",
-        "openai/gpt-5.4",
+        "openai/gpt-5.5",
         "--alt-model",
-        "openai/gpt-5.4",
+        "openai/gpt-5.5",
         "--fast",
       ]),
     );

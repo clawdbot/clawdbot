@@ -205,6 +205,7 @@ describe("gatherDaemonStatus", () => {
       }),
     );
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
+    expect(status.gateway?.tlsEnabled).toBe(true);
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
     expect(inspectGatewayRestart).not.toHaveBeenCalled();

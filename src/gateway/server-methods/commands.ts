@@ -9,7 +9,7 @@ import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getPluginCommandSpecs } from "../../plugins/command-registry-state.js";
+import { getPluginCommandSpecs } from "../../plugins/command-specs.js";
 import { listPluginCommands } from "../../plugins/commands.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { CommandEntry, CommandsListResult } from "../protocol/index.js";

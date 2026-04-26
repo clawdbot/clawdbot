@@ -55,6 +55,9 @@ export function canRunBufferBackedVideoToVideoLiveLane(params: {
     return false;
   }
   if (providerId !== "runway") {
+    if (providerId === "fal") {
+      return params.modelRef.includes("reference-to-video");
+    }
     return true;
   }
   const slash = params.modelRef.indexOf("/");

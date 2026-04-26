@@ -80,6 +80,7 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
 
     private func updateModifierState(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
         // assert(Thread.isMainThread)  - Removed for Swift 6
+
         // Right Option (keyCode 61) acts as a hold-to-talk modifier.
         if keyCode == 61 {
             self.optionDown = modifierFlags.contains(.option)

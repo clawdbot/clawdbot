@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applyJobPatch, createJob, recomputeNextRuns } from "./service/jobs.js";
+import {
+  applyJobPatch,
+  createJob,
+  recomputeNextRuns,
+  resolveJobPayloadTextForMain,
+} from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
@@ -682,6 +687,20 @@ describe("createJob delivery defaults", () => {
       payload: { kind: "systemEvent", text: "ping" },
     });
     expect(job.delivery).toBeUndefined();
+  });
+
+  it("uses legacy systemEvent message text without throwing", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const job = createJob(state, {
+      name: "legacy system event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", message: "legacy text" } as never,
+    });
+
+    expect(resolveJobPayloadTextForMain(job)).toBe("legacy text");
   });
 });
 

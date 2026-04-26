@@ -27,6 +27,7 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 
 const pageCdpMocks = vi.hoisted(() => ({
+  markBackendDomRefsOnPage: vi.fn(async () => new Set<string>()),
   withPageScopedCdpClient: vi.fn(
     async ({ fn }: { fn: (send: () => Promise<unknown>) => unknown }) =>
       await fn(async () => ({ nodes: [] })),

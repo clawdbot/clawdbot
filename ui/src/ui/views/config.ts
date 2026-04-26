@@ -24,6 +24,13 @@ const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   100: "Full",
 };
 
+export type WebPushUiState = {
+  supported: boolean;
+  permission: NotificationPermission | "unsupported";
+  subscribed: boolean;
+  loading: boolean;
+};
+
 export type ConfigProps = {
   raw: string;
   originalRaw: string;
@@ -87,6 +94,10 @@ export type ConfigProps = {
   settingsLayout?: "tabs" | "accordion";
   /** Callback to navigate back to Quick Settings. Shown in accordion mode. */
   onBackToQuick?: () => void;
+  webPush?: WebPushUiState;
+  onWebPushSubscribe?: () => void;
+  onWebPushUnsubscribe?: () => void;
+  onWebPushTest?: () => void;
   onRequestUpdate?: () => void;
 };
 
@@ -612,6 +623,105 @@ function focusCustomThemeImportInput() {
   });
 }
 
+function renderNotificationsSection(props: ConfigProps) {
+  const push = props.webPush;
+  if (!push) {
+    return html`
+      <div class="settings-appearance">
+        <div class="settings-appearance__section">
+          <h3 class="settings-appearance__heading">Push Notifications</h3>
+          <p class="settings-appearance__hint">Not available in this browser.</p>
+        </div>
+      </div>
+    `;
+  }
+
+  const permissionLabel =
+    push.permission === "granted"
+      ? "Granted"
+      : push.permission === "denied"
+        ? "Denied"
+        : push.permission === "default"
+          ? "Not requested"
+          : "Unsupported";
+  const statusDot = push.subscribed ? "settings-status-dot--ok" : "";
+
+  return html`
+    <div class="settings-appearance">
+      <div class="settings-appearance__section">
+        <h3 class="settings-appearance__heading">Push Notifications</h3>
+        <p class="settings-appearance__hint">
+          Subscribe to receive browser push notifications from your gateway.
+        </p>
+
+        <div class="settings-info-grid">
+          <div class="settings-info-row">
+            <span class="settings-info-row__label">Browser support</span>
+            <span class="settings-info-row__value"
+              >${push.supported ? "Available" : "Not supported"}</span
+            >
+          </div>
+          <div class="settings-info-row">
+            <span class="settings-info-row__label">Permission</span>
+            <span class="settings-info-row__value">${permissionLabel}</span>
+          </div>
+          <div class="settings-info-row">
+            <span class="settings-info-row__label">Status</span>
+            <span class="settings-info-row__value">
+              <span class="settings-status-dot ${statusDot}"></span>
+              ${push.subscribed ? "Subscribed" : "Not subscribed"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      ${push.supported && push.permission !== "denied"
+        ? html`
+            <div class="settings-appearance__section">
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                ${push.subscribed
+                  ? html`
+                      <button
+                        class="config-bar__btn"
+                        ?disabled=${push.loading || !props.connected}
+                        @click=${() => props.onWebPushUnsubscribe?.()}
+                      >
+                        Unsubscribe
+                      </button>
+                      <button
+                        class="config-bar__btn"
+                        ?disabled=${push.loading || !props.connected}
+                        @click=${() => props.onWebPushTest?.()}
+                      >
+                        Send test
+                      </button>
+                    `
+                  : html`
+                      <button
+                        class="config-bar__btn config-bar__btn--primary"
+                        ?disabled=${push.loading || !props.connected}
+                        @click=${() => props.onWebPushSubscribe?.()}
+                      >
+                        ${push.loading ? "Subscribing..." : "Enable notifications"}
+                      </button>
+                    `}
+              </div>
+            </div>
+          `
+        : push.permission === "denied"
+          ? html`
+              <div class="settings-appearance__section">
+                <p class="settings-appearance__hint">
+                  Notifications are blocked. Update your browser site permissions to allow
+                  notifications.
+                </p>
+              </div>
+            `
+          : nothing}
+    </div>
+  `;
+}
+
 function renderAppearanceSection(props: ConfigProps) {
   const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
   if (
@@ -861,11 +971,14 @@ export function renderConfig(props: ConfigProps) {
   // Build categorised nav from schema - only include sections that exist in the schema
   const schemaProps = analysis.schema?.properties ?? {};
 
-  const VIRTUAL_SECTIONS = new Set(["__appearance__"]);
+  const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
   const visibleCategories = SECTION_CATEGORIES.map((cat) =>
     Object.assign({}, cat, {
       sections: cat.sections.filter(
-        (s) => (includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps,
+        (s) =>
+          ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
+          (!include || include.has(s.key)) &&
+          (!exclude || !exclude.has(s.key)),
       ),
     }),
   ).filter((cat) => cat.sections.length > 0);
@@ -1308,97 +1421,101 @@ export function renderConfig(props: ConfigProps) {
             ? includeVirtualSections
               ? renderAppearanceSection(props)
               : nothing
-            : formMode === "form"
-              ? html`
-                  ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
-                  ${props.schemaLoading
-                    ? html`
-                        <div class="config-loading">
-                          <div class="config-loading__spinner"></div>
-                          <span>Loading schema…</span>
-                        </div>
-                      `
-                    : renderConfigForm({
-                        schema: analysis.schema,
-                        uiHints: props.uiHints,
-                        value: props.formValue,
-                        rawAvailable,
-                        disabled: props.loading || !props.formValue,
-                        unsupportedPaths: analysis.unsupportedPaths,
-                        onPatch: props.onFormPatch,
-                        searchQuery: props.searchQuery,
-                        activeSection: props.activeSection,
-                        activeSubsection: effectiveSubsection,
-                        revealSensitive:
-                          props.activeSection === "env" ? envSensitiveVisible : false,
-                        isSensitivePathRevealed,
-                        onToggleSensitivePath: (path) => {
-                          toggleSensitivePathReveal(path);
-                          requestUpdate();
-                        },
-                      })}
-                `
-              : (() => {
-                  const sensitiveCount = countSensitiveConfigValues(
-                    props.formValue,
-                    [],
-                    props.uiHints,
-                  );
-                  const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
-                  return html`
-                    ${formUnsafe
+            : props.activeSection === "__notifications__"
+              ? includeVirtualSections
+                ? renderNotificationsSection(props)
+                : nothing
+              : formMode === "form"
+                ? html`
+                    ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
+                    ${props.schemaLoading
                       ? html`
-                          <div class="callout info" style="margin-bottom: 12px">
-                            Your config contains fields the form editor can't safely represent. Use
-                            Raw mode to edit those entries.
+                          <div class="config-loading">
+                            <div class="config-loading__spinner"></div>
+                            <span>Loading schema…</span>
                           </div>
                         `
-                      : nothing}
-                    <div class="field config-raw-field">
-                      <span style="display:flex;align-items:center;gap:8px;">
-                        Raw config (JSON/JSON5)
-                        ${sensitiveCount > 0
-                          ? html`
-                              <span class="pill pill--sm"
-                                >${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"}
-                                ${blurred ? "redacted" : "visible"}</span
-                              >
-                              <button
-                                class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
-                                title=${blurred
-                                  ? "Reveal sensitive values"
-                                  : "Hide sensitive values"}
-                                aria-label="Toggle raw config redaction"
-                                aria-pressed=${!blurred}
-                                @click=${() => {
-                                  cvs.rawRevealed = !cvs.rawRevealed;
-                                  requestUpdate();
-                                }}
-                              >
-                                ${blurred ? icons.eyeOff : icons.eye}
-                              </button>
-                            `
-                          : nothing}
-                      </span>
-                      ${blurred
+                      : renderConfigForm({
+                          schema: analysis.schema,
+                          uiHints: props.uiHints,
+                          value: props.formValue,
+                          rawAvailable,
+                          disabled: props.loading || !props.formValue,
+                          unsupportedPaths: analysis.unsupportedPaths,
+                          onPatch: props.onFormPatch,
+                          searchQuery: props.searchQuery,
+                          activeSection: props.activeSection,
+                          activeSubsection: effectiveSubsection,
+                          revealSensitive:
+                            props.activeSection === "env" ? envSensitiveVisible : false,
+                          isSensitivePathRevealed,
+                          onToggleSensitivePath: (path) => {
+                            toggleSensitivePathReveal(path);
+                            requestUpdate();
+                          },
+                        })}
+                  `
+                : (() => {
+                    const sensitiveCount = countSensitiveConfigValues(
+                      props.formValue,
+                      [],
+                      props.uiHints,
+                    );
+                    const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
+                    return html`
+                      ${formUnsafe
                         ? html`
-                            <div class="callout info" style="margin-top: 12px">
-                              ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}
-                              hidden. Use the reveal button above to edit the raw config.
+                            <div class="callout info" style="margin-bottom: 12px">
+                              Your config contains fields the form editor can't safely represent.
+                              Use Raw mode to edit those entries.
                             </div>
                           `
-                        : html`
-                            <textarea
-                              placeholder="Raw config (JSON/JSON5)"
-                              .value=${props.raw}
-                              @input=${(e: Event) => {
-                                props.onRawChange((e.target as HTMLTextAreaElement).value);
-                              }}
-                            ></textarea>
-                          `}
-                    </div>
-                  `;
-                })()}
+                        : nothing}
+                      <div class="field config-raw-field">
+                        <span style="display:flex;align-items:center;gap:8px;">
+                          Raw config (JSON/JSON5)
+                          ${sensitiveCount > 0
+                            ? html`
+                                <span class="pill pill--sm"
+                                  >${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"}
+                                  ${blurred ? "redacted" : "visible"}</span
+                                >
+                                <button
+                                  class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
+                                  title=${blurred
+                                    ? "Reveal sensitive values"
+                                    : "Hide sensitive values"}
+                                  aria-label="Toggle raw config redaction"
+                                  aria-pressed=${!blurred}
+                                  @click=${() => {
+                                    cvs.rawRevealed = !cvs.rawRevealed;
+                                    requestUpdate();
+                                  }}
+                                >
+                                  ${blurred ? icons.eyeOff : icons.eye}
+                                </button>
+                              `
+                            : nothing}
+                        </span>
+                        ${blurred
+                          ? html`
+                              <div class="callout info" style="margin-top: 12px">
+                                ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}
+                                hidden. Use the reveal button above to edit the raw config.
+                              </div>
+                            `
+                          : html`
+                              <textarea
+                                placeholder="Raw config (JSON/JSON5)"
+                                .value=${props.raw}
+                                @input=${(e: Event) => {
+                                  props.onRawChange((e.target as HTMLTextAreaElement).value);
+                                }}
+                              ></textarea>
+                            `}
+                      </div>
+                    `;
+                  })()}
         </div>
 
         ${props.issues.length > 0

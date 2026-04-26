@@ -3,20 +3,18 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
 import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mjs";
 import {
+  collectModuleReferencesFromSource,
   diffInventoryEntries,
   normalizeRepoPath,
   resolveRepoSpecifier,
-  visitModuleSpecifiers,
   writeLine,
 } from "./lib/guard-inventory-utils.mjs";
-import { toLine } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extensionsRoot = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
@@ -49,7 +47,7 @@ const baselinePathByMode = {
 };
 
 let allInventoryByModePromise;
-let parsedExtensionSourceFilesPromise;
+let extensionModuleReferencesPromise;
 
 const ruleTextByMode = {
   "src-outside-plugin-sdk":
@@ -97,32 +95,34 @@ async function collectExtensionSourceFiles(rootDir) {
   );
 }
 
-async function collectParsedExtensionSourceFiles() {
-  if (!parsedExtensionSourceFilesPromise) {
-    parsedExtensionSourceFilesPromise = (async () => {
+async function collectExtensionModuleReferences() {
+  if (!extensionModuleReferencesPromise) {
+    extensionModuleReferencesPromise = (async () => {
       const files = await collectExtensionSourceFiles(extensionsRoot);
-      return await Promise.all(
+      const referenced = await Promise.all(
         files.map(async (filePath) => {
           const source = await fs.readFile(filePath, "utf8");
-          const scriptKind =
-            filePath.endsWith(".tsx") || filePath.endsWith(".jsx")
-              ? ts.ScriptKind.TSX
-              : ts.ScriptKind.TS;
+          if (!mayContainModuleSpecifier(source)) {
+            return null;
+          }
           return {
             filePath,
-            sourceFile: ts.createSourceFile(
-              filePath,
-              source,
-              ts.ScriptTarget.Latest,
-              true,
-              scriptKind,
-            ),
+            references: collectModuleReferencesFromSource(source),
           };
         }),
       );
+      return referenced.filter((entry) => entry && entry.references.length > 0);
     })();
   }
-  return await parsedExtensionSourceFilesPromise;
+  return await extensionModuleReferencesPromise;
+}
+
+function mayContainModuleSpecifier(source) {
+  return (
+    /\bfrom\s*["']/.test(source) ||
+    /\bimport\s*(?:\(|["']|type\b|[\w*{])/.test(source) ||
+    /\bexport\s*(?:type\s+)?(?:\*|{)[^;\n]*\bfrom\s*["']/.test(source)
+  );
 }
 
 function resolveExtensionRoot(filePath) {
@@ -186,7 +186,7 @@ function shouldReport(mode, resolvedPath) {
   return !resolvedPath.startsWith("src/plugin-sdk/");
 }
 
-function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
+function collectEntriesByModeFromModuleReferences(filePath, references) {
   const entriesByMode = {
     "src-outside-plugin-sdk": [],
     "plugin-sdk-internal": [],
@@ -195,11 +195,11 @@ function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
   const extensionRoot = resolveExtensionRoot(filePath);
   const relativeFile = normalizeRepoPath(repoRoot, filePath);
 
-  function push(kind, specifierNode, specifier) {
+  function push(kind, line, specifier) {
     const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
     const baseEntry = {
       file: relativeFile,
-      line: toLine(sourceFile, specifierNode),
+      line,
       kind,
       specifier,
       resolvedPath,
@@ -225,9 +225,9 @@ function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
     }
   }
 
-  visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
-    push(kind, specifierNode, specifier);
-  });
+  for (const { kind, line, specifier } of references) {
+    push(kind, line, specifier);
+  }
   return entriesByMode;
 }
 
@@ -237,14 +237,14 @@ export async function collectExtensionPluginSdkBoundaryInventory(mode) {
   }
   if (!allInventoryByModePromise) {
     allInventoryByModePromise = (async () => {
-      const files = await collectParsedExtensionSourceFiles();
+      const files = await collectExtensionModuleReferences();
       const inventoryByMode = {
         "src-outside-plugin-sdk": [],
         "plugin-sdk-internal": [],
         "relative-outside-package": [],
       };
-      for (const { filePath, sourceFile } of files) {
-        const entriesByMode = collectEntriesByModeFromSourceFile(sourceFile, filePath);
+      for (const { filePath, references } of files) {
+        const entriesByMode = collectEntriesByModeFromModuleReferences(filePath, references);
         for (const inventoryMode of MODES) {
           inventoryByMode[inventoryMode].push(...entriesByMode[inventoryMode]);
         }

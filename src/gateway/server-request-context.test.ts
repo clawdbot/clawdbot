@@ -62,6 +62,7 @@ describe("createGatewayRequestContext", () => {
       markChannelLoggedOut: vi.fn(),
       wizardRunner: vi.fn(async () => undefined),
       broadcastVoiceWakeChanged: vi.fn(),
+      broadcastVoiceWakeRoutingChanged: vi.fn(),
       unavailableGatewayMethods: new Set(),
     });
 

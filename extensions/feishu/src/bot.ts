@@ -57,6 +57,7 @@ import type { FeishuMessageEvent } from "./event-types.js";
 import {
   isFeishuGroupChatType,
   type FeishuMessageContext,
+  type FeishuMediaInfo,
   type FeishuMessageInfo,
 } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
@@ -67,6 +68,37 @@ export { toMessageResourceType } from "./bot-content.js";
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+async function resolveFeishuAudioPreflightTranscript(params: {
+  cfg: ClawdbotConfig;
+  mediaList: FeishuMediaInfo[];
+  content: string;
+  chatType: "direct" | "group";
+  log: (msg: string) => void;
+}): Promise<string | undefined> {
+  if (params.content.trim() !== "<media:audio>") {
+    return undefined;
+  }
+  const audioMedia = params.mediaList.filter((media) => media.contentType?.startsWith("audio/"));
+  if (audioMedia.length === 0) {
+    return undefined;
+  }
+
+  try {
+    const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
+    return await transcribeFirstAudio({
+      ctx: {
+        MediaPaths: audioMedia.map((media) => media.path),
+        MediaTypes: audioMedia.map((media) => media.contentType).filter(Boolean) as string[],
+        ChatType: params.chatType,
+      },
+      cfg: params.cfg,
+    });
+  } catch (err) {
+    params.log(`feishu: audio preflight transcription failed: ${String(err)}`);
+    return undefined;
+  }
+}
 
 // --- Broadcast support ---
 // Resolve broadcast agent list for a given peer (group) ID.
@@ -122,6 +154,8 @@ export function parseFeishuMessageEvent(
   const ctx: FeishuMessageContext = {
     chatId: event.message.chat_id,
     messageId: event.message.message_id,
+    replyTargetMessageId: event.message.reply_target_message_id?.trim() || undefined,
+    suppressReplyTarget: event.message.suppress_reply_target === true,
     senderId: senderUserId || senderOpenId || "",
     // Keep the historical field name, but fall back to user_id when open_id is unavailable
     // (common in some mobile app deliveries).
@@ -565,14 +599,6 @@ export async function handleFeishuMessage(params: {
       senderIds: [senderUserId],
       senderName: ctx.senderName,
     }).allowed;
-    const commandAuthorized = shouldComputeCommandAuthorized
-      ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-          useAccessGroups,
-          authorizers: [
-            { configured: commandAllowFrom.length > 0, allowed: senderAllowedForCommands },
-          ],
-        })
-      : undefined;
 
     // In group chats, the session is scoped to the group, but the *speaker* is the sender.
     // Using a group-scoped From causes the agent to treat different users as the same person.
@@ -726,6 +752,43 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
     });
     const mediaPayload = buildAgentMediaPayload(mediaList);
+    const audioTranscript = await resolveFeishuAudioPreflightTranscript({
+      cfg: effectiveCfg,
+      mediaList,
+      content: ctx.content,
+      chatType: isGroup ? "group" : "direct",
+      log,
+    });
+    const preflightAudioIndex =
+      audioTranscript === undefined
+        ? -1
+        : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
+    const agentFacingContent = audioTranscript ?? ctx.content;
+    const agentFacingCtx =
+      audioTranscript === undefined
+        ? ctx
+        : {
+            ...ctx,
+            content: audioTranscript,
+          };
+    const effectiveCommandProbeBody =
+      audioTranscript === undefined
+        ? commandProbeBody
+        : isGroup
+          ? normalizeFeishuCommandProbeBody(audioTranscript)
+          : audioTranscript;
+    const shouldComputeEffectiveCommandAuthorized =
+      audioTranscript === undefined
+        ? shouldComputeCommandAuthorized
+        : core.channel.commands.shouldComputeCommandAuthorized(effectiveCommandProbeBody, cfg);
+    const commandAuthorized = shouldComputeEffectiveCommandAuthorized
+      ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+          useAccessGroups,
+          authorizers: [
+            { configured: commandAllowFrom.length > 0, allowed: senderAllowedForCommands },
+          ],
+        })
+      : undefined;
 
     // Fetch quoted/replied message content if parentId exists
     let quotedMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> = null;
@@ -769,7 +832,7 @@ export async function handleFeishuMessage(params: {
 
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
     const messageBody = buildFeishuAgentBody({
-      ctx,
+      ctx: agentFacingCtx,
       quotedContent,
       permissionErrorForAgent,
       botOpenId,
@@ -991,8 +1054,9 @@ export async function handleFeishuMessage(params: {
         InboundHistory: inboundHistory,
         ReplyToId: ctx.parentId,
         RootMessageId: ctx.rootId,
-        RawBody: ctx.content,
-        CommandBody: ctx.content,
+        RawBody: agentFacingContent,
+        CommandBody: agentFacingContent,
+        Transcript: audioTranscript,
         From: feishuFrom,
         To: feishuTo,
         SessionKey: agentSessionKey,
@@ -1018,6 +1082,7 @@ export async function handleFeishuMessage(params: {
         OriginatingTo: feishuTo,
         GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,
         ...mediaPayload,
+        ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
       });
     };
 
@@ -1037,7 +1102,11 @@ export async function handleFeishuMessage(params: {
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
     const replyTargetMessageId =
-      isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
+      isTopicSession || configReplyInThread
+        ? (ctx.rootId ??
+          ctx.replyTargetMessageId ??
+          (ctx.suppressReplyTarget ? undefined : ctx.messageId))
+        : (ctx.replyTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId));
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {

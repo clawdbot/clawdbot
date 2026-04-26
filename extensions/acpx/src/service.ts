@@ -31,6 +31,8 @@ type AcpxRuntimeLike = AcpRuntime & {
   }>;
 };
 
+const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
+
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
   logger?: PluginLogger;
@@ -128,6 +130,10 @@ function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): stri
   return undefined;
 }
 
+function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[ENABLE_STARTUP_PROBE_ENV] === "1";
+}
+
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {
@@ -170,11 +176,11 @@ export function createAcpxRuntimeService(
       registerAcpRuntimeBackend({
         id: ACPX_BACKEND_ID,
         runtime,
-        healthy: () => runtime?.isHealthy() ?? false,
+        ...(shouldRunStartupProbe() ? { healthy: () => runtime?.isHealthy() ?? false } : {}),
       });
       ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
 
-      if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE === "1") {
+      if (!shouldRunStartupProbe() || process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE === "1") {
         return;
       }
 

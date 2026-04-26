@@ -25,9 +25,11 @@ vi.mock("../../tts/provider-registry.js", () => ({
 
 vi.mock("../../tts/tts.js", () => ({
   getResolvedSpeechProviderConfig: vi.fn(),
+  getTtsPersona: vi.fn(() => undefined),
   getTtsProvider: vi.fn(() => "openai"),
   isTtsEnabled: vi.fn(() => true),
   isTtsProviderConfigured: vi.fn(() => true),
+  listTtsPersonas: vi.fn(() => []),
   resolveExplicitTtsOverrides:
     mocks.resolveExplicitTtsOverrides as typeof import("../../tts/tts.js").resolveExplicitTtsOverrides,
   resolveTtsAutoMode: vi.fn(() => false),
@@ -35,6 +37,7 @@ vi.mock("../../tts/tts.js", () => ({
   resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
   resolveTtsProviderOrder: vi.fn(() => ["openai"]),
   setTtsEnabled: vi.fn(),
+  setTtsPersona: vi.fn(),
   setTtsProvider: vi.fn(),
   textToSpeech: mocks.textToSpeech as typeof import("../../tts/tts.js").textToSpeech,
 }));

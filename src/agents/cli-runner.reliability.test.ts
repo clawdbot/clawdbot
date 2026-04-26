@@ -8,6 +8,7 @@ import {
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
@@ -18,6 +19,7 @@ import {
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import { MAX_CLI_SESSION_HISTORY_MESSAGES } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -74,6 +76,7 @@ function buildPreparedContext(params?: {
   sessionKey?: string;
   cliSessionId?: string;
   runId?: string;
+  openClawHistoryPrompt?: string;
 }): PreparedCliRunContext {
   const backend = {
     command: "codex",
@@ -115,6 +118,9 @@ function buildPreparedContext(params?: {
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    ...(params?.openClawHistoryPrompt
+      ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
+      : {}),
     authEpochVersion: 2,
   };
 }
@@ -322,6 +328,56 @@ describe("runCliAgent reliability", () => {
       stopReason: "completed",
       refusal: false,
     });
+  });
+
+  it("seeds fresh CLI sessions from the OpenClaw transcript", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({
+        openClawHistoryPrompt:
+          "Continue this conversation using the OpenClaw transcript below.\n\nUser: earlier ask\n\nAssistant: earlier answer\n\n<next_user_message>\nhi\n</next_user_message>",
+      }),
+    );
+
+    expect(result.meta.finalPromptText).toContain("User: earlier ask");
+    expect(result.meta.finalPromptText).toContain("Assistant: earlier answer");
+  });
+
+  it("keeps resumed CLI sessions on native resume history", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({
+        cliSessionId: "cli-session",
+        openClawHistoryPrompt: "User: earlier ask",
+      }),
+    );
+
+    expect(result.meta.finalPromptText).not.toContain("User: earlier ask");
+    expect(result.meta.finalPromptText).toContain("hi");
   });
 
   it("reports CLI reply backends as streaming until the managed run finishes", async () => {
@@ -696,6 +752,68 @@ describe("runCliAgent reliability", () => {
       });
     } finally {
       historySpy.mockRestore();
+    }
+  });
+
+  it("builds fresh-session history reseed prompts from hook-mutated prompts", async () => {
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier ask" }],
+    });
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "compaction",
+        id: "compaction-1",
+        parentId: "msg-0",
+        timestamp: new Date(2).toISOString(),
+        summary: "compacted earlier ask",
+        firstKeptEntryId: "msg-0",
+        tokensBefore: 10_000,
+      })}\n`,
+      "utf-8",
+    );
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: dir,
+          cliBackends: {
+            "codex-cli": {
+              command: "codex",
+              args: ["exec"],
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        },
+      },
+    };
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "s1",
+        sessionFile,
+        workspaceDir: dir,
+        config,
+        prompt: "current ask",
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        timeoutMs: 1_000,
+        runId: "run-history-hook",
+      });
+
+      expect(context.params.prompt).toBe("hook context\n\ncurrent ask");
+      expect(context.openClawHistoryPrompt).toContain("Compaction summary: compacted earlier ask");
+      expect(context.openClawHistoryPrompt).toContain("hook context");
+      expect(context.openClawHistoryPrompt).toContain("current ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

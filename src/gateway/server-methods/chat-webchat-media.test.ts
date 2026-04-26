@@ -43,6 +43,26 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     );
   });
 
+  it("suppresses reasoning payload audio", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
+    const audioPath = path.join(tmpDir, "clip.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [
+        {
+          text: "Reasoning:\n_step_",
+          mediaUrl: audioPath,
+          trustedLocalMedia: true,
+          isReasoning: true,
+        },
+      ],
+      { localRoots: [tmpDir] },
+    );
+
+    expect(blocks).toHaveLength(0);
+  });
+
   it("skips remote URLs", async () => {
     const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads([
       { mediaUrl: "https://example.com/a.mp3", trustedLocalMedia: true },
@@ -210,6 +230,18 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
         { type: "input_image", image_url: "data:image/png;base64,cG5n" },
       ],
     });
+  });
+
+  it("suppresses reasoning payload media transcripts", async () => {
+    const message = await buildWebchatAssistantMessageFromReplyPayloads([
+      {
+        text: "Reasoning:\n_step_",
+        mediaUrl: "data:image/png;base64,cG5n",
+        isReasoning: true,
+      },
+    ]);
+
+    expect(message).toBeNull();
   });
 
   it("suppresses control tokens and falls back to synthetic image text", async () => {

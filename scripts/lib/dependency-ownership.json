@@ -164,8 +164,9 @@
       "risk": ["version-parser"]
     },
     "sharp": {
-      "owner": "capability:image-ops",
-      "class": "default-runtime-initially",
+      "owner": "plugin:media-understanding-core",
+      "class": "plugin-runtime",
+      "activation": ["media-understanding-core.image-ops"],
       "risk": ["native", "parser", "untrusted-files"]
     },
     "sqlite-vec": {
@@ -192,6 +193,11 @@
       "owner": "core:http-client",
       "class": "core-runtime",
       "risk": ["network"]
+    },
+    "web-push": {
+      "owner": "core:web-push",
+      "class": "core-runtime",
+      "risk": ["network", "push-notifications", "crypto"]
     },
     "ws": {
       "owner": "core:gateway-websocket",

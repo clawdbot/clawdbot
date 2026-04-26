@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import { collectArchitectureSmells, main } from "../scripts/check-architecture-smells.mjs";
 import { createCapturedIo } from "./helpers/captured-io.js";
 
+const smellsPromise = collectArchitectureSmells();
+
 describe("architecture smell inventory", () => {
   it("produces stable sorted output", async () => {
-    const first = await collectArchitectureSmells();
-    const second = await collectArchitectureSmells();
+    const smells = await smellsPromise;
 
-    expect(second).toEqual(first);
     expect(
-      [...first].toSorted(
+      [...smells].toSorted(
         (left, right) =>
           left.category.localeCompare(right.category) ||
           left.file.localeCompare(right.file) ||
@@ -18,7 +18,7 @@ describe("architecture smell inventory", () => {
           left.specifier.localeCompare(right.specifier) ||
           left.reason.localeCompare(right.reason),
       ),
-    ).toEqual(first);
+    ).toEqual(smells);
   });
 
   it("script json output matches the collector", async () => {
@@ -27,6 +27,6 @@ describe("architecture smell inventory", () => {
 
     expect(exitCode).toBe(0);
     expect(captured.readStderr()).toBe("");
-    expect(JSON.parse(captured.readStdout())).toEqual(await collectArchitectureSmells());
+    expect(JSON.parse(captured.readStdout())).toEqual(await smellsPromise);
   });
 });

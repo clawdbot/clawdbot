@@ -18,6 +18,8 @@ const hoisted = vi.hoisted(() => ({
   discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
+  prepareProviderDynamicModelMock: vi.fn(async () => {}),
+  resolveModelWithRegistryMock: vi.fn(),
 }));
 const {
   completeMock,
@@ -29,7 +31,15 @@ const {
   discoverModelsMock,
   fetchMock,
   registerProviderStreamForModelMock,
+  prepareProviderDynamicModelMock,
+  resolveModelWithRegistryMock,
 } = hoisted;
+
+type ResolveModelWithRegistryTestParams = {
+  modelRegistry: { find: (provider: string, modelId: string) => unknown };
+  provider: string;
+  modelId: string;
+};
 
 vi.mock("@mariozechner/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
@@ -63,6 +73,17 @@ vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
   discoverModels: discoverModelsMock,
 }));
 
+vi.mock("../plugins/provider-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  )),
+  prepareProviderDynamicModel: prepareProviderDynamicModelMock,
+}));
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  resolveModelWithRegistry: resolveModelWithRegistryMock,
+}));
+
 const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
@@ -93,6 +114,12 @@ describe("describeImageWithModel", () => {
         baseUrl: "https://api.minimax.io/anthropic",
       })),
     });
+    resolveModelWithRegistryMock.mockImplementation(
+      // Delegate to modelRegistry.find so tests that override discoverModelsMock
+      // automatically get the right model through resolveModelWithRegistry.
+      ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) =>
+        modelRegistry.find(provider, modelId),
+    );
   });
 
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
@@ -186,6 +213,84 @@ describe("describeImageWithModel", () => {
     );
     expect(completeMock).toHaveBeenCalledOnce();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves configured image models when discovery has not registered the provider", async () => {
+    const registryFind = vi.fn(() => null);
+    discoverModelsMock.mockReturnValue({ find: registryFind });
+    resolveModelWithRegistryMock.mockImplementationOnce(
+      ({ provider, modelId }: ResolveModelWithRegistryTestParams) => ({
+        provider,
+        id: modelId,
+        api: "anthropic-messages",
+        input: ["text", "image"],
+        baseUrl: "http://127.0.0.1:1234",
+      }),
+    );
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "lmstudio",
+      model: "google/gemma-4-e2b",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "local vision ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {
+        models: {
+          providers: {
+            lmstudio: {
+              api: "anthropic-messages",
+              baseUrl: "http://127.0.0.1:1234",
+              models: [
+                {
+                  id: "google/gemma-4-e2b",
+                  name: "google/gemma-4-e2b",
+                  input: ["text", "image"],
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131_072,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+      provider: "lmstudio",
+      model: "google/gemma-4-e2b",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "local vision ok",
+      model: "google/gemma-4-e2b",
+    });
+    expect(registryFind).not.toHaveBeenCalled();
+    expect(resolveModelWithRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "lmstudio",
+        modelId: "google/gemma-4-e2b",
+        cfg: expect.objectContaining({
+          models: expect.objectContaining({
+            providers: expect.objectContaining({
+              lmstudio: expect.objectContaining({
+                baseUrl: "http://127.0.0.1:1234",
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(prepareProviderDynamicModelMock).not.toHaveBeenCalled();
+    expect(completeMock).toHaveBeenCalledOnce();
   });
 
   it("passes image prompt as system instructions for codex image requests", async () => {

@@ -4,12 +4,10 @@ read_when:
   - The troubleshooting hub pointed you here for deeper diagnosis
   - You need stable symptom based runbook sections with exact commands
 title: "Troubleshooting"
+sidebarTitle: "Troubleshooting"
 ---
 
-# Gateway troubleshooting
-
-This page is the deep runbook.
-Start at [/help/troubleshooting](/help/troubleshooting) if you want the fast triage flow first.
+This page is the deep runbook. Start at [/help/troubleshooting](/help/troubleshooting) if you want the fast triage flow first.
 
 ## Command ladder
 
@@ -27,13 +25,46 @@ Expected healthy signals:
 
 - `openclaw gateway status` shows `Runtime: running`, `Connectivity probe: ok`, and a `Capability: ...` line.
 - `openclaw doctor` reports no blocking config/service issues.
-- `openclaw channels status --probe` shows live per-account transport status and,
-  where supported, probe/audit results such as `works` or `audit ok`.
+- `openclaw channels status --probe` shows live per-account transport status and, where supported, probe/audit results such as `works` or `audit ok`.
+
+## Split brain installs and newer config guard
+
+Use this when a gateway service unexpectedly stops after an update, or logs show that one `openclaw` binary is older than the version that last wrote `openclaw.json`.
+
+OpenClaw stamps config writes with `meta.lastTouchedVersion`. Read-only commands can still inspect a config written by a newer OpenClaw, but process and service mutations refuse to continue from an older binary. Blocked actions include gateway service start, stop, restart, uninstall, forced service reinstall, service-mode gateway startup, and `gateway --force` port cleanup.
+
+```bash
+which openclaw
+openclaw --version
+openclaw gateway status --deep
+openclaw config get meta.lastTouchedVersion
+```
+
+<Steps>
+  <Step title="Fix PATH">
+    Fix `PATH` so `openclaw` resolves to the newer install, then rerun the action.
+  </Step>
+  <Step title="Reinstall the gateway service">
+    Reinstall the intended gateway service from the newer install:
+
+    ```bash
+    openclaw gateway install --force
+    openclaw gateway restart
+    ```
+
+  </Step>
+  <Step title="Remove stale wrappers">
+    Remove stale system package or old wrapper entries that still point at an old `openclaw` binary.
+  </Step>
+</Steps>
+
+<Warning>
+For intentional downgrade or emergency recovery only, set `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1` for the single command. Leave it unset for normal operation.
+</Warning>
 
 ## Anthropic 429 extra usage required for long context
 
-Use this when logs/errors include:
-`HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+Use this when logs/errors include: `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
 
 ```bash
 openclaw logs --follow
@@ -49,9 +80,17 @@ Look for:
 
 Fix options:
 
-1. Disable `context1m` for that model to fall back to the normal context window.
-2. Use an Anthropic credential that is eligible for long-context requests, or switch to an Anthropic API key.
-3. Configure fallback models so runs continue when Anthropic long-context requests are rejected.
+<Steps>
+  <Step title="Disable context1m">
+    Disable `context1m` for that model to fall back to the normal context window.
+  </Step>
+  <Step title="Use an eligible credential">
+    Use an Anthropic credential that is eligible for long-context requests, or switch to an Anthropic API key.
+  </Step>
+  <Step title="Configure fallback models">
+    Configure fallback models so runs continue when Anthropic long-context requests are rejected.
+  </Step>
+</Steps>
 
 Related:
 
@@ -80,38 +119,26 @@ Look for:
 
 - direct tiny calls succeed, but OpenClaw runs fail only on larger prompts
 - backend errors about `messages[].content` expecting a string
-- backend crashes that appear only with larger prompt-token counts or full agent
-  runtime prompts
+- backend crashes that appear only with larger prompt-token counts or full agent runtime prompts
 
-Common signatures:
-
-- `messages[...].content: invalid type: sequence, expected a string` → backend
-  rejects structured Chat Completions content parts. Fix: set
-  `models.providers.<provider>.models[].compat.requiresStringContent: true`.
-- direct tiny requests succeed, but OpenClaw agent runs fail with backend/model
-  crashes (for example Gemma on some `inferrs` builds) → OpenClaw transport is
-  likely already correct; the backend is failing on the larger agent-runtime
-  prompt shape.
-- failures shrink after disabling tools but do not disappear → tool schemas were
-  part of the pressure, but the remaining issue is still upstream model/server
-  capacity or a backend bug.
-
-Fix options:
-
-1. Set `compat.requiresStringContent: true` for string-only Chat Completions backends.
-2. Set `compat.supportsTools: false` for models/backends that cannot handle
-   OpenClaw's tool schema surface reliably.
-3. Lower prompt pressure where possible: smaller workspace bootstrap, shorter
-   session history, lighter local model, or a backend with stronger long-context
-   support.
-4. If tiny direct requests keep passing while OpenClaw agent turns still crash
-   inside the backend, treat it as an upstream server/model limitation and file
-   a repro there with the accepted payload shape.
+<AccordionGroup>
+  <Accordion title="Common signatures">
+    - `messages[...].content: invalid type: sequence, expected a string` → backend rejects structured Chat Completions content parts. Fix: set `models.providers.<provider>.models[].compat.requiresStringContent: true`.
+    - direct tiny requests succeed, but OpenClaw agent runs fail with backend/model crashes (for example Gemma on some `inferrs` builds) → OpenClaw transport is likely already correct; the backend is failing on the larger agent-runtime prompt shape.
+    - failures shrink after disabling tools but do not disappear → tool schemas were part of the pressure, but the remaining issue is still upstream model/server capacity or a backend bug.
+  </Accordion>
+  <Accordion title="Fix options">
+    1. Set `compat.requiresStringContent: true` for string-only Chat Completions backends.
+    2. Set `compat.supportsTools: false` for models/backends that cannot handle OpenClaw's tool schema surface reliably.
+    3. Lower prompt pressure where possible: smaller workspace bootstrap, shorter session history, lighter local model, or a backend with stronger long-context support.
+    4. If tiny direct requests keep passing while OpenClaw agent turns still crash inside the backend, treat it as an upstream server/model limitation and file a repro there with the accepted payload shape.
+  </Accordion>
+</AccordionGroup>
 
 Related:
 
-- [Local models](/gateway/local-models)
 - [Configuration](/gateway/configuration)
+- [Local models](/gateway/local-models)
 - [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
 
 ## No replies
@@ -141,10 +168,10 @@ Common signatures:
 Related:
 
 - [Channel troubleshooting](/channels/troubleshooting)
-- [Pairing](/channels/pairing)
 - [Groups](/channels/groups)
+- [Pairing](/channels/pairing)
 
-## Dashboard control ui connectivity
+## Dashboard control UI connectivity
 
 When dashboard/control UI will not connect, validate URL, auth mode, and secure context assumptions.
 
@@ -162,32 +189,21 @@ Look for:
 - Auth mode/token mismatch between client and gateway.
 - HTTP usage where device identity is required.
 
-Common signatures:
-
-- `device identity required` → non-secure context or missing device auth.
-- `origin not allowed` → browser `Origin` is not in `gateway.controlUi.allowedOrigins`
-  (or you are connecting from a non-loopback browser origin without an explicit
-  allowlist).
-- `device nonce required` / `device nonce mismatch` → client is not completing the
-  challenge-based device auth flow (`connect.challenge` + `device.nonce`).
-- `device signature invalid` / `device signature expired` → client signed the wrong
-  payload (or stale timestamp) for the current handshake.
-- `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → client can do one trusted retry with cached device token.
-- That cached-token retry reuses the cached scope set stored with the paired
-  device token. Explicit `deviceToken` / explicit `scopes` callers keep their
-  requested scope set instead.
-- Outside that retry path, connect auth precedence is explicit shared
-  token/password first, then explicit `deviceToken`, then stored device token,
-  then bootstrap token.
-- On the async Tailscale Serve Control UI path, failed attempts for the same
-  `{scope, ip}` are serialized before the limiter records the failure. Two bad
-  concurrent retries from the same client can therefore surface `retry later`
-  on the second attempt instead of two plain mismatches.
-- `too many failed authentication attempts (retry later)` from a browser-origin
-  loopback client → repeated failures from that same normalized `Origin` are
-  locked out temporarily; another localhost origin uses a separate bucket.
-- repeated `unauthorized` after that retry → shared token/device token drift; refresh token config and re-approve/rotate device token if needed.
-- `gateway connect failed:` → wrong host/port/url target.
+<AccordionGroup>
+  <Accordion title="Connect / auth signatures">
+    - `device identity required` → non-secure context or missing device auth.
+    - `origin not allowed` → browser `Origin` is not in `gateway.controlUi.allowedOrigins` (or you are connecting from a non-loopback browser origin without an explicit allowlist).
+    - `device nonce required` / `device nonce mismatch` → client is not completing the challenge-based device auth flow (`connect.challenge` + `device.nonce`).
+    - `device signature invalid` / `device signature expired` → client signed the wrong payload (or stale timestamp) for the current handshake.
+    - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → client can do one trusted retry with cached device token.
+    - That cached-token retry reuses the cached scope set stored with the paired device token. Explicit `deviceToken` / explicit `scopes` callers keep their requested scope set instead.
+    - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
+    - On the async Tailscale Serve Control UI path, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure. Two bad concurrent retries from the same client can therefore surface `retry later` on the second attempt instead of two plain mismatches.
+    - `too many failed authentication attempts (retry later)` from a browser-origin loopback client → repeated failures from that same normalized `Origin` are locked out temporarily; another localhost origin uses a separate bucket.
+    - repeated `unauthorized` after that retry → shared token/device token drift; refresh token config and re-approve/rotate device token if needed.
+    - `gateway connect failed:` → wrong host/port/url target.
+  </Accordion>
+</AccordionGroup>
 
 ### Auth detail codes quick map
 
@@ -200,6 +216,10 @@ Use `error.details.code` from the failed `connect` response to pick the next act
 | `AUTH_DEVICE_TOKEN_MISMATCH` | Cached per-device token is stale or revoked.                                                                                                                                                 | Rotate/re-approve device token using [devices CLI](/cli/devices), then reconnect.                                                                                                                                                                                                        |
 | `PAIRING_REQUIRED`           | Device identity needs approval. Check `error.details.reason` for `not-paired`, `scope-upgrade`, `role-upgrade`, or `metadata-upgrade`, and use `requestId` / `remediationHint` when present. | Approve pending request: `openclaw devices list` then `openclaw devices approve <requestId>`. Scope/role upgrades use the same flow after you review the requested access.                                                                                                               |
 
+<Note>
+Direct loopback backend RPCs authenticated with the shared gateway token/password should not depend on the CLI's paired-device scope baseline. If subagents or other internal calls still fail with `scope-upgrade`, verify the caller is using `client.id: "gateway-client"` and `client.mode: "backend"` and is not forcing an explicit `deviceIdentity` or device token.
+</Note>
+
 Device auth v2 migration check:
 
 ```bash
@@ -210,24 +230,30 @@ openclaw gateway status
 
 If logs show nonce/signature errors, update the connecting client and verify it:
 
-1. waits for `connect.challenge`
-2. signs the challenge-bound payload
-3. sends `connect.params.device.nonce` with the same challenge nonce
+<Steps>
+  <Step title="Wait for connect.challenge">
+    Client waits for the gateway-issued `connect.challenge`.
+  </Step>
+  <Step title="Sign the payload">
+    Client signs the challenge-bound payload.
+  </Step>
+  <Step title="Send the device nonce">
+    Client sends `connect.params.device.nonce` with the same challenge nonce.
+  </Step>
+</Steps>
 
 If `openclaw devices rotate` / `revoke` / `remove` is denied unexpectedly:
 
-- paired-device token sessions can manage only **their own** device unless the
-  caller also has `operator.admin`
-- `openclaw devices rotate --scope ...` can only request operator scopes that
-  the caller session already holds
+- paired-device token sessions can manage only **their own** device unless the caller also has `operator.admin`
+- `openclaw devices rotate --scope ...` can only request operator scopes that the caller session already holds
 
 Related:
 
-- [Control UI](/web/control-ui)
 - [Configuration](/gateway/configuration) (gateway auth modes)
-- [Trusted proxy auth](/gateway/trusted-proxy-auth)
-- [Remote access](/gateway/remote)
+- [Control UI](/web/control-ui)
 - [Devices](/cli/devices)
+- [Remote access](/gateway/remote)
+- [Trusted proxy auth](/gateway/trusted-proxy-auth)
 
 ## Gateway service not running
 
@@ -249,12 +275,14 @@ Look for:
 - Extra launchd/systemd/schtasks installs when `--deep` is used.
 - `Other gateway-like services detected (best effort)` cleanup hints.
 
-Common signatures:
-
-- `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → local gateway mode is not enabled, or the config file was clobbered and lost `gateway.mode`. Fix: set `gateway.mode="local"` in your config, or re-run `openclaw onboard --mode local` / `openclaw setup` to restamp the expected local-mode config. If you are running OpenClaw via Podman, the default config path is `~/.openclaw/openclaw.json`.
-- `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path (token/password, or trusted-proxy where configured).
-- `another gateway instance is already listening` / `EADDRINUSE` → port conflict.
-- `Other gateway-like services detected (best effort)` → stale or parallel launchd/systemd/schtasks units exist. Most setups should keep one gateway per machine; if you do need more than one, isolate ports + config/state/workspace. See [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host).
+<AccordionGroup>
+  <Accordion title="Common signatures">
+    - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → local gateway mode is not enabled, or the config file was clobbered and lost `gateway.mode`. Fix: set `gateway.mode="local"` in your config, or re-run `openclaw onboard --mode local` / `openclaw setup` to restamp the expected local-mode config. If you are running OpenClaw via Podman, the default config path is `~/.openclaw/openclaw.json`.
+    - `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path (token/password, or trusted-proxy where configured).
+    - `another gateway instance is already listening` / `EADDRINUSE` → port conflict.
+    - `Other gateway-like services detected (best effort)` → stale or parallel launchd/systemd/schtasks units exist. Most setups should keep one gateway per machine; if you do need more than one, isolate ports + config/state/workspace. See [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host).
+  </Accordion>
+</AccordionGroup>
 
 Related:
 
@@ -281,46 +309,43 @@ Look for:
 - A timestamped `openclaw.json.clobbered.*` file beside the active config
 - A main-agent system event that starts with `Config recovery warning`
 
-What happened:
-
-- The rejected config did not validate during startup or hot reload.
-- OpenClaw preserved the rejected payload as `.clobbered.*`.
-- The active config was restored from the last validated last-known-good copy.
-- The next main-agent turn is warned not to blindly rewrite the rejected config.
-- If all validation issues were under `plugins.entries.<id>...`, OpenClaw would
-  not restore the whole file. Plugin-local failures stay loud while unrelated
-  user settings remain in the active config.
-
-Inspect and repair:
-
-```bash
-CONFIG="$(openclaw config file)"
-ls -lt "$CONFIG".clobbered.* "$CONFIG".rejected.* 2>/dev/null | head
-diff -u "$CONFIG" "$(ls -t "$CONFIG".clobbered.* 2>/dev/null | head -n 1)"
-openclaw config validate
-openclaw doctor
-```
-
-Common signatures:
-
-- `.clobbered.*` exists → an external direct edit or startup read was restored.
-- `.rejected.*` exists → an OpenClaw-owned config write failed schema or clobber checks before commit.
-- `Config write rejected:` → the write tried to drop required shape, shrink the file sharply, or persist invalid config.
-- `missing-meta-vs-last-good`, `gateway-mode-missing-vs-last-good`, or `size-drop-vs-last-good:*` → startup treated the current file as clobbered because it lost fields or size compared with the last-known-good backup.
-- `Config last-known-good promotion skipped` → the candidate contained redacted secret placeholders such as `***`.
-
-Fix options:
-
-1. Keep the restored active config if it is correct.
-2. Copy only the intended keys from `.clobbered.*` or `.rejected.*`, then apply them with `openclaw config set` or `config.patch`.
-3. Run `openclaw config validate` before restarting.
-4. If you edit by hand, keep the full JSON5 config, not just the partial object you wanted to change.
+<AccordionGroup>
+  <Accordion title="What happened">
+    - The rejected config did not validate during startup or hot reload.
+    - OpenClaw preserved the rejected payload as `.clobbered.*`.
+    - The active config was restored from the last validated last-known-good copy.
+    - The next main-agent turn is warned not to blindly rewrite the rejected config.
+    - If all validation issues were under `plugins.entries.<id>...`, OpenClaw would not restore the whole file. Plugin-local failures stay loud while unrelated user settings remain in the active config.
+  </Accordion>
+  <Accordion title="Inspect and repair">
+    ```bash
+    CONFIG="$(openclaw config file)"
+    ls -lt "$CONFIG".clobbered.* "$CONFIG".rejected.* 2>/dev/null | head
+    diff -u "$CONFIG" "$(ls -t "$CONFIG".clobbered.* 2>/dev/null | head -n 1)"
+    openclaw config validate
+    openclaw doctor
+    ```
+  </Accordion>
+  <Accordion title="Common signatures">
+    - `.clobbered.*` exists → an external direct edit or startup read was restored.
+    - `.rejected.*` exists → an OpenClaw-owned config write failed schema or clobber checks before commit.
+    - `Config write rejected:` → the write tried to drop required shape, shrink the file sharply, or persist invalid config.
+    - `missing-meta-vs-last-good`, `gateway-mode-missing-vs-last-good`, or `size-drop-vs-last-good:*` → startup treated the current file as clobbered because it lost fields or size compared with the last-known-good backup.
+    - `Config last-known-good promotion skipped` → the candidate contained redacted secret placeholders such as `***`.
+  </Accordion>
+  <Accordion title="Fix options">
+    1. Keep the restored active config if it is correct.
+    2. Copy only the intended keys from `.clobbered.*` or `.rejected.*`, then apply them with `openclaw config set` or `config.patch`.
+    3. Run `openclaw config validate` before restarting.
+    4. If you edit by hand, keep the full JSON5 config, not just the partial object you wanted to change.
+  </Accordion>
+</AccordionGroup>
 
 Related:
 
-- [Configuration: strict validation](/gateway/configuration#strict-validation)
-- [Configuration: hot reload](/gateway/configuration#config-hot-reload)
 - [Config](/cli/config)
+- [Configuration: hot reload](/gateway/configuration#config-hot-reload)
+- [Configuration: strict validation](/gateway/configuration#strict-validation)
 - [Doctor](/gateway/doctor)
 
 ## Gateway probe warnings
@@ -352,7 +377,7 @@ Related:
 - [Multiple gateways on the same host](/gateway#multiple-gateways-same-host)
 - [Remote access](/gateway/remote)
 
-## Channel connected messages not flowing
+## Channel connected, messages not flowing
 
 If channel state is connected but message flow is dead, focus on policy, permissions, and channel specific delivery rules.
 
@@ -379,9 +404,9 @@ Common signatures:
 Related:
 
 - [Channel troubleshooting](/channels/troubleshooting)
-- [WhatsApp](/channels/whatsapp)
-- [Telegram](/channels/telegram)
 - [Discord](/channels/discord)
+- [Telegram](/channels/telegram)
+- [WhatsApp](/channels/whatsapp)
 
 ## Cron and heartbeat delivery
 
@@ -401,23 +426,25 @@ Look for:
 - Job run history status (`ok`, `skipped`, `error`).
 - Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
 
-Common signatures:
-
-- `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
-- `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
-- `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
-- `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank lines / markdown headers, so OpenClaw skips the model call.
-- `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` contains a `tasks:` block, but none of the tasks are due on this tick.
-- `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
-- `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
+<AccordionGroup>
+  <Accordion title="Common signatures">
+    - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
+    - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
+    - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
+    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank lines / markdown headers, so OpenClaw skips the model call.
+    - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` contains a `tasks:` block, but none of the tasks are due on this tick.
+    - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
+    - `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
+  </Accordion>
+</AccordionGroup>
 
 Related:
 
-- [Scheduled tasks: troubleshooting](/automation/cron-jobs#troubleshooting)
-- [Scheduled tasks](/automation/cron-jobs)
 - [Heartbeat](/gateway/heartbeat)
+- [Scheduled tasks](/automation/cron-jobs)
+- [Scheduled tasks: troubleshooting](/automation/cron-jobs#troubleshooting)
 
-## Node paired tool fails
+## Node paired, tool fails
 
 If a node is paired but tools fail, isolate foreground, permission, and approval state.
 
@@ -444,9 +471,9 @@ Common signatures:
 
 Related:
 
+- [Exec approvals](/tools/exec-approvals)
 - [Node troubleshooting](/nodes/troubleshooting)
 - [Nodes](/nodes/index)
-- [Exec approvals](/tools/exec-approvals)
 
 ## Browser tool fails
 
@@ -467,95 +494,104 @@ Look for:
 - CDP profile reachability.
 - Local Chrome availability for `existing-session` / `user` profiles.
 
-Common signatures:
-
-- `unknown command "browser"` or `unknown command 'browser'` → the bundled browser plugin is excluded by `plugins.allow`.
-- browser tool missing / unavailable while `browser.enabled=true` → `plugins.allow` excludes `browser`, so the plugin never loaded.
-- `Failed to start Chrome CDP on port` → browser process failed to launch.
-- `browser.executablePath not found` → configured path is invalid.
-- `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme such as `file:` or `ftp:`.
-- `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
-- `Could not find DevToolsActivePort for chrome` → Chrome MCP existing-session could not attach to the selected browser data dir yet. Open the browser inspect page, enable remote debugging, keep the browser open, approve the first attach prompt, then retry. If signed-in state is not required, prefer the managed `openclaw` profile.
-- `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
-- `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from the gateway host.
-- `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no reachable target, or the HTTP endpoint answered but the CDP WebSocket still could not be opened.
-- `Playwright is not available in this gateway build; '<feature>' is unsupported.` → the current gateway install lacks the bundled browser plugin's `playwright-core` runtime dependency; run `openclaw doctor --fix`, then restart the gateway. ARIA snapshots and basic page screenshots can still work, but navigation, AI snapshots, CSS-selector element screenshots, and PDF export stay unavailable.
-- `fullPage is not supported for element screenshots` → screenshot request mixed `--full-page` with `--ref` or `--element`.
-- `element screenshots are not supported for existing-session profiles; use ref from snapshot.` → Chrome MCP / `existing-session` screenshot calls must use page capture or a snapshot `--ref`, not CSS `--element`.
-- `existing-session file uploads do not support element selectors; use ref/inputRef.` → Chrome MCP upload hooks need snapshot refs, not CSS selectors.
-- `existing-session file uploads currently support one file at a time.` → send one upload per call on Chrome MCP profiles.
-- `existing-session dialog handling does not support timeoutMs.` → dialog hooks on Chrome MCP profiles do not support timeout overrides.
-- `existing-session type does not support timeoutMs overrides.` → omit `timeoutMs` for `act:type` on `profile="user"` / Chrome MCP existing-session profiles, or use a managed/CDP browser profile when a custom timeout is required.
-- `existing-session evaluate does not support timeoutMs overrides.` → omit `timeoutMs` for `act:evaluate` on `profile="user"` / Chrome MCP existing-session profiles, or use a managed/CDP browser profile when a custom timeout is required.
-- `response body is not supported for existing-session profiles yet.` → `responsebody` still requires a managed browser or raw CDP profile.
-- stale viewport / dark-mode / locale / offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the active control session and release Playwright/CDP emulation state without restarting the whole gateway.
+<AccordionGroup>
+  <Accordion title="Plugin / executable signatures">
+    - `unknown command "browser"` or `unknown command 'browser'` → the bundled browser plugin is excluded by `plugins.allow`.
+    - browser tool missing / unavailable while `browser.enabled=true` → `plugins.allow` excludes `browser`, so the plugin never loaded.
+    - `Failed to start Chrome CDP on port` → browser process failed to launch.
+    - `browser.executablePath not found` → configured path is invalid.
+    - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme such as `file:` or `ftp:`.
+    - `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
+    - `Playwright is not available in this gateway build; '<feature>' is unsupported.` → the current gateway install lacks the bundled browser plugin's `playwright-core` runtime dependency; run `openclaw doctor --fix`, then restart the gateway. ARIA snapshots and basic page screenshots can still work, but navigation, AI snapshots, CSS-selector element screenshots, and PDF export stay unavailable.
+  </Accordion>
+  <Accordion title="Chrome MCP / existing-session signatures">
+    - `Could not find DevToolsActivePort for chrome` → Chrome MCP existing-session could not attach to the selected browser data dir yet. Open the browser inspect page, enable remote debugging, keep the browser open, approve the first attach prompt, then retry. If signed-in state is not required, prefer the managed `openclaw` profile.
+    - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
+    - `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from the gateway host.
+    - `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no reachable target, or the HTTP endpoint answered but the CDP WebSocket still could not be opened.
+  </Accordion>
+  <Accordion title="Element / screenshot / upload signatures">
+    - `fullPage is not supported for element screenshots` → screenshot request mixed `--full-page` with `--ref` or `--element`.
+    - `element screenshots are not supported for existing-session profiles; use ref from snapshot.` → Chrome MCP / `existing-session` screenshot calls must use page capture or a snapshot `--ref`, not CSS `--element`.
+    - `existing-session file uploads do not support element selectors; use ref/inputRef.` → Chrome MCP upload hooks need snapshot refs, not CSS selectors.
+    - `existing-session file uploads currently support one file at a time.` → send one upload per call on Chrome MCP profiles.
+    - `existing-session dialog handling does not support timeoutMs.` → dialog hooks on Chrome MCP profiles do not support timeout overrides.
+    - `existing-session type does not support timeoutMs overrides.` → omit `timeoutMs` for `act:type` on `profile="user"` / Chrome MCP existing-session profiles, or use a managed/CDP browser profile when a custom timeout is required.
+    - `existing-session evaluate does not support timeoutMs overrides.` → omit `timeoutMs` for `act:evaluate` on `profile="user"` / Chrome MCP existing-session profiles, or use a managed/CDP browser profile when a custom timeout is required.
+    - `response body is not supported for existing-session profiles yet.` → `responsebody` still requires a managed browser or raw CDP profile.
+    - stale viewport / dark-mode / locale / offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the active control session and release Playwright/CDP emulation state without restarting the whole gateway.
+  </Accordion>
+</AccordionGroup>
 
 Related:
 
-- [Browser troubleshooting](/tools/browser-linux-troubleshooting)
 - [Browser (OpenClaw-managed)](/tools/browser)
+- [Browser troubleshooting](/tools/browser-linux-troubleshooting)
 
 ## If you upgraded and something suddenly broke
 
 Most post-upgrade breakage is config drift or stricter defaults now being enforced.
 
-### 1) Auth and URL override behavior changed
+<AccordionGroup>
+  <Accordion title="1. Auth and URL override behavior changed">
+    ```bash
+    openclaw gateway status
+    openclaw config get gateway.mode
+    openclaw config get gateway.remote.url
+    openclaw config get gateway.auth.mode
+    ```
 
-```bash
-openclaw gateway status
-openclaw config get gateway.mode
-openclaw config get gateway.remote.url
-openclaw config get gateway.auth.mode
-```
+    What to check:
 
-What to check:
+    - If `gateway.mode=remote`, CLI calls may be targeting remote while your local service is fine.
+    - Explicit `--url` calls do not fall back to stored credentials.
 
-- If `gateway.mode=remote`, CLI calls may be targeting remote while your local service is fine.
-- Explicit `--url` calls do not fall back to stored credentials.
+    Common signatures:
 
-Common signatures:
+    - `gateway connect failed:` → wrong URL target.
+    - `unauthorized` → endpoint reachable but wrong auth.
 
-- `gateway connect failed:` → wrong URL target.
-- `unauthorized` → endpoint reachable but wrong auth.
+  </Accordion>
+  <Accordion title="2. Bind and auth guardrails are stricter">
+    ```bash
+    openclaw config get gateway.bind
+    openclaw config get gateway.auth.mode
+    openclaw config get gateway.auth.token
+    openclaw gateway status
+    openclaw logs --follow
+    ```
 
-### 2) Bind and auth guardrails are stricter
+    What to check:
 
-```bash
-openclaw config get gateway.bind
-openclaw config get gateway.auth.mode
-openclaw config get gateway.auth.token
-openclaw gateway status
-openclaw logs --follow
-```
+    - Non-loopback binds (`lan`, `tailnet`, `custom`) need a valid gateway auth path: shared token/password auth, or a correctly configured non-loopback `trusted-proxy` deployment.
+    - Old keys like `gateway.token` do not replace `gateway.auth.token`.
 
-What to check:
+    Common signatures:
 
-- Non-loopback binds (`lan`, `tailnet`, `custom`) need a valid gateway auth path: shared token/password auth, or a correctly configured non-loopback `trusted-proxy` deployment.
-- Old keys like `gateway.token` do not replace `gateway.auth.token`.
+    - `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path.
+    - `Connectivity probe: failed` while runtime is running → gateway alive but inaccessible with current auth/url.
 
-Common signatures:
+  </Accordion>
+  <Accordion title="3. Pairing and device identity state changed">
+    ```bash
+    openclaw devices list
+    openclaw pairing list --channel <channel> [--account <id>]
+    openclaw logs --follow
+    openclaw doctor
+    ```
 
-- `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path.
-- `Connectivity probe: failed` while runtime is running → gateway alive but inaccessible with current auth/url.
+    What to check:
 
-### 3) Pairing and device identity state changed
+    - Pending device approvals for dashboard/nodes.
+    - Pending DM pairing approvals after policy or identity changes.
 
-```bash
-openclaw devices list
-openclaw pairing list --channel <channel> [--account <id>]
-openclaw logs --follow
-openclaw doctor
-```
+    Common signatures:
 
-What to check:
+    - `device identity required` → device auth not satisfied.
+    - `pairing required` → sender/device must be approved.
 
-- Pending device approvals for dashboard/nodes.
-- Pending DM pairing approvals after policy or identity changes.
-
-Common signatures:
-
-- `device identity required` → device auth not satisfied.
-- `pairing required` → sender/device must be approved.
+  </Accordion>
+</AccordionGroup>
 
 If the service config and runtime still disagree after checks, reinstall service metadata from the same profile/state directory:
 
@@ -566,12 +602,12 @@ openclaw gateway restart
 
 Related:
 
-- [Gateway-owned pairing](/gateway/pairing)
 - [Authentication](/gateway/authentication)
 - [Background exec and process tool](/gateway/background-process)
+- [Gateway-owned pairing](/gateway/pairing)
 
 ## Related
 
-- [Gateway runbook](/gateway)
 - [Doctor](/gateway/doctor)
 - [FAQ](/help/faq)
+- [Gateway runbook](/gateway)

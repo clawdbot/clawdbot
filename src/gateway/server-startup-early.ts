@@ -1,6 +1,7 @@
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   primeRemoteSkillsCache,
@@ -8,7 +9,10 @@ import {
   setSkillsRemoteRegistry,
 } from "../infra/skills-remote.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { startTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
+import {
+  configureTaskRegistryMaintenance,
+  startTaskRegistryMaintenance,
+} from "../tasks/task-registry.maintenance.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 
@@ -77,6 +81,10 @@ export async function startGatewayEarlyRuntime(params: {
   if (!params.minimalTestGateway) {
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
+    configureTaskRegistryMaintenance({
+      cronStorePath: resolveCronStorePath(params.cfgAtStart.cron?.store),
+      cronRuntimeAuthoritative: true,
+    });
     startTaskRegistryMaintenance();
   }
 

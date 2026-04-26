@@ -18,6 +18,14 @@ const EXPECTED_BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS = [
 
 const EXPECTED_BUNDLED_MUSIC_PROVIDER_PLUGIN_IDS = ["comfy", "google", "minimax"] as const;
 
+const EXPECTED_BUNDLED_VIDEO_PROVIDER_IDS_BY_PLUGIN: Record<string, readonly string[]> = {
+  minimax: ["minimax", "minimax-portal"],
+};
+
+const EXPECTED_BUNDLED_MUSIC_PROVIDER_IDS_BY_PLUGIN: Record<string, readonly string[]> = {
+  minimax: ["minimax", "minimax-portal"],
+};
+
 function bundledVideoProviderPluginIds(): string[] {
   return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
     (entry) => entry.videoGenerationProviderIds.length > 0,
@@ -40,7 +48,9 @@ describe("bundled media-generation provider capabilities", () => {
     for (const entry of BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
       (snapshot) => snapshot.videoGenerationProviderIds.length > 0,
     )) {
-      expect(entry.videoGenerationProviderIds, entry.pluginId).toEqual([entry.pluginId]);
+      expect(entry.videoGenerationProviderIds, entry.pluginId).toEqual(
+        EXPECTED_BUNDLED_VIDEO_PROVIDER_IDS_BY_PLUGIN[entry.pluginId] ?? [entry.pluginId],
+      );
     }
   });
 
@@ -49,7 +59,9 @@ describe("bundled media-generation provider capabilities", () => {
     for (const entry of BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
       (snapshot) => snapshot.musicGenerationProviderIds.length > 0,
     )) {
-      expect(entry.musicGenerationProviderIds, entry.pluginId).toEqual([entry.pluginId]);
+      expect(entry.musicGenerationProviderIds, entry.pluginId).toEqual(
+        EXPECTED_BUNDLED_MUSIC_PROVIDER_IDS_BY_PLUGIN[entry.pluginId] ?? [entry.pluginId],
+      );
     }
   });
 });

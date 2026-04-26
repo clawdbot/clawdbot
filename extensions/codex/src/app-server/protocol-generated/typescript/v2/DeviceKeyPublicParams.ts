@@ -5,4 +5,4 @@
 /**
  * Fetch a controller-local device key public key by id.
  */
-export type DeviceKeyPublicParams = { keyId: string, };
+export type DeviceKeyPublicParams = { keyId: string };

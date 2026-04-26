@@ -31,7 +31,7 @@ OpenClaw auto-detects in this order and stops at the first working option:
 3. **Gemini CLI** (`gemini`) using `read_many_files`
 4. **Provider auth**
    - Configured `models.providers.*` entries that support audio are tried first
-   - Bundled fallback order: OpenAI → Groq → Deepgram → Google → Mistral
+   - Bundled fallback order: OpenAI → Groq → xAI → Deepgram → Google → SenseAudio → ElevenLabs → Mistral
 
 To disable auto-detection, set `tools.media.audio.enabled: false`.
 To customize, set `tools.media.audio.models`.
@@ -112,6 +112,21 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 }
 ```
 
+### Provider-only (SenseAudio)
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "senseaudio", model: "senseaudio-asr-pro-1.5-260319" }],
+      },
+    },
+  },
+}
+```
+
 ### Echo transcript to chat (opt-in)
 
 ```json5
@@ -136,6 +151,8 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - Deepgram picks up `DEEPGRAM_API_KEY` when `provider: "deepgram"` is used.
 - Deepgram setup details: [Deepgram (audio transcription)](/providers/deepgram).
 - Mistral setup details: [Mistral](/providers/mistral).
+- SenseAudio picks up `SENSEAUDIO_API_KEY` when `provider: "senseaudio"` is used.
+- SenseAudio setup details: [SenseAudio](/providers/senseaudio).
 - Audio providers can override `baseUrl`, `headers`, and `providerOptions` via `tools.media.audio`.
 - Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
 - Tiny/empty audio files below 1024 bytes are skipped before provider/CLI transcription.

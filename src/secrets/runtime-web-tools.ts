@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -120,10 +121,18 @@ function inferExactBundledPluginScopedWebToolConfigOwner(params: {
   return isRecord(pluginConfig?.[params.key]) ? params.pluginId : undefined;
 }
 
-async function hasCustomWebSearchPluginRisk(params: {
+type WebProviderContract = "webSearchProviders" | "webFetchProviders";
+
+async function hasCustomWebProviderPluginRisk(params: {
+  contract: WebProviderContract;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): Promise<boolean> {
+  const installRecords = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
+  if (Object.keys(installRecords).length > 0) {
+    return true;
+  }
+
   const plugins = params.config.plugins;
   if (!plugins) {
     return false;
@@ -131,14 +140,10 @@ async function hasCustomWebSearchPluginRisk(params: {
   if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
     return true;
   }
-  if (plugins.installs && Object.keys(plugins.installs).length > 0) {
-    return true;
-  }
-
   const { resolveManifestContractPluginIds } = await loadRuntimeWebToolsManifest();
   const bundledPluginIds = new Set<string>(
     resolveManifestContractPluginIds({
-      contract: "webSearchProviders",
+      contract: params.contract,
       origin: "bundled",
       config: params.config,
       env: params.env,
@@ -372,6 +377,7 @@ async function resolveBundledWebFetchProviders(params: {
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
   configuredBundledPluginId?: string;
+  hasCustomWebFetchPluginRisk: boolean;
 }): Promise<PluginWebFetchProviderEntry[]> {
   const env = { ...process.env, ...params.context.env };
   if (params.configuredBundledPluginId) {
@@ -390,15 +396,24 @@ async function resolveBundledWebFetchProviders(params: {
       origin: "bundled",
     });
   }
-  const { resolveBundledWebFetchProvidersFromPublicArtifacts } =
-    await loadRuntimeWebToolsPublicArtifacts();
-  const bundled = resolveBundledWebFetchProvidersFromPublicArtifacts({
-    config: params.sourceConfig,
-    env,
-    bundledAllowlistCompat: true,
-  });
-  if (bundled && bundled.length > 0) {
-    return bundled;
+  if (!params.hasCustomWebFetchPluginRisk) {
+    const { resolveBundledWebFetchProvidersFromPublicArtifacts } =
+      await loadRuntimeWebToolsPublicArtifacts();
+    const bundled = resolveBundledWebFetchProvidersFromPublicArtifacts({
+      config: params.sourceConfig,
+      env,
+      bundledAllowlistCompat: true,
+    });
+    if (bundled && bundled.length > 0) {
+      return bundled;
+    }
+    const { resolvePluginWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
+    return resolvePluginWebFetchProviders({
+      config: params.sourceConfig,
+      env,
+      bundledAllowlistCompat: true,
+      origin: "bundled",
+    });
   }
   const { resolvePluginWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
   return resolvePluginWebFetchProviders({
@@ -476,11 +491,21 @@ export async function resolveRuntimeWebTools(params: {
   const resolvedWeb = isRecord(resolvedTools?.web) ? resolvedTools.web : undefined;
   let hasCustomWebSearchRisk: Promise<boolean> | undefined;
   const getHasCustomWebSearchRisk = (): Promise<boolean> => {
-    hasCustomWebSearchRisk ??= hasCustomWebSearchPluginRisk({
+    hasCustomWebSearchRisk ??= hasCustomWebProviderPluginRisk({
+      contract: "webSearchProviders",
       config: params.sourceConfig,
       env,
     });
     return hasCustomWebSearchRisk;
+  };
+  let hasCustomWebFetchRisk: Promise<boolean> | undefined;
+  const getHasCustomWebFetchRisk = (): Promise<boolean> => {
+    hasCustomWebFetchRisk ??= hasCustomWebProviderPluginRisk({
+      contract: "webFetchProviders",
+      config: params.sourceConfig,
+      env,
+    });
+    return hasCustomWebFetchRisk;
   };
   const legacyXSearchSource = isRecord(sourceWeb?.x_search) ? sourceWeb.x_search : undefined;
   const legacyXSearchResolved = isRecord(resolvedWeb?.x_search) ? resolvedWeb.x_search : undefined;
@@ -665,11 +690,12 @@ export async function resolveRuntimeWebTools(params: {
       invalidAutoDetectCode: "WEB_FETCH_PROVIDER_INVALID_AUTODETECT",
       sourceConfig: params.sourceConfig,
       context: params.context,
-      resolveProviders: ({ configuredBundledPluginId }) =>
+      resolveProviders: async ({ configuredBundledPluginId }) =>
         resolveBundledWebFetchProviders({
           sourceConfig: params.sourceConfig,
           context: params.context,
           configuredBundledPluginId,
+          hasCustomWebFetchPluginRisk: await getHasCustomWebFetchRisk(),
         }),
       sortProviders: sortWebFetchProvidersForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>

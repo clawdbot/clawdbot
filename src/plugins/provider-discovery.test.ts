@@ -176,6 +176,7 @@ describe("resolveInstalledPluginProviderContributionIds", () => {
       resolveInstalledPluginProviderContributionIds({
         candidates: [candidate],
         env: hermeticEnv(),
+        preferPersisted: false,
       }),
     ).toEqual(["demo", "demo-alias"]);
   });
@@ -197,6 +198,7 @@ describe("resolveInstalledPluginProviderContributionIds", () => {
         },
       },
       env: hermeticEnv(),
+      preferPersisted: false,
     };
 
     expect(resolveInstalledPluginProviderContributionIds(params)).toEqual([]);

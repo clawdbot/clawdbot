@@ -1,10 +1,7 @@
-import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
-import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  sanitizeChatHistoryMessages,
-} from "./server-methods/chat.js";
+  projectChatDisplayMessages,
+} from "./chat-display-projection.js";
 import { attachOpenClawTranscriptMeta, readSessionMessages } from "./session-utils.js";
 
 type SessionHistoryTranscriptMeta = {
@@ -32,102 +29,6 @@ type SessionHistoryTranscriptTarget = {
   storePath?: string;
   sessionFile?: string;
 };
-
-type RoleContentMessage = {
-  role: string;
-  content?: unknown;
-};
-
-function asRoleContentMessage(message: SessionHistoryMessage): RoleContentMessage | null {
-  const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
-  if (!role) {
-    return null;
-  }
-  return {
-    role,
-    ...(message.content !== undefined
-      ? { content: message.content }
-      : message.text !== undefined
-        ? { content: message.text }
-        : {}),
-  };
-}
-
-function isEmptyTextOnlyContent(content: unknown): boolean {
-  if (typeof content === "string") {
-    return content.trim().length === 0;
-  }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  if (content.length === 0) {
-    return true;
-  }
-  let sawText = false;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text") {
-      return false;
-    }
-    sawText = true;
-    if (typeof entry.text !== "string" || entry.text.trim().length > 0) {
-      return false;
-    }
-  }
-  return sawText;
-}
-
-function shouldHideSanitizedHistoryMessage(message: SessionHistoryMessage): boolean {
-  const roleContent = asRoleContentMessage(message);
-  if (!roleContent) {
-    return false;
-  }
-  if (roleContent.role === "user" && isEmptyTextOnlyContent(message.content ?? message.text)) {
-    return true;
-  }
-  if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT)) {
-    return true;
-  }
-  return isHeartbeatOkResponse(roleContent);
-}
-
-function filterVisibleSessionHistoryMessages(
-  messages: SessionHistoryMessage[],
-): SessionHistoryMessage[] {
-  if (messages.length === 0) {
-    return messages;
-  }
-  let changed = false;
-  const visible: SessionHistoryMessage[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const current = messages[i];
-    if (!current) {
-      continue;
-    }
-    const currentRoleContent = asRoleContentMessage(current);
-    const next = messages[i + 1];
-    const nextRoleContent = next ? asRoleContentMessage(next) : null;
-    if (
-      currentRoleContent &&
-      nextRoleContent &&
-      isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) &&
-      isHeartbeatOkResponse(nextRoleContent)
-    ) {
-      changed = true;
-      i++;
-      continue;
-    }
-    if (shouldHideSanitizedHistoryMessage(current)) {
-      changed = true;
-      continue;
-    }
-    visible.push(current);
-  }
-  return changed ? visible : messages;
-}
 
 function resolveCursorSeq(cursor: string | undefined): number | undefined {
   if (!cursor) {
@@ -198,13 +99,10 @@ export function buildSessionHistorySnapshot(params: {
   limit?: number;
   cursor?: string;
 }): SessionHistorySnapshot {
-  const visibleMessages = filterVisibleSessionHistoryMessages(
-    toSessionHistoryMessages(
-      sanitizeChatHistoryMessages(
-        stripEnvelopeFromMessages(params.rawMessages),
-        params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-      ),
-    ),
+  const visibleMessages = toSessionHistoryMessages(
+    projectChatDisplayMessages(params.rawMessages, {
+      maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    }),
   );
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
   const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
@@ -276,18 +174,10 @@ export class SessionHistorySseState {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       seq: this.rawTranscriptSeq,
     });
-    const sanitized = sanitizeChatHistoryMessages(
-      stripEnvelopeFromMessages([nextMessage]),
-      this.maxChars,
+    const [sanitizedMessage] = toSessionHistoryMessages(
+      projectChatDisplayMessages([nextMessage], { maxChars: this.maxChars }),
     );
-    if (sanitized.length === 0) {
-      return null;
-    }
-    const [sanitizedMessage] = toSessionHistoryMessages(sanitized);
     if (!sanitizedMessage) {
-      return null;
-    }
-    if (shouldHideSanitizedHistoryMessage(sanitizedMessage)) {
       return null;
     }
     const nextMessages = [...this.sentHistory.messages, sanitizedMessage];

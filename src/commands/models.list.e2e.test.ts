@@ -21,6 +21,7 @@ const loadModelCatalog = vi.fn(async () => []);
 const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );
+const loadStaticManifestCatalogRowsForList = vi.fn(() => []);
 const hasProviderStaticCatalogForFilter = vi.fn().mockResolvedValue(false);
 const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const modelRegistryState = {
@@ -113,6 +114,10 @@ vi.mock("./models/list.provider-catalog.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./models/list.manifest-catalog.js", () => ({
+  loadStaticManifestCatalogRowsForList,
+}));
+
 vi.mock("../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModel,
 }));
@@ -162,6 +167,8 @@ beforeEach(() => {
   loadModelCatalog.mockResolvedValue([]);
   loadProviderCatalogModelsForList.mockReset();
   loadProviderCatalogModelsForList.mockResolvedValue([]);
+  loadStaticManifestCatalogRowsForList.mockReset();
+  loadStaticManifestCatalogRowsForList.mockReturnValue([]);
   hasProviderStaticCatalogForFilter.mockReset();
   hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   shouldSuppressBuiltInModel.mockReset();

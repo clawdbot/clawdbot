@@ -63,6 +63,7 @@ Supported keys:
       },
       system: {},
     },
+    speechLocale: "ru-RU",
     silenceTimeoutMs: 1500,
     interruptOnSpeech: true,
   },
@@ -78,6 +79,7 @@ Defaults:
 - `providers.elevenlabs.modelId`: defaults to `eleven_v3` when unset.
 - `providers.mlx.modelId`: defaults to `mlx-community/Soprano-80M-bf16` when unset.
 - `providers.elevenlabs.apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).
+- `speechLocale`: optional BCP 47 locale id for on-device Talk speech recognition on iOS/macOS. Leave unset to use the device default.
 - `outputFormat`: defaults to `pcm_44100` on macOS/iOS and `pcm_24000` on Android (set `mp3_*` to force MP3 streaming)
 
 ## macOS UI
@@ -90,6 +92,13 @@ Defaults:
   - **Speaking**: radiating rings
   - Click cloud: stop speaking
   - Click X: exit Talk mode
+
+## Android UI
+
+- Voice tab toggle: **Talk**
+- Manual **Mic** and **Talk** are mutually exclusive runtime capture modes.
+- Manual Mic stops when the app leaves the foreground or the user leaves the Voice tab.
+- Talk Mode keeps running until toggled off or the Android node disconnects, and uses Android's microphone foreground-service type while active.
 
 ## Notes
 

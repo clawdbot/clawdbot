@@ -226,6 +226,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
+  const pluginsWithChannelRegistrationConflict = new Set<string>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
@@ -373,6 +374,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: { name?: string; names?: string[]; optional?: boolean },
   ) => {
+    if (pluginsWithChannelRegistrationConflict.has(record.id)) {
+      return;
+    }
     const names = opts?.names ?? (opts?.name ? [opts.name] : []);
     const optional = opts?.optional === true;
     const factory: OpenClawPluginToolFactory =
@@ -674,6 +678,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: `channel already registered: ${id} (${existingRuntime.pluginId})`,
       });
+      pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
     const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
@@ -692,6 +697,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: `channel setup already registered: ${id} (${existingSetup.pluginId})`,
       });
+      pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
     record.channelIds.push(id);
@@ -1198,6 +1204,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       service,
       source: record.source,
+      origin: record.origin,
       rootDir: record.rootDir,
     });
   };

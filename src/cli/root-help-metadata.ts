@@ -3,10 +3,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 let precomputedRootHelpText: string | null | undefined;
+let precomputedBrowserHelpText: string | null | undefined;
 
-export function loadPrecomputedRootHelpText(): string | null {
-  if (precomputedRootHelpText !== undefined) {
-    return precomputedRootHelpText;
+function loadPrecomputedHelpText(
+  key: "rootHelpText" | "browserHelpText",
+  cache: string | null | undefined,
+  setCache: (value: string | null) => void,
+): string | null {
+  if (cache !== undefined) {
+    return cache;
   }
   try {
     const metadataPath = path.resolve(
@@ -15,16 +20,29 @@ export function loadPrecomputedRootHelpText(): string | null {
       "cli-startup-metadata.json",
     );
     const raw = fs.readFileSync(metadataPath, "utf8");
-    const parsed = JSON.parse(raw) as { rootHelpText?: unknown };
-    if (typeof parsed.rootHelpText === "string" && parsed.rootHelpText.length > 0) {
-      precomputedRootHelpText = parsed.rootHelpText;
-      return precomputedRootHelpText;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const value = parsed[key];
+    if (typeof value === "string" && value.length > 0) {
+      setCache(value);
+      return value;
     }
   } catch {
-    // Fall back to live root-help rendering.
+    // Fall back to live help rendering.
   }
-  precomputedRootHelpText = null;
+  setCache(null);
   return null;
+}
+
+export function loadPrecomputedRootHelpText(): string | null {
+  return loadPrecomputedHelpText("rootHelpText", precomputedRootHelpText, (value) => {
+    precomputedRootHelpText = value;
+  });
+}
+
+export function loadPrecomputedBrowserHelpText(): string | null {
+  return loadPrecomputedHelpText("browserHelpText", precomputedBrowserHelpText, (value) => {
+    precomputedBrowserHelpText = value;
+  });
 }
 
 export function outputPrecomputedRootHelpText(): boolean {
@@ -36,8 +54,18 @@ export function outputPrecomputedRootHelpText(): boolean {
   return true;
 }
 
+export function outputPrecomputedBrowserHelpText(): boolean {
+  const browserHelpText = loadPrecomputedBrowserHelpText();
+  if (!browserHelpText) {
+    return false;
+  }
+  process.stdout.write(browserHelpText);
+  return true;
+}
+
 export const __testing = {
   resetPrecomputedRootHelpTextForTests(): void {
     precomputedRootHelpText = undefined;
+    precomputedBrowserHelpText = undefined;
   },
 };

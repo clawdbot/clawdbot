@@ -158,7 +158,7 @@ describe("qa suite planning helpers", () => {
         scenarios,
         scenarioIds: ["anthropic-only"],
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.4",
+        primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["anthropic-only"]);
   });
@@ -274,7 +274,7 @@ describe("qa suite planning helpers", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("openai-only", {
-        config: { requiredProvider: "openai", requiredModel: "gpt-5.4" },
+        config: { requiredProvider: "openai", requiredModel: "gpt-5.5" },
       }),
       makeQaSuiteTestScenario("anthropic-only", {
         config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-6" },
@@ -288,7 +288,7 @@ describe("qa suite planning helpers", () => {
       selectQaSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.4",
+        primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "openai-only"]);
 
@@ -317,7 +317,7 @@ describe("qa suite planning helpers", () => {
       selectQaSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.4",
+        primaryModel: "mock-openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "mock-only"]);
 
@@ -325,7 +325,7 @@ describe("qa suite planning helpers", () => {
       selectQaSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.4",
+        primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "live-only"]);
   });

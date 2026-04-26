@@ -1,17 +1,16 @@
-import path from "node:path";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  loadOpenClawProviderIndex,
+  type OpenClawProviderIndexProvider,
+} from "../model-catalog/index.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
 import {
   describePluginInstallSource,
   type PluginInstallSourceInfo,
 } from "./install-source-info.js";
-import {
-  loadPluginManifest,
-  type PluginPackageInstall,
-  type PluginManifestLoadResult,
-} from "./manifest.js";
+import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index.js";
+import type { PluginPackageInstall } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { loadPluginRegistrySnapshot, type PluginRegistryRecord } from "./plugin-registry.js";
 import {
   resolveManifestProviderAuthChoices,
   type ProviderAuthChoiceMetadata,
@@ -36,6 +35,10 @@ type PreferredInstallSource = {
   install: PluginPackageInstall;
   packageName?: string;
 };
+type PreferredInstallSources = {
+  installedPluginIds: ReadonlySet<string>;
+  installsByPluginId: Map<string, PreferredInstallSource>;
+};
 
 const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
@@ -45,136 +48,193 @@ const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
 };
 
 function isPreferredOrigin(candidate: PluginOrigin, current: PluginOrigin | undefined): boolean {
-  if (!current) {
-    return true;
+  return !current || INSTALL_ORIGIN_PRIORITY[candidate] < INSTALL_ORIGIN_PRIORITY[current];
+}
+
+function normalizeDefaultChoice(value: unknown): PluginPackageInstall["defaultChoice"] | undefined {
+  return value === "npm" || value === "local" ? value : undefined;
+}
+
+function resolveInstallInfoFromInstallRecord(
+  record: InstalledPluginInstallRecordInfo | undefined,
+): PluginPackageInstall | null {
+  if (!record) {
+    return null;
   }
-  return INSTALL_ORIGIN_PRIORITY[candidate] < INSTALL_ORIGIN_PRIORITY[current];
+  const npmSpec = (record.resolvedSpec ?? record.spec)?.trim();
+  const localPath = (record.installPath ?? record.sourcePath)?.trim();
+  if (record.source === "npm" && npmSpec) {
+    return {
+      npmSpec,
+      defaultChoice: "npm",
+      ...(record.integrity ? { expectedIntegrity: record.integrity } : {}),
+    };
+  }
+  if (record.source === "path" && localPath) {
+    return {
+      localPath,
+      defaultChoice: "local",
+    };
+  }
+  return null;
 }
 
-function resolvePluginManifest(
-  rootDir: Parameters<typeof loadPluginManifest>[0],
-  rejectHardlinks: boolean,
-): Extract<PluginManifestLoadResult, { ok: true }> | null {
-  const manifest = loadPluginManifest(rootDir, rejectHardlinks);
-  return manifest.ok ? manifest : null;
-}
-
-function resolveTrustedNpmSpec(params: {
+function resolveInstallInfoFromPackageSource(params: {
   origin: PluginOrigin;
-  install?: PluginPackageInstall;
-}): string | undefined {
-  if (params.origin !== "bundled" && params.origin !== "config") {
-    return undefined;
-  }
-  const npmSpec = params.install?.npmSpec?.trim();
-  if (!npmSpec) {
-    return undefined;
-  }
-  const parsed = parseRegistryNpmSpec(npmSpec);
-  return parsed ? npmSpec : undefined;
-}
-
-function resolveInstallInfo(params: {
-  origin: PluginOrigin;
-  install?: PluginPackageInstall;
-  packageDir?: string;
-  workspaceDir?: string;
+  source?: PluginInstallSourceInfo;
 }): PluginPackageInstall | null {
-  const npmSpec = resolveTrustedNpmSpec({
-    origin: params.origin,
-    install: params.install,
-  });
-  let localPath = params.install?.localPath?.trim();
-  if (!localPath && params.workspaceDir && params.packageDir) {
-    const relative = path.relative(params.workspaceDir, params.packageDir);
-    localPath = relative || undefined;
-  }
+  const npmSpec =
+    params.origin === "bundled" || params.origin === "config"
+      ? params.source?.npm?.spec
+      : undefined;
+  const localPath = params.source?.local?.path;
   if (!npmSpec && !localPath) {
     return null;
   }
-  const defaultChoice =
-    params.install?.defaultChoice ?? (localPath ? "local" : npmSpec ? "npm" : undefined);
+  const defaultChoice = normalizeDefaultChoice(params.source?.defaultChoice);
   return {
     ...(npmSpec ? { npmSpec } : {}),
     ...(localPath ? { localPath } : {}),
-    ...(defaultChoice ? { defaultChoice } : {}),
-    ...(params.install?.minHostVersion ? { minHostVersion: params.install.minHostVersion } : {}),
-    ...(npmSpec && params.install?.expectedIntegrity
-      ? { expectedIntegrity: params.install.expectedIntegrity }
+    ...(defaultChoice ? { defaultChoice } : npmSpec ? { defaultChoice: "npm" as const } : {}),
+    ...(npmSpec && params.source?.npm?.expectedIntegrity
+      ? { expectedIntegrity: params.source.npm.expectedIntegrity }
       : {}),
-    ...(params.install?.allowInvalidConfigRecovery === true
-      ? { allowInvalidConfigRecovery: true }
-      : {}),
+  };
+}
+
+function resolveInstallInfoFromRegistryRecord(params: {
+  record: PluginRegistryRecord;
+  installRecord?: InstalledPluginInstallRecordInfo;
+}): PluginPackageInstall | null {
+  return (
+    resolveInstallInfoFromInstallRecord(params.installRecord) ??
+    resolveInstallInfoFromPackageSource({
+      origin: params.record.origin,
+      source: params.record.packageInstall,
+    })
+  );
+}
+
+function resolveInstallInfoFromProviderIndex(
+  provider: OpenClawProviderIndexProvider,
+): PluginPackageInstall | null {
+  const install = provider.plugin.install;
+  if (!install) {
+    return null;
+  }
+  const npmSpec = install.npmSpec?.trim();
+  if (!npmSpec) {
+    return null;
+  }
+  const defaultChoice = normalizeDefaultChoice(install.defaultChoice) ?? "npm";
+  return {
+    npmSpec,
+    defaultChoice,
+    ...(install.minHostVersion ? { minHostVersion: install.minHostVersion } : {}),
+    ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
   };
 }
 
 function resolvePreferredInstallsByPluginId(
   params: ProviderInstallCatalogParams,
-): Map<string, PreferredInstallSource> {
+): PreferredInstallSources {
   const preferredByPluginId = new Map<string, PreferredInstallSource>();
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
-  for (const candidate of discoverOpenClawPlugins({
+  const index = loadPluginRegistrySnapshot({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  }).candidates) {
-    const idHint = candidate.idHint.trim();
-    if (candidate.origin === "workspace" && params.includeUntrustedWorkspacePlugins === false) {
-      if (!idHint) {
-        continue;
-      }
-      if (
-        !resolveEffectiveEnableState({
-          id: idHint,
-          origin: candidate.origin,
-          config: normalizedConfig,
-          rootConfig: params.config,
-        }).enabled
-      ) {
-        continue;
-      }
-    }
-    const manifest = resolvePluginManifest(candidate.rootDir, candidate.origin !== "bundled");
-    if (!manifest) {
-      continue;
-    }
+  });
+  const installedPluginIds = new Set(index.plugins.map((record) => record.pluginId));
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  for (const record of index.plugins) {
     if (
-      candidate.origin === "workspace" &&
+      record.origin === "workspace" &&
       params.includeUntrustedWorkspacePlugins === false &&
       !resolveEffectiveEnableState({
-        id: manifest.manifest.id,
-        origin: candidate.origin,
+        id: record.pluginId,
+        origin: record.origin,
         config: normalizedConfig,
         rootConfig: params.config,
+        enabledByDefault: record.enabledByDefault,
       }).enabled
     ) {
       continue;
     }
-    const install = resolveInstallInfo({
-      origin: candidate.origin,
-      install: candidate.packageManifest?.install,
-      packageDir: candidate.packageDir,
-      workspaceDir: candidate.workspaceDir,
+    const install = resolveInstallInfoFromRegistryRecord({
+      record,
+      installRecord: index.installRecords[record.pluginId],
     });
     if (!install) {
       continue;
     }
-    const existing = preferredByPluginId.get(manifest.manifest.id);
-    if (!existing || isPreferredOrigin(candidate.origin, existing.origin)) {
-      preferredByPluginId.set(manifest.manifest.id, {
-        origin: candidate.origin,
+    const existing = preferredByPluginId.get(record.pluginId);
+    if (!existing || isPreferredOrigin(record.origin, existing.origin)) {
+      preferredByPluginId.set(record.pluginId, {
+        origin: record.origin,
         install,
-        ...(candidate.packageName ? { packageName: candidate.packageName } : {}),
+        ...(record.packageName ? { packageName: record.packageName } : {}),
       });
     }
   }
-  return preferredByPluginId;
+  return { installedPluginIds, installsByPluginId: preferredByPluginId };
+}
+
+function resolveProviderIndexInstallCatalogEntries(params: {
+  installedPluginIds: ReadonlySet<string>;
+  seenChoiceIds: ReadonlySet<string>;
+}): ProviderInstallCatalogEntry[] {
+  const entries: ProviderInstallCatalogEntry[] = [];
+  const index = loadOpenClawProviderIndex();
+  for (const provider of Object.values(index.providers)) {
+    if (params.installedPluginIds.has(provider.plugin.id)) {
+      continue;
+    }
+    const install = resolveInstallInfoFromProviderIndex(provider);
+    if (!install) {
+      continue;
+    }
+    for (const choice of provider.authChoices ?? []) {
+      if (params.seenChoiceIds.has(choice.choiceId)) {
+        continue;
+      }
+      entries.push({
+        pluginId: provider.plugin.id,
+        providerId: provider.id,
+        methodId: choice.method,
+        choiceId: choice.choiceId,
+        choiceLabel: choice.choiceLabel,
+        ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+        ...(choice.assistantPriority !== undefined
+          ? { assistantPriority: choice.assistantPriority }
+          : {}),
+        ...(choice.assistantVisibility ? { assistantVisibility: choice.assistantVisibility } : {}),
+        ...(choice.groupId ? { groupId: choice.groupId } : {}),
+        ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
+        ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+        ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
+        ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
+        ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
+        ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
+        ...(choice.onboardingScopes ? { onboardingScopes: [...choice.onboardingScopes] } : {}),
+        label: provider.name,
+        origin: "bundled",
+        install,
+        installSource: describePluginInstallSource(install, {
+          expectedPackageName: provider.plugin.package,
+        }),
+      });
+    }
+  }
+  return entries;
 }
 
 export function resolveProviderInstallCatalogEntries(
   params?: ProviderInstallCatalogParams,
 ): ProviderInstallCatalogEntry[] {
-  const installsByPluginId = resolvePreferredInstallsByPluginId(params ?? {});
-  return resolveManifestProviderAuthChoices(params)
+  const installParams = params ?? {};
+  const { installedPluginIds, installsByPluginId } =
+    resolvePreferredInstallsByPluginId(installParams);
+  const manifestEntries = resolveManifestProviderAuthChoices(params)
     .flatMap((choice) => {
       const install = installsByPluginId.get(choice.pluginId);
       if (!install) {
@@ -193,6 +253,14 @@ export function resolveProviderInstallCatalogEntries(
       ];
     })
     .toSorted((left, right) => left.choiceLabel.localeCompare(right.choiceLabel));
+  const seenChoiceIds = new Set(manifestEntries.map((entry) => entry.choiceId));
+  const indexEntries = resolveProviderIndexInstallCatalogEntries({
+    installedPluginIds,
+    seenChoiceIds,
+  });
+  return [...manifestEntries, ...indexEntries].toSorted((left, right) =>
+    left.choiceLabel.localeCompare(right.choiceLabel),
+  );
 }
 
 export function resolveProviderInstallCatalogEntry(

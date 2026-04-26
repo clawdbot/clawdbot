@@ -101,11 +101,17 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn).toHaveBeenCalledWith(expect.anything(), expect.anything(), options);
   });
 
-  it("adds Copilot headers and rewrites Responses connection-bound IDs before payload send", () => {
-    const connectionBoundId = Buffer.from(`reasoning-${"x".repeat(24)}`).toString("base64");
+  it("adds Copilot headers, preserves reasoning IDs, and rewrites message IDs before payload send", () => {
+    const reasoningId = Buffer.from(`reasoning-${"x".repeat(24)}`).toString("base64");
+    const messageId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
     const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
-      const payload = { input: [{ id: connectionBoundId, type: "reasoning" }] };
+      const payload = {
+        input: [
+          { id: reasoningId, type: "reasoning" },
+          { id: messageId, type: "message" },
+        ],
+      };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
       return {
@@ -144,7 +150,8 @@ describe("wrapCopilotAnthropicStream", () => {
         "X-Test": "1",
       },
     });
-    expect(payloads[0]?.input[0]?.id).toMatch(/^rs_[a-f0-9]{16}$/);
+    expect(payloads[0]?.input[0]?.id).toBe(reasoningId);
+    expect(payloads[0]?.input[1]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
   });
 
   it("rewrites Copilot Responses IDs returned by an existing payload hook", async () => {

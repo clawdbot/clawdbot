@@ -4,6 +4,7 @@ export * from "./sessions/artifacts.js";
 export * from "./sessions/metadata.js";
 export * from "./sessions/main-session.js";
 export * from "./sessions/main-session.runtime.js";
+export * from "./sessions/lifecycle.js";
 export * from "./sessions/paths.js";
 export * from "./sessions/reset.js";
 export * from "./sessions/session-key.js";

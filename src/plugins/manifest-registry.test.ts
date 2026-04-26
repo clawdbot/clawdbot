@@ -377,14 +377,10 @@ describe("loadPluginManifestRegistry", () => {
 
     const registry = loadPluginManifestRegistry({
       cache: false,
-      config: {
-        plugins: {
-          installs: {
-            zalouser: {
-              source: "npm",
-              installPath: globalDir,
-            },
-          },
+      installRecords: {
+        zalouser: {
+          source: "npm",
+          installPath: globalDir,
         },
       },
       candidates: [

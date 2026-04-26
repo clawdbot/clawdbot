@@ -3,7 +3,14 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createAsyncLock, readJsonFile, writeJsonAtomic, writeTextAtomic } from "./json-files.js";
+import {
+  JsonFileReadError,
+  createAsyncLock,
+  readDurableJsonFile,
+  readJsonFile,
+  writeJsonAtomic,
+  writeTextAtomic,
+} from "./json-files.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -42,6 +49,23 @@ describe("json file helpers", () => {
   ])("$name", async ({ setup, expected }) => {
     await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       await expect(readJsonFile(await setup(base))).resolves.toEqual(expected);
+    });
+  });
+
+  it("reads durable json strictly while allowing missing files", async () => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const validPath = path.join(base, "valid.json");
+      const invalidPath = path.join(base, "invalid.json");
+      const missingPath = path.join(base, "missing.json");
+      await fs.writeFile(validPath, '{"ok":true}', "utf8");
+      await fs.writeFile(invalidPath, "{not-json}", "utf8");
+
+      await expect(readDurableJsonFile(validPath)).resolves.toEqual({ ok: true });
+      await expect(readDurableJsonFile(missingPath)).resolves.toBeNull();
+      await expect(readDurableJsonFile(invalidPath)).rejects.toMatchObject({
+        filePath: invalidPath,
+        reason: "parse",
+      } satisfies Partial<JsonFileReadError>);
     });
   });
 
@@ -87,6 +111,25 @@ describe("json file helpers", () => {
       expect(renameSpy).toHaveBeenCalledOnce();
       expect(copySpy).toHaveBeenCalledOnce();
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
+    });
+  });
+
+  it("replaces symlink targets instead of writing through them on Windows rename fallback", async () => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "state.json");
+      const outsidePath = path.join(base, "outside.json");
+      await fs.writeFile(outsidePath, "outside", "utf8");
+      await fs.symlink(outsidePath, filePath);
+
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      const renameError = Object.assign(new Error("EPERM"), { code: "EPERM" });
+      vi.spyOn(fs, "rename").mockRejectedValueOnce(renameError);
+
+      await writeTextAtomic(filePath, "new");
+
+      await expect(fs.lstat(filePath)).resolves.toSatisfy((stat) => !stat.isSymbolicLink());
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
+      await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe("outside");
     });
   });
 

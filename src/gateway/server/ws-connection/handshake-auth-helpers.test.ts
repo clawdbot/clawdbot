@@ -574,6 +574,31 @@ describe("handshake auth helpers", () => {
   });
 
   describe("shouldAllowSilentLocalPairing — metadata-upgrade reason", () => {
+    it("allows silent metadata-upgrade for direct local native app clients without browser origin", () => {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "direct_local",
+          hasBrowserOriginHeader: false,
+          isControlUi: false,
+          isWebchat: false,
+          isNativeAppUi: true,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(true);
+    });
+
+    it("still requires approval for direct local node metadata-upgrade", () => {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "direct_local",
+          hasBrowserOriginHeader: false,
+          isControlUi: false,
+          isWebchat: false,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(false);
+    });
+
     it("allows silent metadata-upgrade for cli_container_local CLI clients", () => {
       expect(
         shouldAllowSilentLocalPairing({
@@ -617,6 +642,27 @@ describe("handshake auth helpers", () => {
           hasBrowserOriginHeader: true,
           isControlUi: true,
           isWebchat: false,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(false);
+    });
+
+    it("still requires approval for direct local Browser or Control UI metadata-upgrade", () => {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "direct_local",
+          hasBrowserOriginHeader: true,
+          isControlUi: true,
+          isWebchat: false,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(false);
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "direct_local",
+          hasBrowserOriginHeader: true,
+          isControlUi: false,
+          isWebchat: true,
           reason: "metadata-upgrade",
         }),
       ).toBe(false);

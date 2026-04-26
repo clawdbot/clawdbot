@@ -1,7 +1,10 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { TSchema } from "typebox";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   resolveProviderFollowupFallbackRoute,
   resolveProviderSystemPromptContribution,
@@ -30,9 +33,26 @@ function hasMedia(payload: { mediaUrl?: string; mediaUrls?: string[] }): boolean
   return resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
+function asOpenClawConfig(value: unknown): OpenClawConfig | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as OpenClawConfig)
+    : undefined;
+}
+
+function asProviderRuntimeModel(
+  value: BuildAgentRuntimePlanParams["model"],
+): ProviderRuntimeModel | undefined {
+  return value !== undefined ? (value as ProviderRuntimeModel) : undefined;
+}
+
+function asThinkLevel(value: BuildAgentRuntimePlanParams["thinkingLevel"]): ThinkLevel | undefined {
+  return value !== undefined ? (value as ThinkLevel) : undefined;
+}
+
 export function buildAgentRuntimeDeliveryPlan(
   params: BuildAgentRuntimeDeliveryPlanParams,
 ): AgentRuntimeDeliveryPlan {
+  const config = asOpenClawConfig(params.config);
   return {
     isSilentPayload(payload): boolean {
       return isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) && !hasMedia(payload);
@@ -40,10 +60,10 @@ export function buildAgentRuntimeDeliveryPlan(
     resolveFollowupRoute(routeParams) {
       return resolveProviderFollowupFallbackRoute({
         provider: params.provider,
-        config: params.config,
+        config,
         workspaceDir: params.workspaceDir,
         context: {
-          config: params.config,
+          config,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
           provider: params.provider,
@@ -66,13 +86,15 @@ export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
 }
 
 export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
+  const config = asOpenClawConfig(params.config);
+  const model = asProviderRuntimeModel(params.model);
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
   const transport = params.resolvedTransport;
   const auth = buildAgentRuntimeAuthPlan({
     provider: params.provider,
     authProfileProvider: params.authProfileProvider,
     sessionAuthProfileId: params.sessionAuthProfileId,
-    config: params.config,
+    config,
     workspaceDir: params.workspaceDir,
     harnessId: params.harnessId,
     harnessRuntime: params.harnessRuntime,
@@ -87,12 +109,12 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
   };
   const toolContext = {
     provider: params.provider,
-    config: params.config,
+    config,
     workspaceDir: params.workspaceDir,
     env: process.env,
     modelId: params.modelId,
     modelApi,
-    model: params.model,
+    model,
   };
   const resolveToolContext = (overrides?: {
     workspaceDir?: string;
@@ -102,7 +124,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     ...toolContext,
     ...(overrides?.workspaceDir !== undefined ? { workspaceDir: overrides.workspaceDir } : {}),
     ...(overrides?.modelApi !== undefined ? { modelApi: overrides.modelApi } : {}),
-    ...(overrides?.model !== undefined ? { model: overrides.model } : {}),
+    ...(overrides?.model !== undefined ? { model: asProviderRuntimeModel(overrides.model) } : {}),
   });
   const resolveTranscriptRuntimePolicy = (overrides?: {
     workspaceDir?: string;
@@ -112,25 +134,25 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     resolveTranscriptPolicy({
       provider: params.provider,
       modelId: params.modelId,
-      config: params.config,
+      config,
       workspaceDir: overrides?.workspaceDir ?? params.workspaceDir,
       env: process.env,
       modelApi: overrides?.modelApi ?? modelApi,
-      model: overrides?.model ?? params.model,
+      model: asProviderRuntimeModel(overrides?.model) ?? model,
     });
   const resolveTransportExtraParams = (
     overrides: Parameters<AgentRuntimePlan["transport"]["resolveExtraParams"]>[0] = {},
   ) =>
     resolvePreparedExtraParams({
-      cfg: params.config,
+      cfg: config,
       provider: params.provider,
       modelId: params.modelId,
       agentDir: params.agentDir,
       workspaceDir: overrides.workspaceDir ?? params.workspaceDir,
       extraParamsOverride: overrides.extraParamsOverride ?? params.extraParamsOverride,
-      thinkingLevel: overrides.thinkingLevel ?? params.thinkingLevel,
+      thinkingLevel: asThinkLevel(overrides.thinkingLevel ?? params.thinkingLevel),
       agentId: overrides.agentId ?? params.agentId,
-      model: overrides.model ?? params.model,
+      model: asProviderRuntimeModel(overrides.model) ?? model,
       resolvedTransport: overrides.resolvedTransport ?? transport,
     });
 
@@ -143,9 +165,12 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       resolveSystemPromptContribution(context) {
         return resolveProviderSystemPromptContribution({
           provider: params.provider,
-          config: params.config,
+          config,
           workspaceDir: context.workspaceDir ?? params.workspaceDir,
-          context,
+          context: {
+            ...context,
+            config: asOpenClawConfig(context.config),
+          },
         });
       },
     },

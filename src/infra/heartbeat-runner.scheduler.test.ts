@@ -346,6 +346,24 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("clamps oversized scheduler delays so heartbeats do not fire in a tight loop (#71414)", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    // 365d resolves to ~31_536_000_000 ms, well past Node setTimeout's
+    // 2_147_483_647 ms cap. Without clamping, setTimeout would fire after
+    // 1ms and re-arm in a tight loop, exhausting the runner.
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "365d" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    // Advance well past the broken 1ms re-arm but well under the clamped cap
+    // (~24.85d). If the bug is present, runSpy gets called many times.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

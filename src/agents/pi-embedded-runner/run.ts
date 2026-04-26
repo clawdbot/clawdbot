@@ -90,6 +90,7 @@ import { resolveModelAsync } from "./model.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
+import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
@@ -120,6 +121,7 @@ import {
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
+  shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -325,6 +327,7 @@ export async function runEmbeddedPiAgent(
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
+        jobId: params.jobId,
         agentId: workspaceResolution.agentId,
         sessionKey: resolvedSessionKey,
         sessionId: params.sessionId,
@@ -377,20 +380,26 @@ export async function runEmbeddedPiAgent(
         agentHarnessId: params.agentHarnessId,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
-      if (!pluginHarnessOwnsTransport) {
-        await ensureOpenClawModelsJson(params.config, agentDir);
-      }
-
-      const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
+      const dynamicModelResolution = await resolveModelAsync(
         provider,
         modelId,
         agentDir,
         params.config,
-        // Plugin harnesses may expose synthetic providers that PI cannot
-        // discover safely; resolve their model metadata without touching PI
-        // auth/model stores.
-        { skipPiDiscovery: pluginHarnessOwnsTransport },
+        {
+          // Plugin dynamic model hooks can resolve explicit model refs without
+          // first generating PI models.json. This keeps one-shot model runs from
+          // blocking on unrelated provider discovery.
+          skipPiDiscovery: true,
+        },
       );
+      const modelResolution =
+        dynamicModelResolution.model || pluginHarnessOwnsTransport
+          ? dynamicModelResolution
+          : await (async () => {
+              await ensureOpenClawModelsJson(params.config, agentDir);
+              return await resolveModelAsync(provider, modelId, agentDir, params.config);
+            })();
+      const { model, error, authStorage, modelRegistry } = modelResolution;
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
           reason: "model_not_found",
@@ -615,9 +624,9 @@ export async function runEmbeddedPiAgent(
       let timeoutCompactionAttempts = 0;
       // Silent-error retry: non-strict-agentic models (e.g. ollama/glm-5.1) can
       // end a turn with stopReason="error" + zero output tokens, producing no
-      // user-visible text. The existing empty-response retry is gated on
-      // isStrictAgenticSupportedProviderModel (gpt-5 only). This is an
-      // orthogonal, model-agnostic resubmission.
+      // user-visible text. This is an orthogonal, model-agnostic resubmission
+      // for errored turns; stopReason="stop" empty zero-token turns use the
+      // visible-answer retry instruction instead.
       const MAX_EMPTY_ERROR_RETRIES = 3;
       let emptyErrorRetries = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
@@ -669,16 +678,11 @@ export async function runEmbeddedPiAgent(
           modelId: failure.modelId,
         });
       };
-      const resolveAuthProfileFailureReason = (
-        failoverReason: FailoverReason | null,
-      ): AuthProfileFailureReason | null => {
-        // Timeouts are transport/model-path failures, not auth health signals,
-        // so they should not persist auth-profile failure state.
-        if (!failoverReason || failoverReason === "timeout") {
-          return null;
-        }
-        return failoverReason;
-      };
+      const resolveRunAuthProfileFailureReason = (failoverReason: FailoverReason | null) =>
+        resolveAuthProfileFailureReason({
+          failoverReason,
+          policy: params.authProfileFailurePolicy,
+        });
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
         if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
           return;
@@ -1485,7 +1489,7 @@ export async function runEmbeddedPiAgent(
             const promptFailoverReason =
               promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider });
             const promptProfileFailureReason =
-              resolveAuthProfileFailureReason(promptFailoverReason);
+              resolveRunAuthProfileFailureReason(promptFailoverReason);
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
               reason: promptProfileFailureReason,
@@ -1630,7 +1634,7 @@ export async function runEmbeddedPiAgent(
             },
           );
           const assistantProfileFailureReason =
-            resolveAuthProfileFailureReason(assistantFailoverReason);
+            resolveRunAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(
             assistantForFailover?.errorMessage ?? "",
@@ -1869,32 +1873,45 @@ export async function runEmbeddedPiAgent(
           }
 
           const payloadCount = payloadsWithToolMedia?.length ?? 0;
-          const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
-            provider,
-            modelId,
-            executionContract,
-            prompt: params.prompt,
-            aborted,
-            timedOut,
-            attempt,
-          });
-          const nextReasoningOnlyRetryInstruction = resolveReasoningOnlyRetryInstruction({
-            provider: activeErrorContext.provider,
-            modelId: activeErrorContext.model,
-            executionContract,
-            aborted,
-            timedOut,
-            attempt,
-          });
-          const nextEmptyResponseRetryInstruction = resolveEmptyResponseRetryInstruction({
-            provider: activeErrorContext.provider,
-            modelId: activeErrorContext.model,
-            executionContract,
+          const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
+            allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
             payloadCount,
             aborted,
             timedOut,
             attempt,
           });
+          const nextPlanningOnlyRetryInstruction = emptyAssistantReplyIsSilent
+            ? null
+            : resolvePlanningOnlyRetryInstruction({
+                provider,
+                modelId,
+                executionContract,
+                prompt: params.prompt,
+                aborted,
+                timedOut,
+                attempt,
+              });
+          const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
+            ? null
+            : resolveReasoningOnlyRetryInstruction({
+                provider: activeErrorContext.provider,
+                modelId: activeErrorContext.model,
+                executionContract,
+                aborted,
+                timedOut,
+                attempt,
+              });
+          const nextEmptyResponseRetryInstruction = emptyAssistantReplyIsSilent
+            ? null
+            : resolveEmptyResponseRetryInstruction({
+                provider: activeErrorContext.provider,
+                modelId: activeErrorContext.model,
+                executionContract,
+                payloadCount,
+                aborted,
+                timedOut,
+                attempt,
+              });
           if (
             nextPlanningOnlyRetryInstruction &&
             planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
@@ -1966,12 +1983,14 @@ export async function runEmbeddedPiAgent(
             );
             continue;
           }
-          const incompleteTurnText = resolveIncompleteTurnPayloadText({
-            payloadCount,
-            aborted,
-            timedOut,
-            attempt,
-          });
+          const incompleteTurnText = emptyAssistantReplyIsSilent
+            ? null
+            : resolveIncompleteTurnPayloadText({
+                payloadCount,
+                aborted,
+                timedOut,
+                attempt,
+              });
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
             log.warn(
               `reasoning-only retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
@@ -2047,7 +2066,7 @@ export async function runEmbeddedPiAgent(
             if (lastProfileId) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
-                reason: resolveAuthProfileFailureReason(assistantFailoverReason),
+                reason: resolveRunAuthProfileFailureReason(assistantFailoverReason),
               });
             }
             return {
@@ -2092,13 +2111,10 @@ export async function runEmbeddedPiAgent(
           // ── silent-error retry ────────────────────────────────────────────
           // Observed with ollama/glm-5.1: a turn can end with stopReason="error"
           // and zero output tokens AND empty content after a successful
-          // tool-call sequence, producing no user-visible text at all. The
-          // existing empty-response retry path (resolveEmptyResponseRetryInstruction)
-          // is gated on the strict-agentic contract (gpt-5 only), so non-frontier
-          // models fall through to "incomplete turn detected" → silent gap
-          // until the user nudges. This is a narrower, model-agnostic
-          // resubmission: same prompt, same session transcript (tool results
-          // already captured), no instruction injection. Placed before the
+          // tool-call sequence, producing no user-visible text at all. This
+          // path is narrower than the empty-response continuation retry:
+          // same prompt, same session transcript (tool results already
+          // captured), no instruction injection. Placed before the
           // incompleteTurnText return so it actually gets a chance to fire.
           //
           // Content-empty guard: a reasoning-only error (content has thinking
@@ -2157,7 +2173,7 @@ export async function runEmbeddedPiAgent(
             if (lastProfileId) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
-                reason: resolveAuthProfileFailureReason(assistantFailoverReason),
+                reason: resolveRunAuthProfileFailureReason(assistantFailoverReason),
               });
             }
 
@@ -2219,12 +2235,15 @@ export async function runEmbeddedPiAgent(
             : attempt.yieldDetected
               ? "end_turn"
               : (sessionLastAssistant?.stopReason as string | undefined);
+          const terminalPayloads = emptyAssistantReplyIsSilent
+            ? [{ text: SILENT_REPLY_TOKEN }]
+            : payloadsWithToolMedia;
           attempt.setTerminalLifecycleMeta?.({
             replayInvalid,
             livenessState,
           });
           return {
-            payloads: payloadsWithToolMedia?.length ? payloadsWithToolMedia : undefined,
+            payloads: terminalPayloads?.length ? terminalPayloads : undefined,
             ...(attempt.diagnosticTrace
               ? { diagnosticTrace: freezeDiagnosticTraceContext(attempt.diagnosticTrace) }
               : {}),
@@ -2239,6 +2258,9 @@ export async function runEmbeddedPiAgent(
               replayInvalid,
               livenessState,
               agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              ...(emptyAssistantReplyIsSilent
+                ? { terminalReplyKind: "silent-empty" as const }
+                : {}),
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.

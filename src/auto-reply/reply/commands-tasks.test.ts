@@ -135,7 +135,9 @@ describe("buildTasksReply", () => {
 
     const reply = await buildTasksReplyForTest();
 
-    expect(reply.text).toContain("[Mon 2026-04-06 02:42 GMT+1]");
+    expect(reply.text).toContain("Background task");
+    expect(reply.text).toContain("Finished.");
+    expect(reply.text).not.toContain("[Mon 2026-04-06 02:42 GMT+1]");
     expect(reply.text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
     expect(reply.text).not.toContain("OpenClaw runtime context (internal):");
   });

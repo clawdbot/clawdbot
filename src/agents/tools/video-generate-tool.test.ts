@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { MAX_VIDEO_BYTES } from "../../media/constants.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
@@ -185,6 +186,51 @@ describe("createVideoGenerateTool", () => {
     expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
+  it("uses the video media cap when mediaMaxMb is not configured", async () => {
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "qwen",
+      model: "wan2.6-t2v",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        {
+          buffer: Buffer.from("video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "lobster.mp4",
+        },
+      ],
+    });
+    const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/generated-lobster.mp4",
+      id: "generated-lobster.mp4",
+      size: 11,
+      contentType: "video/mp4",
+    });
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await tool.execute("call-default-cap", { prompt: "friendly lobster surfing" });
+
+    expect(saveSpy).toHaveBeenCalledWith(
+      Buffer.from("video-bytes"),
+      "video/mp4",
+      "tool-video-generation",
+      MAX_VIDEO_BYTES,
+      "lobster.mp4",
+    );
+  });
+
   it("surfaces url-only generated videos without saving local files", async () => {
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "vydra",
@@ -230,6 +276,56 @@ describe("createVideoGenerateTool", () => {
       },
       paths: ["https://example.com/generated-lobster.mp4"],
       metadata: { taskId: "task-1" },
+    });
+  });
+
+  it("falls back to the provider URL when generated video persistence exceeds the media cap", async () => {
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "fal",
+      model: "fal-ai/minimax/video-01-live",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        {
+          buffer: Buffer.from("large-video-bytes"),
+          url: "https://fal.run/files/generated-lobster.mp4",
+          mimeType: "video/mp4",
+          fileName: "lobster.mp4",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockRejectedValueOnce(
+      new Error("Media exceeds 16MB limit"),
+    );
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "fal/fal-ai/minimax/video-01-live" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    const result = await tool.execute("call-url-fallback", {
+      prompt: "friendly lobster surfing",
+    });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("Generated 1 video with fal/fal-ai/minimax/video-01-live.");
+    expect(text).toContain("MEDIA:https://fal.run/files/generated-lobster.mp4");
+    expect(result.details).toMatchObject({
+      provider: "fal",
+      model: "fal-ai/minimax/video-01-live",
+      count: 1,
+      media: {
+        mediaUrls: ["https://fal.run/files/generated-lobster.mp4"],
+      },
+      paths: ["https://fal.run/files/generated-lobster.mp4"],
     });
   });
 

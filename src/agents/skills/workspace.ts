@@ -440,7 +440,7 @@ function loadSkillEntries(
     const suspicious = childDirs.length > limits.maxCandidatesPerRoot;
 
     const maxCandidates = Math.max(0, limits.maxSkillsLoadedPerSource);
-    const limitedChildren = childDirs.slice().sort().slice(0, maxCandidates);
+    const limitedChildren = childDirs.toSorted().slice(0, maxCandidates);
 
     if (suspicious) {
       skillsLogger.warn("Skills root looks suspiciously large, truncating discovery.", {

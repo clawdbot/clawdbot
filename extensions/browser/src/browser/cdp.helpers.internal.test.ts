@@ -234,17 +234,90 @@ describe("cdp.helpers internal", () => {
     it("rejects in-flight pending calls when the socket closes mid-call", async () => {
       const server = await startWsServer();
       wss = server.wss;
+      let callbackCount = 0;
+      let connectionCount = 0;
       server.wss.on("connection", (socket) => {
+        connectionCount += 1;
         socket.on("message", () => {
           // Defer close so the pending entry is definitely registered.
           setTimeout(() => socket.close(), 10);
         });
       });
       await expect(
-        withCdpSocket(server.url, async (send) => {
-          await send("Test.willClose");
-        }),
+        withCdpSocket(
+          server.url,
+          async (send) => {
+            callbackCount += 1;
+            await send("Test.willClose");
+          },
+          { handshakeRetries: 2, handshakeRetryDelayMs: 1, handshakeMaxRetryDelayMs: 1 },
+        ),
       ).rejects.toThrow(/CDP socket closed/);
+      expect(callbackCount).toBe(1);
+      expect(connectionCount).toBe(1);
+    });
+
+    it("retries websocket failures before any CDP command is sent", async () => {
+      let rejectedHandshakes = 0;
+      wss = new WebSocketServer({
+        port: 0,
+        host: "127.0.0.1",
+        verifyClient: (_info, cb) => {
+          if (rejectedHandshakes === 0) {
+            rejectedHandshakes += 1;
+            cb(false, 503, "try later");
+            return;
+          }
+          cb(true);
+        },
+      });
+      await new Promise<void>((resolve) => wss?.once("listening", () => resolve()));
+      const port = (wss.address() as { port: number }).port;
+      let callbackCount = 0;
+      wss.on("connection", (socket) => {
+        socket.on("message", (raw) => {
+          const msg = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
+          socket.send(JSON.stringify({ id: msg.id, result: { echoed: msg.method } }));
+        });
+      });
+
+      const result = await withCdpSocket<{ echoed?: string }>(
+        `ws://127.0.0.1:${port}/devtools/browser/TEST`,
+        async (send) => {
+          callbackCount += 1;
+          return (await send("Test.afterOpen")) as { echoed?: string };
+        },
+        { handshakeRetries: 2, handshakeRetryDelayMs: 1, handshakeMaxRetryDelayMs: 1 },
+      );
+
+      expect(result.echoed).toBe("Test.afterOpen");
+      expect(rejectedHandshakes).toBe(1);
+      expect(callbackCount).toBe(1);
+    });
+
+    it("does not retry rate-limited websocket handshakes", async () => {
+      let rejectedHandshakes = 0;
+      wss = new WebSocketServer({
+        port: 0,
+        host: "127.0.0.1",
+        verifyClient: (_info, cb) => {
+          rejectedHandshakes += 1;
+          cb(false, 429, "too many requests");
+        },
+      });
+      await new Promise<void>((resolve) => wss?.once("listening", () => resolve()));
+      const port = (wss.address() as { port: number }).port;
+
+      await expect(
+        withCdpSocket(
+          `ws://127.0.0.1:${port}/devtools/browser/TEST`,
+          async (send) => {
+            await send("Test.neverRuns");
+          },
+          { handshakeRetries: 2, handshakeRetryDelayMs: 1, handshakeMaxRetryDelayMs: 1 },
+        ),
+      ).rejects.toThrow(/429/);
+      expect(rejectedHandshakes).toBe(1);
     });
 
     it("rejects and closes the socket when a CDP command exceeds its timeout", async () => {

@@ -5,6 +5,7 @@ import {
   createQueuedTaskRun,
   createRunningTaskRun,
   failTaskRunByRunId,
+  finalizeTaskRunByRunId,
   getDetachedTaskLifecycleRuntime,
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskRuntime,
@@ -76,6 +77,7 @@ describe("detached-task-runtime", () => {
       createRunningTaskRun: vi.fn(() => runningTask),
       startTaskRunByRunId: vi.fn(() => updatedTasks),
       recordTaskRunProgressByRunId: vi.fn(() => updatedTasks),
+      finalizeTaskRunByRunId: vi.fn(() => updatedTasks),
       completeTaskRunByRunId: vi.fn(() => updatedTasks),
       failTaskRunByRunId: vi.fn(() => updatedTasks),
       setDetachedTaskDeliveryStatusByRunId: vi.fn(() => updatedTasks),
@@ -111,6 +113,7 @@ describe("detached-task-runtime", () => {
 
     startTaskRunByRunId({ runId: "run-running", startedAt: 10 });
     recordTaskRunProgressByRunId({ runId: "run-running", lastEventAt: 20 });
+    finalizeTaskRunByRunId({ runId: "run-running", status: "succeeded", endedAt: 25 });
     completeTaskRunByRunId({ runId: "run-running", endedAt: 30 });
     failTaskRunByRunId({ runId: "run-running", endedAt: 40 });
     setDetachedTaskDeliveryStatusByRunId({
@@ -133,6 +136,9 @@ describe("detached-task-runtime", () => {
     );
     expect(fakeRuntime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-running", lastEventAt: 20 }),
+    );
+    expect(fakeRuntime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-running", status: "succeeded", endedAt: 25 }),
     );
     expect(fakeRuntime.completeTaskRunByRunId).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-running", endedAt: 30 }),
@@ -164,6 +170,30 @@ describe("detached-task-runtime", () => {
       runtime,
     });
     expect(getDetachedTaskLifecycleRuntime()).toBe(runtime);
+  });
+
+  it("falls back to legacy complete and fail hooks when a runtime has no finalizer", () => {
+    const defaultRuntime = getDetachedTaskLifecycleRuntime();
+    const completeTaskRunByRunIdSpy = vi.fn(() => []);
+    const failTaskRunByRunIdSpy = vi.fn(() => []);
+    const legacyRuntime = {
+      ...defaultRuntime,
+      completeTaskRunByRunId: completeTaskRunByRunIdSpy,
+      failTaskRunByRunId: failTaskRunByRunIdSpy,
+    };
+    delete legacyRuntime.finalizeTaskRunByRunId;
+
+    setDetachedTaskLifecycleRuntime(legacyRuntime);
+
+    finalizeTaskRunByRunId({ runId: "legacy-ok", status: "succeeded", endedAt: 10 });
+    finalizeTaskRunByRunId({ runId: "legacy-timeout", status: "timed_out", endedAt: 20 });
+
+    expect(completeTaskRunByRunIdSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "legacy-ok", status: "succeeded", endedAt: 10 }),
+    );
+    expect(failTaskRunByRunIdSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "legacy-timeout", status: "timed_out", endedAt: 20 }),
+    );
   });
 
   describe("tryRecoverTaskBeforeMarkLost", () => {

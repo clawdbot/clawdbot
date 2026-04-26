@@ -6,4 +6,4 @@ import type { DeviceKeySignPayload } from "./DeviceKeySignPayload.js";
 /**
  * Sign an accepted structured payload with a controller-local device key.
  */
-export type DeviceKeySignParams = { keyId: string, payload: DeviceKeySignPayload, };
+export type DeviceKeySignParams = { keyId: string; payload: DeviceKeySignPayload };

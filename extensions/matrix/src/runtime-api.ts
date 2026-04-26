@@ -87,7 +87,7 @@ export {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
 } from "openclaw/plugin-sdk/conversation-runtime";
-export { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+export { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 export { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";

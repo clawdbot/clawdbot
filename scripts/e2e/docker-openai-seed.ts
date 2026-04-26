@@ -6,12 +6,12 @@ import {
 
 export type { OpenClawConfig };
 
-const DOCKER_OPENAI_MODEL_REF = "openai/gpt-5.4";
+const DOCKER_OPENAI_MODEL_REF = "openai/gpt-5.5";
 const DOCKER_OPENAI_BASE_URL =
   process.env.OPENCLAW_DOCKER_OPENAI_BASE_URL?.trim() || "http://127.0.0.1:9/v1";
 const DOCKER_OPENAI_MODEL: ModelDefinitionConfig = {
-  id: "gpt-5.4",
-  name: "gpt-5.4",
+  id: "gpt-5.5",
+  name: "gpt-5.5",
   api: "openai-responses",
   reasoning: true,
   input: ["text", "image"],

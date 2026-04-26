@@ -110,6 +110,14 @@ permissions:
 }
 ```
 
+Trusted same-process backend clients (`client.id: "gateway-client"`,
+`client.mode: "backend"`) may omit `device` on direct loopback connections when
+they authenticate with the shared gateway token/password. This path is reserved
+for internal control-plane RPCs and keeps stale CLI/device pairing baselines from
+blocking local backend work such as subagent session updates. Remote clients,
+browser-origin clients, node clients, and explicit device-token/device-identity
+clients still use the normal pairing and scope-upgrade checks.
+
 When a device token is issued, `hello-ok` also includes:
 
 ```json
@@ -352,8 +360,8 @@ enumeration of `src/gateway/server-methods/*.ts`.
   <Accordion title="Device pairing and device tokens">
     - `device.pair.list` returns pending and approved paired devices.
     - `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage device-pairing records.
-    - `device.token.rotate` rotates a paired device token within its approved role and scope bounds.
-    - `device.token.revoke` revokes a paired device token.
+    - `device.token.rotate` rotates a paired device token within its approved role and caller scope bounds.
+    - `device.token.revoke` revokes a paired device token within its approved role and caller scope bounds.
   </Accordion>
 
   <Accordion title="Node pairing, invoke, and pending work">
@@ -541,15 +549,15 @@ rather than the pre-handshake defaults.
   reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing` scope).
-- Token issuance/rotation stays bounded to the approved role set recorded in
-  that device's pairing entry; rotating a token cannot expand the device into a
-  role that pairing approval never granted.
+- Token issuance, rotation, and revocation stay bounded to the approved role set
+  recorded in that device's pairing entry; token mutation cannot expand or
+  target a device role that pairing approval never granted.
 - For paired-device token sessions, device management is self-scoped unless the
   caller also has `operator.admin`: non-admin callers can remove/revoke/rotate
   only their **own** device entry.
-- `device.token.rotate` also checks the requested operator scope set against the
-  caller's current session scopes. Non-admin callers cannot rotate a token into
-  a broader operator scope set than they already hold.
+- `device.token.rotate` and `device.token.revoke` also check the target operator
+  token scope set against the caller's current session scopes. Non-admin callers
+  cannot rotate or revoke a broader operator token than they already hold.
 - Auth failures include `error.details.code` plus recovery hints:
   - `error.details.canRetryWithDeviceToken` (boolean)
   - `error.details.recommendedNextStep` (`retry_with_device_token`, `update_auth_configuration`, `update_auth_credentials`, `wait_then_retry`, `review_auth_configuration`)
@@ -569,11 +577,13 @@ rather than the pre-handshake defaults.
   trusted shared-secret helper flows.
 - Same-host tailnet or LAN connects are still treated as remote for pairing and
   require approval.
-- All WS clients must include `device` identity during `connect` (operator + node).
-  Control UI can omit it only in these modes:
+- WS clients normally include `device` identity during `connect` (operator +
+  node). The only device-less operator exceptions are explicit trust paths:
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
   - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
+  - direct-loopback `gateway-client` backend RPCs authenticated with the shared
+    gateway token/password.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics

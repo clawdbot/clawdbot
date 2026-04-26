@@ -607,29 +607,43 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   );
 
   it("handles transparent and semantic env wrappers in allowlist mode", async () => {
-    const transparent = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      security: "allowlist",
-      command: ["env", "tr", "a", "b"],
-    });
-    if (process.platform === "win32") {
-      expect(transparent.runCommand).not.toHaveBeenCalled();
-      expectInvokeErrorMessage(transparent.sendInvokeResult, { message: "allowlist miss" });
-    } else {
-      const runArgs = vi.mocked(transparent.runCommand).mock.calls[0]?.[0] as string[] | undefined;
-      expect(runArgs).toBeDefined();
-      expect(runArgs?.[0]).toMatch(/(^|[/\\])tr$/);
-      expect(runArgs?.slice(1)).toEqual(["a", "b"]);
-      expectInvokeOk(transparent.sendInvokeResult);
+    const oldPath = process.env.PATH;
+    if (process.platform !== "win32") {
+      process.env.PATH = "/usr/bin:/bin";
     }
+    try {
+      const transparent = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        security: "allowlist",
+        command: ["env", "tr", "a", "b"],
+      });
+      if (process.platform === "win32") {
+        expect(transparent.runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(transparent.sendInvokeResult, { message: "allowlist miss" });
+      } else {
+        const runArgs = vi.mocked(transparent.runCommand).mock.calls[0]?.[0] as
+          | string[]
+          | undefined;
+        expect(runArgs).toBeDefined();
+        expect(runArgs?.[0]).toMatch(/(^|[/\\])tr$/);
+        expect(runArgs?.slice(1)).toEqual(["a", "b"]);
+        expectInvokeOk(transparent.sendInvokeResult);
+      }
 
-    const semantic = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      security: "allowlist",
-      command: ["env", "FOO=bar", "tr", "a", "b"],
-    });
-    expect(semantic.runCommand).not.toHaveBeenCalled();
-    expectInvokeErrorMessage(semantic.sendInvokeResult, { message: "allowlist miss" });
+      const semantic = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        security: "allowlist",
+        command: ["env", "FOO=bar", "tr", "a", "b"],
+      });
+      expect(semantic.runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(semantic.sendInvokeResult, { message: "allowlist miss" });
+    } finally {
+      if (oldPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = oldPath;
+      }
+    }
   });
 
   it("denies shell payload carriers in allowlist mode without explicit approval", async () => {

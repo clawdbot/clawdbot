@@ -20,8 +20,8 @@ describe("qa live timeout policy", () => {
       resolveQaLiveTurnTimeoutMs(
         {
           providerMode: "live-frontier",
-          primaryModel: "openai/gpt-5.4",
-          alternateModel: "openai/gpt-5.4",
+          primaryModel: "openai/gpt-5.5",
+          alternateModel: "openai/gpt-5.5",
         },
         30_000,
       ),

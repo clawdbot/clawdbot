@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { DEFAULT_ASSISTANT_AVATAR, type AssistantIdentity } from "../assistant-identity.ts";
+import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -15,23 +15,17 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../types/chat-types.ts";
-import {
-  resolveLocalUserAvatarText,
-  resolveLocalUserAvatarUrl,
-  resolveLocalUserName,
-} from "../user-identity.ts";
-import { agentLogoUrl, isRenderableControlUiAvatarUrl } from "../views/agents-utils.ts";
+import { resolveLocalUserName } from "../user-identity.ts";
+export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
+import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
   extractThinkingCached,
   formatReasoningMarkdown,
 } from "./message-extract.ts";
-import {
-  isToolResultMessage,
-  normalizeMessage,
-  normalizeRoleForGrouping,
-} from "./message-normalizer.ts";
+import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
+import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
 import {
   extractToolCards,
@@ -48,6 +42,53 @@ type AssistantAttachmentAvailability =
 
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
+
+export type ChatTimestampDisplay = {
+  label: string;
+  title: string;
+  dateTime: string;
+};
+
+export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    return {
+      label: "Unknown date",
+      title: "Unknown date",
+      dateTime: "",
+    };
+  }
+
+  return {
+    label: date.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+    title: date.toLocaleString([], {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }),
+    dateTime: date.toISOString(),
+  };
+}
+
+function renderChatTimestamp(timestamp: number) {
+  const display = formatChatTimestampForDisplay(timestamp);
+  return html`
+    <time class="chat-group-timestamp" datetime=${display.dateTime} title=${display.title}>
+      ${display.label}
+    </time>
+  `;
+}
 
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
   assistantAttachmentAvailabilityCache.clear();
@@ -218,7 +259,7 @@ export function renderReadingIndicatorGroup(
 ) {
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, undefined, basePath, authToken)}
+      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
           <span class="chat-reading-indicator__dots">
@@ -238,15 +279,11 @@ export function renderStreamingGroup(
   basePath?: string,
   authToken?: string | null,
 ) {
-  const timestamp = new Date(startedAt).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
   const name = assistant?.name ?? "Assistant";
 
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, undefined, basePath, authToken)}
+      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
           {
@@ -260,7 +297,7 @@ export function renderStreamingGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${name}</span>
-          <span class="chat-group-timestamp">${timestamp}</span>
+          ${renderChatTimestamp(startedAt)}
         </div>
       </div>
     </div>
@@ -316,17 +353,13 @@ export function renderMessageGroup(
         : normalizedRole === "tool"
           ? "tool"
           : "other";
-  const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
   return html`
     <div class="chat-group ${roleClass}">
-      ${renderAvatar(
+      ${renderChatAvatar(
         group.role,
         {
           name: assistantName,
@@ -365,8 +398,7 @@ export function renderMessageGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
-          <span class="chat-group-timestamp">${timestamp}</span>
-          ${renderMessageMeta(meta)}
+          ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
           ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
@@ -397,6 +429,7 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   let cost = 0;
   let model: string | null = null;
   let hasUsage = false;
+  let maxPromptTokens = 0;
 
   for (const { message } of group.messages) {
     const m = message as Record<string, unknown>;
@@ -406,10 +439,15 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
     const usage = m.usage as Record<string, number> | undefined;
     if (usage) {
       hasUsage = true;
-      input += usage.input ?? usage.inputTokens ?? 0;
-      output += usage.output ?? usage.outputTokens ?? 0;
-      cacheRead += usage.cacheRead ?? usage.cache_read_input_tokens ?? 0;
-      cacheWrite += usage.cacheWrite ?? usage.cache_creation_input_tokens ?? 0;
+      const callInput = usage.input ?? usage.inputTokens ?? 0;
+      const callOutput = usage.output ?? usage.outputTokens ?? 0;
+      const callCacheRead = usage.cacheRead ?? usage.cache_read_input_tokens ?? 0;
+      const callCacheWrite = usage.cacheWrite ?? usage.cache_creation_input_tokens ?? 0;
+      input += callInput;
+      output += callOutput;
+      cacheRead += callCacheRead;
+      cacheWrite += callCacheWrite;
+      maxPromptTokens = Math.max(maxPromptTokens, callInput + callCacheRead + callCacheWrite);
     }
     const c = m.cost as Record<string, number> | undefined;
     if (c?.total) {
@@ -424,10 +462,9 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
     return null;
   }
 
-  const promptTokens = input + cacheRead + cacheWrite;
   const contextPercent =
-    contextWindow && promptTokens > 0
-      ? Math.min(Math.round((promptTokens / contextWindow) * 100), 100)
+    contextWindow && maxPromptTokens > 0
+      ? Math.min(Math.round((maxPromptTokens / contextWindow) * 100), 100)
       : null;
 
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
@@ -495,7 +532,15 @@ function renderMessageMeta(meta: GroupMeta | null) {
     return nothing;
   }
 
-  return html`<span class="msg-meta">${parts}</span>`;
+  return html`
+    <details class="msg-meta">
+      <summary class="msg-meta__summary" title="Show message context details">
+        <span class="msg-meta__summary-icon" aria-hidden="true">${icons.chevronRight}</span>
+        <span>Context</span>
+      </summary>
+      <span class="msg-meta__details">${parts}</span>
+    </details>
+  `;
 }
 
 function extractGroupText(group: MessageGroup): string {
@@ -626,142 +671,6 @@ function renderTtsButton(group: MessageGroup) {
       ${icons.volume2}
     </button>
   `;
-}
-
-function renderAvatar(
-  role: string,
-  assistant?: Pick<AssistantIdentity, "name" | "avatar">,
-  user?: { name?: string | null; avatar?: string | null },
-  basePath?: string,
-  authToken?: string | null,
-) {
-  const normalized = normalizeRoleForGrouping(role);
-  const assistantName = assistant?.name?.trim() || "Assistant";
-  const assistantAvatar = assistant?.avatar?.trim() || "";
-  const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);
-  const userName = resolveLocalUserName(user);
-  const userAvatarUrl = resolveLocalUserAvatarUrl(user);
-  const userAvatarText = resolveLocalUserAvatarText(user);
-  const initial =
-    normalized === "user"
-      ? html`
-          <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-            <circle cx="12" cy="8" r="4" />
-            <path d="M20 21a8 8 0 1 0-16 0" />
-          </svg>
-        `
-      : normalized === "assistant"
-        ? html`
-            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-              <path d="M12 2l2.4 7.2H22l-6 4.8 2.4 7.2L12 16l-6.4 5.2L8 14 2 9.2h7.6z" />
-            </svg>
-          `
-        : normalized === "tool"
-          ? html`
-              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-                <path
-                  d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53a7.76 7.76 0 0 0 .07-1 7.76 7.76 0 0 0-.07-.97l2.11-1.63a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.15 7.15 0 0 0-1.69-.98l-.38-2.65A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42l-.38 2.65a7.15 7.15 0 0 0-1.69.98l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.49.49 0 0 0 .12.64L4.57 11a7.9 7.9 0 0 0 0 1.94l-2.11 1.69a.49.49 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1c.52.4 1.08.72 1.69.98l.38 2.65c.05.24.26.42.49.42h4c.23 0 .44-.18.49-.42l.38-2.65a7.15 7.15 0 0 0 1.69-.98l2.49 1a.5.5 0 0 0 .61-.22l2-3.46a.49.49 0 0 0-.12-.64z"
-                />
-              </svg>
-            `
-          : html`
-              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-                <circle cx="12" cy="12" r="10" />
-                <text
-                  x="12"
-                  y="16.5"
-                  text-anchor="middle"
-                  font-size="14"
-                  font-weight="600"
-                  fill="var(--bg, #fff)"
-                >
-                  ?
-                </text>
-              </svg>
-            `;
-  const className =
-    normalized === "user"
-      ? "user"
-      : normalized === "assistant"
-        ? "assistant"
-        : normalized === "tool"
-          ? "tool"
-          : "other";
-
-  if (normalized === "user" && userAvatarUrl) {
-    return html`<img class="chat-avatar ${className}" src="${userAvatarUrl}" alt="${userName}" />`;
-  }
-
-  if (normalized === "user" && userAvatarText) {
-    return html`<div class="chat-avatar ${className}" aria-label="${userName}">
-      ${userAvatarText}
-    </div>`;
-  }
-
-  if (assistantAvatar && normalized === "assistant") {
-    if (isAvatarUrl(assistantAvatar)) {
-      if (authToken?.trim() && assistantAvatar.startsWith("/")) {
-        return html`<img
-          class="chat-avatar ${className} chat-avatar--logo"
-          src="${agentLogoUrl(basePath ?? "")}"
-          alt="${assistantName}"
-        />`;
-      }
-      return html`<img
-        class="chat-avatar ${className}"
-        src="${assistantAvatar}"
-        alt="${assistantName}"
-      />`;
-    }
-    if (assistantAvatarText) {
-      return html`<div class="chat-avatar ${className}" aria-label="${assistantName}">
-        ${assistantAvatarText}
-      </div>`;
-    }
-    return html`<img
-      class="chat-avatar ${className} chat-avatar--logo"
-      src="${agentLogoUrl(basePath ?? "")}"
-      alt="${assistantName}"
-    />`;
-  }
-
-  /* Assistant with no custom avatar: use logo when basePath available */
-  if (normalized === "assistant" && basePath) {
-    const logoUrl = agentLogoUrl(basePath);
-    return html`<img
-      class="chat-avatar ${className} chat-avatar--logo"
-      src="${logoUrl}"
-      alt="${assistantName}"
-    />`;
-  }
-
-  return html`<div class="chat-avatar ${className}">${initial}</div>`;
-}
-
-function isAvatarUrl(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
-}
-
-const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
-
-export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed === DEFAULT_ASSISTANT_AVATAR) {
-    return null;
-  }
-  if (isAvatarUrl(trimmed)) {
-    return null;
-  }
-  if (
-    trimmed.length > 8 ||
-    /\s/.test(trimmed) ||
-    /[\\/.:]/.test(trimmed) ||
-    UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS.test(trimmed)
-  ) {
-    return null;
-  }
-  return trimmed;
 }
 
 function resolveRenderableMessageImages(

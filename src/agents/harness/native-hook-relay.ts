@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -7,6 +7,7 @@ import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
+import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
 
 export type JsonValue =
   | null
@@ -20,6 +21,7 @@ export const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",
   "post_tool_use",
   "permission_request",
+  "before_agent_finalize",
 ] as const;
 
 export const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
@@ -38,6 +40,11 @@ export type NativeHookRelayInvocation = {
   runId: string;
   cwd?: string;
   model?: string;
+  turnId?: string;
+  transcriptPath?: string;
+  permissionMode?: string;
+  stopHookActive?: boolean;
+  lastAssistantMessage?: string;
   toolName?: string;
   toolUseId?: string;
   rawPayload: JsonValue;
@@ -93,15 +100,29 @@ export type InvokeNativeHookRelayParams = {
 };
 
 type NativeHookRelayInvocationMetadata = Partial<
-  Pick<NativeHookRelayInvocation, "nativeEventName" | "cwd" | "model" | "toolName" | "toolUseId">
+  Pick<
+    NativeHookRelayInvocation,
+    | "nativeEventName"
+    | "cwd"
+    | "model"
+    | "turnId"
+    | "transcriptPath"
+    | "permissionMode"
+    | "stopHookActive"
+    | "lastAssistantMessage"
+    | "toolName"
+    | "toolUseId"
+  >
 >;
 
 type NativeHookRelayProviderAdapter = {
   normalizeMetadata: (rawPayload: JsonValue) => NativeHookRelayInvocationMetadata;
-  readToolInput: (rawPayload: JsonValue) => Record<string, unknown>;
+  readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
   readToolResponse: (rawPayload: JsonValue) => unknown;
   renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
   renderPreToolUseBlockResponse: (reason: string) => NativeHookRelayProcessResponse;
+  renderBeforeAgentFinalizeReviseResponse: (reason: string) => NativeHookRelayProcessResponse;
+  renderBeforeAgentFinalizeStopResponse: (reason?: string) => NativeHookRelayProcessResponse;
   renderPermissionDecisionResponse: (
     decision: NativeHookRelayPermissionDecision,
     message?: string,
@@ -114,6 +135,15 @@ const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
 const MAX_NATIVE_HOOK_RELAY_JSON_DEPTH = 64;
 const MAX_NATIVE_HOOK_RELAY_JSON_NODES = 20_000;
+const MAX_NATIVE_HOOK_RELAY_STRING_LENGTH = 1_000_000;
+const MAX_NATIVE_HOOK_RELAY_TOTAL_STRING_LENGTH = 4_000_000;
+const MAX_NATIVE_HOOK_RELAY_HISTORY_STRING_LENGTH = 4_000;
+const MAX_NATIVE_HOOK_RELAY_HISTORY_TOTAL_STRING_LENGTH = 20_000;
+const MAX_NATIVE_HOOK_RELAY_HISTORY_ARRAY_ITEMS = 50;
+const MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS = 50;
+const MAX_PERMISSION_FALLBACK_KEYS = 200;
+const MAX_PERMISSION_FALLBACK_KEY_CHARS = 240;
+const MAX_PERMISSION_FINGERPRINT_SORT_KEYS = 200;
 const MAX_APPROVAL_TITLE_LENGTH = 80;
 const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
@@ -142,7 +172,7 @@ type NativeHookRelayPermissionApprovalRequest = {
   toolCallId?: string;
   cwd?: string;
   model?: string;
-  toolInput: Record<string, unknown>;
+  toolInput: Record<string, JsonValue>;
   signal?: AbortSignal;
 };
 
@@ -172,6 +202,22 @@ const nativeHookRelayProviderAdapters: Record<
           permissionDecision: "deny",
           permissionDecisionReason: reason,
         },
+      })}\n`,
+      stderr: "",
+      exitCode: 0,
+    }),
+    renderBeforeAgentFinalizeReviseResponse: (reason) => ({
+      stdout: `${JSON.stringify({
+        decision: "block",
+        reason,
+      })}\n`,
+      stderr: "",
+      exitCode: 0,
+    }),
+    renderBeforeAgentFinalizeStopResponse: (reason) => ({
+      stdout: `${JSON.stringify({
+        continue: false,
+        ...(reason?.trim() ? { stopReason: reason.trim() } : {}),
       })}\n`,
       stderr: "",
       exitCode: 0,
@@ -321,7 +367,10 @@ export function renderNativeHookRelayUnavailableResponse(params: {
 }
 
 function recordNativeHookRelayInvocation(invocation: NativeHookRelayInvocation): void {
-  invocations.push(invocation);
+  invocations.push({
+    ...invocation,
+    rawPayload: snapshotNativeHookRelayPayload(invocation.rawPayload),
+  });
   if (invocations.length > MAX_NATIVE_HOOK_RELAY_INVOCATIONS) {
     invocations.splice(0, invocations.length - MAX_NATIVE_HOOK_RELAY_INVOCATIONS);
   }
@@ -354,6 +403,9 @@ async function processNativeHookRelayInvocation(params: {
   }
   if (params.invocation.event === "post_tool_use") {
     return runNativeHookRelayPostToolUse(params);
+  }
+  if (params.invocation.event === "before_agent_finalize") {
+    return runNativeHookRelayBeforeAgentFinalize(params);
   }
   return runNativeHookRelayPermissionRequest(params);
 }
@@ -431,7 +483,7 @@ async function runNativeHookRelayPermissionRequest(params: {
   const pendingApproval = pendingPermissionApprovals.get(approvalKey);
   try {
     const decision = await (pendingApproval ??
-      requestNativeHookRelayPermissionApprovalWithBudget({
+      startNativeHookRelayPermissionApprovalWithBudget({
         registration: params.registration,
         approvalKey,
         request,
@@ -443,19 +495,63 @@ async function runNativeHookRelayPermissionRequest(params: {
       return params.adapter.renderPermissionDecisionResponse("deny", "Denied by user");
     }
   } catch (error) {
-    log.warn(`native hook permission approval failed; deferring: ${String(error)}`);
+    log.warn(
+      `native hook permission approval failed; deferring to provider approval path: ${String(error)}`,
+    );
+  }
+  // A PermissionRequest no-op is not an allow decision. Codex interprets it as
+  // "no hook decision" and falls through to its normal guardian/user approval path.
+  return params.adapter.renderNoopResponse(params.invocation.event);
+}
+
+async function runNativeHookRelayBeforeAgentFinalize(params: {
+  registration: NativeHookRelayRegistration;
+  invocation: NativeHookRelayInvocation;
+  adapter: NativeHookRelayProviderAdapter;
+}): Promise<NativeHookRelayProcessResponse> {
+  const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
+    event: {
+      runId: params.registration.runId,
+      sessionId: params.registration.sessionId,
+      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      ...(params.invocation.turnId ? { turnId: params.invocation.turnId } : {}),
+      provider: params.registration.provider,
+      ...(params.invocation.model ? { model: params.invocation.model } : {}),
+      ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+      ...(params.invocation.transcriptPath
+        ? { transcriptPath: params.invocation.transcriptPath }
+        : {}),
+      stopHookActive: params.invocation.stopHookActive === true,
+      ...(params.invocation.lastAssistantMessage
+        ? { lastAssistantMessage: params.invocation.lastAssistantMessage }
+        : {}),
+    },
+    ctx: {
+      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+      sessionId: params.registration.sessionId,
+      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      runId: params.registration.runId,
+      ...(params.invocation.cwd ? { workspaceDir: params.invocation.cwd } : {}),
+      ...(params.invocation.model ? { modelId: params.invocation.model } : {}),
+    },
+  });
+  if (outcome.action === "revise") {
+    return params.adapter.renderBeforeAgentFinalizeReviseResponse(outcome.reason);
+  }
+  if (outcome.action === "finalize") {
+    return params.adapter.renderBeforeAgentFinalizeStopResponse(outcome.reason);
   }
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
-async function requestNativeHookRelayPermissionApprovalWithBudget(params: {
+async function startNativeHookRelayPermissionApprovalWithBudget(params: {
   registration: NativeHookRelayRegistration;
   approvalKey: string;
   request: NativeHookRelayPermissionApprovalRequest;
 }): Promise<NativeHookRelayPermissionApprovalResult> {
   if (!consumeNativeHookRelayPermissionBudget(params.registration.relayId)) {
     log.warn(
-      `native hook permission approval rate limit exceeded; deferring: relay=${params.registration.relayId} run=${params.registration.runId}`,
+      `native hook permission approval rate limit exceeded; deferring to provider approval path: relay=${params.registration.relayId} run=${params.registration.runId}`,
     );
     return "defer";
   }
@@ -473,7 +569,10 @@ function nativeHookRelayPermissionApprovalKey(params: {
   return [
     params.registration.relayId,
     params.registration.runId,
-    params.request.toolCallId ?? permissionRequestFallbackKey(params.request),
+    params.request.toolCallId
+      ? `call:${params.request.toolCallId}`
+      : permissionRequestFallbackKey(params.request),
+    permissionRequestContentFingerprint(params.request),
   ].join(":");
 }
 
@@ -482,8 +581,108 @@ function permissionRequestFallbackKey(request: NativeHookRelayPermissionApproval
   if (command) {
     return `${request.toolName}:command:${truncateText(command, 240)}`;
   }
-  const keys = Object.keys(request.toolInput).toSorted().join(",");
-  return `${request.toolName}:keys:${truncateText(keys, 240)}`;
+  return `${request.toolName}:keys:${permissionRequestToolInputKeyFingerprint(request.toolInput)}`;
+}
+
+function permissionRequestToolInputKeyFingerprint(toolInput: Record<string, unknown>): string {
+  let fingerprint = "";
+  const { keys, truncated } = readBoundedOwnKeys(toolInput, MAX_PERMISSION_FALLBACK_KEYS);
+  for (const key of keys) {
+    const separator = fingerprint ? "," : "";
+    const remaining = MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length - separator.length;
+    if (remaining <= 0) {
+      break;
+    }
+    fingerprint += `${separator}${key.slice(0, remaining)}`;
+  }
+  if (truncated && fingerprint.length < MAX_PERMISSION_FALLBACK_KEY_CHARS) {
+    const marker = `${fingerprint ? "," : ""}...`;
+    fingerprint += marker.slice(0, MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length);
+  }
+  return fingerprint || "none";
+}
+
+function permissionRequestContentFingerprint(
+  request: NativeHookRelayPermissionApprovalRequest,
+): string {
+  const hash = createHash("sha256");
+  hash.update(request.toolName);
+  hash.update("\0");
+  updateJsonHash(hash, request.toolInput);
+  return hash.digest("hex");
+}
+
+function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): void {
+  if (value === null) {
+    hash.update("null");
+    return;
+  }
+  if (typeof value === "string") {
+    hash.update("string:");
+    hash.update(JSON.stringify(value));
+    return;
+  }
+  if (typeof value === "number") {
+    hash.update(`number:${String(value)}`);
+    return;
+  }
+  if (typeof value === "boolean") {
+    hash.update(`boolean:${String(value)}`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    hash.update("[");
+    for (const item of value) {
+      updateJsonHash(hash, item);
+      hash.update(",");
+    }
+    hash.update("]");
+    return;
+  }
+  hash.update("{");
+  const { keys, truncated } = readBoundedOwnKeys(value, MAX_PERMISSION_FINGERPRINT_SORT_KEYS);
+  for (const key of keys) {
+    hash.update(JSON.stringify(key));
+    hash.update(":");
+    updateJsonHash(hash, value[key]);
+    hash.update(",");
+  }
+  if (truncated) {
+    // Keep ordinary objects order-independent without sorting a broad native
+    // hook payload. The tail remains content-sensitive in traversal order.
+    const sortedKeySet = new Set(keys);
+    hash.update("#object-tail:");
+    for (const key in value) {
+      if (!Object.prototype.hasOwnProperty.call(value, key) || sortedKeySet.has(key)) {
+        continue;
+      }
+      hash.update(JSON.stringify(key));
+      hash.update(":");
+      updateJsonHash(hash, value[key]);
+      hash.update(",");
+    }
+  }
+  hash.update("}");
+}
+
+function readBoundedOwnKeys(
+  value: Record<string, unknown>,
+  maxKeys: number,
+): { keys: string[]; truncated: boolean } {
+  const keys: string[] = [];
+  let truncated = false;
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
+    if (keys.length >= maxKeys) {
+      truncated = true;
+      break;
+    }
+    keys.push(key);
+  }
+  keys.sort();
+  return { keys, truncated };
 }
 
 function consumeNativeHookRelayPermissionBudget(relayId: string, now = Date.now()): boolean {
@@ -507,6 +706,55 @@ function removeNativeHookRelayPermissionState(relayId: string): void {
       pendingPermissionApprovals.delete(key);
     }
   }
+}
+
+function snapshotNativeHookRelayPayload(payload: JsonValue): JsonValue {
+  return snapshotJsonValue(payload, {
+    remainingStringLength: MAX_NATIVE_HOOK_RELAY_HISTORY_TOTAL_STRING_LENGTH,
+  });
+}
+
+function snapshotJsonValue(value: JsonValue, state: { remainingStringLength: number }): JsonValue {
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return snapshotString(value, state);
+  }
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, MAX_NATIVE_HOOK_RELAY_HISTORY_ARRAY_ITEMS)
+      .map((item) => snapshotJsonValue(item, state));
+    if (value.length > MAX_NATIVE_HOOK_RELAY_HISTORY_ARRAY_ITEMS) {
+      items.push("[truncated]");
+    }
+    return items;
+  }
+  const snapshot: Record<string, JsonValue> = {};
+  const keys = Object.keys(value);
+  for (const key of keys.slice(0, MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS)) {
+    snapshot[snapshotString(key, state)] = snapshotJsonValue(value[key], state);
+  }
+  if (keys.length > MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS) {
+    snapshot["[truncated]"] = keys.length - MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS;
+  }
+  return snapshot;
+}
+
+function snapshotString(value: string, state: { remainingStringLength: number }): string {
+  if (state.remainingStringLength <= 0) {
+    return "[truncated]";
+  }
+  const limit = Math.min(
+    value.length,
+    MAX_NATIVE_HOOK_RELAY_HISTORY_STRING_LENGTH,
+    state.remainingStringLength,
+  );
+  state.remainingStringLength -= limit;
+  if (limit >= value.length) {
+    return value;
+  }
+  return `${value.slice(0, limit)}...[truncated]`;
 }
 
 function normalizeNativeHookInvocation(params: {
@@ -552,6 +800,26 @@ function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvoc
   if (model) {
     metadata.model = model;
   }
+  const turnId = readOptionalString(payload.turn_id);
+  if (turnId) {
+    metadata.turnId = turnId;
+  }
+  const transcriptPath = readOptionalString(payload.transcript_path);
+  if (transcriptPath) {
+    metadata.transcriptPath = transcriptPath;
+  }
+  const permissionMode = readOptionalString(payload.permission_mode);
+  if (permissionMode) {
+    metadata.permissionMode = permissionMode;
+  }
+  const stopHookActive = readOptionalBoolean(payload.stop_hook_active);
+  if (stopHookActive !== undefined) {
+    metadata.stopHookActive = stopHookActive;
+  }
+  const lastAssistantMessage = readOptionalString(payload.last_assistant_message);
+  if (lastAssistantMessage) {
+    metadata.lastAssistantMessage = lastAssistantMessage;
+  }
   const toolName = readOptionalString(payload.tool_name);
   if (toolName) {
     metadata.toolName = toolName;
@@ -563,16 +831,16 @@ function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvoc
   return metadata;
 }
 
-function readCodexToolInput(rawPayload: JsonValue): Record<string, unknown> {
+function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   const toolInput = payload.tool_input;
   if (isJsonObject(toolInput)) {
-    return toolInput;
+    return toolInput as Record<string, JsonValue>;
   }
   if (toolInput === undefined) {
     return {};
   }
-  return { value: toolInput };
+  return { value: toolInput as JsonValue };
 }
 
 function readCodexToolResponse(rawPayload: JsonValue): unknown {
@@ -782,7 +1050,12 @@ function readNativeHookRelayProvider(value: unknown): NativeHookRelayProvider {
 }
 
 function readNativeHookRelayEvent(value: unknown): NativeHookRelayEvent {
-  if (value === "pre_tool_use" || value === "post_tool_use" || value === "permission_request") {
+  if (
+    value === "pre_tool_use" ||
+    value === "post_tool_use" ||
+    value === "permission_request" ||
+    value === "before_agent_finalize"
+  ) {
     return value;
   }
   throw new Error("unsupported native hook relay event");
@@ -799,9 +1072,14 @@ function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function isJsonValue(value: unknown): value is JsonValue {
   const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
   let nodes = 0;
+  let totalStringLength = 0;
   while (stack.length) {
     const current = stack.pop()!;
     nodes += 1;
@@ -811,7 +1089,17 @@ function isJsonValue(value: unknown): value is JsonValue {
     if (current.depth > MAX_NATIVE_HOOK_RELAY_JSON_DEPTH) {
       return false;
     }
-    if (current.value === null || typeof current.value === "string") {
+    if (current.value === null) {
+      continue;
+    }
+    if (typeof current.value === "string") {
+      if (current.value.length > MAX_NATIVE_HOOK_RELAY_STRING_LENGTH) {
+        return false;
+      }
+      totalStringLength += current.value.length;
+      if (totalStringLength > MAX_NATIVE_HOOK_RELAY_TOTAL_STRING_LENGTH) {
+        return false;
+      }
       continue;
     }
     if (typeof current.value === "number") {
@@ -824,8 +1112,11 @@ function isJsonValue(value: unknown): value is JsonValue {
       continue;
     }
     if (Array.isArray(current.value)) {
-      for (const item of current.value) {
-        stack.push({ value: item, depth: current.depth + 1 });
+      for (let index = 0; index < current.value.length; index += 1) {
+        if (nodes + stack.length + 1 > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
+          return false;
+        }
+        stack.push({ value: current.value[index], depth: current.depth + 1 });
       }
       continue;
     }
@@ -833,8 +1124,21 @@ function isJsonValue(value: unknown): value is JsonValue {
       return false;
     }
     try {
-      for (const item of Object.values(current.value)) {
-        stack.push({ value: item, depth: current.depth + 1 });
+      for (const key in current.value) {
+        if (!Object.prototype.hasOwnProperty.call(current.value, key)) {
+          continue;
+        }
+        if (key.length > MAX_NATIVE_HOOK_RELAY_STRING_LENGTH) {
+          return false;
+        }
+        totalStringLength += key.length;
+        if (totalStringLength > MAX_NATIVE_HOOK_RELAY_TOTAL_STRING_LENGTH) {
+          return false;
+        }
+        if (nodes + stack.length + 1 > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
+          return false;
+        }
+        stack.push({ value: current.value[key], depth: current.depth + 1 });
       }
     } catch {
       return false;
@@ -873,6 +1177,14 @@ export const __testing = {
     request: NativeHookRelayPermissionApprovalRequest,
   ): string {
     return formatPermissionApprovalDescription(request);
+  },
+  permissionRequestContentFingerprintForTests(
+    request: NativeHookRelayPermissionApprovalRequest,
+  ): string {
+    return permissionRequestContentFingerprint(request);
+  },
+  permissionRequestToolInputKeyFingerprintForTests(toolInput: Record<string, unknown>): string {
+    return permissionRequestToolInputKeyFingerprint(toolInput);
   },
   setNativeHookRelayPermissionApprovalRequesterForTests(
     requester: NativeHookRelayPermissionApprovalRequester,

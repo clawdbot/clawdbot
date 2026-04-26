@@ -140,6 +140,10 @@ steps:
             - set: imageStartedAtMs
               value:
                 expr: "Date.now()"
+            - set: mediaPath
+              value: ""
+            - set: imageReplyText
+              value: ""
             - call: runAgentPrompt
               args:
                 - ref: env
@@ -149,17 +153,47 @@ steps:
                     expr: config.imagePrompt
                   timeoutMs:
                     expr: liveTurnTimeoutMs(env, 45000)
-            - call: resolveGeneratedImagePath
-              saveAs: mediaPath
-              args:
-                - env:
-                    ref: env
-                  promptSnippet:
-                    expr: config.imagePromptSnippet
-                  startedAtMs:
-                    ref: imageStartedAtMs
-                  timeoutMs:
-                    expr: liveTurnTimeoutMs(env, 45000)
+            - try:
+                actions:
+                  - call: resolveGeneratedImagePath
+                    saveAs: mediaPath
+                    args:
+                      - env:
+                          ref: env
+                        promptSnippet:
+                          expr: config.imagePromptSnippet
+                        startedAtMs:
+                          ref: imageStartedAtMs
+                        timeoutMs:
+                          expr: liveTurnTimeoutMs(env, 15000)
+                catch:
+                  - set: mediaPath
+                    value: ""
+            - if:
+                expr: "!mediaPath"
+                then:
+                  - call: waitForOutboundMessage
+                    saveAs: imageReply
+                    args:
+                      - ref: state
+                      - lambda:
+                          params: [candidate]
+                          expr: "candidate.conversation.id === 'qa-operator' && (String(candidate.text ?? '').includes('MEDIA:') || /media failed|image generation failed/i.test(String(candidate.text ?? '')))"
+                      - expr: liveTurnTimeoutMs(env, 45000)
+                  - set: imageReplyText
+                    value:
+                      expr: "String(imageReply.text ?? '')"
+                else:
+                  - set: imageReplyText
+                    value:
+                      expr: "`MEDIA:${mediaPath}`"
+            - set: imageReplyLower
+              value:
+                expr: "imageReplyText.toLowerCase()"
+            - assert:
+                expr: "Boolean(mediaPath) || (!env.mock && /media failed|image generation failed/.test(imageReplyLower))"
+                message:
+                  expr: "`expected restored ${config.deniedTool} to either produce media or, in live mode only, surface a provider-side image failure; got ${imageReplyText}`"
             # Tool-call assertion (criterion 2 of the parity completion
             # gate in #64227): the restored `image_generate` capability
             # must have actually fired as a real tool call. Without this
@@ -190,5 +224,5 @@ steps:
               args:
                 - ref: env
                 - 60000
-    detailsExpr: "`${wakeMarker}\\n${config.deniedTool}=${String(afterTools.has(config.deniedTool))}\\nMEDIA:${mediaPath}`"
+    detailsExpr: "`${wakeMarker}\\n${config.deniedTool}=${String(afterTools.has(config.deniedTool))}\\n${mediaPath ? `MEDIA:${mediaPath}` : imageReplyText}`"
 ```

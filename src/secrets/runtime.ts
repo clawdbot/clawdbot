@@ -140,12 +140,20 @@ async function resolveLoadablePluginOrigins(params: {
     params.config,
     resolveDefaultAgentId(params.config),
   );
-  const { loadPluginManifestRegistry } = await loadRuntimeManifestHelpers();
-  const manifestRegistry = loadPluginManifestRegistry({
+  const { loadPluginManifestRegistryForInstalledIndex, loadPluginRegistrySnapshot } =
+    await loadRuntimeManifestHelpers();
+  const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir,
     cache: true,
     env: params.env,
+  });
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params.config,
+    workspaceDir,
+    env: params.env,
+    includeDisabled: true,
   });
   return new Map(manifestRegistry.plugins.map((record) => [record.id, record.origin]));
 }

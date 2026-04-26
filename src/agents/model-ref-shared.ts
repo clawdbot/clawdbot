@@ -69,6 +69,9 @@ export function normalizeStaticProviderModelId(provider: string, model: string):
   if (provider === "openrouter" && !model.includes("/")) {
     return `openrouter/${model}`;
   }
+  if (provider === "nvidia" && !model.includes("/")) {
+    return `nvidia/${model}`;
+  }
   if (provider === "xai") {
     return normalizeNativeXaiModelId(model);
   }

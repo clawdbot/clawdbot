@@ -27,7 +27,9 @@ let lastClientOptions: {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  clientName?: string;
   clientDisplayName?: string;
+  mode?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
@@ -59,7 +61,9 @@ vi.mock("./client.js", () => ({
       url?: string;
       token?: string;
       password?: string;
+      clientName?: string;
       clientDisplayName?: string;
+      mode?: string;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
@@ -97,7 +101,9 @@ class StubGatewayClient {
     url?: string;
     token?: string;
     password?: string;
+    clientName?: string;
     clientDisplayName?: string;
+    mode?: string;
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
     onClose?: (code: number, reason: string) => void;
@@ -303,12 +309,29 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("test-token");
   });
 
-  it("keeps device identity enabled for local loopback shared-token auth", async () => {
+  it("keeps direct-local backend shared-token auth independent of paired device state", async () => {
     setLocalLoopbackGatewayConfig();
 
     await callGateway({
       method: "health",
       token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps device identity enabled for explicit CLI loopback shared-token auth", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
     });
 
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
@@ -329,6 +352,22 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("explicit-token");
     expect(lastClientOptions?.deviceIdentity).toBeNull();
     expect(lastRequestOptions?.method).toBe("health");
+  });
+
+  it("keeps backend device identity enabled for remote shared-token auth", async () => {
+    loadConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
+    setGatewayNetworkDefaults();
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.url).toBe("wss://remote.example:18789");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
   it("honors an explicit null device identity override", async () => {
@@ -468,6 +507,22 @@ describe("callGateway url resolution", () => {
 
     await callGatewayScoped({ method: "health", scopes: [] });
     expect(lastClientOptions?.scopes).toEqual([]);
+  });
+
+  it("uses backend client metadata for explicit scoped default calls", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "sessions.delete",
+      scopes: ["operator.admin"],
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.clientDisplayName).toBe("gateway:sessions.delete");
+    expect(lastClientOptions?.scopes).toEqual(["operator.admin"]);
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
   });
 
   it("labels default backend calls with the requested method", async () => {

@@ -1,1 +1,2 @@
-export { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+export { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
+export { loadPluginRegistrySnapshot } from "../plugins/plugin-registry.js";

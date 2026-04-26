@@ -324,7 +324,6 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
-  let fileLogger: TsLogger<LogObj> | null = null;
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -347,10 +346,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      if (!fileLogger) {
-        fileLogger = getChildLogger({ subsystem: resolvedSubsystem });
-      }
-      logToFile(fileLogger, level, message, fileMeta);
+      logToFile(getChildLogger({ subsystem: resolvedSubsystem }), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -413,10 +409,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem: resolvedSubsystem });
-        }
-        logToFile(fileLogger, "info", message, { raw: true });
+        logToFile(getChildLogger({ subsystem: resolvedSubsystem }), "info", message, { raw: true });
       }
       if (
         shouldLogToConsole("info", { level: getConsoleSettings().level }) &&

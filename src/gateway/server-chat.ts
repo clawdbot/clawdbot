@@ -1,19 +1,16 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
-import {
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-} from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
-  isSuppressedControlReplyLeadFragment,
-  isSuppressedControlReplyText,
-} from "./control-reply-text.js";
+  normalizeLiveAssistantEventText,
+  projectLiveAssistantBufferedText,
+  resolveMergedAssistantText,
+  shouldSuppressAssistantEventForLiveChat,
+} from "./live-chat-projector.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
@@ -85,48 +82,6 @@ function normalizeHeartbeatChatFinalText(params: {
     return { suppress: true, text: "" };
   }
   return { suppress: false, text: stripped.text };
-}
-
-function appendUniqueSuffix(base: string, suffix: string): string {
-  if (!suffix) {
-    return base;
-  }
-  if (!base) {
-    return suffix;
-  }
-  if (base.endsWith(suffix)) {
-    return base;
-  }
-  const maxOverlap = Math.min(base.length, suffix.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
-      return base + suffix.slice(overlap);
-    }
-  }
-  return base + suffix;
-}
-
-function resolveMergedAssistantText(params: {
-  previousText: string;
-  nextText: string;
-  nextDelta: string;
-}) {
-  const { previousText, nextText, nextDelta } = params;
-  if (nextText && previousText) {
-    if (nextText.startsWith(previousText)) {
-      return nextText;
-    }
-    if (previousText.startsWith(nextText) && !nextDelta) {
-      return previousText;
-    }
-  }
-  if (nextDelta) {
-    return appendUniqueSuffix(previousText, nextDelta);
-  }
-  if (nextText) {
-    return nextText;
-  }
-  return previousText;
 }
 
 export type ChatRunEntry = {
@@ -671,11 +626,10 @@ export function createAgentEventHandler({
     opts?: { skipChatErrorFinal?: boolean },
   ) => {
     clearPendingTerminalLifecycleError(evt.runId);
-    const delayMs = Math.max(1, Math.min(Math.floor(lifecycleErrorRetryGraceMs), 2_147_483_647));
-    const timer = setTimeout(() => {
+    const timer = setSafeTimeout(() => {
       pendingTerminalLifecycleErrors.delete(evt.runId);
       finalizeLifecycleEvent(evt, opts);
-    }, delayMs);
+    }, lifecycleErrorRetryGraceMs);
     timer.unref?.();
     pendingTerminalLifecycleErrors.set(evt.runId, timer);
   };
@@ -688,35 +642,21 @@ export function createAgentEventHandler({
     text: string,
     delta?: unknown,
   ) => {
-    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
-    const cleanedDelta =
-      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
+    const cleaned = normalizeLiveAssistantEventText({ text, delta });
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
-      nextText: cleanedText,
-      nextDelta: cleanedDelta,
+      nextText: cleaned.text,
+      nextDelta: cleaned.delta,
     });
     if (!mergedRawText) {
       return;
     }
     chatRunState.rawBuffers.set(clientRunId, mergedRawText);
-    if (isSuppressedControlReplyText(mergedRawText)) {
-      chatRunState.buffers.set(clientRunId, "");
-      return;
-    }
-    if (isSuppressedControlReplyLeadFragment(mergedRawText)) {
-      chatRunState.buffers.set(clientRunId, mergedRawText);
-      return;
-    }
-    const mergedText = startsWithSilentToken(mergedRawText, SILENT_REPLY_TOKEN)
-      ? stripLeadingSilentToken(mergedRawText, SILENT_REPLY_TOKEN)
-      : mergedRawText;
+    const projected = projectLiveAssistantBufferedText(mergedRawText);
+    const mergedText = projected.text;
     chatRunState.buffers.set(clientRunId, mergedText);
-    if (isSuppressedControlReplyText(mergedText)) {
-      return;
-    }
-    if (isSuppressedControlReplyLeadFragment(mergedText)) {
+    if (projected.suppress) {
       return;
     }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
@@ -744,19 +684,26 @@ export function createAgentEventHandler({
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
-  const resolveBufferedChatTextState = (clientRunId: string, sourceRunId: string) => {
-    const bufferedText = stripInlineDirectiveTagsForDisplay(
-      chatRunState.buffers.get(clientRunId) ?? "",
-    ).text.trim();
+  const resolveBufferedChatTextState = (
+    clientRunId: string,
+    sourceRunId: string,
+    options?: { suppressLeadFragments?: boolean },
+  ) => {
+    const bufferedText = normalizeLiveAssistantEventText({
+      text: chatRunState.buffers.get(clientRunId) ?? "",
+    }).text.trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
       text: bufferedText,
     });
-    const text = normalizedHeartbeatText.text.trim();
-    const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || isSuppressedControlReplyText(text);
-    return { text, shouldSuppressSilent };
+    const projected = projectLiveAssistantBufferedText(normalizedHeartbeatText.text.trim(), {
+      suppressLeadFragments: options?.suppressLeadFragments,
+    });
+    return {
+      text: projected.text.trim(),
+      shouldSuppressSilent: normalizedHeartbeatText.suppress || projected.suppress,
+    };
   };
 
   const flushBufferedChatDeltaIfNeeded = (
@@ -765,18 +712,14 @@ export function createAgentEventHandler({
     sourceRunId: string,
     seq: number,
   ) => {
-    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
-    const shouldSuppressSilentLeadFragment = isSuppressedControlReplyLeadFragment(text);
+    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
+      suppressLeadFragments: true,
+    });
     const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
       clientRunId,
       sourceRunId,
     );
-    if (
-      !text ||
-      shouldSuppressSilent ||
-      shouldSuppressSilentLeadFragment ||
-      shouldSuppressHeartbeatStreaming
-    ) {
+    if (!text || shouldSuppressSilent || shouldSuppressHeartbeatStreaming) {
       return;
     }
 
@@ -813,7 +756,9 @@ export function createAgentEventHandler({
     stopReason?: string,
     errorKind?: ErrorKind,
   ) => {
-    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
+    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
+      suppressLeadFragments: false,
+    });
     // Flush any throttled delta so streaming clients receive the complete text
     // before the final event. The 150 ms throttle in emitChatDelta may have
     // suppressed the most recent chunk, leaving the client with stale text.
@@ -980,7 +925,12 @@ export function createAgentEventHandler({
           isToolEvent ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : agentPayload,
         );
       }
-      if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
+      if (
+        !isAborted &&
+        evt.stream === "assistant" &&
+        typeof evt.data?.text === "string" &&
+        !shouldSuppressAssistantEventForLiveChat(evt.data)
+      ) {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
       }
     }

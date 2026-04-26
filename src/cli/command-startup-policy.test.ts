@@ -76,10 +76,67 @@ describe("command-startup-policy", () => {
     ).toBe(false);
     expect(
       shouldLoadPluginsForCommandPath({
+        commandPath: ["channels", "logs"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["message", "send"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["message", "send"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
         commandPath: ["agents", "list"],
         jsonOutputMode: false,
       }),
     ).toBe(true);
+    // text-only opts agents list out of plugin preload in --json mode so
+    // dashboards/scripts that poll this command don't pay the bundled-plugin
+    // import waterfall when they only consume config-derived fields. (#71739)
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents", "list"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents", "bind"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents", "bindings"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents", "unbind"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents", "set-identity"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents", "delete"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(false);
   });
 
   it("matches banner suppression policy", () => {

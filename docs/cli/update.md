@@ -32,7 +32,7 @@ openclaw --update
 
 ## Options
 
-- `--no-restart`: skip restarting the Gateway service after a successful update.
+- `--no-restart`: skip restarting the Gateway service after a successful update. Package-manager updates that do restart the Gateway verify the restarted service reports the expected updated version before the command succeeds.
 - `--channel <stable|beta|dev>`: set the update channel (git + npm; persisted in config).
 - `--tag <dist-tag|version|spec>`: override the package target for this update only. For package installs, `main` maps to `github:openclaw/openclaw#main`.
 - `--dry-run`: preview planned update actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.
@@ -83,10 +83,11 @@ install method aligned:
 The Gateway core auto-updater (when enabled via config) reuses this same update path.
 
 For package-manager installs, `openclaw update` resolves the target package
-version before invoking the package manager. If the installed version exactly
-matches the target and no update-channel change needs to be persisted, the
-command exits as skipped before package install, plugin sync, completion refresh,
-or gateway restart work.
+version before invoking the package manager. Even when the installed version
+already matches the target, the command refreshes the global package install,
+then runs plugin sync, completion refresh, and restart work. This keeps packaged
+sidecars and channel-owned plugin records aligned with the installed OpenClaw
+build.
 
 ## Git checkout flow
 
@@ -113,6 +114,10 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity
 differs from the stored install record, `openclaw update` aborts that plugin
 artifact update instead of installing it. Reinstall or update the plugin
 explicitly only after verifying that you trust the new artifact.
+
+Post-update plugin sync failures fail the update result and stop restart
+follow-up work. Fix the plugin install/update error, then rerun
+`openclaw update`.
 
 If pnpm bootstrap still fails, the updater now stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
 

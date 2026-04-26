@@ -1,7 +1,4 @@
-import {
-  resolvePluginConfigObject,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+import { resolvePluginConfigObject, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
@@ -12,7 +9,7 @@ import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
-const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"] as const;
+const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2", "gpt-5.2-codex"] as const;
 
 type GithubCopilotPluginConfig = {
   discovery?: {

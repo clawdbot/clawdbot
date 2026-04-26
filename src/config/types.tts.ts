@@ -25,6 +25,33 @@ export type TtsModelOverrideConfig = {
 
 export type TtsProviderConfigMap = Record<string, Record<string, unknown>>;
 
+export type TtsPersonaFallbackPolicy = "preserve-persona" | "provider-defaults" | "fail";
+
+export type TtsPersonaPromptConfig = {
+  profile?: string;
+  scene?: string;
+  sampleContext?: string;
+  style?: string;
+  accent?: string;
+  pacing?: string;
+  constraints?: string[];
+};
+
+export type TtsPersonaConfig = {
+  label?: string;
+  description?: string;
+  /** Preferred provider for this persona. Explicit provider prefs still win. */
+  provider?: TtsProvider;
+  fallbackPolicy?: TtsPersonaFallbackPolicy;
+  prompt?: TtsPersonaPromptConfig;
+  /** Provider-specific persona bindings keyed by speech provider id. */
+  providers?: TtsProviderConfigMap;
+};
+
+export type ResolvedTtsPersona = TtsPersonaConfig & {
+  id: string;
+};
+
 export type TtsConfig = {
   /** Auto-TTS mode (preferred). */
   auto?: TtsAutoMode;
@@ -34,6 +61,10 @@ export type TtsConfig = {
   mode?: TtsMode;
   /** Primary TTS provider (fallbacks are automatic). */
   provider?: TtsProvider;
+  /** Active TTS persona id. */
+  persona?: string;
+  /** Named TTS personas. */
+  personas?: Record<string, TtsPersonaConfig>;
   /** Optional model override for TTS auto-summary (provider/model or alias). */
   summaryModel?: string;
   /** Allow the model to override TTS parameters. */

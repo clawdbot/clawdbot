@@ -6,6 +6,11 @@ import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -42,7 +47,16 @@ async function getSessionsHandlers() {
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
-  clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
+  clearSessionQueues: vi.fn((keys: Array<string | undefined>) => {
+    const clearedKeys = Array.from(
+      new Set(
+        keys
+          .map((key) => (typeof key === "string" ? key.trim() : ""))
+          .filter((key) => key.length > 0),
+      ),
+    );
+    return { followupCleared: 0, laneCleared: 0, keys: clearedKeys };
+  }),
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
 }));
 
@@ -437,6 +451,7 @@ describe("gateway server sessions", () => {
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
+    resetSystemEventsForTest();
     acpRuntimeMocks.cancel.mockClear();
     acpRuntimeMocks.close.mockClear();
     acpRuntimeMocks.getAcpRuntimeBackend.mockReset();
@@ -2688,6 +2703,9 @@ describe("gateway server sessions", () => {
 
   test("sessions.reset aborts active runs and clears queues", async () => {
     await seedActiveMainSession();
+    enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
+    enqueueSystemEvent("stale event via canonical key", { sessionKey: "agent:main:main" });
+    enqueueSystemEvent("stale event via session id", { sessionKey: "sess-main" });
     const waitCallCountAtSnapshotClear: number[] = [];
     bootstrapCacheMocks.clearBootstrapSnapshot.mockImplementation(() => {
       waitCallCountAtSnapshotClear.push(embeddedRunMock.waitCalls.length);
@@ -2710,6 +2728,9 @@ describe("gateway server sessions", () => {
       ["main", "agent:main:main", "sess-main"],
       "sess-main",
     );
+    expect(peekSystemEvents("main")).toEqual([]);
+    expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    expect(peekSystemEvents("sess-main")).toEqual([]);
     expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-main");
     expect(waitCallCountAtSnapshotClear).toEqual([1]);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);

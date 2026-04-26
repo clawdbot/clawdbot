@@ -27,6 +27,7 @@ import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../i
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
@@ -55,6 +56,7 @@ import { createGatewayServerLiveState, type GatewayServerLiveState } from "./ser
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
+import { bootstrapGatewayNetworkRuntime } from "./server-network-runtime.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
@@ -244,6 +246,8 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  bootstrapGatewayNetworkRuntime();
+
   const minimalTestGateway =
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
@@ -328,6 +332,8 @@ export async function startGatewayServer(
           config: cfgAtStart,
           writeConfig: writeConfigFile,
           log,
+          runtimeBind: opts.bind,
+          runtimePort: port,
         }),
       );
   cfgAtStart = controlUiSeed.config;
@@ -616,6 +622,9 @@ export async function startGatewayServer(
     await runClosePrelude();
     await createCloseHandler()({ reason: "gateway startup failed" });
   };
+  const broadcastVoiceWakeRoutingChanged = (config: VoiceWakeRoutingConfig) => {
+    broadcast("voicewake.routing.changed", { config }, { dropIfSlow: true });
+  };
 
   try {
     const earlyRuntime = await startupTrace.measure("runtime.early", () =>
@@ -766,6 +775,7 @@ export async function startGatewayServer(
       wizardRunner,
       broadcastVoiceWakeChanged,
       unavailableGatewayMethods,
+      broadcastVoiceWakeRoutingChanged,
     });
 
     setFallbackGatewayContextResolver(() => gatewayRequestContext);

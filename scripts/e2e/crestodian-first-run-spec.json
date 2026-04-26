@@ -1,0 +1,68 @@
+{
+  "stateDirName": "crestodian-ring-zero-state",
+  "defaultWorkspaceName": "crestodian-main-workspace",
+  "agentWorkspaceName": "crestodian-reef-workspace",
+  "dockerDefaultWorkspace": "/tmp/openclaw-first-run",
+  "dockerAgentWorkspace": "/tmp/openclaw-reef",
+  "agentId": "reef",
+  "model": "openai/gpt-5.2",
+  "discordEnv": "DISCORD_BOT_TOKEN",
+  "discordToken": "openclaw-crestodian-discord-e2e-token",
+  "commands": [
+    {
+      "id": "setup",
+      "message": "setup workspace {defaultWorkspace} model {model}",
+      "expectOutput": "[crestodian] done: crestodian.setup",
+      "approve": true
+    },
+    {
+      "id": "default-model",
+      "message": "set default model {model}",
+      "expectOutput": "[crestodian] done: config.setDefaultModel",
+      "approve": true
+    },
+    {
+      "id": "agent",
+      "message": "create agent {agentId} workspace {agentWorkspace} model {model}",
+      "expectOutput": "[crestodian] done: agents.create",
+      "approve": true
+    },
+    {
+      "id": "discord-plugin-allow",
+      "message": "config set plugins.allow [\"discord\"]",
+      "expectOutput": "[crestodian] done: config.set",
+      "approve": true
+    },
+    {
+      "id": "discord-plugin-entry",
+      "message": "config set plugins.entries.discord.enabled true",
+      "expectOutput": "[crestodian] done: config.set",
+      "approve": true
+    },
+    {
+      "id": "discord-token",
+      "message": "config set-ref channels.discord.token env {discordEnv}",
+      "expectOutput": "[crestodian] done: config.setRef",
+      "approve": true
+    },
+    {
+      "id": "discord-enabled",
+      "message": "config set channels.discord.enabled true",
+      "expectOutput": "[crestodian] done: config.set",
+      "approve": true
+    },
+    {
+      "id": "validate",
+      "message": "validate config",
+      "expectOutput": "Config valid:",
+      "approve": false
+    }
+  ],
+  "auditOperations": [
+    "crestodian.setup",
+    "config.setDefaultModel",
+    "agents.create",
+    "config.setRef",
+    "config.set"
+  ]
+}

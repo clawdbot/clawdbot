@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { handleCodexConversationBindingResolved } from "./conversation-binding.js";
+import {
+  handleCodexConversationBindingResolved,
+  handleCodexConversationInboundClaim,
+} from "./conversation-binding.js";
 
 let tempDir: string;
 
@@ -39,5 +42,35 @@ describe("codex conversation binding", () => {
     });
 
     await expect(fs.stat(sidecar)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("consumes inbound bound messages when command authorization is absent", async () => {
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "run this",
+        channel: "discord",
+        isGroup: true,
+      },
+      {
+        channelId: "discord",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile: path.join(tempDir, "session.jsonl"),
+            workspaceDir: tempDir,
+          },
+        },
+      },
+    );
+
+    expect(result).toEqual({ handled: true });
   });
 });

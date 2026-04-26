@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-import { isUsageCountedSessionTranscriptFileName } from "../../../../src/config/sessions/artifacts.js";
+import {
+  isCompactionCheckpointTranscriptFileName,
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
+} from "../../../../src/config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 import { redactSensitiveText } from "../../../../src/logging/redact.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import { hashText } from "./internal.js";
-
-const log = createSubsystemLogger("memory");
+import { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
+import { hashText } from "./hash.js";
 
 export type SessionFileEntry = {
   path: string;
@@ -44,6 +46,13 @@ function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
   return typeof runId === "string" && runId.startsWith("dreaming-narrative-");
 }
 
+function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
+  const fileName = path.basename(absPath);
+  return (
+    isSessionArchiveArtifactName(fileName) || isCompactionCheckpointTranscriptFileName(fileName)
+  );
+}
+
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
   const dir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
@@ -60,6 +69,11 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
 
 export function sessionPathForFile(absPath: string): string {
   return path.join("sessions", path.basename(absPath)).replace(/\\/g, "/");
+}
+
+async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
+  const { createSubsystemLogger } = await import("../../../../src/logging/subsystem.js");
+  createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
 }
 
 function normalizeSessionText(value: string): string {
@@ -118,6 +132,18 @@ export function extractSessionText(
 export async function buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
   try {
     const stat = await fs.stat(absPath);
+    if (shouldSkipTranscriptFileForDreaming(absPath)) {
+      return {
+        path: sessionPathForFile(absPath),
+        absPath,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        hash: hashText("\n\n"),
+        content: "",
+        lineMap: [],
+        generatedByDreamingNarrative: false,
+      };
+    }
     const raw = await fs.readFile(absPath, "utf-8");
     const lines = raw.split("\n");
     const collected: string[] = [];
@@ -145,12 +171,15 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
         continue;
       }
       const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown }
+        | { role?: unknown; content?: unknown; provenance?: unknown }
         | undefined;
       if (!message || typeof message.role !== "string") {
         continue;
       }
       if (message.role !== "user" && message.role !== "assistant") {
+        continue;
+      }
+      if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
       }
       const text = extractSessionText(message.content, message.role);
@@ -174,7 +203,7 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     };
   } catch (err) {
-    log.debug(`Failed reading session file ${absPath}: ${String(err)}`);
+    void logSessionFileReadFailure(absPath, err);
     return null;
   }
 }

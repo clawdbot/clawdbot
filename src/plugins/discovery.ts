@@ -8,6 +8,7 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
+import { resolvePackagedBundledLoadPathAlias } from "./bundled-load-path-aliases.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -1143,6 +1144,18 @@ export function discoverOpenClawPlugins(params: {
         }
         const trimmed = extraPath.trim();
         if (!trimmed) {
+          continue;
+        }
+        const bundledAlias = resolvePackagedBundledLoadPathAlias({
+          bundledRoot: roots.stock,
+          loadPath: resolveUserPath(trimmed, env),
+        });
+        if (bundledAlias) {
+          result.diagnostics.push({
+            level: "warn",
+            source: trimmed,
+            message: `ignored plugins.load.paths entry that points at OpenClaw's ${bundledAlias.kind} bundled plugin directory; remove this redundant path or run openclaw doctor --fix`,
+          });
           continue;
         }
         discoverFromPath({

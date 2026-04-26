@@ -114,7 +114,21 @@ jobs:
 
       - name: Run root Dockerfile CLI smoke
         run: |
-          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
+          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc '
+            which openclaw &&
+            openclaw --version &&
+            node -e "
+              const fs = require(\"node:fs\");
+              const path = require(\"node:path\");
+              const pkg = require(\"/app/package.json\");
+              for (const [dep, rel] of Object.entries(pkg.pnpm?.patchedDependencies ?? {})) {
+                const absolute = path.join(\"/app\", rel);
+                if (!fs.existsSync(absolute)) {
+                  throw new Error(`missing patch for ${dep}: ${rel}`);
+                }
+              }
+            "
+          '
 
       - name: Run agents delete shared workspace Docker CLI smoke
         env:

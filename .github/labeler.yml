@@ -3,6 +3,12 @@
       - any-glob-to-any-file:
           - "extensions/bluebubbles/**"
           - "docs/channels/bluebubbles.md"
+"plugin: azure-speech":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/azure-speech/**"
+          - "docs/providers/azure-speech.md"
+          - "docs/tools/tts.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -307,6 +313,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/huggingface/**"
+"extensions: inworld":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/inworld/**"
+          - "docs/providers/inworld.md"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:
@@ -315,6 +326,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lmstudio/**"
+"extensions: litellm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/litellm/**"
+          - "docs/providers/litellm.md"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:
@@ -351,6 +367,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qianfan/**"
+"extensions: senseaudio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/senseaudio/**"
+          - "docs/providers/senseaudio.md"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:
@@ -367,6 +388,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/together/**"
+"extensions: tts-local-cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tts-local-cli/**"
+          - "docs/tools/tts.md"
 "extensions: venice":
   - changed-files:
       - any-glob-to-any-file:

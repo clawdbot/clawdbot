@@ -72,8 +72,8 @@ steps:
               expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && (() => { const lower = normalizeLowercaseStringOrEmpty(candidate.text); return lower.includes('switch') || lower.includes('handoff'); })()).at(-1)"
           - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
       - assert:
-          expr: "!env.mock || ((await fetchJson(`${env.mock.baseUrl}/debug/last-request`))?.body?.model === 'gpt-5.4-alt')"
+          expr: "!env.mock || ((await fetchJson(`${env.mock.baseUrl}/debug/last-request`))?.body?.model === 'gpt-5.5-alt')"
           message:
-            expr: "`expected gpt-5.4-alt, got ${String((await fetchJson(`${env.mock.baseUrl}/debug/last-request`))?.body?.model ?? '')}`"
+            expr: "`expected gpt-5.5-alt, got ${String((await fetchJson(`${env.mock.baseUrl}/debug/last-request`))?.body?.model ?? '')}`"
     detailsExpr: outbound.text
 ```

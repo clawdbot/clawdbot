@@ -59,16 +59,14 @@ jobs:
           PACKAGE_SPEC: ${{ inputs.package_spec }}
         run: echo "Approved npm Telegram beta E2E for ${PACKAGE_SPEC}"
 
-  prepare_docker_e2e_image:
-    name: Prepare Docker E2E image
-    needs: validate_dispatch_ref
+  run_npm_telegram_beta_e2e:
+    name: Run published npm Telegram E2E
+    needs: approve_release_manager
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 90
+    timeout-minutes: 60
+    environment: qa-live-shared
     permissions:
       contents: read
-      packages: write
-    outputs:
-      image: ${{ steps.image.outputs.image }}
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -79,61 +77,20 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
 
-      - name: Resolve Docker E2E image tag
-        id: image
-        shell: bash
-        env:
-          SELECTED_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          repository="${GITHUB_REPOSITORY,,}"
-          image="ghcr.io/${repository}-docker-e2e:${SELECTED_SHA}"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "Docker E2E image: \`$image\`" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
 
-      - name: Log in to GHCR
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Build and push Docker E2E image
+      - name: Build Docker E2E image
         uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: .
           file: ./scripts/e2e/Dockerfile
           target: build
           platforms: linux/amd64
-          tags: ${{ steps.image.outputs.image }}
+          tags: openclaw-docker-e2e:local
+          load: true
+          push: false
           provenance: false
-          push: true
-
-  run_npm_telegram_beta_e2e:
-    name: Run published npm Telegram E2E
-    needs: [approve_release_manager, prepare_docker_e2e_image]
-    runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 60
-    environment: qa-live-shared
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-
-      - name: Log in to GHCR
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -178,7 +135,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_SKIP_DOCKER_BUILD: "1"
-          OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
+          OPENCLAW_DOCKER_E2E_IMAGE: openclaw-docker-e2e:local
           OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.package_spec }}
           OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.provider_mode }}
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: convex

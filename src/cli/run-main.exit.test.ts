@@ -14,6 +14,7 @@ const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const buildProgramMock = vi.hoisted(() => vi.fn());
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
@@ -71,6 +72,7 @@ vi.mock("./program/root-help.js", () => ({
 }));
 
 vi.mock("./root-help-metadata.js", () => ({
+  outputPrecomputedBrowserHelpText: outputPrecomputedBrowserHelpTextMock,
   outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
 }));
 
@@ -98,8 +100,10 @@ describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasMemoryRuntimeMock.mockReturnValue(false);
+    outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
     getProgramContextMock.mockReturnValue(null);
+    delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -115,6 +119,29 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(ensureTaskRegistryReadyMock).not.toHaveBeenCalled();
     expect(startTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it("renders browser help from startup metadata without building the full program", async () => {
+    outputPrecomputedBrowserHelpTextMock.mockReturnValueOnce(true);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`unexpected process.exit(${String(code)})`);
+    }) as typeof process.exit);
+
+    await runCli(["node", "openclaw", "browser", "--help"]);
+
+    expect(maybeRunCliInContainerMock).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "browser",
+      "--help",
+    ]);
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(outputPrecomputedBrowserHelpTextMock).toHaveBeenCalledTimes(1);
+    expect(outputRootHelpMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });

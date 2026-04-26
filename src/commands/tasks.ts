@@ -1,3 +1,5 @@
+import { loadConfig } from "../config/config.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -24,6 +26,7 @@ import { compareTaskAuditFindingSortKeys } from "../tasks/task-registry.audit.sh
 import {
   getInspectableTaskAuditSummary,
   getInspectableTaskRegistrySummary,
+  configureTaskRegistryMaintenance,
   previewTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
 } from "../tasks/task-registry.maintenance.js";
@@ -44,8 +47,14 @@ const RUN_PAD = 10;
 const info = theme.info;
 
 async function loadTaskCancelConfig() {
-  const { loadConfig } = await import("../config/config.js");
   return loadConfig();
+}
+
+function configureTaskMaintenanceFromConfig(): void {
+  const cfg = loadConfig();
+  configureTaskRegistryMaintenance({
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+  });
 }
 
 function truncate(value: string, maxChars: number) {
@@ -417,6 +426,7 @@ export async function tasksAuditCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  configureTaskMaintenanceFromConfig();
   const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
   const { allFindings, filteredFindings, taskFindings, summary } = toSystemAuditFindings({
@@ -491,6 +501,7 @@ export async function tasksMaintenanceCommand(
   opts: { json?: boolean; apply?: boolean },
   runtime: RuntimeEnv,
 ) {
+  configureTaskMaintenanceFromConfig();
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();
   const taskMaintenance = opts.apply

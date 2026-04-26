@@ -1,14 +1,25 @@
+import fs from "node:fs";
+import JSON5 from "json5";
 import { getCommandPathWithRootOptions } from "../cli/argv.js";
+import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveNodeRequireFromMeta } from "./node-require.js";
 
 type LoggingConfig = OpenClawConfig["logging"];
 
-const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
+let cachedLoggingConfig:
+  | {
+      path: string;
+      logging: LoggingConfig | undefined;
+    }
+  | undefined;
 
 export function shouldSkipMutatingLoggingConfigRead(argv: string[] = process.argv): boolean {
   const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
   return primary === "config" && (secondary === "schema" || secondary === "validate");
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function readLoggingConfig(): LoggingConfig | undefined {
@@ -16,17 +27,21 @@ export function readLoggingConfig(): LoggingConfig | undefined {
     return undefined;
   }
   try {
-    const loaded = requireConfig?.("../config/config.js") as
-      | {
-          loadConfig?: () => OpenClawConfig;
-        }
-      | undefined;
-    const parsed = loaded?.loadConfig?.();
-    const logging = parsed?.logging;
-    if (!logging || typeof logging !== "object" || Array.isArray(logging)) {
+    const configPath = resolveConfigPath();
+    if (cachedLoggingConfig?.path === configPath) {
+      return cachedLoggingConfig.logging;
+    }
+    if (!fs.existsSync(configPath)) {
       return undefined;
     }
-    return logging as LoggingConfig;
+    const parsed = JSON5.parse(fs.readFileSync(configPath, "utf8"));
+    const logging = isObjectRecord(parsed) ? parsed.logging : undefined;
+    const resolved = isObjectRecord(logging) ? (logging as LoggingConfig) : undefined;
+    cachedLoggingConfig = {
+      path: configPath,
+      logging: resolved,
+    };
+    return resolved;
   } catch {
     return undefined;
   }

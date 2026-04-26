@@ -7,6 +7,7 @@ import {
   issueOperatorToken,
   openTrackedWs,
   pairDeviceIdentity,
+  resolveDeviceIdentityPath,
 } from "./device-authz.test-helpers.js";
 import {
   connectOk,
@@ -200,7 +201,53 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
   });
 });
 
-describe("gateway device.token.rotate caller scope guard", () => {
+describe("gateway device.token.rotate/revoke caller scope guard", () => {
+  test("rejects shared-token callers rotating or revoking above their session scopes", async () => {
+    const started = await startServer("secret");
+    const target = await issueOperatorToken({
+      name: "shared-pairing-target",
+      approvedScopes: ["operator.admin"],
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+
+    let pairingWs: WebSocket | undefined;
+    try {
+      pairingWs = await openTrackedWs(started.port);
+      await connectOk(pairingWs, {
+        token: "secret",
+        scopes: ["operator.pairing"],
+        deviceIdentityPath: resolveDeviceIdentityPath("shared-pairing-caller"),
+      });
+
+      const rotate = await rpcReq(pairingWs, "device.token.rotate", {
+        deviceId: target.deviceId,
+        role: "operator",
+      });
+      expect(rotate.ok).toBe(false);
+      expect(rotate.error?.message).toBe("device token rotation denied");
+
+      const afterRotate = await getPairedDevice(target.deviceId);
+      expect(afterRotate?.tokens?.operator?.token).toBe(target.token);
+      expect(afterRotate?.tokens?.operator?.revokedAtMs).toBeUndefined();
+
+      const revoke = await rpcReq(pairingWs, "device.token.revoke", {
+        deviceId: target.deviceId,
+        role: "operator",
+      });
+      expect(revoke.ok).toBe(false);
+      expect(revoke.error?.message).toBe("device token revocation denied");
+
+      const afterRevoke = await getPairedDevice(target.deviceId);
+      expect(afterRevoke?.tokens?.operator?.token).toBe(target.token);
+      expect(afterRevoke?.tokens?.operator?.revokedAtMs).toBeUndefined();
+    } finally {
+      pairingWs?.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
   test("rejects rotating an admin-approved device token above the caller session scopes", async () => {
     const started = await startServer("secret");
     const attacker = await issueOperatorToken({

@@ -166,7 +166,10 @@ describe("config mutate helpers", () => {
     await replaceConfigFile({
       baseHash: snapshot.hash,
       snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
+      writeOptions: {
+        expectedConfigPath: snapshot.path,
+        unsetPaths: [["plugins", "installs"]],
+      },
       nextConfig: {
         plugins: {
           entries: {
@@ -194,7 +197,7 @@ describe("config mutate helpers", () => {
       installs?: Record<string, unknown>;
     };
     expect(persistedPlugins.entries?.demo).toEqual({ enabled: true });
-    expect(persistedPlugins.installs?.demo).toMatchObject({ source: "npm", spec: "demo" });
+    expect(persistedPlugins.installs).toBeUndefined();
   });
 
   it("falls back to the root writer when a plugins include write is not isolated", async () => {

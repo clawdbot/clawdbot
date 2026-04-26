@@ -96,6 +96,36 @@ describe("Codex app-server config", () => {
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
+        start: expect.objectContaining({
+          command: "codex",
+          commandSource: "managed",
+        }),
+      }),
+    );
+  });
+
+  it("treats configured and environment commands as explicit overrides", () => {
+    expect(
+      resolveCodexAppServerRuntimeOptions({
+        pluginConfig: { appServer: { command: "/opt/codex/bin/codex" } },
+        env: { OPENCLAW_CODEX_APP_SERVER_BIN: "/usr/local/bin/codex" },
+      }).start,
+    ).toEqual(
+      expect.objectContaining({
+        command: "/opt/codex/bin/codex",
+        commandSource: "config",
+      }),
+    );
+
+    expect(
+      resolveCodexAppServerRuntimeOptions({
+        pluginConfig: {},
+        env: { OPENCLAW_CODEX_APP_SERVER_BIN: "/usr/local/bin/codex" },
+      }).start,
+    ).toEqual(
+      expect.objectContaining({
+        command: "/usr/local/bin/codex",
+        commandSource: "env",
       }),
     );
   });
@@ -244,6 +274,7 @@ describe("Codex app-server config", () => {
     };
     const appServerProperties = manifest.configSchema.properties.appServer.properties;
 
+    expect(appServerProperties.command?.default).toBeUndefined();
     expect(appServerProperties.approvalPolicy?.default).toBeUndefined();
     expect(appServerProperties.sandbox?.default).toBeUndefined();
     expect(appServerProperties.approvalsReviewer?.default).toBeUndefined();

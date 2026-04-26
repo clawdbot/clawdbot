@@ -128,7 +128,7 @@ function createMissedIsolatedJob(now: number): CronJob {
 }
 
 describe("cron service ops seam coverage", () => {
-  it("start clears stale running markers, replays interrupted recurring jobs, persists, and arms the timer (#60495)", async () => {
+  it("start marks interrupted running jobs failed, persists, and arms the timer", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
@@ -154,11 +154,10 @@ describe("cron service ops seam coverage", () => {
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ jobId: "startup-interrupted" }),
-      "cron: clearing stale running marker on startup",
+      "cron: marking interrupted running job failed on startup",
     );
-    // Interrupted recurring jobs are now replayed on first restart (#60495)
-    expect(enqueueSystemEvent).toHaveBeenCalled();
-    expect(requestHeartbeatNow).toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
     expect(state.timer).not.toBeNull();
 
     const persisted = (await loadCronStore(storePath)) as {
@@ -167,7 +166,10 @@ describe("cron service ops seam coverage", () => {
     const job = persisted.jobs[0];
     expect(job).toBeDefined();
     expect(job?.state.runningAtMs).toBeUndefined();
-    expect(job?.state.lastStatus).toBe("ok");
+    expect(job?.state.lastStatus).toBe("error");
+    expect(job?.state.lastRunStatus).toBe("error");
+    expect(job?.state.lastRunAtMs).toBe(now - 30 * 60_000);
+    expect(job?.state.lastError).toBe("cron: job interrupted by gateway restart");
     expect((job?.state.nextRunAtMs ?? 0) > now).toBe(true);
 
     const delays = timeoutSpy.mock.calls

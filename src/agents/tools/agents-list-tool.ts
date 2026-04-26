@@ -5,7 +5,12 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveAgentConfig } from "../agent-scope.js";
+import { resolveAgentRuntimePolicy } from "../agent-runtime-policy.js";
+import {
+  listAgentEntries,
+  resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
+} from "../agent-scope.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -16,7 +21,56 @@ type AgentListEntry = {
   id: string;
   name?: string;
   configured: boolean;
+  model?: string;
+  agentRuntime?: {
+    id: string;
+    fallback?: "pi" | "none";
+    source: "env" | "agent" | "defaults" | "implicit";
+  };
 };
+
+function normalizeRuntimeValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+}
+
+function resolveAgentRuntimeMetadata(
+  cfg: ReturnType<typeof loadConfig>,
+  agentId: string,
+): NonNullable<AgentListEntry["agentRuntime"]> {
+  const envRuntime = normalizeRuntimeValue(process.env.OPENCLAW_AGENT_RUNTIME);
+  if (envRuntime) {
+    return {
+      id: envRuntime,
+      source: "env",
+    };
+  }
+
+  const agentEntry = listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
+  const agentPolicy = resolveAgentRuntimePolicy(agentEntry);
+  const agentRuntime = normalizeRuntimeValue(agentPolicy?.id);
+  if (agentRuntime) {
+    return {
+      id: agentRuntime,
+      fallback: agentPolicy?.fallback,
+      source: "agent",
+    };
+  }
+
+  const defaultsPolicy = resolveAgentRuntimePolicy(cfg.agents?.defaults);
+  const defaultsRuntime = normalizeRuntimeValue(defaultsPolicy?.id);
+  if (defaultsRuntime) {
+    return {
+      id: defaultsRuntime,
+      fallback: defaultsPolicy?.fallback,
+      source: "defaults",
+    };
+  }
+
+  return {
+    id: "pi",
+    source: "implicit",
+  };
+}
 
 export function createAgentsListTool(opts?: {
   agentSessionKey?: string;
@@ -85,11 +139,16 @@ export function createAgentsListTool(opts?: {
         .filter((id) => id !== requesterAgentId)
         .toSorted((a, b) => a.localeCompare(b));
       const ordered = [requesterAgentId, ...rest];
-      const agents: AgentListEntry[] = ordered.map((id) => ({
-        id,
-        name: configuredNameMap.get(id),
-        configured: configuredIds.includes(id),
-      }));
+      const agents: AgentListEntry[] = ordered.map((id) => {
+        const agentRuntime = resolveAgentRuntimeMetadata(cfg, id);
+        return {
+          id,
+          name: configuredNameMap.get(id),
+          configured: configuredIds.includes(id),
+          model: resolveAgentEffectiveModelPrimary(cfg, id),
+          agentRuntime,
+        };
+      });
 
       return jsonResult({
         requester: requesterAgentId,

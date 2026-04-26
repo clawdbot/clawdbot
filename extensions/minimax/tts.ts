@@ -6,7 +6,17 @@ import {
 
 export const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimax.io";
 
-export const MINIMAX_TTS_MODELS = ["speech-2.8-hd", "speech-01-240228"] as const;
+export const MINIMAX_TTS_MODELS = [
+  "speech-2.8-hd",
+  "speech-2.8-turbo",
+  "speech-2.6-hd",
+  "speech-2.6-turbo",
+  "speech-02-hd",
+  "speech-02-turbo",
+  "speech-01-hd",
+  "speech-01-turbo",
+  "speech-01-240228",
+] as const;
 
 export const MINIMAX_TTS_VOICES = [
   "English_expressive_narrator",
@@ -21,7 +31,7 @@ export function normalizeMinimaxTtsBaseUrl(baseUrl?: string): string {
   if (!trimmed) {
     return DEFAULT_MINIMAX_TTS_BASE_URL;
   }
-  return trimmed.replace(/\/+$/, "");
+  return trimmed.replace(/\/+$/, "").replace(/\/(?:anthropic|v1)$/i, "");
 }
 
 function normalizeMinimaxTtsPitch(pitch: number): number {

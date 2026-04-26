@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import { createPluginSourceLoader } from "./source-loader.js";
@@ -77,9 +78,11 @@ function resolveProviderDiscoveryEntryPlugins(params: {
 }): ProviderDiscoveryEntryResult {
   const pluginIds = resolveDiscoveredProviderPluginIds(params);
   const pluginIdSet = new Set(pluginIds);
-  const pluginRecords = loadPluginManifestRegistry(params).plugins.filter((plugin) =>
-    pluginIdSet.has(plugin.id),
-  );
+  const pluginRecords = loadPluginManifestRegistryForPluginRegistry({
+    ...params,
+    pluginIds,
+    includeDisabled: true,
+  }).plugins.filter((plugin) => pluginIdSet.has(plugin.id));
   const entryRecords = pluginRecords.filter((plugin) => plugin.providerDiscoverySource);
   const entryPluginIds = new Set(entryRecords.map((plugin) => plugin.id));
   if (entryRecords.length === 0) {

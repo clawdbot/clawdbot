@@ -18,11 +18,13 @@ type RemoteNodeRecord = {
   deviceFamily?: string;
   commands?: string[];
   bins: Set<string>;
+  connected: boolean;
   remoteIp?: string;
 };
 
 const log = createSubsystemLogger("gateway/skills-remote");
 const remoteNodes = new Map<string, RemoteNodeRecord>();
+const remoteBinProbeInflight = new Map<string, Promise<void>>();
 let remoteRegistry: NodeRegistry | null = null;
 
 function describeNode(nodeId: string): string {
@@ -62,20 +64,36 @@ function extractErrorMessage(err: unknown): string | undefined {
   return undefined;
 }
 
-function logRemoteBinProbeFailure(nodeId: string, err: unknown) {
+function logRemoteBinProbeFailure(
+  nodeId: string,
+  err: unknown,
+  context?: { command?: string; timeoutMs?: number; requiredBinCount?: number },
+) {
   const message = extractErrorMessage(err);
   const label = describeNode(nodeId);
+  const details = [
+    context?.command ? `command=${context.command}` : undefined,
+    typeof context?.timeoutMs === "number" ? `timeoutMs=${context.timeoutMs}` : undefined,
+    typeof context?.requiredBinCount === "number"
+      ? `requiredBins=${context.requiredBinCount}`
+      : undefined,
+    `connected=${remoteNodes.get(nodeId)?.connected === true ? "yes" : "no"}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
   // Node unavailable errors (not connected or disconnected mid-operation) are expected
   // when nodes have transient connections - log at info level instead of warn
   if (message?.includes("node not connected") || message?.includes("node disconnected")) {
-    log.info(`remote bin probe skipped: node unavailable (${label})`);
+    log.info(`remote bin probe skipped: node unavailable (${label}; ${details})`);
     return;
   }
   if (message?.includes("invoke timed out") || message?.includes("timeout")) {
-    log.warn(`remote bin probe timed out (${label}); check node connectivity for ${label}`);
+    log.warn(
+      `remote bin probe timed out (${label}; ${details}); check node connectivity for ${label}`,
+    );
     return;
   }
-  log.warn(`remote bin probe error (${label}): ${message ?? "unknown"}`);
+  log.warn(`remote bin probe error (${label}; ${details}): ${message ?? "unknown"}`);
 }
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
@@ -109,6 +127,7 @@ function upsertNode(record: {
   commands?: string[];
   remoteIp?: string;
   bins?: string[];
+  connected?: boolean;
 }) {
   const existing = remoteNodes.get(record.nodeId);
   const bins = new Set<string>(record.bins ?? existing?.bins ?? []);
@@ -120,7 +139,17 @@ function upsertNode(record: {
     commands: record.commands ?? existing?.commands,
     remoteIp: record.remoteIp ?? existing?.remoteIp,
     bins,
+    connected: record.connected ?? existing?.connected ?? false,
   });
+}
+
+function clearRemoteNodeBins(nodeId: string): boolean {
+  const existing = remoteNodes.get(nodeId);
+  if (!existing || existing.bins.size === 0) {
+    return false;
+  }
+  existing.bins = new Set();
+  return true;
 }
 
 export function setSkillsRemoteRegistry(registry: NodeRegistry | null) {
@@ -140,8 +169,14 @@ export async function primeRemoteSkillsCache() {
         commands: node.commands,
         remoteIp: node.remoteIp,
         bins: node.bins,
+        connected: false,
       });
-      if (isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands)) {
+      if (
+        node.bins &&
+        node.bins.length > 0 &&
+        isMacPlatform(node.platform, node.deviceFamily) &&
+        supportsSystemRun(node.commands)
+      ) {
         sawMac = true;
       }
     }
@@ -161,7 +196,7 @@ export function recordRemoteNodeInfo(node: {
   commands?: string[];
   remoteIp?: string;
 }) {
-  upsertNode(node);
+  upsertNode({ ...node, connected: true });
 }
 
 export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
@@ -219,6 +254,12 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
     if (Array.isArray(parsed.bins)) {
       return parsed.bins.map((bin) => normalizeOptionalString(String(bin)) ?? "").filter(Boolean);
     }
+    if (parsed.bins && typeof parsed.bins === "object") {
+      return Object.entries(parsed.bins)
+        .filter(([, resolvedPath]) => normalizeOptionalString(resolvedPath) !== undefined)
+        .map(([bin]) => normalizeOptionalString(bin) ?? "")
+        .filter(Boolean);
+    }
     if (typeof parsed.stdout === "string") {
       return parsed.stdout
         .split(/\r?\n/)
@@ -254,6 +295,28 @@ export async function refreshRemoteNodeBins(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
 }) {
+  const existing = remoteBinProbeInflight.get(params.nodeId);
+  if (existing) {
+    await existing;
+    return;
+  }
+  const run = refreshRemoteNodeBinsUncoalesced(params).finally(() => {
+    if (remoteBinProbeInflight.get(params.nodeId) === run) {
+      remoteBinProbeInflight.delete(params.nodeId);
+    }
+  });
+  remoteBinProbeInflight.set(params.nodeId, run);
+  await run;
+}
+
+async function refreshRemoteNodeBinsUncoalesced(params: {
+  nodeId: string;
+  platform?: string;
+  deviceFamily?: string;
+  commands?: string[];
+  cfg: OpenClawConfig;
+  timeoutMs?: number;
+}) {
   if (!remoteRegistry) {
     return;
   }
@@ -278,27 +341,34 @@ export async function refreshRemoteNodeBins(params: {
     return;
   }
 
+  const binsList = [...requiredBins];
+  const timeoutMs = params.timeoutMs ?? 15_000;
+  const command = canWhich ? "system.which" : "system.run";
+  const logContext = { command, timeoutMs, requiredBinCount: binsList.length };
   try {
-    const binsList = [...requiredBins];
     const res = await remoteRegistry.invoke(
       canWhich
         ? {
             nodeId: params.nodeId,
-            command: "system.which",
+            command,
             params: { bins: binsList },
-            timeoutMs: params.timeoutMs ?? 15_000,
+            timeoutMs,
           }
         : {
             nodeId: params.nodeId,
-            command: "system.run",
+            command,
             params: {
               command: ["/bin/sh", "-lc", buildBinProbeScript(binsList)],
             },
-            timeoutMs: params.timeoutMs ?? 15_000,
+            timeoutMs,
           },
     );
     if (!res.ok) {
-      logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown");
+      const cleared = clearRemoteNodeBins(params.nodeId);
+      logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown", logContext);
+      if (cleared) {
+        bumpSkillsSnapshotVersion({ reason: "remote-node" });
+      }
       return;
     }
     const bins = parseBinProbePayload(res.payloadJSON, res.payload);
@@ -312,7 +382,11 @@ export async function refreshRemoteNodeBins(params: {
     await updatePairedNodeMetadata(params.nodeId, { bins });
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
-    logRemoteBinProbeFailure(params.nodeId, err);
+    const cleared = clearRemoteNodeBins(params.nodeId);
+    logRemoteBinProbeFailure(params.nodeId, err, logContext);
+    if (cleared) {
+      bumpSkillsSnapshotVersion({ reason: "remote-node" });
+    }
   }
 }
 
@@ -320,7 +394,10 @@ export function getRemoteSkillEligibility(options?: {
   advertiseExecNode?: boolean;
 }): SkillEligibilityContext["remote"] | undefined {
   const macNodes = [...remoteNodes.values()].filter(
-    (node) => isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands),
+    (node) =>
+      node.connected &&
+      isMacPlatform(node.platform, node.deviceFamily) &&
+      supportsSystemRun(node.commands),
   );
   if (macNodes.length === 0) {
     return undefined;

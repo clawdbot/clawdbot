@@ -21,6 +21,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("./cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => {
     const codexHome = process.env.CODEX_HOME;
     if (!codexHome) {

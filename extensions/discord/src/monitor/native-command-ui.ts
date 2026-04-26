@@ -15,6 +15,7 @@ import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   listChatCommands,
   resolveStoredModelOverride,
   serializeCommandArgs,
@@ -54,6 +55,11 @@ import { resolveDiscordNativeInteractionChannelContext } from "./native-interact
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
+type DiscordNativeChoiceInteraction =
+  | AutocompleteInteraction
+  | CommandInteraction
+  | ButtonInteraction
+  | StringSelectMenuInteraction;
 
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
 
@@ -190,6 +196,12 @@ function buildDiscordModelPickerCurrentModel(
   return `${defaultProvider}/${defaultModel}`;
 }
 
+function resolveConfiguredAgentRuntimeId(value: {
+  agentRuntime?: { id?: unknown };
+}): string | undefined {
+  return normalizeOptionalString(value.agentRuntime?.id);
+}
+
 function buildDiscordModelPickerAllowedModelRefs(
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>,
 ): Set<string> {
@@ -280,7 +292,7 @@ async function resolveDiscordModelPickerRoute(params: {
 }
 
 export async function resolveDiscordNativeChoiceContext(params: {
-  interaction: AutocompleteInteraction;
+  interaction: DiscordNativeChoiceInteraction;
   cfg: ReturnType<typeof loadConfig>;
   accountId: string;
   threadBindings: ThreadBindingManager;
@@ -380,15 +392,15 @@ function resolveDiscordModelPickerCurrentRuntime(params: {
     // Fall through to configured defaults when the session store is unavailable.
   }
 
-  const agentRuntime = normalizeOptionalString(
+  const agentRuntime = resolveConfiguredAgentRuntimeId(
     params.cfg.agents?.list?.find(
       (entry) => normalizeOptionalString(entry.id) === params.route.agentId,
-    )?.embeddedHarness?.runtime,
+    ) ?? {},
   );
   if (agentRuntime) {
     return agentRuntime;
   }
-  return normalizeOptionalString(params.cfg.agents?.defaults?.embeddedHarness?.runtime) ?? "auto";
+  return resolveConfiguredAgentRuntimeId(params.cfg.agents?.defaults ?? {}) ?? "auto";
 }
 
 export async function replyWithDiscordModelPickerProviders(params: {
@@ -1066,8 +1078,7 @@ export function buildDiscordCommandArgMenu(params: {
     );
     return new Row(buttons);
   });
-  const content =
-    menu.title ?? `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
+  const content = formatCommandArgMenuTitle({ command, menu });
   return { content, components: rows };
 }
 

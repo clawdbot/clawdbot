@@ -292,6 +292,9 @@ by default, plus git-checkout installs under the same prefix flow.
     - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
     - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
   </Step>
+  <Step title="Handle failures">
+    `iwr ... | iex` and scriptblock installs report a terminating error without closing the current PowerShell session. Direct `powershell -File` / `pwsh -File` installs still exit non-zero for automation.
+  </Step>
 </Steps>
 
 ### Examples (install.ps1)

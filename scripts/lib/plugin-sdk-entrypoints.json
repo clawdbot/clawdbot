@@ -45,6 +45,7 @@
   "channel-runtime",
   "interactive-runtime",
   "outbound-media",
+  "outbound-send-deps",
   "outbound-runtime",
   "poll-runtime",
   "infra-runtime",

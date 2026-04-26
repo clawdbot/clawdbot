@@ -19,7 +19,7 @@ describe("qa-lab server capture helpers", () => {
         metaJson: JSON.stringify({
           provider: "openai",
           api: "responses",
-          model: "gpt-5.4",
+          model: "gpt-5.5",
           captureOrigin: "shared-fetch",
         }),
       }),
@@ -29,7 +29,7 @@ describe("qa-lab server capture helpers", () => {
         payloadPreview: '{"hello":"world"}',
         provider: "openai",
         api: "responses",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         captureOrigin: "shared-fetch",
       }),
     );

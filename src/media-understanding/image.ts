@@ -6,14 +6,16 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
 } from "../agents/model-auth.js";
-import { normalizeModelRef } from "../agents/model-selection.js";
+import { findNormalizedProviderValue, normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { resolveModelWithRegistry } from "../agents/pi-embedded-runner/model.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
+import { prepareProviderDynamicModel } from "../plugins/provider-runtime.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -141,11 +143,55 @@ async function resolveImageRuntime(params: {
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
+  const configuredProviders = params.cfg.models?.providers;
+  const providerConfig =
+    configuredProviders?.[resolvedRef.provider] ??
+    findNormalizedProviderValue(configuredProviders, resolvedRef.provider);
+  // Fast path: resolve without dynamic model preparation first.
+  // This avoids unnecessary prepare hooks (e.g. OpenRouter catalog fetch)
+  // for models that are already explicitly resolvable.
+  let model = resolveModelWithRegistry({
+    provider: resolvedRef.provider,
+    modelId: resolvedRef.model,
+    modelRegistry,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+  }) as Model<Api> | null;
+
+  // If the model is not in the registry yet, prepare dynamic provider models
+  // and retry (needed for provider-runtime-backed dynamic models).
+  if (!model) {
+    await prepareProviderDynamicModel({
+      provider: resolvedRef.provider,
+      config: params.cfg,
+      context: {
+        config: params.cfg,
+        agentDir: params.agentDir,
+        provider: resolvedRef.provider,
+        modelId: resolvedRef.model,
+        modelRegistry,
+        providerConfig,
+      },
+    });
+    model = resolveModelWithRegistry({
+      provider: resolvedRef.provider,
+      modelId: resolvedRef.model,
+      modelRegistry,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    }) as Model<Api> | null;
+  }
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
   if (!model.input?.includes("image")) {
+    // resolveModelWithRegistry may synthesize a text-only fallback for configured
+    // providers, which would change "Unknown model" → "Model does not support images"
+    // and skip the MiniMax VLM recovery path. Throw Unknown model for MiniMax VLM
+    // models so the caller can attempt the fallback.
+    if (isMinimaxVlmModel(resolvedRef.provider, resolvedRef.model)) {
+      throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
+    }
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
   }
   const apiKeyInfo = await getApiKeyForModel({

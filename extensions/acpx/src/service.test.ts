@@ -47,6 +47,7 @@ async function makeTempDir(): Promise<string> {
 afterEach(async () => {
   runtimeRegistry.clear();
   prepareAcpxCodexAuthConfigMock.mockClear();
+  delete process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE;
   delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
   delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE;
   for (const dir of tempDirs.splice(0)) {
@@ -99,7 +100,7 @@ describe("createAcpxRuntimeService", () => {
     expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
   });
 
-  it("creates the embedded runtime state directory before probing", async () => {
+  it("creates the embedded runtime state directory without probing at startup by default", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = path.join(workspaceDir, "custom-state");
     const ctx = createServiceContext(workspaceDir);
@@ -118,7 +119,30 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(ctx);
 
+    await fs.access(stateDir);
+    expect(probeAvailability).not.toHaveBeenCalled();
+    expect(getAcpRuntimeBackend("acpx")?.healthy).toBeUndefined();
+
+    await service.stop?.(ctx);
+  });
+
+  it("can run the embedded runtime probe at startup when explicitly enabled", async () => {
+    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "1";
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const probeAvailability = vi.fn(async () => {});
+    const runtime = createMockRuntime({
+      probeAvailability,
+      isHealthy: () => true,
+    });
+    const service = createAcpxRuntimeService({
+      runtimeFactory: () => runtime as never,
+    });
+
+    await service.start(ctx);
+
     expect(probeAvailability).toHaveBeenCalledOnce();
+    expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(true);
 
     await service.stop?.(ctx);
   });
@@ -255,6 +279,7 @@ describe("createAcpxRuntimeService", () => {
   });
 
   it("can skip the embedded runtime probe via env", async () => {
+    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "1";
     process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE = "1";
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
@@ -277,6 +302,7 @@ describe("createAcpxRuntimeService", () => {
   });
 
   it("formats non-string doctor details without losing object payloads", async () => {
+    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "1";
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
     const runtime = createMockRuntime({

@@ -15,7 +15,11 @@ import {
   getSessionBindingService,
   registerSessionBindingAdapter,
 } from "../../infra/outbound/session-binding-service.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -292,6 +296,7 @@ beforeEach(() => {
     });
 });
 afterEach(async () => {
+  resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 describe("initSessionState thread forking", () => {
@@ -785,6 +790,53 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.bodyStripped).toBe("KeepThisCase");
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
+  });
+
+  it("drains stale system events when /new rotates an existing session", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-reset-system-events-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:system-events";
+    const existingSessionId = "session-with-stale-events";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        systemSent: true,
+      },
+    });
+    enqueueSystemEvent("stale session-key event", { sessionKey });
+    enqueueSystemEvent("stale session-id event", { sessionKey: existingSessionId });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/new continue",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    await expect(
+      drainFormattedSystemEvents({
+        cfg,
+        sessionKey,
+        isMainSession: false,
+        isNewSession: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(peekSystemEvents(existingSessionId)).toEqual([]);
   });
 
   it("rotates local session state for /new on bound ACP sessions", async () => {
@@ -1334,6 +1386,10 @@ describe("initSessionState reset policy", () => {
         updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
       },
     });
+    enqueueSystemEvent("stale daily rollover event", { sessionKey });
+    enqueueSystemEvent("stale daily rollover session-id event", {
+      sessionKey: existingSessionId,
+    });
 
     const cfg = { session: { store: storePath } } as OpenClawConfig;
     const result = await initSessionState({
@@ -1348,6 +1404,15 @@ describe("initSessionState reset policy", () => {
       sessionKey,
       previousSessionId: existingSessionId,
     });
+    await expect(
+      drainFormattedSystemEvents({
+        cfg,
+        sessionKey,
+        isMainSession: false,
+        isNewSession: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(peekSystemEvents(existingSessionId)).toEqual([]);
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -1403,6 +1468,50 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("drains stale system events when idle rollover creates a new session", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-system-events-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:idle-system-events";
+    const existingSessionId = "idle-system-events-session";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+    enqueueSystemEvent("stale idle rollover event", { sessionKey });
+    enqueueSystemEvent("stale idle rollover session-id event", {
+      sessionKey: existingSessionId,
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "idle", idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    await expect(
+      drainFormattedSystemEvents({
+        cfg,
+        sessionKey,
+        isMainSession: false,
+        isNewSession: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(peekSystemEvents(existingSessionId)).toEqual([]);
   });
 
   it("keeps the existing stale session for /reset soft", async () => {

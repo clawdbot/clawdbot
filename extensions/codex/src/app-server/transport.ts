@@ -21,6 +21,7 @@ export type CodexAppServerTransport = {
   kill?: (signal?: NodeJS.Signals) => unknown;
   unref?: () => unknown;
   once: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  off?: (event: string, listener: (...args: unknown[]) => void) => unknown;
 };
 
 export function closeCodexAppServerTransport(
@@ -50,10 +51,53 @@ export function closeCodexAppServerTransport(
   child.stdin.unref?.();
 }
 
+export async function closeCodexAppServerTransportAndWait(
+  child: CodexAppServerTransport,
+  options: { exitTimeoutMs?: number; forceKillDelayMs?: number } = {},
+): Promise<boolean> {
+  if (!hasCodexAppServerTransportExited(child)) {
+    closeCodexAppServerTransport(child, options);
+  }
+  return await waitForCodexAppServerTransportExit(child, options.exitTimeoutMs ?? 2_000);
+}
+
 function hasCodexAppServerTransportExited(child: CodexAppServerTransport): boolean {
   return child.exitCode !== null && child.exitCode !== undefined
     ? true
     : child.signalCode !== null && child.signalCode !== undefined;
+}
+
+async function waitForCodexAppServerTransportExit(
+  child: CodexAppServerTransport,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (hasCodexAppServerTransportExited(child)) {
+    return true;
+  }
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const onExit = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(true);
+    };
+    const timeout = setTimeout(
+      () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        child.off?.("exit", onExit);
+        resolve(false);
+      },
+      Math.max(1, timeoutMs),
+    );
+    timeout.unref?.();
+    child.once("exit", onExit);
+  });
 }
 
 function signalCodexAppServerTransport(

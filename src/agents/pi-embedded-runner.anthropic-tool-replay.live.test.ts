@@ -7,6 +7,7 @@ import {
 } from "./live-cache-test-support.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./pi-embedded-runner/run/attempt.tool-call-normalization.js";
+import { OMITTED_ASSISTANT_REASONING_TEXT } from "./pi-embedded-runner/thinking.js";
 import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
 
 const ANTHROPIC_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]);
@@ -33,7 +34,7 @@ function buildLiveAnthropicModel(): {
       name: modelId,
       api: "anthropic-messages" as const,
       provider: "anthropic",
-      baseUrl: "https://api.anthropic.com/v1",
+      baseUrl: "https://api.anthropic.com",
       reasoning: true,
       input: ["text"] as const,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -44,6 +45,94 @@ function buildLiveAnthropicModel(): {
 }
 
 describeLive("pi embedded anthropic replay sanitization (live)", () => {
+  it(
+    "accepts regular text-only assistant replay history",
+    async () => {
+      const { apiKey, model } = buildLiveAnthropicModel();
+      const messages: Message[] = [
+        {
+          role: "user",
+          content: "Remember the marker REGULAR_ANTHROPIC_REPLAY_OK.",
+          timestamp: Date.now(),
+        },
+        buildAssistantMessageWithZeroUsage({
+          model: { api: model.api, provider: model.provider, id: model.id },
+          content: [{ type: "text", text: "I remember REGULAR_ANTHROPIC_REPLAY_OK." }],
+          stopReason: "stop",
+        }),
+        {
+          role: "user",
+          content: "Reply with a short confirmation if this replay history is valid.",
+          timestamp: Date.now(),
+        },
+      ];
+
+      logLiveCache(`anthropic regular replay live model=${model.provider}/${model.id}`);
+      const response = await completeSimpleWithLiveTimeout(
+        model,
+        { messages },
+        {
+          apiKey,
+          cacheRetention: "none",
+          sessionId: "anthropic-regular-replay-live",
+          maxTokens: 64,
+          temperature: 0,
+        },
+        "anthropic regular text replay live synthetic transcript",
+        ANTHROPIC_TIMEOUT_MS,
+      );
+
+      const text = extractAssistantText(response);
+      logLiveCache(`anthropic regular replay live result=${JSON.stringify(text)}`);
+      expect(text.trim().length).toBeGreaterThan(0);
+    },
+    6 * 60_000,
+  );
+
+  it(
+    "accepts omitted-reasoning placeholder assistant replay history",
+    async () => {
+      const { apiKey, model } = buildLiveAnthropicModel();
+      const messages: Message[] = [
+        {
+          role: "user",
+          content: "Remember that the previous assistant reasoning was omitted.",
+          timestamp: Date.now(),
+        },
+        buildAssistantMessageWithZeroUsage({
+          model: { api: model.api, provider: model.provider, id: model.id },
+          content: [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
+          stopReason: "stop",
+        }),
+        {
+          role: "user",
+          content: "Reply with exactly OK if this placeholder replay history is valid.",
+          timestamp: Date.now(),
+        },
+      ];
+
+      logLiveCache(`anthropic omitted-reasoning replay live model=${model.provider}/${model.id}`);
+      const response = await completeSimpleWithLiveTimeout(
+        model,
+        { messages },
+        {
+          apiKey,
+          cacheRetention: "none",
+          sessionId: "anthropic-omitted-reasoning-replay-live",
+          maxTokens: 64,
+          temperature: 0,
+        },
+        "anthropic omitted reasoning replay live synthetic transcript",
+        ANTHROPIC_TIMEOUT_MS,
+      );
+
+      const text = extractAssistantText(response);
+      logLiveCache(`anthropic omitted-reasoning replay live result=${JSON.stringify(text)}`);
+      expect(text.trim().length).toBeGreaterThan(0);
+    },
+    6 * 60_000,
+  );
+
   it(
     "preserves toolCall replay history that Anthropic accepts end-to-end",
     async () => {

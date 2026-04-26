@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("bundled plugin public surface loader", () => {
-  it("keeps Windows dist public artifact loads off Jiti native import", async () => {
+  it("uses transpiled Jiti import for Windows dist public artifact loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "windows-dist-ok" })));
     vi.doMock("jiti", () => ({
       createJiti,

@@ -333,8 +333,8 @@ describe("createMusicGenerateTool", () => {
     vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
       {
         id: "minimax",
-        defaultModel: "music-2.5+",
-        models: ["music-2.5+"],
+        defaultModel: "music-2.6",
+        models: ["music-2.6"],
         capabilities: {
           generate: {
             maxTracks: 1,
@@ -355,7 +355,7 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "minimax/music-2.5+" },
+            musicGenerationModel: { primary: "minimax/music-2.6" },
           },
         },
       }),
@@ -457,7 +457,7 @@ describe("createMusicGenerateTool", () => {
   it("surfaces normalized durations from runtime metadata", async () => {
     vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
       provider: "minimax",
-      model: "music-2.5+",
+      model: "music-2.6",
       attempts: [],
       ignoredOverrides: [],
       tracks: [
@@ -489,7 +489,7 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "minimax/music-2.5+" },
+            musicGenerationModel: { primary: "minimax/music-2.6" },
           },
         },
       }),
@@ -521,8 +521,8 @@ describe("createMusicGenerateTool", () => {
     vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
       {
         id: "minimax",
-        defaultModel: "music-2.5+",
-        models: ["music-2.5+"],
+        defaultModel: "music-2.6",
+        models: ["music-2.6"],
         capabilities: {
           edit: { enabled: true, maxInputImages: 1 },
         },
@@ -538,7 +538,7 @@ describe("createMusicGenerateTool", () => {
     });
     vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
       provider: "minimax",
-      model: "music-2.5+",
+      model: "music-2.6",
       attempts: [],
       ignoredOverrides: [],
       tracks: [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg" }],
@@ -553,7 +553,7 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "minimax/music-2.5+" },
+            musicGenerationModel: { primary: "minimax/music-2.6" },
           },
         },
         tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },

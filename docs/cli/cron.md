@@ -138,6 +138,10 @@ Delivery ownership note:
 - `announce` fallback-delivers the final reply only when the agent did not send
   directly to the resolved target. `webhook` posts the finished payload to a URL.
   `none` disables runner fallback delivery.
+- Reminders created from an active chat preserve the live chat delivery target
+  for fallback announce delivery. Internal session keys may be lowercase; do not
+  use them as a source of truth for case-sensitive provider IDs such as Matrix
+  room IDs.
 
 ## Common admin commands
 

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import JSZip from "jszip";
 
 export type DiagnosticSupportBundleFile = {
   path: string;
@@ -132,6 +131,7 @@ export async function writeSupportBundleZip(params: {
   files: readonly DiagnosticSupportBundleFile[];
   compressionLevel?: number;
 }): Promise<number> {
+  const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
   for (const file of params.files) {
     zip.file(assertSafeBundleRelativePath(file.path), file.content);

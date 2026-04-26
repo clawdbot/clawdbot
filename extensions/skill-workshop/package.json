@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/skill-workshop",
-  "version": "2026.4.20",
+  "version": "2026.4.25",
   "private": true,
   "description": "OpenClaw skill workshop plugin",
   "type": "module",
   "dependencies": {
-    "typebox": "1.1.31"
+    "typebox": "1.1.32"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

@@ -271,6 +271,28 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it('skips implicit target resolution for bare delivery.mode "none"', async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob({ mode: "none" }),
+    });
+
+    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      disableMessageTool: false,
+      forceMessageTool: true,
+    });
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.messageChannel).toBeUndefined();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.messageTo).toBeUndefined();
+  });
+
   it('suppresses automatic exec completion notifications when delivery.mode is "none"', async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
@@ -353,7 +375,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
-  it("resolves implicit last-target context for bare delivery.mode none", async () => {
+  it('does not resolve implicit "last" context for bare delivery.mode none', async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: false,
@@ -373,19 +395,14 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       } as never,
     });
 
-    expect(resolveDeliveryTargetMock).toHaveBeenCalledTimes(1);
-    expect(resolveDeliveryTargetMock.mock.calls[0]?.[2]).toMatchObject({
-      channel: "last",
-      sessionKey: undefined,
-    });
+    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
       disableMessageTool: false,
       forceMessageTool: true,
-      messageChannel: "messagechat",
-      messageTo: "123",
-      currentChannelId: "123",
     });
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.messageChannel).toBeUndefined();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.messageTo).toBeUndefined();
   });
 
   it("resolves implicit last-target context for delivery.mode none with only accountId", async () => {
@@ -690,7 +707,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
   });
 
-  it("marks no-deliver runs delivered when the message tool sends to the current target", async () => {
+  it("does not mark bare no-deliver runs delivered when the current target is unresolved", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: false,
@@ -707,11 +724,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(dispatchCronDeliveryMock.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         deliveryRequested: false,
-        skipMessagingToolDelivery: true,
+        skipMessagingToolDelivery: false,
+        unverifiedMessagingToolDelivery: true,
       }),
     );
-    expect(result.delivered).toBe(true);
-    expect(result.deliveryAttempted).toBe(true);
+    expect(result.delivered).toBe(false);
+    expect(result.deliveryAttempted).toBe(false);
   });
 });
 

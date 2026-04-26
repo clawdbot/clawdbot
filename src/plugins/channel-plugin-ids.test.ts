@@ -31,6 +31,14 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./installed-plugin-index-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
+  return {
+    ...actual,
+    readPersistedInstalledPluginIndexSync: vi.fn(() => null),
+  };
+});
+
 import {
   hasConfiguredChannelsForReadOnlyScope,
   listConfiguredAnnounceChannelIdsForConfig,
@@ -41,6 +49,17 @@ import {
   resolveConfiguredChannelPluginIds,
   resolveGatewayStartupPluginIds,
 } from "./channel-plugin-ids.js";
+
+function withManifestLoadPaths<T extends { id: string }>(plugin: T): T {
+  return {
+    rootDir: `/tmp/plugins/${plugin.id}`,
+    source: `/tmp/plugins/${plugin.id}/index.ts`,
+    manifestPath: `/tmp/plugins/${plugin.id}/openclaw.plugin.json`,
+    skills: [],
+    hooks: [],
+    ...plugin,
+  };
+}
 
 function createManifestRegistryFixture() {
   return {
@@ -76,6 +95,30 @@ function createManifestRegistryFixture() {
         enabledByDefault: undefined,
         providers: ["demo-provider"],
         cliBackends: ["demo-cli"],
+      },
+      {
+        id: "anthropic",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["anthropic"],
+        cliBackends: ["claude-cli"],
+      },
+      {
+        id: "openai",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["openai", "openai-codex"],
+        cliBackends: ["codex-cli"],
+      },
+      {
+        id: "google",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["google", "google-gemini-cli"],
+        cliBackends: ["google-gemini-cli"],
       },
       {
         id: "codex",
@@ -177,7 +220,7 @@ function createManifestRegistryFixture() {
         providers: [],
         cliBackends: [],
       },
-    ],
+    ].map(withManifestLoadPaths),
     diagnostics: [],
   };
 }
@@ -197,7 +240,7 @@ function createManifestRegistryFixtureWithWorkspaceDemoChannel() {
         providers: [],
         cliBackends: [],
       },
-    ],
+    ].map(withManifestLoadPaths),
   };
 }
 
@@ -233,8 +276,8 @@ function createStartupConfig(params: {
   enabledPluginIds?: string[];
   providerIds?: string[];
   modelId?: string;
-  embeddedHarnessRuntime?: string;
-  agentEmbeddedHarnessRuntimes?: string[];
+  agentRuntimeId?: string;
+  agentRuntimeIds?: string[];
   channelIds?: string[];
   allowPluginIds?: string[];
   noConfiguredChannels?: boolean;
@@ -297,10 +340,10 @@ function createStartupConfig(params: {
           agents: {
             defaults: {
               model: { primary: params.modelId },
-              ...(params.embeddedHarnessRuntime
+              ...(params.agentRuntimeId
                 ? {
-                    embeddedHarness: {
-                      runtime: params.embeddedHarnessRuntime,
+                    agentRuntime: {
+                      id: params.agentRuntimeId,
                       fallback: "none",
                     },
                   }
@@ -309,32 +352,32 @@ function createStartupConfig(params: {
                 [params.modelId]: {},
               },
             },
-            ...(params.agentEmbeddedHarnessRuntimes?.length
+            ...(params.agentRuntimeIds?.length
               ? {
-                  list: params.agentEmbeddedHarnessRuntimes.map((runtime, index) => ({
+                  list: params.agentRuntimeIds.map((runtime, index) => ({
                     id: `agent-${index + 1}`,
-                    embeddedHarness: { runtime },
+                    agentRuntime: { id: runtime },
                   })),
                 }
               : {}),
           },
         }
-      : params.embeddedHarnessRuntime || params.agentEmbeddedHarnessRuntimes?.length
+      : params.agentRuntimeId || params.agentRuntimeIds?.length
         ? {
             agents: {
-              defaults: params.embeddedHarnessRuntime
+              defaults: params.agentRuntimeId
                 ? {
-                    embeddedHarness: {
-                      runtime: params.embeddedHarnessRuntime,
+                    agentRuntime: {
+                      id: params.agentRuntimeId,
                       fallback: "none",
                     },
                   }
                 : {},
-              ...(params.agentEmbeddedHarnessRuntimes?.length
+              ...(params.agentRuntimeIds?.length
                 ? {
-                    list: params.agentEmbeddedHarnessRuntimes.map((runtime, index) => ({
+                    list: params.agentRuntimeIds.map((runtime, index) => ({
                       id: `agent-${index + 1}`,
-                      embeddedHarness: { runtime },
+                      agentRuntime: { id: runtime },
                     })),
                   }
                 : {}),
@@ -525,6 +568,51 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("does not treat persisted auth alone as gateway startup intent", () => {
+    listPotentialConfiguredChannelIds.mockImplementation(
+      (
+        _config: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { includePersistedAuthState?: boolean },
+      ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
+    );
+
+    expectStartupPluginIdsCase({
+      config: {} as OpenClawConfig,
+      env: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
+      } as NodeJS.ProcessEnv,
+      expected: ["browser"],
+    });
+  });
+
+  it("does not treat persisted auth alone as deferred channel startup intent", () => {
+    loadPluginManifestRegistry
+      .mockReset()
+      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+    listPotentialConfiguredChannelIds.mockImplementation(
+      (
+        _config: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { includePersistedAuthState?: boolean },
+      ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
+    );
+
+    expect(
+      resolveConfiguredDeferredChannelPluginIds({
+        config: {
+          plugins: {
+            allow: ["workspace-demo-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual([]);
+  });
+
   it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {
     loadPluginManifestRegistry
       .mockReset()
@@ -581,7 +669,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   it("includes required agent harness owner plugins when the default runtime is forced", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
-        embeddedHarnessRuntime: "codex",
+        agentRuntimeId: "codex",
         enabledPluginIds: ["codex"],
       }),
       expected: ["demo-channel", "browser", "codex"],
@@ -591,7 +679,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   it("includes required agent harness owner plugins when an agent override forces the runtime", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
-        agentEmbeddedHarnessRuntimes: ["codex"],
+        agentRuntimeIds: ["codex"],
         enabledPluginIds: ["codex"],
       }),
       expected: ["demo-channel", "browser", "codex"],
@@ -608,13 +696,59 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("includes required CLI backend owner plugins when the default runtime is forced", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        agentRuntimeId: "demo-cli",
+        enabledPluginIds: ["demo-provider-plugin"],
+      }),
+      expected: ["demo-channel", "browser", "demo-provider-plugin"],
+    });
+  });
+
+  it.each([
+    ["claude-cli", "anthropic"],
+    ["codex-cli", "openai"],
+    ["google-gemini-cli", "google"],
+  ] as const)("includes the bundled %s CLI backend owner at startup", (runtime, pluginId) => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        agentRuntimeId: runtime,
+      }),
+      expected: ["demo-channel", "browser", pluginId],
+    });
+  });
+
+  it("does not include required CLI backend owner plugins when they are explicitly disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        agents: {
+          defaults: {
+            agentRuntime: {
+              id: "demo-cli",
+              fallback: "none",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "demo-provider-plugin": {
+              enabled: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser"],
+    });
+  });
+
   it("does not include required agent harness owner plugins when they are explicitly disabled", () => {
     expectStartupPluginIdsCase({
       config: {
         agents: {
           defaults: {
-            embeddedHarness: {
-              runtime: "codex",
+            agentRuntime: {
+              id: "codex",
               fallback: "none",
             },
           },

@@ -231,7 +231,8 @@ describe("createLaneTextDeliverer", () => {
 
   it("retains preview when an existing preview final edit fails with ambiguous error", async () => {
     const harness = createHarness({ answerMessageId: 999 });
-    // Plain Error with no error_code → ambiguous, prefer incomplete over duplicate
+    // Plain Error with no error_code → ambiguous. Retain unless the preview is
+    // known to be an incomplete prefix of the final text.
     harness.editPreview.mockRejectedValue(new Error("500: preview edit failed"));
 
     await expectFinalPreviewRetained({
@@ -239,6 +240,20 @@ describe("createLaneTextDeliverer", () => {
       expectedLogSnippet: "ambiguous error; keeping existing preview to avoid duplicate",
     });
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back when an ambiguous final edit failure would leave an incomplete preview", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      answerLastPartialText: "Hello fi",
+    });
+    harness.editPreview.mockRejectedValue(new Error("500: preview edit failed"));
+
+    await expectFinalEditFallbackToSend({
+      harness,
+      text: HELLO_FINAL,
+      expectedLogSnippet: "preview is an incomplete prefix; falling back",
+    });
   });
 
   it("falls back when Telegram reports the current final edit target missing", async () => {
@@ -475,6 +490,29 @@ describe("createLaneTextDeliverer", () => {
       expect.objectContaining({ text: "Complete final answer" }),
     );
     expect(result.kind).toBe("sent");
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(5555);
+  });
+
+  it("falls back when an archived preview ambiguous final edit would leave an incomplete prefix", async () => {
+    const harness = createHarness();
+    harness.archivedAnswerPreviews.push({
+      messageId: 5555,
+      textSnapshot: "Hello fi",
+      deleteIfUnused: true,
+    });
+    harness.editPreview.mockRejectedValue(new Error("500: preview edit failed"));
+
+    await expectFinalEditFallbackToSend({
+      harness,
+      text: HELLO_FINAL,
+      expectedLogSnippet: "preview is an incomplete prefix; falling back",
+    });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 5555,
+        text: HELLO_FINAL,
+      }),
+    );
     expect(harness.deletePreviewMessage).toHaveBeenCalledWith(5555);
   });
 

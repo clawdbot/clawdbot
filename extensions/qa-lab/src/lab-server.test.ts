@@ -85,6 +85,7 @@ const captureMock = vi.hoisted(() => {
     readBlob() {
       return null;
     },
+    close: vi.fn(),
     deleteSessions(sessionIds: string[]) {
       const ids = new Set(sessionIds);
       for (let index = sessions.length - 1; index >= 0; index -= 1) {
@@ -106,11 +107,16 @@ const captureMock = vi.hoisted(() => {
     reset() {
       sessions.splice(0);
       events.splice(0);
+      store.close.mockClear();
     },
   };
 });
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+  acquireDebugProxyCaptureStore: () => ({
+    store: captureMock.store,
+    release: captureMock.store.close,
+  }),
   getDebugProxyCaptureStore: () => captureMock.store,
   resolveDebugProxySettings: () => ({
     dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH ?? "",
@@ -508,9 +514,9 @@ describe("qa-lab server", () => {
         `fs.writeFileSync(${JSON.stringify(markerPath)}, process.argv.slice(2).join(" "), "utf8");`,
         "process.stdout.write(JSON.stringify({",
         "  models: [{",
-        '    key: "openai/gpt-5.4",',
-        '    name: "GPT-5.4",',
-        '    input: "openai/gpt-5.4",',
+        '    key: "openai/gpt-5.5",',
+        '    name: "GPT-5.5",',
+        '    input: "openai/gpt-5.5",',
         "    available: true,",
         "    missing: false,",
         "  }],",
@@ -726,7 +732,7 @@ describe("qa-lab server", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         captureOrigin: "shared-fetch",
       }),
     });
@@ -747,7 +753,7 @@ describe("qa-lab server", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         captureOrigin: "shared-fetch",
       }),
     });
@@ -796,7 +802,7 @@ describe("qa-lab server", () => {
         expect.objectContaining({
           flowId: "flow-1",
           provider: "openai",
-          model: "gpt-5.4",
+          model: "gpt-5.5",
           captureOrigin: "shared-fetch",
         }),
         expect.objectContaining({
@@ -828,7 +834,7 @@ describe("qa-lab server", () => {
     );
     expect(coverage.coverage.models).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ value: "gpt-5.4", count: 2 }),
+        expect.objectContaining({ value: "gpt-5.5", count: 2 }),
         expect.objectContaining({ value: "kimi-k2.5:cloud", count: 1 }),
       ]),
     );

@@ -212,6 +212,12 @@ export function createWhatsAppPluginBase(params: {
       polls: true,
       reactions: true,
       media: true,
+      tts: {
+        voice: {
+          synthesisTarget: "voice-note",
+          transcodesAudio: true,
+        },
+      },
     },
     reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
     gatewayMethods: ["web.login.start", "web.login.wait"],

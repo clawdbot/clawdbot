@@ -181,6 +181,28 @@ describe("loginOpenAICodexOAuth", () => {
     );
   });
 
+  it("explains OpenAI unsupported region token exchange failures", async () => {
+    mocks.loginOpenAICodex.mockRejectedValue(new Error("403 unsupported_country_region_territory"));
+
+    const { prompter, spin } = createPrompter();
+    const runtime = createRuntime();
+    await expect(
+      loginOpenAICodexOAuth({
+        prompter,
+        runtime,
+        isRemote: false,
+        openUrl: async () => {},
+      }),
+    ).rejects.toThrow(/unsupported_region/i);
+
+    expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth failed");
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("HTTPS_PROXY"));
+    expect(prompter.note).toHaveBeenCalledWith(
+      "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
+      "OAuth help",
+    );
+  });
+
   it("passes manual code input hook for remote oauth flows", async () => {
     const creds = createCodexCredentials();
     mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {

@@ -1,10 +1,11 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginManifestActivationCapability } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
 export type PluginActivationPlannerTrigger =
@@ -56,18 +57,22 @@ type ResolveManifestActivationPlanParams = {
   cache?: boolean;
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
+  manifestRecords?: readonly PluginManifestRecord[];
 };
 
 export function resolveManifestActivationPlan(
   params: ResolveManifestActivationPlanParams,
 ): PluginActivationPlan {
   const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
-  const registry = loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    cache: params.cache,
-  });
+  const registry = params.manifestRecords
+    ? { plugins: params.manifestRecords, diagnostics: [] }
+    : loadPluginManifestRegistryForPluginRegistry({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        cache: params.cache,
+        includeDisabled: true,
+      });
   const entries = registry.plugins
     .flatMap((plugin) => {
       if (params.origin && plugin.origin !== params.origin) {

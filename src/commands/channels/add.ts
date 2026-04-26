@@ -5,7 +5,9 @@ import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
-import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -13,7 +15,8 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
-import { channelLabel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
+import { channelLabel } from "./runtime-label.js";
+import { requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
 type ChannelSetupPluginInstallModule = typeof import("../channel-setup/plugin-install.js");
 type OnboardChannelsModule = typeof import("../onboard-channels.js");
@@ -111,6 +114,7 @@ export async function channelsAddCommand(
   const cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
   const baseHash = configSnapshot.hash;
   let nextConfig = cfg;
+  let pluginRegistrySourceChanged = false;
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
@@ -237,13 +241,22 @@ export async function channelsAddCommand(
       }
     }
 
-    await replaceConfigFile({
+    const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig,
       ...(baseHash !== undefined ? { baseHash } : {}),
     });
+    const writtenConfig = committed.config;
+    if (committed.movedInstallRecords) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: writtenConfig,
+        reason: "source-changed",
+        installRecords: committed.installRecords,
+        logger: { warn: (message) => runtime.log(message) },
+      });
+    }
     await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
       hooks: postWriteHooks.drain(),
-      cfg: nextConfig,
+      cfg: writtenConfig,
       runtime,
     });
     await prompter.outro("Channels updated.");
@@ -303,6 +316,7 @@ export async function channelsAddCommand(
       if (!result.installed) {
         return;
       }
+      pluginRegistrySourceChanged = true;
       catalogEntry = {
         ...catalogEntry,
         ...(result.pluginId ? { pluginId: result.pluginId } : {}),
@@ -368,10 +382,19 @@ export async function channelsAddCommand(
     runtime,
   });
 
-  await replaceConfigFile({
+  const committed = await commitConfigWithPendingPluginInstalls({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
   });
+  const writtenConfig = committed.config;
+  if (committed.movedInstallRecords || pluginRegistrySourceChanged) {
+    await refreshPluginRegistryAfterConfigMutation({
+      config: writtenConfig,
+      reason: "source-changed",
+      ...(committed.movedInstallRecords ? { installRecords: committed.installRecords } : {}),
+      logger: { warn: (message) => runtime.log(message) },
+    });
+  }
   runtime.log(`Added ${plugin.meta.label ?? channelLabel(channel)} account "${accountId}".`);
   const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {
@@ -391,7 +414,7 @@ export async function channelsAddCommand(
             }),
         },
       ],
-      cfg: nextConfig,
+      cfg: writtenConfig,
       runtime,
     });
   }

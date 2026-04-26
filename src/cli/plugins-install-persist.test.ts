@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   enablePluginInConfig,
-  recordPluginInstall,
+  refreshPluginRegistry,
   resetPluginsCliTestState,
   writeConfigFile,
+  writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
 describe("persistPluginInstall", () => {
@@ -27,26 +28,12 @@ describe("persistPluginInstall", () => {
         },
       },
     } as OpenClawConfig;
-    const persistedConfig = {
-      plugins: {
-        ...enabledConfig.plugins,
-        installs: {
-          alpha: {
-            source: "npm",
-            spec: "alpha@1.0.0",
-            installPath: "/tmp/alpha",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
     enablePluginInConfig.mockImplementation((...args: unknown[]) => {
       const [cfg, pluginId] = args as [OpenClawConfig, string];
       expect(pluginId).toBe("alpha");
       expect(cfg.plugins?.allow).toEqual(["alpha", "memory-core"]);
       return { config: enabledConfig };
     });
-    recordPluginInstall.mockReturnValue(persistedConfig);
 
     const next = await persistPluginInstall({
       config: baseConfig,
@@ -58,7 +45,25 @@ describe("persistPluginInstall", () => {
       },
     });
 
-    expect(next).toBe(persistedConfig);
-    expect(writeConfigFile).toHaveBeenCalledWith(persistedConfig);
+    expect(next).toEqual(enabledConfig);
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      alpha: expect.objectContaining({
+        source: "npm",
+        spec: "alpha@1.0.0",
+        installPath: "/tmp/alpha",
+      }),
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: enabledConfig,
+      installRecords: {
+        alpha: expect.objectContaining({
+          source: "npm",
+          spec: "alpha@1.0.0",
+          installPath: "/tmp/alpha",
+        }),
+      },
+      reason: "source-changed",
+    });
   });
 });

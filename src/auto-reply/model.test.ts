@@ -72,6 +72,20 @@ describe("extractModelDirective", () => {
       expect(result.rawProfile).toBe("cf:default");
     });
 
+    it("keeps LM Studio @iq* quant suffixes inside model ids", () => {
+      const result = extractModelDirective("/model lmstudio/qwen3.6-27b@iq3_xxs");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("lmstudio/qwen3.6-27b@iq3_xxs");
+      expect(result.rawProfile).toBeUndefined();
+    });
+
+    it("allows profile overrides after LM Studio @iq* quant suffixes", () => {
+      const result = extractModelDirective("/model lmstudio/qwen3.6-27b@iq3_xxs@work");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("lmstudio/qwen3.6-27b@iq3_xxs");
+      expect(result.rawProfile).toBe("work");
+    });
+
     it("returns no directive for plain text", () => {
       const result = extractModelDirective("hello world");
       expect(result.hasDirective).toBe(false);

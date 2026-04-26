@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { parseMessageContent } from "./bot-content.js";
 import {
   buildBroadcastSessionKey,
   buildFeishuAgentBody,
@@ -44,6 +45,29 @@ describe("toMessageResourceType", () => {
     expect(toMessageResourceType("video")).toBe("file");
     expect(toMessageResourceType("file")).toBe("file");
     expect(toMessageResourceType("sticker")).toBe("file");
+  });
+});
+
+describe("parseMessageContent media placeholders", () => {
+  it("uses an audio placeholder instead of leaking raw file_key JSON", () => {
+    expect(
+      parseMessageContent(JSON.stringify({ file_key: "file_audio", duration: 1200 }), "audio"),
+    ).toBe("<media:audio>");
+  });
+
+  it("prefers Feishu-provided audio transcript text when present", () => {
+    expect(
+      parseMessageContent(
+        JSON.stringify({ file_key: "file_audio", speech_to_text: " spoken words " }),
+        "audio",
+      ),
+    ).toBe("spoken words");
+  });
+
+  it("keeps media filenames as placeholder context without raw payload fields", () => {
+    expect(
+      parseMessageContent(JSON.stringify({ file_key: "file_doc", file_name: "q1.pdf" }), "file"),
+    ).toBe("<media:document> (q1.pdf)");
   });
 });
 

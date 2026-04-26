@@ -3,7 +3,7 @@ import {
   hasResolvedCredentialValue,
 } from "../channels/account-snapshot-fields.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -80,7 +80,7 @@ function formatChannelAccountNote(params: {
 export async function collectChannelSecurityFindings(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
-  plugins: ReturnType<typeof listChannelPlugins>;
+  plugins: ChannelPlugin[];
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const sourceConfig = params.sourceConfig ?? params.cfg;

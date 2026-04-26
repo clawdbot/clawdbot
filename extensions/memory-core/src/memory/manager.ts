@@ -338,7 +338,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       opts?.sources && opts.sources.length > 0
         ? [...new Set(opts.sources)].filter((s) => this.sources.has(s))
         : undefined;
-    if (opts?.sources && opts.sources.length > 0 && (!searchSources || searchSources.length === 0)) {
+    if (
+      opts?.sources &&
+      opts.sources.length > 0 &&
+      (!searchSources || searchSources.length === 0)
+    ) {
       return [];
     }
     const sourceFilterList = searchSources ?? [...this.sources];
@@ -375,9 +379,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                 });
                 const searchTerms = keywords.length > 0 ? keywords : [cleaned];
                 return searchTerms.map((term) =>
-                  this.searchKeyword(term, candidates, { boostFallbackRanking: true }, sourceFilterList).catch(
-                    () => [],
-                  ),
+                  this.searchKeyword(
+                    term,
+                    candidates,
+                    { boostFallbackRanking: true },
+                    sourceFilterList,
+                  ).catch(() => []),
                 );
               })(),
             );

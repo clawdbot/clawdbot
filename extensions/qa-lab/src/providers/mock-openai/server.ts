@@ -53,7 +53,7 @@ type StreamEvent =
  * - Everything else (including empty strings) → `"unknown"`
  *
  * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.4` model string is still
+ * so an Anthropic request with an `openai/gpt-5.5` model string is still
  * classified as `"openai"`. That matches the parity program's convention
  * where the provider label is the source of truth, not the HTTP route.
  */
@@ -78,7 +78,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.4` or `claude-opus-4-6`.
+  // `gpt-5.5` or `claude-opus-4-6`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -338,21 +338,33 @@ function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string
   return texts.join("\n");
 }
 
-function countImageInputs(input: ResponsesInputItem[]) {
+function countImageInputs(value: unknown): number {
+  const seen = new WeakSet<object>();
+  const stack = [value];
   let count = 0;
-  for (const item of input) {
-    if (!Array.isArray(item.content)) {
+  let visited = 0;
+  while (stack.length > 0 && visited < 50_000) {
+    visited += 1;
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      for (const entry of current) {
+        stack.push(entry);
+      }
       continue;
     }
-    for (const entry of item.content) {
-      if (
-        entry &&
-        typeof entry === "object" &&
-        (entry as { type?: unknown }).type === "input_image"
-      ) {
-        count += 1;
-      }
+    if (!current || typeof current !== "object") {
+      continue;
     }
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const record = current as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : "";
+    if (type === "input_image" || type === "image" || type === "image_url" || type === "media") {
+      count += 1;
+    }
+    stack.push(record.content, record.image_url, record.source);
   }
   return count;
 }
@@ -522,6 +534,14 @@ function extractExactReplyDirective(text: string) {
   return extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
 }
 
+function extractFinishExactlyDirective(text: string) {
+  const backtickedMatch = extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
+  }
+  return extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i);
+}
+
 function extractExactMarkerDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
   if (backtickedMatch) {
@@ -648,6 +668,8 @@ function buildAssistantText(
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const finishExactlyDirective =
+    extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const imageInputCount = countImageInputs(input);
@@ -810,6 +832,9 @@ function buildAssistantText(
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
+  }
+  if (finishExactlyDirective) {
+    return finishExactlyDirective;
   }
   if (prompt) {
     return `Protocol note: acknowledged. Continue with the QA scenario plan and report worked, failed, and blocked items.`;
@@ -1373,6 +1398,7 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("memory_search", {
         query: "current Project Nebula codename ORBIT-10",
         maxResults: 3,
+        corpus: "sessions",
       });
     }
     const results = Array.isArray(toolJson?.results)
@@ -1537,7 +1563,7 @@ async function buildResponsesPayload(
 // ---------------------------------------------------------------------------
 //
 // The QA parity gate needs two comparable scenario runs: one against the
-// "candidate" (openai/gpt-5.4) and one against the "baseline"
+// "candidate" (openai/gpt-5.5) and one against the "baseline"
 // (anthropic/claude-opus-4-6). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
@@ -1926,8 +1952,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
     if (req.method === "GET" && url.pathname === "/v1/models") {
       writeJson(res, 200, {
         data: [
-          { id: "gpt-5.4", object: "model" },
-          { id: "gpt-5.4-alt", object: "model" },
+          { id: "gpt-5.5", object: "model" },
+          { id: "gpt-5.5-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
           { id: "text-embedding-3-small", object: "model" },
           { id: "claude-opus-4-6", object: "model" },

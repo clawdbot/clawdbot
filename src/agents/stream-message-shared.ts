@@ -72,6 +72,23 @@ export function buildAssistantMessageWithZeroUsage(params: {
   });
 }
 
+// Single canonical sentinel placed in the `content` array of any assistant turn
+// that failed before the model produced its own content. AWS Bedrock Converse
+// rejects assistant messages with `content: []` during replay ("The content
+// field in the Message object at messages.N is empty."), which can persist into
+// the session file and trap subsequent turns in a validation-failure loop. The
+// raw provider error text is intentionally NOT placed in `content` because that
+// array is replayed back to the model on the next turn — provider error strings
+// can carry hostnames or upstream metadata, and replaying them as assistant
+// content opens a prompt-injection surface (CWE-200). The detailed error stays
+// in the peer `errorMessage` field, which clients/UIs read directly and
+// providers do not include in their wire payloads.
+//
+// This constant is the single source of truth used by replay normalization and
+// session-file repair as well, so a session repaired offline reads identically
+// to a live stream-error turn (and the repair pass remains idempotent).
+export const STREAM_ERROR_FALLBACK_TEXT = "[assistant turn failed before producing content]";
+
 export function buildStreamErrorAssistantMessage(params: {
   model: StreamModelDescriptor;
   errorMessage: string;
@@ -80,7 +97,7 @@ export function buildStreamErrorAssistantMessage(params: {
   return {
     ...buildAssistantMessageWithZeroUsage({
       model: params.model,
-      content: [],
+      content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
       stopReason: "error",
       timestamp: params.timestamp,
     }),

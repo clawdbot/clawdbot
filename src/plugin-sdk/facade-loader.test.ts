@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -18,6 +19,24 @@ const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const FACADE_LOADER_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModuleSync";
 type FacadeLoaderJitiFactory = NonNullable<Parameters<typeof setFacadeLoaderJitiFactoryForTest>[0]>;
+
+function forceNodeRuntimeVersionsForTest(): () => void {
+  const originalVersions = process.versions;
+  const nodeVersions = { ...originalVersions } as NodeJS.ProcessVersions & {
+    bun?: string | undefined;
+  };
+  delete nodeVersions.bun;
+  Object.defineProperty(process, "versions", {
+    configurable: true,
+    value: nodeVersions,
+  });
+  return () => {
+    Object.defineProperty(process, "versions", {
+      configurable: true,
+      value: originalVersions,
+    });
+  };
+}
 
 function createBundledPluginDir(prefix: string, marker: string): string {
   return createBundledPluginPublicSurfaceFixture({ createTempDirSync, marker, prefix });
@@ -108,7 +127,7 @@ describe("plugin-sdk facade loader", () => {
     expect(listImportedFacadeRuntimeIds()).toEqual(["demo"]);
   });
 
-  it("keeps Windows dist facade loads off Jiti native import", () => {
+  it("uses the runtime-supported Jiti boundary for Windows dist facade loads", () => {
     const dir = createTempDirSync("openclaw-facade-loader-windows-dist-");
     const bundledPluginsDir = path.join(dir, "dist");
     fs.mkdirSync(path.join(bundledPluginsDir, "demo"), { recursive: true });
@@ -127,6 +146,7 @@ describe("plugin-sdk facade loader", () => {
       })) as unknown as ReturnType<FacadeLoaderJitiFactory>;
     }) as FacadeLoaderJitiFactory);
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const restoreVersions = forceNodeRuntimeVersionsForTest();
 
     try {
       expect(
@@ -139,10 +159,11 @@ describe("plugin-sdk facade loader", () => {
       expect(createJitiCalls[0]?.[0]).toEqual(expect.any(String));
       expect(createJitiCalls[0]?.[1]).toEqual(
         expect.objectContaining({
-          tryNative: false,
+          tryNative: shouldExpectNativeJitiForJavaScriptTestRuntime(),
         }),
       );
     } finally {
+      restoreVersions();
       platformSpy.mockRestore();
     }
   });

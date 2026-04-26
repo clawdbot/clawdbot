@@ -7,6 +7,7 @@ import {
   stripProviderPrefix,
 } from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import { assessLastAssistantMessage } from "../thinking.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -328,6 +329,37 @@ function isEmptyResponseAssistantTurn(params: {
   return true;
 }
 
+function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
+  payloadCount: number;
+  attempt: Pick<
+    IncompleteTurnAttempt,
+    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+  >;
+}): boolean {
+  if (isEmptyResponseAssistantTurn(params)) {
+    return true;
+  }
+  if (params.payloadCount !== 0) {
+    return false;
+  }
+  if (params.attempt.assistantTexts.join("\n\n").trim().length > 0) {
+    return false;
+  }
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (!assistant || assistant.stopReason === "error") {
+    return false;
+  }
+  if (
+    isIncompleteTerminalAssistantTurn({
+      hasAssistantVisibleText: false,
+      lastAssistant: assistant,
+    })
+  ) {
+    return false;
+  }
+  return isReasoningOnlyAssistantTurn(assistant);
+}
+
 function shouldSkipPlanningOnlyRetry(params: {
   aborted: boolean;
   timedOut: boolean;
@@ -342,6 +374,25 @@ function shouldSkipPlanningOnlyRetry(params: {
     params.attempt.lastToolError ||
     params.attempt.replayMetadata.hadPotentialSideEffects,
   );
+}
+
+export function shouldTreatEmptyAssistantReplyAsSilent(params: {
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): boolean {
+  if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipPlanningOnlyRetry(params)) {
+    return false;
+  }
+  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
+    return false;
+  }
+  return isNonVisibleAssistantTurnEligibleForSilentReply({
+    payloadCount: params.payloadCount,
+    attempt: params.attempt,
+  });
 }
 
 export function resolveReasoningOnlyRetryInstruction(params: {
@@ -394,16 +445,6 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   if (
-    !shouldApplyPlanningOnlyRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-      executionContract: params.executionContract,
-    })
-  ) {
-    return null;
-  }
-
-  if (
     !isEmptyResponseAssistantTurn({
       payloadCount: params.payloadCount,
       attempt: params.attempt,
@@ -412,7 +453,20 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
-  return EMPTY_RESPONSE_RETRY_INSTRUCTION;
+  if (
+    shouldApplyPlanningOnlyRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+      executionContract: params.executionContract,
+    }) ||
+    isZeroUsageEmptyStopAssistantTurn(
+      params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null,
+    )
+  ) {
+    return EMPTY_RESPONSE_RETRY_INSTRUCTION;
+  }
+
+  return null;
 }
 
 function shouldApplyPlanningOnlyRetryGuard(params: {

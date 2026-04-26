@@ -24,6 +24,12 @@ export type GoogleMeetTestNodeListResult = {
   }>;
 };
 
+type CommandResult = {
+  code: number;
+  stdout?: string;
+  stderr?: string;
+};
+
 export function captureStdout() {
   let output = "";
   const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
@@ -50,6 +56,10 @@ export function setupGoogleMeetPlugin(
       params?: unknown;
       timeoutMs?: number;
     }) => Promise<unknown>;
+    runCommandWithTimeoutHandler?: (
+      argv: string[],
+      options?: { timeoutMs?: number },
+    ) => Promise<CommandResult>;
   } = {},
 ) {
   const methods = new Map<string, unknown>();
@@ -112,12 +122,17 @@ export function setupGoogleMeetPlugin(
     }
     return options.nodesInvokeResult ?? { launched: true };
   });
-  const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
-    if (argv[0] === "/usr/sbin/system_profiler") {
-      return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
-    }
-    return { code: 0, stdout: "", stderr: "" };
-  });
+  const runCommandWithTimeout = vi.fn(
+    async (argv: string[], runOptions?: { timeoutMs?: number }) => {
+      if (options.runCommandWithTimeoutHandler) {
+        return options.runCommandWithTimeoutHandler(argv, runOptions);
+      }
+      if (argv[0] === "/usr/sbin/system_profiler") {
+        return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  );
   const api = createTestPluginApi({
     id: "google-meet",
     name: "Google Meet",

@@ -991,10 +991,25 @@ async function dispatchDiscordCommandInteraction(params: {
     }
   }
 
+  const menuNeedsModelContext =
+    !(commandArgs?.raw && !commandArgs.values) &&
+    command.args?.some(
+      (arg) => typeof arg.choices === "function" && commandArgs?.values?.[arg.name] == null,
+    );
+  const menuModelContext = menuNeedsModelContext
+    ? await resolveDiscordNativeChoiceContext({
+        interaction: interaction as CommandInteraction,
+        cfg,
+        accountId,
+        threadBindings,
+      })
+    : null;
   const menu = resolveCommandArgMenu({
     command,
     args: commandArgs,
     cfg,
+    provider: menuModelContext?.provider,
+    model: menuModelContext?.model,
   });
   if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({

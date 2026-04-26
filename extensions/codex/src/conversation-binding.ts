@@ -113,6 +113,9 @@ export async function handleCodexConversationInboundClaim(
   if (!data) {
     return undefined;
   }
+  if (event.commandAuthorized !== true) {
+    return { handled: true };
+  }
   const prompt = (event.bodyForAgent ?? event.content ?? "").trim();
   if (!prompt) {
     return { handled: true };

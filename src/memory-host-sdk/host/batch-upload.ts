@@ -3,7 +3,7 @@ import {
   normalizeBatchBaseUrl,
   type BatchHttpClientConfig,
 } from "./batch-utils.js";
-import { hashText } from "./internal.js";
+import { hashText } from "./hash.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 
 export async function uploadBatchJsonlFile(params: {

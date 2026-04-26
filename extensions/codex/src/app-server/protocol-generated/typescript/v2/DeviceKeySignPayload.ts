@@ -7,48 +7,62 @@ import type { RemoteControlClientEnrollmentAudience } from "./RemoteControlClien
 /**
  * Structured payloads accepted by `device/key/sign`.
  */
-export type DeviceKeySignPayload = { "type": "remoteControlClientConnection", nonce: string, audience: RemoteControlClientConnectionAudience,
-/**
- * Backend-issued websocket session id that this proof authorizes.
- */
-sessionId: string,
-/**
- * Origin of the backend endpoint that issued the challenge and will verify this proof.
- */
-targetOrigin: string,
-/**
- * Websocket route path that this proof authorizes.
- */
-targetPath: string, accountUserId: string, clientId: string,
-/**
- * Remote-control token expiration as Unix seconds.
- */
-tokenExpiresAt: number,
-/**
- * SHA-256 of the controller-scoped remote-control token, encoded as unpadded base64url.
- */
-tokenSha256Base64url: string,
-/**
- * Must contain exactly `remote_control_controller_websocket`.
- */
-scopes: Array<string>, } | { "type": "remoteControlClientEnrollment", nonce: string, audience: RemoteControlClientEnrollmentAudience,
-/**
- * Backend-issued enrollment challenge id that this proof authorizes.
- */
-challengeId: string,
-/**
- * Origin of the backend endpoint that issued the challenge and will verify this proof.
- */
-targetOrigin: string,
-/**
- * HTTP route path that this proof authorizes.
- */
-targetPath: string, accountUserId: string, clientId: string,
-/**
- * SHA-256 of the requested device identity operation, encoded as unpadded base64url.
- */
-deviceIdentitySha256Base64url: string,
-/**
- * Enrollment challenge expiration as Unix seconds.
- */
-challengeExpiresAt: number, };
+export type DeviceKeySignPayload =
+  | {
+      type: "remoteControlClientConnection";
+      nonce: string;
+      audience: RemoteControlClientConnectionAudience;
+      /**
+       * Backend-issued websocket session id that this proof authorizes.
+       */
+      sessionId: string;
+      /**
+       * Origin of the backend endpoint that issued the challenge and will verify this proof.
+       */
+      targetOrigin: string;
+      /**
+       * Websocket route path that this proof authorizes.
+       */
+      targetPath: string;
+      accountUserId: string;
+      clientId: string;
+      /**
+       * Remote-control token expiration as Unix seconds.
+       */
+      tokenExpiresAt: number;
+      /**
+       * SHA-256 of the controller-scoped remote-control token, encoded as unpadded base64url.
+       */
+      tokenSha256Base64url: string;
+      /**
+       * Must contain exactly `remote_control_controller_websocket`.
+       */
+      scopes: Array<string>;
+    }
+  | {
+      type: "remoteControlClientEnrollment";
+      nonce: string;
+      audience: RemoteControlClientEnrollmentAudience;
+      /**
+       * Backend-issued enrollment challenge id that this proof authorizes.
+       */
+      challengeId: string;
+      /**
+       * Origin of the backend endpoint that issued the challenge and will verify this proof.
+       */
+      targetOrigin: string;
+      /**
+       * HTTP route path that this proof authorizes.
+       */
+      targetPath: string;
+      accountUserId: string;
+      clientId: string;
+      /**
+       * SHA-256 of the requested device identity operation, encoded as unpadded base64url.
+       */
+      deviceIdentitySha256Base64url: string;
+      /**
+       * Enrollment challenge expiration as Unix seconds.
+       */
+      challengeExpiresAt: number;
+    };

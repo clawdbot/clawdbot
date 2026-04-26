@@ -20,6 +20,7 @@ const hoisted = vi.hoisted(() => {
   const scheduleSubagentOrphanRecovery = vi.fn();
   const shouldWakeFromRestartSentinel = vi.fn(() => false);
   const scheduleRestartSentinelWake = vi.fn();
+  const getAcpRuntimeBackend = vi.fn<(id?: string) => unknown>(() => null);
   const reconcilePendingSessionIdentities = vi.fn(async () => ({
     checked: 0,
     resolved: 0,
@@ -41,6 +42,7 @@ const hoisted = vi.hoisted(() => {
     scheduleSubagentOrphanRecovery,
     shouldWakeFromRestartSentinel,
     scheduleRestartSentinelWake,
+    getAcpRuntimeBackend,
     reconcilePendingSessionIdentities,
   };
 });
@@ -97,6 +99,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   })),
 }));
 
+vi.mock("../acp/runtime/registry.js", () => ({
+  getAcpRuntimeBackend: hoisted.getAcpRuntimeBackend,
+}));
+
 vi.mock("./server-restart-sentinel.js", () => ({
   scheduleRestartSentinelWake: hoisted.scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel: hoisted.shouldWakeFromRestartSentinel,
@@ -143,6 +149,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.scheduleSubagentOrphanRecovery.mockClear();
     hoisted.shouldWakeFromRestartSentinel.mockReturnValue(false);
     hoisted.scheduleRestartSentinelWake.mockClear();
+    hoisted.getAcpRuntimeBackend.mockReset();
+    hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();
   });
 
@@ -292,6 +300,46 @@ describe("startGatewayPostAttachRuntime", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("waits for a healthy ACP runtime backend before startup identity reconcile", async () => {
+    let healthy = false;
+    hoisted.getAcpRuntimeBackend.mockImplementation((id?: string) => ({
+      id: id ?? "acpx",
+      runtime: {},
+      healthy: () => healthy,
+    }));
+
+    await startGatewaySidecars({
+      cfg: {
+        hooks: { internal: { enabled: false } },
+        acp: { enabled: true, backend: "acpx" },
+      } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => undefined),
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.getAcpRuntimeBackend).toHaveBeenCalledWith("acpx");
+    });
+    expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
+
+    healthy = true;
+    await vi.waitFor(() => {
+      expect(hoisted.reconcilePendingSessionIdentities).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("passes typed gateway_start context with config, workspace dir, and a live cron getter", async () => {

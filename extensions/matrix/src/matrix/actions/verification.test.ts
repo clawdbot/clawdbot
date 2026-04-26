@@ -35,6 +35,7 @@ let listMatrixVerifications: typeof import("./verification.js").listMatrixVerifi
 let getMatrixEncryptionStatus: typeof import("./verification.js").getMatrixEncryptionStatus;
 let getMatrixRoomKeyBackupStatus: typeof import("./verification.js").getMatrixRoomKeyBackupStatus;
 let getMatrixVerificationStatus: typeof import("./verification.js").getMatrixVerificationStatus;
+let restoreMatrixRoomKeyBackup: typeof import("./verification.js").restoreMatrixRoomKeyBackup;
 let runMatrixSelfVerification: typeof import("./verification.js").runMatrixSelfVerification;
 let startMatrixVerification: typeof import("./verification.js").startMatrixVerification;
 
@@ -45,6 +46,7 @@ describe("matrix verification actions", () => {
       getMatrixRoomKeyBackupStatus,
       getMatrixVerificationStatus,
       listMatrixVerifications,
+      restoreMatrixRoomKeyBackup,
       runMatrixSelfVerification,
       startMatrixVerification,
     } = await import("./verification.js"));
@@ -259,6 +261,24 @@ describe("matrix verification actions", () => {
       trusted: true,
     });
     expect(withResolvedActionClientMock).toHaveBeenCalledTimes(2);
+    expect(withStartedActionClientMock).not.toHaveBeenCalled();
+  });
+
+  it("restores room-key backup without startup crypto auto-repair", async () => {
+    const restoreRoomKeyBackup = vi.fn(async () => ({
+      success: true,
+      imported: 1,
+      total: 1,
+    }));
+    withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ restoreRoomKeyBackup });
+    });
+
+    const restored = await restoreMatrixRoomKeyBackup({ recoveryKey: " key " });
+
+    expect(restored).toMatchObject({ success: true });
+    expect(restoreRoomKeyBackup).toHaveBeenCalledWith({ recoveryKey: "key" });
+    expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
     expect(withStartedActionClientMock).not.toHaveBeenCalled();
   });
 

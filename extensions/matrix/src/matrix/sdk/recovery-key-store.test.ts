@@ -382,4 +382,57 @@ describe("MatrixRecoveryKeyStore", () => {
     expect(persisted.keyId).toBe("OLD");
     expect(persisted.encodedPrivateKey).toBe(storedEncoded);
   });
+
+  it("generates a fresh recovery key when secret storage is explicitly rotated", async () => {
+    const recoveryKeyPath = createTempRecoveryKeyPath();
+    const oldEncoded = encodeRecoveryKey(
+      new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)),
+    );
+    fs.writeFileSync(
+      recoveryKeyPath,
+      JSON.stringify({
+        version: 1,
+        createdAt: "2026-03-12T00:00:00.000Z",
+        keyId: "OLD",
+        encodedPrivateKey: oldEncoded,
+        privateKeyBase64: Buffer.from(
+          new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)),
+        ).toString("base64"),
+      }),
+      "utf8",
+    );
+
+    const freshEncoded = encodeRecoveryKey(
+      new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 101)),
+    ) as string;
+    const bootstrapSecretStorage = createBootstrapSecretStorageMock();
+    const createRecoveryKeyFromPassphrase = vi.fn(async () =>
+      createGeneratedRecoveryKey({
+        keyId: "NEW",
+        name: "Fresh key",
+        bytes: Array.from({ length: 32 }, (_, i) => i + 101),
+        encodedPrivateKey: freshEncoded,
+      }),
+    );
+    const crypto = createRecoveryKeyCrypto({
+      bootstrapSecretStorage,
+      createRecoveryKeyFromPassphrase,
+      status: { ready: true, defaultKeyId: "OLD" },
+    });
+    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
+
+    await store.bootstrapSecretStorageWithRecoveryKey(crypto, {
+      forceNewRecoveryKey: true,
+      forceNewSecretStorage: true,
+    });
+
+    const persisted = JSON.parse(fs.readFileSync(recoveryKeyPath, "utf8")) as {
+      keyId?: string;
+      encodedPrivateKey?: string;
+    };
+    expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
+    expect(persisted.keyId).toBe("NEW");
+    expect(persisted.encodedPrivateKey).toBe(freshEncoded);
+    expect(persisted.encodedPrivateKey).not.toBe(oldEncoded);
+  });
 });

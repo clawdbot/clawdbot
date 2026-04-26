@@ -217,6 +217,7 @@ export function buildEmbeddedRunBaseParams(params: {
     senderIsOwner: params.run.senderIsOwner,
     enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider, params.model),
     silentExpected: params.run.silentExpected,
+    allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
     provider: params.provider,
     model: params.model,
     ...params.authProfile,

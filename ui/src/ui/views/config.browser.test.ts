@@ -349,7 +349,80 @@ describe("config view", () => {
     (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
+  });
 
+  it("shows section hero and hides nested card header in single-section form view", () => {
+    const { container } = renderConfigView({
+      activeSection: "auth",
+      schema: {
+        type: "object",
+        properties: {
+          auth: {
+            type: "object",
+            properties: {
+              authPermanentBackoffMinutes: {
+                type: "number",
+              },
+            },
+          },
+        },
+      },
+      formValue: {
+        auth: {
+          authPermanentBackoffMinutes: 10,
+        },
+      },
+      originalValue: {
+        auth: {
+          authPermanentBackoffMinutes: 10,
+        },
+      },
+    });
+
+    const heroTitle = container.querySelector(".config-section-hero__title");
+    expect(heroTitle?.textContent?.trim()).toBe("Authentication");
+    expect(container.querySelector(".config-section-card__header")).toBeNull();
+  });
+
+  it("keeps card headers in multi-section root view", () => {
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          auth: {
+            type: "object",
+            properties: {},
+          },
+          gateway: {
+            type: "object",
+            properties: {},
+          },
+        },
+      },
+      formValue: {
+        auth: {},
+        gateway: {},
+      },
+      originalValue: {
+        auth: {},
+        gateway: {},
+      },
+    });
+
+    expect(container.querySelectorAll(".config-section-card__header").length).toBeGreaterThan(0);
+  });
+
+  it("clears the active search query", () => {
+    const container = document.createElement("div");
+    const onSearchChange = vi.fn();
+    render(
+      renderConfig({
+        ...baseProps(),
+        searchQuery: "gateway",
+        onSearchChange,
+      }),
+      container,
+    );
     const clearButton = container.querySelector<HTMLButtonElement>(".config-search__clear");
     expect(clearButton).toBeTruthy();
     clearButton?.click();

@@ -79,7 +79,7 @@ vi.mock("../../auto-reply/commands-registry.js", () => ({
 vi.mock("../../auto-reply/skill-commands.js", () => ({
   listSkillCommandsForAgents: vi.fn(() => mockSkillCommands),
 }));
-vi.mock("../../plugins/command-registry-state.js", () => ({
+vi.mock("../../plugins/command-specs.js", () => ({
   getPluginCommandSpecs: vi.fn((provider?: string) => {
     if (provider === "whatsapp") {
       return [];

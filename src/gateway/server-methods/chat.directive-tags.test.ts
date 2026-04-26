@@ -26,6 +26,7 @@ const mockState = vi.hoisted(() => ({
     sensitiveMedia?: boolean;
     replyToId?: string;
     replyToCurrent?: boolean;
+    isReasoning?: boolean;
   } | null,
   dispatchedReplies: [] as Array<{
     kind: "tool" | "block" | "final";
@@ -36,6 +37,7 @@ const mockState = vi.hoisted(() => ({
       trustedLocalMedia?: boolean;
       replyToId?: string;
       replyToCurrent?: boolean;
+      isReasoning?: boolean;
     };
   }>,
   dispatchError: null as Error | null,
@@ -114,6 +116,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           sensitiveMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
+          isReasoning?: boolean;
         }) => boolean;
         sendBlockReply: (payload: {
           text?: string;
@@ -122,6 +125,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           trustedLocalMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
+          isReasoning?: boolean;
         }) => boolean;
         sendToolResult: (payload: {
           text?: string;
@@ -130,6 +134,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           trustedLocalMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
+          isReasoning?: boolean;
         }) => boolean;
         markComplete: () => void;
         waitForIdle: () => Promise<void>;
@@ -597,6 +602,31 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ],
     });
     expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:data:image/png;base64,cG5n");
+  });
+
+  it("suppresses reasoning payloads from webchat transcript replies", async () => {
+    createTranscriptFixture("openclaw-chat-send-reasoning-hidden-");
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: { text: "Reasoning:\n_step_", isReasoning: true },
+      },
+      {
+        kind: "final",
+        payload: { text: "final answer" },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-reasoning-hidden",
+    });
+
+    expect(JSON.stringify(payload?.message)).toContain("final answer");
+    expect(JSON.stringify(payload?.message)).not.toContain("Reasoning");
   });
 
   it("chat.inject keeps message defined when directive tag is the only content", async () => {

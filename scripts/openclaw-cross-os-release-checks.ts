@@ -18,6 +18,7 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertNoBundledRuntimeDepsStagingDebris } from "../src/infra/package-dist-inventory.ts";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -35,7 +36,7 @@ const providerConfig = {
     extensionId: "openai",
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
-    model: "openai/gpt-5.4",
+    model: "openai/gpt-5.5",
   },
   anthropic: {
     extensionId: "anthropic",
@@ -482,7 +483,8 @@ function isPackagedDistPath(relativePath) {
   return true;
 }
 
-async function writePackageDistInventoryForCandidate(params) {
+export async function writePackageDistInventoryForCandidate(params) {
+  await assertNoBundledRuntimeDepsStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
     ["pack", "--dry-run", "--ignore-scripts", "--json"],

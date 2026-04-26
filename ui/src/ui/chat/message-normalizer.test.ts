@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  normalizeMessage,
-  normalizeRoleForGrouping,
-  isToolResultMessage,
-} from "./message-normalizer.ts";
+import { normalizeMessage } from "./message-normalizer.ts";
 
 describe("message-normalizer", () => {
   describe("normalizeMessage", () => {
@@ -388,71 +384,6 @@ describe("message-normalizer", () => {
       });
 
       expect(result.senderLabel).toBe("Iris");
-    });
-  });
-
-  describe("normalizeRoleForGrouping", () => {
-    it("returns tool for toolresult", () => {
-      expect(normalizeRoleForGrouping("toolresult")).toBe("tool");
-      expect(normalizeRoleForGrouping("toolResult")).toBe("tool");
-      expect(normalizeRoleForGrouping("TOOLRESULT")).toBe("tool");
-    });
-
-    it("returns tool for tool_result", () => {
-      expect(normalizeRoleForGrouping("tool_result")).toBe("tool");
-      expect(normalizeRoleForGrouping("TOOL_RESULT")).toBe("tool");
-    });
-
-    it("returns tool for tool", () => {
-      expect(normalizeRoleForGrouping("tool")).toBe("tool");
-      expect(normalizeRoleForGrouping("Tool")).toBe("tool");
-    });
-
-    it("returns tool for function", () => {
-      expect(normalizeRoleForGrouping("function")).toBe("tool");
-      expect(normalizeRoleForGrouping("Function")).toBe("tool");
-    });
-
-    it("preserves user role", () => {
-      expect(normalizeRoleForGrouping("user")).toBe("user");
-      expect(normalizeRoleForGrouping("User")).toBe("User");
-    });
-
-    it("preserves assistant role", () => {
-      expect(normalizeRoleForGrouping("assistant")).toBe("assistant");
-    });
-
-    it("preserves system role", () => {
-      expect(normalizeRoleForGrouping("system")).toBe("system");
-    });
-  });
-
-  describe("isToolResultMessage", () => {
-    it("returns true for toolresult role", () => {
-      expect(isToolResultMessage({ role: "toolresult" })).toBe(true);
-      expect(isToolResultMessage({ role: "toolResult" })).toBe(true);
-      expect(isToolResultMessage({ role: "TOOLRESULT" })).toBe(true);
-    });
-
-    it("returns true for tool_result role", () => {
-      expect(isToolResultMessage({ role: "tool_result" })).toBe(true);
-      expect(isToolResultMessage({ role: "TOOL_RESULT" })).toBe(true);
-    });
-
-    it("returns false for other roles", () => {
-      expect(isToolResultMessage({ role: "user" })).toBe(false);
-      expect(isToolResultMessage({ role: "assistant" })).toBe(false);
-      expect(isToolResultMessage({ role: "tool" })).toBe(false);
-    });
-
-    it("returns false for missing role", () => {
-      expect(isToolResultMessage({})).toBe(false);
-      expect(isToolResultMessage({ content: "test" })).toBe(false);
-    });
-
-    it("returns false for non-string role", () => {
-      expect(isToolResultMessage({ role: 123 })).toBe(false);
-      expect(isToolResultMessage({ role: null })).toBe(false);
     });
   });
 });

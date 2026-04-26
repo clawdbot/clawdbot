@@ -204,6 +204,17 @@ describe("resolveControlUiLinks", () => {
     expect(links.wsUrl).toBe("ws://192.168.1.100:18789");
   });
 
+  it("uses secure schemes when gateway TLS is enabled", () => {
+    const links = resolveControlUiLinks({
+      port: 18789,
+      bind: "custom",
+      customBindHost: "192.168.1.100",
+      tlsEnabled: true,
+    });
+    expect(links.httpUrl).toBe("https://192.168.1.100:18789/");
+    expect(links.wsUrl).toBe("wss://192.168.1.100:18789");
+  });
+
   it("falls back to loopback for invalid customBindHost", () => {
     const links = resolveControlUiLinks({
       port: 18789,

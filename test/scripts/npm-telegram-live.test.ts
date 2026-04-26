@@ -46,26 +46,28 @@ describe("npm Telegram live Docker E2E", () => {
 
     expect(workflow).toContain("approve_release_manager:");
     expect(workflow).toContain("environment: npm-release");
-    expect(workflow).toContain("needs: [approve_release_manager, prepare_docker_e2e_image]");
+    expect(workflow).toContain("needs: approve_release_manager");
     expect(workflow).not.toContain('new Set(["admin", "write"])');
     expect(workflow).not.toContain("data.role_name");
     expect(workflow).not.toContain("github.rest.teams.listMembersInOrg");
     expect(workflow).not.toContain("getMembershipForUserInOrg");
   });
 
-  it("prepares and reuses a cached Docker E2E image before approval", () => {
+  it("builds and reuses a local Docker E2E image after approval", () => {
     const workflow = readFileSync(WORKFLOW_PATH, "utf8");
 
-    expect(workflow).toContain("prepare_docker_e2e_image:");
+    expect(workflow).not.toContain("prepare_docker_e2e_image:");
+    expect(workflow).toContain("run_npm_telegram_beta_e2e:");
+    expect(workflow).toContain("needs: approve_release_manager");
     expect(workflow).toContain("useblacksmith/setup-docker-builder");
     expect(workflow).toContain("useblacksmith/build-push-action");
+    expect(workflow).toContain("tags: openclaw-docker-e2e:local");
+    expect(workflow).toContain("load: true");
+    expect(workflow).toContain("push: false");
     expect(workflow).not.toContain("cache-from: type=gha");
     expect(workflow).not.toContain("cache-to: type=gha");
-    expect(workflow).toContain("needs: [approve_release_manager, prepare_docker_e2e_image]");
     expect(workflow).toContain('OPENCLAW_SKIP_DOCKER_BUILD: "1"');
-    expect(workflow).toContain(
-      "OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}",
-    );
+    expect(workflow).toContain("OPENCLAW_DOCKER_E2E_IMAGE: openclaw-docker-e2e:local");
   });
 
   it("lets npm-specific credential aliases override shared QA env", () => {

@@ -61,6 +61,7 @@ function formatAccountLine(params: {
     channel: channel.id,
     accountId: snapshot.accountId,
     name: snapshot.name,
+    channelLabel: channel.meta.label ?? channel.id,
     channelStyle: theme.accent,
     accountStyle: theme.heading,
   });
@@ -112,7 +113,9 @@ export async function channelsListCommand(
   }
   const includeUsage = opts.usage !== false;
 
-  const plugins = listReadOnlyChannelPluginsForConfig(cfg);
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    includeSetupRuntimeFallback: false,
+  });
 
   const authStore = loadAuthProfileStoreWithoutExternalProfiles();
   const authProfiles = Object.entries(authStore.profiles).map(([profileId, profile]) => ({

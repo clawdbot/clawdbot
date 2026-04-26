@@ -225,7 +225,7 @@ type StructuredQaParityLabel = {
 /**
  * Only treat caller labels as provenance-checked identifiers when they are
  * exact lower-case provider/model refs. Human-facing display labels like
- * "GPT-5.4 candidate" or "Candidate: GPT-5.4" should render in the report
+ * "GPT-5.5 candidate" or "Candidate: GPT-5.5" should render in the report
  * without being misread as structured provider ids.
  */
 function parseStructuredLabelRef(label: string): StructuredQaParityLabel | null {
@@ -486,9 +486,9 @@ export function buildQaAgenticParityComparison(params: {
 
 export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityComparison): string {
   // Title is parametrized from the candidate / baseline labels so reports
-  // for any candidate/baseline pair (not only gpt-5.4 vs opus 4.6) render
+  // for any candidate/baseline pair (not only gpt-5.5 vs opus 4.6) render
   // with an accurate header. The default CLI labels are still
-  // openai/gpt-5.4 vs anthropic/claude-opus-4-6, but the helper works for
+  // openai/gpt-5.5 vs anthropic/claude-opus-4-6, but the helper works for
   // any parity comparison a caller configures.
   const lines = [
     `# OpenClaw Agentic Parity Report — ${comparison.candidateLabel} vs ${comparison.baselineLabel}`,

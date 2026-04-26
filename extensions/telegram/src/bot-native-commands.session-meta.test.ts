@@ -42,8 +42,12 @@ const persistentBindingMocks = vi.hoisted(() => ({
   })),
 }));
 const sessionMocks = vi.hoisted(() => ({
+  loadSessionStore: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(),
   resolveStorePath: vi.fn(),
+}));
+const commandAuthMocks = vi.hoisted(() => ({
+  resolveCommandArgMenu: vi.fn(),
 }));
 const replyMocks = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
@@ -134,6 +138,26 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
       touch: (bindingId: string, at?: number) => sessionBindingMocks.touch(bindingId, at),
       unbind: vi.fn(),
     }),
+  };
+});
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    loadSessionStore: sessionMocks.loadSessionStore,
+    resolveStorePath: sessionMocks.resolveStorePath,
+  };
+});
+vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/command-auth-native")>(
+    "openclaw/plugin-sdk/command-auth-native",
+  );
+  commandAuthMocks.resolveCommandArgMenu.mockImplementation(actual.resolveCommandArgMenu);
+  return {
+    ...actual,
+    resolveCommandArgMenu: commandAuthMocks.resolveCommandArgMenu,
   };
 });
 vi.mock("./bot-native-commands.runtime.js", async () => {
@@ -406,6 +430,8 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockClear();
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
+    commandAuthMocks.resolveCommandArgMenu.mockClear();
+    sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
     replyMocks.dispatchReplyWithBufferedBlockDispatcher
@@ -430,6 +456,132 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(call?.ctx?.OriginatingChannel).toBe("telegram");
     expect(call?.ctx?.Provider).toBe("telegram");
     expect(call?.sessionKey).toBe("agent:main:telegram:slash:200");
+  });
+
+  it("uses the target session model when building native argument menus", async () => {
+    const cfg: OpenClawConfig = {};
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        modelOverrideSource: "user",
+        updatedAt: 0,
+      },
+    });
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "think" && params.provider === "anthropic",
+    )?.[0];
+    expect(menuCall).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+    );
+    expect(sessionMocks.loadSessionStore).toHaveBeenCalledWith("/tmp/openclaw-sessions.json");
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Choose level for /think."),
+      expect.objectContaining({ reply_markup: expect.any(Object) }),
+    );
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("inherits the parent session model when building DM thread native argument menus", async () => {
+    const cfg: OpenClawConfig = {};
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        modelOverrideSource: "user",
+        updatedAt: 0,
+      },
+    });
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext({ threadId: 77 }));
+
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "think" && params.provider === "anthropic",
+    )?.[0];
+    expect(menuCall).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Choose level for /think."),
+      expect.objectContaining({ reply_markup: expect.any(Object) }),
+    );
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured default model instead of temporary auto fallback overrides", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+    } as OpenClawConfig;
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        modelOverrideSource: "auto",
+        modelProvider: "anthropic",
+        model: "claude-opus-4-7",
+        updatedAt: 0,
+      },
+    });
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "think" && params.provider === "openai",
+    )?.[0];
+    expect(menuCall).toEqual(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Choose level for /think."),
+      expect.objectContaining({ reply_markup: expect.any(Object) }),
+    );
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("does not load the session store when a native argument menu is skipped", async () => {
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg: {},
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext({ match: "high" }));
+
+    expect(sessionMocks.loadSessionStore).not.toHaveBeenCalled();
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 
   it("awaits session metadata persistence before dispatch", async () => {

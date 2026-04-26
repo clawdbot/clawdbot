@@ -332,6 +332,64 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 'second';\n");
   });
 
+  it("fingerprints regular files when readdir reports symlink-like entries", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+
+    const realReaddirSync = fs.readdirSync.bind(fs);
+    vi.spyOn(fs, "readdirSync").mockImplementation(((target, options) => {
+      const result = realReaddirSync(target, options as never);
+      if (
+        String(target) !== directDir ||
+        typeof options !== "object" ||
+        options === null ||
+        !("withFileTypes" in options) ||
+        options.withFileTypes !== true
+      ) {
+        return result;
+      }
+      return (result as fs.Dirent[]).map((entry) => {
+        if (entry.name !== "package.json") {
+          return entry;
+        }
+        return {
+          ...entry,
+          isSymbolicLink: () => true,
+          isDirectory: () => false,
+          isFile: () => false,
+        } as fs.Dirent;
+      }) as never;
+    }) as typeof fs.readdirSync);
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: () => {
+        installCount += 1;
+        throw new Error("unexpected fallback install");
+      },
+    });
+
+    expect(installCount).toBe(0);
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'direct';\n");
+  });
+
   it("refuses to replace a symlinked plugin node_modules directory", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {

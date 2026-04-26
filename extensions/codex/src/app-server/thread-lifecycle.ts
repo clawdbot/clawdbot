@@ -3,6 +3,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
+import { isModernCodexModel } from "../../provider.js";
 import type { CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
@@ -178,7 +179,7 @@ export function buildTurnStartParams(
     sandboxPolicy: codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    effort: resolveReasoningEffort(params.thinkLevel),
+    effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
   };
 }
 
@@ -283,11 +284,22 @@ function resolveCodexAppServerModelProvider(provider: string): string | undefine
   return normalized === "openai-codex" ? "openai" : normalized;
 }
 
-function resolveReasoningEffort(
+// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) use the
+// none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
+// defaults thinkLevel to "minimal", so without translation EVERY agent turn
+// on those models pays a wasted first request + retry-with-low fallback in
+// pi-embedded-runner. Map "minimal" -> "low" upfront for modern models so the
+// first request is accepted. Older Codex models still accept "minimal"
+// directly. (#71946)
+// Exported for unit-test coverage of the model-aware translation path.
+export function resolveReasoningEffort(
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
+  modelId: string,
 ): "minimal" | "low" | "medium" | "high" | "xhigh" | null {
+  if (thinkLevel === "minimal") {
+    return isModernCodexModel(modelId) ? "low" : "minimal";
+  }
   if (
-    thinkLevel === "minimal" ||
     thinkLevel === "low" ||
     thinkLevel === "medium" ||
     thinkLevel === "high" ||

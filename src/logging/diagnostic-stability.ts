@@ -246,6 +246,16 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "run.attempt":
       record.count = event.attempt;
       break;
+    case "context.assembled":
+      record.channel = event.channel;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.count = event.messageCount;
+      record.bytes = event.promptChars;
+      record.context =
+        event.contextTokenBudget !== undefined ? { limit: event.contextTokenBudget } : undefined;
+      record.bytes = event.promptChars;
+      break;
     case "diagnostic.heartbeat":
       record.webhooks = { ...event.webhooks };
       record.active = event.active;
@@ -295,6 +305,34 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.outcome = event.outcome;
       assignReasonCode(record, event.errorCategory);
       break;
+    case "harness.run.started":
+      record.source = event.harnessId;
+      record.pluginId = event.pluginId;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      break;
+    case "harness.run.completed":
+      record.source = event.harnessId;
+      record.pluginId = event.pluginId;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      record.durationMs = event.durationMs;
+      record.outcome = event.outcome;
+      record.count = event.itemLifecycle?.completedCount;
+      break;
+    case "harness.run.error":
+      record.source = event.harnessId;
+      record.pluginId = event.pluginId;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      record.durationMs = event.durationMs;
+      record.outcome = "error";
+      record.action = event.phase;
+      assignReasonCode(record, event.errorCategory);
+      break;
     case "model.call.started":
       record.provider = event.provider;
       record.model = event.model;
@@ -334,6 +372,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.channel = event.channel;
       record.pluginId = event.pluginId;
       assignReasonCode(record, event.reason);
+      break;
+    case "telemetry.exporter":
+      record.source = event.exporter;
+      record.target = event.signal;
+      record.outcome = event.status;
+      assignReasonCode(record, event.reason ?? event.errorCategory);
       break;
   }
 

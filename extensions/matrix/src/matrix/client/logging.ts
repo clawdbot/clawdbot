@@ -1,8 +1,10 @@
+import { logger as matrixJsSdkRootLogger } from "matrix-js-sdk/lib/logger.js";
 import { ConsoleLogger, LogService, setMatrixConsoleLogging } from "../sdk/logger.js";
 
 let matrixSdkLoggingConfigured = false;
 let matrixSdkLogMode: "default" | "quiet" = "default";
 const matrixSdkBaseLogger = new ConsoleLogger();
+let matrixJsSdkRootLoggerSnapshot: MatrixJsSdkRootLoggerSnapshot | null = null;
 
 type MatrixJsSdkLogger = {
   trace: (...messageOrObject: unknown[]) => void;
@@ -11,6 +13,18 @@ type MatrixJsSdkLogger = {
   warn: (...messageOrObject: unknown[]) => void;
   error: (...messageOrObject: unknown[]) => void;
   getChild: (namespace: string) => MatrixJsSdkLogger;
+};
+
+type MatrixJsSdkLoglevelLogger = {
+  getLevel?: () => number | string;
+  methodFactory?: unknown;
+  rebuild?: () => void;
+  setLevel?: (level: number | string, persist?: boolean) => void;
+};
+
+type MatrixJsSdkRootLoggerSnapshot = {
+  level?: number | string;
+  methodFactory?: unknown;
 };
 
 function shouldSuppressMatrixHttpNotFound(module: string, messageOrObject: unknown[]): boolean {
@@ -50,6 +64,7 @@ export function createMatrixJsSdkClientLogger(prefix = "matrix"): MatrixJsSdkLog
 
 function applyMatrixSdkLogger(): void {
   if (matrixSdkLogMode === "quiet") {
+    setMatrixJsSdkRootLoggerLevel("silent");
     LogService.setLogger({
       trace: () => {},
       debug: () => {},
@@ -60,6 +75,7 @@ function applyMatrixSdkLogger(): void {
     return;
   }
 
+  setMatrixJsSdkRootLoggerLevel("debug");
   LogService.setLogger({
     trace: (module, ...messageOrObject) => matrixSdkBaseLogger.trace(module, ...messageOrObject),
     debug: (module, ...messageOrObject) => matrixSdkBaseLogger.debug(module, ...messageOrObject),
@@ -72,6 +88,26 @@ function applyMatrixSdkLogger(): void {
       matrixSdkBaseLogger.error(module, ...messageOrObject);
     },
   });
+}
+
+function setMatrixJsSdkRootLoggerLevel(level: "debug" | "silent"): void {
+  const logger = matrixJsSdkRootLogger as unknown as MatrixJsSdkLoglevelLogger;
+  matrixJsSdkRootLoggerSnapshot ??= {
+    level: logger.getLevel?.(),
+    methodFactory: logger.methodFactory,
+  };
+  if (level === "silent") {
+    logger.methodFactory = () => () => undefined;
+    logger.setLevel?.("silent", false);
+    logger.rebuild?.();
+    return;
+  }
+  logger.methodFactory = matrixJsSdkRootLoggerSnapshot.methodFactory;
+  const previousLevel = matrixJsSdkRootLoggerSnapshot.level;
+  if (typeof previousLevel === "string" || typeof previousLevel === "number") {
+    logger.setLevel?.(previousLevel, false);
+  }
+  logger.rebuild?.();
 }
 
 function createMatrixJsSdkLoggerInstance(prefix: string): MatrixJsSdkLogger {

@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
+import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
+
+const logPathTracker = createSuiteLogPathTracker("openclaw-subsystem-log-");
 
 function installConsoleMethodSpy(method: "warn" | "error") {
   const spy = vi.fn();
@@ -15,11 +20,20 @@ function installConsoleMethodSpy(method: "warn" | "error") {
   return spy;
 }
 
+beforeAll(async () => {
+  await logPathTracker.setup();
+});
+
 afterEach(() => {
   setConsoleSubsystemFilter(null);
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+  vi.useRealTimers();
+});
+
+afterAll(async () => {
+  await logPathTracker.cleanup();
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
@@ -189,5 +203,23 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps long-lived subsystem loggers on the current-day rolling file", () => {
+    const logDir = path.dirname(logPathTracker.nextPath());
+    const firstDay = path.join(logDir, "openclaw-2026-01-01.log");
+    const secondDay = path.join(logDir, "openclaw-2026-01-02.log");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T08:00:00Z"));
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file: firstDay });
+    const log = createSubsystemLogger("diagnostics");
+
+    log.info("first day subsystem log");
+    vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
+    log.info("second day subsystem log");
+
+    expect(fs.readFileSync(firstDay, "utf8")).toContain("first day subsystem log");
+    expect(fs.readFileSync(secondDay, "utf8")).toContain("second day subsystem log");
+    expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day subsystem log");
   });
 });

@@ -27,6 +27,14 @@ function isResetCommandCandidate(text: string): boolean {
   return /^\/(?:new|reset)(?:\s|$)/i.test(text);
 }
 
+function isAcpCommandCandidate(text: string): boolean {
+  return /^\/acp(?:\s|$)/i.test(text);
+}
+
+function isLocalCommandCandidate(text: string): boolean {
+  return /^\/(?:status|unfocus)(?:\s|$)/i.test(text);
+}
+
 export function shouldBypassAcpDispatchForCommand(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
@@ -47,6 +55,14 @@ export function shouldBypassAcpDispatchForCommand(
 
   if (isResetCommandCandidate(normalized)) {
     return true;
+  }
+
+  if (isAcpCommandCandidate(normalized)) {
+    return true;
+  }
+
+  if (isLocalCommandCandidate(normalized)) {
+    return allowTextCommands;
   }
 
   if (!normalized.startsWith("!")) {

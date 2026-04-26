@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-support/browser-security-runtime.mock.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
@@ -28,7 +29,7 @@ function okDispatchResponse(): BrowserDispatchResponse {
 }
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({
+  loadConfig: vi.fn<() => OpenClawConfig>(() => ({
     gateway: {
       auth: {
         token: "loopback-token",
@@ -197,11 +198,225 @@ describe("fetchBrowserJson loopback auth", () => {
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
 
-  it("preserves dispatcher error context while keeping no-retry hint", async () => {
+  it("preserves dispatcher timeout context without no-retry hint", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
-      contains: ["Chrome CDP handshake timeout", "Do NOT retry the browser tool"],
+      contains: ["Chrome CDP handshake timeout", "Restart the OpenClaw gateway"],
+      omits: ["Can't reach the OpenClaw browser control service", "Do NOT retry the browser tool"],
+    });
+  });
+
+  it("preserves dispatcher abort context without no-retry hint", async () => {
+    mocks.dispatch.mockRejectedValueOnce(new DOMException("operation aborted", "AbortError"));
+
+    await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
+      contains: ["operation aborted", "Restart the OpenClaw gateway"],
+      omits: ["Do NOT retry the browser tool"],
+    });
+  });
+
+  it("avoids restart-gateway guidance for attachOnly dispatcher timeouts", async () => {
+    mocks.loadConfig.mockReturnValue({
+      browser: {
+        attachOnly: true,
+        defaultProfile: "manual",
+        profiles: {
+          manual: {
+            cdpUrl: "http://127.0.0.1:9222",
+            attachOnly: true,
+            color: "#00AA00",
+          },
+        },
+      },
+    });
+    mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("/tabs?profile=manual"),
+      {
+        contains: [
+          "Chrome CDP handshake timeout",
+          "browser profile is external to OpenClaw",
+          "Restarting the OpenClaw gateway will not launch it",
+        ],
+        omits: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
+      },
+    );
+  });
+
+  it("avoids restart-gateway guidance for existing-session dispatcher timeouts", async () => {
+    mocks.loadConfig.mockReturnValue({
+      browser: {
+        defaultProfile: "user",
+        profiles: {
+          user: {
+            driver: "existing-session",
+            attachOnly: true,
+            color: "#00AA00",
+          },
+        },
+      },
+    });
+    mocks.dispatch.mockRejectedValueOnce(new DOMException("operation aborted", "AbortError"));
+
+    await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
+      contains: [
+        "operation aborted",
+        "browser profile is external to OpenClaw",
+        "Restarting the OpenClaw gateway will not launch it",
+      ],
+      omits: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
+    });
+  });
+
+  it("avoids restart-gateway guidance for remote CDP dispatcher timeouts", async () => {
+    mocks.loadConfig.mockReturnValue({
+      browser: {
+        defaultProfile: "remote",
+        profiles: {
+          remote: {
+            cdpUrl: "https://browserless.example/chrome?token=test",
+            color: "#00AA00",
+          },
+        },
+      },
+    });
+    mocks.dispatch.mockRejectedValueOnce(new Error("timed out"));
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("/tabs?profile=remote"),
+      {
+        contains: [
+          "timed out",
+          "browser profile is external to OpenClaw",
+          "Restarting the OpenClaw gateway will not launch it",
+        ],
+        omits: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
+      },
+    );
+  });
+
+  it("keeps restart-gateway guidance for managed local dispatcher timeouts", async () => {
+    mocks.loadConfig.mockReturnValue({
+      browser: {
+        defaultProfile: "openclaw",
+        profiles: {
+          openclaw: {
+            cdpPort: 18800,
+            color: "#FF4500",
+          },
+        },
+      },
+    });
+    mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("/tabs?profile=openclaw"),
+      {
+        contains: ["Chrome CDP handshake timeout", "Restart the OpenClaw gateway"],
+        omits: ["browser profile is external to OpenClaw", "Do NOT retry the browser tool"],
+      },
+    );
+  });
+
+  it("keeps restart-gateway guidance when dispatcher profile resolution fails", async () => {
+    mocks.loadConfig.mockImplementation(() => {
+      throw new Error("config unavailable");
+    });
+    mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("/tabs?profile=manual"),
+      {
+        contains: ["Chrome CDP handshake timeout", "Restart the OpenClaw gateway"],
+        omits: ["browser profile is external to OpenClaw", "Do NOT retry the browser tool"],
+      },
+    );
+  });
+
+  it("keeps restart-gateway guidance for unknown dispatcher profiles", async () => {
+    mocks.loadConfig.mockReturnValue({
+      browser: {
+        defaultProfile: "openclaw",
+        profiles: {
+          openclaw: {
+            cdpPort: 18800,
+            color: "#FF4500",
+          },
+        },
+      },
+    });
+    mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("/tabs?profile=missing"),
+      {
+        contains: ["Chrome CDP handshake timeout", "Restart the OpenClaw gateway"],
+        omits: ["browser profile is external to OpenClaw", "Do NOT retry the browser tool"],
+      },
+    );
+  });
+
+  it("uses the default external profile when dispatcher request omits profile", async () => {
+    mocks.loadConfig.mockReturnValue({
+      browser: {
+        defaultProfile: "manual",
+        profiles: {
+          manual: {
+            cdpUrl: "http://127.0.0.1:9222",
+            attachOnly: true,
+            color: "#00AA00",
+          },
+        },
+      },
+    });
+    mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
+
+    await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
+      contains: [
+        "Chrome CDP handshake timeout",
+        "browser profile is external to OpenClaw",
+        "Restarting the OpenClaw gateway will not launch it",
+      ],
+      omits: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
+    });
+  });
+
+  it("keeps no-retry hint but not restart guidance for persistent external profile failures", async () => {
+    mocks.loadConfig.mockReturnValue({
+      browser: {
+        attachOnly: true,
+        defaultProfile: "manual",
+        profiles: {
+          manual: {
+            cdpUrl: "http://127.0.0.1:9222",
+            attachOnly: true,
+            color: "#00AA00",
+          },
+        },
+      },
+    });
+    mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP connection refused"));
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("/tabs?profile=manual"),
+      {
+        contains: [
+          "Chrome CDP connection refused",
+          "browser profile is external to OpenClaw",
+          "Do NOT retry the browser tool",
+        ],
+        omits: ["Restart the OpenClaw gateway"],
+      },
+    );
+  });
+
+  it("keeps no-retry hint for persistent dispatcher failures", async () => {
+    mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP connection refused"));
+
+    await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
+      contains: ["Chrome CDP connection refused", "Do NOT retry the browser tool"],
       omits: ["Can't reach the OpenClaw browser control service"],
     });
   });
@@ -297,6 +512,40 @@ describe("fetchBrowserJson loopback auth", () => {
           "Can't reach the OpenClaw browser control service",
           "Do NOT retry the browser tool",
         ],
+      },
+    );
+  });
+
+  it("omits no-retry hint for absolute HTTP timeout failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("timed out");
+      }),
+    );
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("http://example.com/", { timeoutMs: 1234 }),
+      {
+        contains: ["timed out after 1234ms"],
+        omits: ["Do NOT retry the browser tool"],
+      },
+    );
+  });
+
+  it("omits no-retry hint for absolute HTTP abort failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new DOMException("operation aborted", "AbortError");
+      }),
+    );
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("http://example.com/"),
+      {
+        contains: ["Browser control request was cancelled"],
+        omits: ["Do NOT retry the browser tool"],
       },
     );
   });

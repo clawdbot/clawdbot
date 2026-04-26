@@ -5,6 +5,12 @@ import { registerLazyCommand } from "./register-lazy-command.js";
 export type CommandGroupPlaceholder = {
   name: string;
   description: string;
+  options?: readonly CommandGroupPlaceholderOption[];
+};
+
+export type CommandGroupPlaceholderOption = {
+  flags: string;
+  description: string;
 };
 
 export type CommandGroupEntry = {
@@ -53,6 +59,7 @@ export function registerLazyCommandGroup(
     program,
     name: placeholder.name,
     description: placeholder.description,
+    options: placeholder.options,
     removeNames: [...new Set(getCommandGroupNames(entry))],
     register: async () => {
       await entry.register(program);

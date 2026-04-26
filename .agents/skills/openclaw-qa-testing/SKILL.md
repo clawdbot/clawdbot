@@ -49,6 +49,19 @@ pnpm openclaw qa suite \
 5. If the user wants to watch the live UI, find the current `openclaw-qa` listen port and report `http://127.0.0.1:<port>`.
 6. If a scenario fails, fix the product or harness root cause, then rerun the full lane.
 
+## OTEL smoke
+
+For local QA-lab OpenTelemetry validation, use:
+
+```bash
+pnpm qa:otel:smoke
+```
+
+This starts a local OTLP/HTTP trace receiver, runs the `otel-trace-smoke`
+scenario through qa-channel, decodes the emitted protobuf spans, and verifies
+the exported trace names and privacy contract. It does not require Opik,
+Langfuse, or external collector credentials.
+
 ## QA credentials and 1Password
 
 - Use `op` only inside `tmux` for QA secret lookup in this repo.

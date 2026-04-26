@@ -489,7 +489,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex" },
+            agentRuntime: { id: "codex" },
           },
         },
       },
@@ -529,7 +529,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex" },
+            agentRuntime: { id: "codex" },
           },
         },
       },

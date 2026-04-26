@@ -430,6 +430,11 @@ jobs:
             command: pnpm test:docker:doctor-switch
             timeout_minutes: 60
             release_path: true
+          - suite_id: docker-session-runtime-context
+            label: Session Runtime Context Docker E2E
+            command: pnpm test:docker:session-runtime-context
+            timeout_minutes: 60
+            release_path: true
           - suite_id: docker-qr
             label: QR Import Docker E2E
             command: pnpm test:docker:qr

@@ -10,8 +10,6 @@ type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
   typeof import("./manifest-registry.js").loadPluginManifestRegistry;
-type ResolveManifestContractPluginIds =
-  typeof import("./manifest-registry.js").resolveManifestContractPluginIds;
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
@@ -19,23 +17,6 @@ const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
-const resolveManifestContractPluginIdsMock = vi.fn<ResolveManifestContractPluginIds>((params) => {
-  const onlyPluginIds =
-    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistryMock({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })
-    .plugins.filter(
-      (plugin) =>
-        (!params.origin || plugin.origin === params.origin) &&
-        (!onlyPluginIds || onlyPluginIds.has(plugin.id)) &&
-        (plugin.contracts?.[params.contract] ?? []).length > 0,
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-});
 const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
@@ -308,9 +289,14 @@ describe("resolvePluginProviders", () => {
     vi.doMock("./manifest-registry.js", () => ({
       loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
-      resolveManifestContractPluginIds: (...args: Parameters<ResolveManifestContractPluginIds>) =>
-        resolveManifestContractPluginIdsMock(...args),
     }));
+    vi.doMock("./installed-plugin-index-store.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
+      return {
+        ...actual,
+        readPersistedInstalledPluginIndexSync: () => null,
+      };
+    });
     ({
       resolveActivatableProviderOwnerPluginIds,
       resolveOwningPluginIdsForProvider,
@@ -348,7 +334,6 @@ describe("resolvePluginProviders", () => {
     resolveRuntimePluginRegistryMock.mockReturnValue(registry);
     loadOpenClawPluginsMock.mockReturnValue(registry);
     loadPluginManifestRegistryMock.mockReset();
-    resolveManifestContractPluginIdsMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(
       (params): PluginAutoEnableResult => ({
@@ -467,7 +452,6 @@ describe("resolvePluginProviders", () => {
         declaredPluginIds,
       }),
     ).toEqual(["legacy-auth-owner"]);
-    expect(resolveManifestContractPluginIdsMock).not.toHaveBeenCalled();
   });
 
   it("treats explicit empty provider scopes as scoped-empty in provider helpers", () => {
@@ -1312,6 +1296,52 @@ describe("resolvePluginProviders", () => {
     ]);
 
     expectModelOwningPluginIds("gpt-5.4", ["workspace-openai"]);
+  });
+
+  it("preserves LM Studio @iq* quant suffixes when resolving model-owned provider plugins", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "lmstudio",
+        providerIds: ["lmstudio"],
+        modelSupport: {
+          modelPatterns: ["^qwen3\\.6-27b@iq3_xxs$"],
+        },
+      }),
+    ]);
+    const provider: ProviderPlugin = {
+      id: "lmstudio",
+      label: "LM Studio",
+      auth: [],
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({ pluginId: "lmstudio", provider, source: "bundled" });
+    resolveRuntimePluginRegistryMock.mockReturnValue(registry);
+
+    expectModelOwningPluginIds("qwen3.6-27b@iq3_xxs", ["lmstudio"]);
+    expectModelOwningPluginIds("qwen3.6-27b", undefined);
+
+    const providers = resolvePluginProviders({
+      config: {},
+      modelRefs: ["qwen3.6-27b@iq3_xxs"],
+      bundledProviderAllowlistCompat: true,
+    });
+
+    expectResolvedProviders(providers, [
+      { id: "lmstudio", label: "LM Studio", auth: [], pluginId: "lmstudio" },
+    ]);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["lmstudio"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["lmstudio"],
+            entries: {
+              lmstudio: { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
   });
 
   it("auto-loads a model-owned provider plugin from shorthand model refs", () => {

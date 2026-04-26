@@ -9,6 +9,7 @@ import { registerMatrixSubagentHooks } from "../../subagent-hooks-api.js";
 // Hoisted stubs referenced in vi.mock factories below
 const bindMock = vi.hoisted(() => vi.fn());
 const unbindMock = vi.hoisted(() => vi.fn());
+const getCapabilitiesMock = vi.hoisted(() => vi.fn());
 const getManagerMock = vi.hoisted(() => vi.fn());
 const listAllBindingsMock = vi.hoisted(() => vi.fn((): any[] => []));
 const listBindingsForAccountMock = vi.hoisted(() => vi.fn((): any[] => []));
@@ -17,7 +18,11 @@ const resolveMatrixBaseConfigMock = vi.hoisted(() => vi.fn((): any => ({})));
 const findMatrixAccountConfigMock = vi.hoisted(() => vi.fn((): any => undefined));
 
 vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", () => ({
-  getSessionBindingService: () => ({ bind: bindMock, unbind: unbindMock }),
+  getSessionBindingService: () => ({
+    bind: bindMock,
+    getCapabilities: getCapabilitiesMock,
+    unbind: unbindMock,
+  }),
 }));
 
 vi.mock("./account-config.js", () => ({
@@ -81,6 +86,7 @@ function makeSpawnEvent(
 describe("handleMatrixSubagentSpawning", () => {
   beforeEach(() => {
     bindMock.mockReset();
+    getCapabilitiesMock.mockReset();
     getManagerMock.mockReset();
     resolveMatrixBaseConfigMock.mockReset();
     findMatrixAccountConfigMock.mockReset();
@@ -89,7 +95,12 @@ describe("handleMatrixSubagentSpawning", () => {
       threadBindings: { enabled: true, spawnSubagentSessions: true },
     });
     findMatrixAccountConfigMock.mockReturnValue(undefined);
-    // Default: manager exists
+    getCapabilitiesMock.mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      placements: ["current", "child"],
+      unbindSupported: true,
+    });
     getManagerMock.mockReturnValue({ persist: vi.fn() });
     // Default: bind resolves ok
     bindMock.mockResolvedValue({
@@ -188,15 +199,21 @@ describe("handleMatrixSubagentSpawning", () => {
     );
   });
 
-  it("returns error when no binding manager is available for the account", async () => {
-    getManagerMock.mockReturnValue(null);
+  it("returns error when no binding adapter is available for the account", async () => {
+    getCapabilitiesMock.mockReturnValue({
+      adapterAvailable: false,
+      bindSupported: false,
+      placements: [],
+      unbindSupported: false,
+    });
     const result = await handleMatrixSubagentSpawning(fakeApi, makeSpawnEvent());
     expect(result).toEqual(
       expect.objectContaining({
         status: "error",
-        error: expect.stringContaining("No Matrix thread binding manager"),
+        error: expect.stringContaining("No Matrix session binding adapter"),
       }),
     );
+    expect(bindMock).not.toHaveBeenCalled();
   });
 
   it("calls bind with the resolved room id and returns ok", async () => {
@@ -255,7 +272,10 @@ describe("handleMatrixSubagentSpawning", () => {
       },
     });
     await handleMatrixSubagentSpawning(fakeApi, makeSpawnEvent({ accountId: undefined as never }));
-    expect(getManagerMock).toHaveBeenCalledWith("default");
+    expect(getCapabilitiesMock).toHaveBeenCalledWith({
+      channel: "matrix",
+      accountId: "default",
+    });
     expect(bindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         conversation: expect.objectContaining({ accountId: "default" }),
@@ -295,6 +315,7 @@ describe("handleMatrixSubagentSpawning", () => {
 describe("matrix subagent hook registration", () => {
   beforeEach(() => {
     bindMock.mockReset();
+    getCapabilitiesMock.mockReset();
     getManagerMock.mockReset();
     resolveMatrixBaseConfigMock.mockReset();
     findMatrixAccountConfigMock.mockReset();
@@ -304,6 +325,12 @@ describe("matrix subagent hook registration", () => {
       threadBindings: { enabled: true, spawnSubagentSessions: true },
     });
     findMatrixAccountConfigMock.mockReturnValue(undefined);
+    getCapabilitiesMock.mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      placements: ["current", "child"],
+      unbindSupported: true,
+    });
     getManagerMock.mockReturnValue({ persist: vi.fn() });
     bindMock.mockResolvedValue({
       conversation: {
@@ -752,6 +779,7 @@ describe("concurrent spawns across accounts", () => {
 
   beforeEach(() => {
     bindMock.mockReset();
+    getCapabilitiesMock.mockReset();
     getManagerMock.mockReset();
     resolveMatrixBaseConfigMock.mockReset();
     findMatrixAccountConfigMock.mockReset();
@@ -759,6 +787,12 @@ describe("concurrent spawns across accounts", () => {
       threadBindings: { enabled: true, spawnSubagentSessions: true },
     });
     findMatrixAccountConfigMock.mockReturnValue(undefined);
+    getCapabilitiesMock.mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      placements: ["current", "child"],
+      unbindSupported: true,
+    });
     getManagerMock.mockReturnValue({ persist: vi.fn() });
   });
 

@@ -15,7 +15,7 @@ type SelectionDeps = {
   profile: ResolvedBrowserProfile;
   getProfileState: () => ProfileRuntimeState;
   getCdpControlPolicy: () => SsrFPolicy | undefined;
-  ensureBrowserAvailable: () => Promise<void>;
+  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
   listTabs: () => Promise<BrowserTab[]>;
   openTab: (url: string) => Promise<BrowserTab>;
 };
@@ -99,7 +99,7 @@ export function createProfileSelectionOps({
 
     if (capabilities.usesChromeMcp) {
       const { focusChromeMcpTab } = await getChromeMcpModule();
-      await focusChromeMcpTab(profile.name, resolvedTargetId, profile.userDataDir);
+      await focusChromeMcpTab(profile.name, resolvedTargetId, profile);
       const profileState = getProfileState();
       profileState.lastTargetId = resolvedTargetId;
       return;
@@ -136,7 +136,7 @@ export function createProfileSelectionOps({
 
     if (capabilities.usesChromeMcp) {
       const { closeChromeMcpTab } = await getChromeMcpModule();
-      await closeChromeMcpTab(profile.name, resolvedTargetId, profile.userDataDir);
+      await closeChromeMcpTab(profile.name, resolvedTargetId, profile);
       return;
     }
 

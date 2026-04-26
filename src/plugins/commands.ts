@@ -12,7 +12,6 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
-  getPluginCommandSpecs,
   listPluginInvocationKeys,
   listProviderPluginCommandSpecs,
   registerPluginCommand,
@@ -24,6 +23,7 @@ import {
   setPluginCommandRegistryLocked,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
+import { getPluginCommandSpecs } from "./command-specs.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,

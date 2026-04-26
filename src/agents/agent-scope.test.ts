@@ -65,6 +65,7 @@ describe("resolveAgentConfig", () => {
       groupChat: undefined,
       subagents: undefined,
       sandbox: undefined,
+      tts: undefined,
       tools: undefined,
     });
   });

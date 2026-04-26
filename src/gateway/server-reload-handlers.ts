@@ -59,6 +59,8 @@ type GatewayReloadLog = {
 };
 
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
+const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
+const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
@@ -125,6 +127,87 @@ type ManagedGatewayConfigReloaderParams = Omit<
 };
 
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
+  const getActiveCounts = () => {
+    const queueSize = getTotalQueueSize();
+    const pendingReplies = getTotalPendingReplies();
+    const embeddedRuns = getActiveEmbeddedRunCount();
+    const activeTasks = getInspectableTaskRegistrySummary().active;
+    return {
+      queueSize,
+      pendingReplies,
+      embeddedRuns,
+      activeTasks,
+      totalActive: queueSize + pendingReplies + embeddedRuns + activeTasks,
+    };
+  };
+  const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
+    const details = [];
+    if (counts.queueSize > 0) {
+      details.push(`${counts.queueSize} operation(s)`);
+    }
+    if (counts.pendingReplies > 0) {
+      details.push(`${counts.pendingReplies} reply(ies)`);
+    }
+    if (counts.embeddedRuns > 0) {
+      details.push(`${counts.embeddedRuns} embedded run(s)`);
+    }
+    if (counts.activeTasks > 0) {
+      details.push(`${counts.activeTasks} task run(s)`);
+    }
+    return details;
+  };
+  const waitForActiveWorkBeforeChannelReload = async (
+    channels: Iterable<ChannelKind>,
+    nextConfig: OpenClawConfig,
+  ) => {
+    const initial = getActiveCounts();
+    if (initial.totalActive <= 0) {
+      return;
+    }
+    const channelNames = [...channels].join(", ");
+    const initialDetails = formatActiveDetails(initial);
+    params.logReload.warn(
+      `config change requires channel reload (${channelNames}) — deferring until ${initialDetails.join(
+        ", ",
+      )} complete`,
+    );
+    const timeoutMsRaw = nextConfig.gateway?.reload?.deferralTimeoutMs;
+    const timeoutMs =
+      typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
+        ? Math.max(CHANNEL_RELOAD_DEFERRAL_POLL_MS, Math.floor(timeoutMsRaw))
+        : undefined;
+    const startedAt = Date.now();
+    let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
+    while (true) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
+        timer.unref?.();
+      });
+      const current = getActiveCounts();
+      if (current.totalActive <= 0) {
+        params.logReload.info("active operations and replies completed; reloading channels now");
+        return;
+      }
+      const elapsedMs = Date.now() - startedAt;
+      if (timeoutMs !== undefined && elapsedMs >= timeoutMs) {
+        const remaining = formatActiveDetails(current);
+        params.logReload.warn(
+          `channel reload timeout after ${elapsedMs}ms with ${remaining.join(
+            ", ",
+          )} still active; reloading channels anyway`,
+        );
+        return;
+      }
+      if (Date.now() >= nextStillPendingAt) {
+        const remaining = formatActiveDetails(current);
+        params.logReload.warn(
+          `channel reload still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active`,
+        );
+        nextStillPendingAt = Date.now() + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
+      }
+    }
+  };
+
   const applyHotReload = async (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
@@ -207,6 +290,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
         );
       } else {
+        await waitForActiveWorkBeforeChannelReload(plan.restartChannels, nextConfig);
         const restartChannel = async (name: ChannelKind) => {
           params.logChannels.info(`restarting ${name} channel`);
           await params.stopChannel(name);
@@ -244,35 +328,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       return false;
     }
 
-    const getActiveCounts = () => {
-      const queueSize = getTotalQueueSize();
-      const pendingReplies = getTotalPendingReplies();
-      const embeddedRuns = getActiveEmbeddedRunCount();
-      const activeTasks = getInspectableTaskRegistrySummary().active;
-      return {
-        queueSize,
-        pendingReplies,
-        embeddedRuns,
-        activeTasks,
-        totalActive: queueSize + pendingReplies + embeddedRuns + activeTasks,
-      };
-    };
-    const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
-      const details = [];
-      if (counts.queueSize > 0) {
-        details.push(`${counts.queueSize} operation(s)`);
-      }
-      if (counts.pendingReplies > 0) {
-        details.push(`${counts.pendingReplies} reply(ies)`);
-      }
-      if (counts.embeddedRuns > 0) {
-        details.push(`${counts.embeddedRuns} embedded run(s)`);
-      }
-      if (counts.activeTasks > 0) {
-        details.push(`${counts.activeTasks} task run(s)`);
-      }
-      return details;
-    };
     const active = getActiveCounts();
 
     if (active.totalActive > 0) {
@@ -296,6 +351,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           onReady: () => {
             restartPending = false;
             params.logReload.info("all operations and replies completed; restarting gateway now");
+          },
+          onStillPending: (_pending, elapsedMs) => {
+            const remaining = formatActiveDetails(getActiveCounts());
+            params.logReload.warn(
+              `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active`,
+            );
           },
           onTimeout: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());

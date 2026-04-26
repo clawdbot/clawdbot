@@ -252,6 +252,27 @@ export function buildDirectChatContext(params: {
   return lines.join(" ");
 }
 
+export function resolveGroupSilentReplyBehavior(params: {
+  sessionEntry?: SessionEntry;
+  defaultActivation: "always" | "mention";
+  silentReplyPolicy?: SilentReplyPolicy;
+  silentReplyRewrite?: boolean;
+}): {
+  activation: "always" | "mention";
+  canUseSilentReply: boolean;
+  allowEmptyAssistantReplyAsSilent: boolean;
+} {
+  const activation =
+    normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
+  const canUseSilentReply =
+    params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true;
+  return {
+    activation,
+    canUseSilentReply,
+    allowEmptyAssistantReplyAsSilent: params.silentReplyPolicy === "allow",
+  };
+}
+
 export function buildGroupIntro(params: {
   cfg: OpenClawConfig;
   sessionCtx: TemplateContext;
@@ -261,10 +282,7 @@ export function buildGroupIntro(params: {
   silentReplyPolicy?: SilentReplyPolicy;
   silentReplyRewrite?: boolean;
 }): string {
-  const activation =
-    normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
-  const canUseSilentReply =
-    params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true;
+  const { activation, canUseSilentReply } = resolveGroupSilentReplyBehavior(params);
   const activationLine =
     activation === "always"
       ? "Activation: always-on (you receive every group message)."

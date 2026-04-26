@@ -136,6 +136,7 @@ export async function generateVideo(
     if (inputAudioCount > 0) {
       const { capabilities: candCaps } = resolveVideoGenerationModeCapabilities({
         provider,
+        model: candidate.model,
         inputImageCount,
         inputVideoCount,
       });
@@ -171,6 +172,7 @@ export async function generateVideo(
     ) {
       const { capabilities: optCaps } = resolveVideoGenerationModeCapabilities({
         provider,
+        model: candidate.model,
         inputImageCount,
         inputVideoCount,
       });
@@ -201,6 +203,7 @@ export async function generateVideo(
     if (typeof requestedDuration === "number" && Number.isFinite(requestedDuration)) {
       const { capabilities: durCaps } = resolveVideoGenerationModeCapabilities({
         provider,
+        model: candidate.model,
         inputImageCount,
         inputVideoCount,
       });

@@ -2,6 +2,7 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import type { EmbeddedRunAttemptResult } from "../agents/pi-embedded-runner/run/types.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -81,6 +82,10 @@ export {
   setActiveEmbeddedRun,
 } from "../agents/pi-embedded-runner/runs.js";
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+export {
+  logAgentRuntimeToolDiagnostics,
+  normalizeAgentRuntimeTools,
+} from "../agents/runtime-plan/tools.js";
 export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
@@ -111,6 +116,7 @@ export {
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
 export {
+  runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
@@ -145,4 +151,47 @@ export function formatToolProgressOutput(
     return redacted;
   }
   return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
+}
+
+export type AgentHarnessTerminalOutcomeInput = {
+  assistantTexts: readonly string[];
+  reasoningText?: string | null;
+  planText?: string | null;
+  promptError?: unknown;
+  turnCompleted: boolean;
+};
+
+export type AgentHarnessTerminalOutcomeClassification = NonNullable<
+  EmbeddedRunAttemptResult["agentHarnessResultClassification"]
+>;
+
+/**
+ * Classify terminal harness turns that completed without assistant output that
+ * should advance fallback. Deliberate silent replies such as NO_REPLY count as
+ * intentional output, while whitespace-only text remains fallback-eligible.
+ * This is intentionally SDK-level so plugin harness adapters such as Codex
+ * preserve the same OpenClaw-owned fallback signals as the built-in PI path
+ * without re-implementing terminal-result policy.
+ */
+export function classifyAgentHarnessTerminalOutcome(
+  params: AgentHarnessTerminalOutcomeInput,
+): AgentHarnessTerminalOutcomeClassification | undefined {
+  if (
+    !params.turnCompleted ||
+    (params.promptError !== undefined && params.promptError !== null) ||
+    hasVisibleAssistantText(params.assistantTexts)
+  ) {
+    return undefined;
+  }
+  if (params.planText?.trim()) {
+    return "planning-only";
+  }
+  if (params.reasoningText?.trim()) {
+    return "reasoning-only";
+  }
+  return "empty";
+}
+
+function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
+  return assistantTexts.some((text) => text.trim().length > 0);
 }

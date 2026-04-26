@@ -8,11 +8,12 @@ title: "Transcript hygiene"
 ---
 
 This document describes **provider-specific fixes** applied to transcripts before a run
-(building model context). These are **in-memory** adjustments used to satisfy strict
-provider requirements. These hygiene steps do **not** rewrite the stored JSONL transcript
-on disk; however, a separate session-file repair pass may rewrite malformed JSONL files
-by dropping invalid lines before the session is loaded. When a repair occurs, the original
-file is backed up alongside the session file.
+(building model context). Most of these are **in-memory** adjustments used to satisfy
+strict provider requirements. A separate session-file repair pass may also rewrite
+stored JSONL before the session is loaded, either by dropping malformed JSONL lines or
+by repairing persisted turns that are syntactically valid but known to be rejected by a
+provider during replay. When a repair occurs, the original file is backed up alongside
+the session file.
 
 Scope includes:
 
@@ -22,8 +23,10 @@ Scope includes:
 - Tool result pairing repair
 - Turn validation / ordering
 - Thought signature cleanup
+- Thinking signature cleanup
 - Image payload sanitization
 - User-input provenance tagging (for inter-session routed prompts)
+- Empty assistant error-turn repair for Bedrock Converse replay
 
 If you need transcript storage details, see:
 
@@ -131,6 +134,26 @@ external end-user instructions.
 
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict alternation).
+- Thinking blocks with missing, empty, or blank replay signatures are stripped
+  before provider conversion. If that empties an assistant turn, OpenClaw keeps
+  turn shape with non-empty omitted-reasoning text.
+- Older thinking-only assistant turns that must be stripped are replaced with
+  non-empty omitted-reasoning text so provider adapters do not drop the replay
+  turn.
+
+**Amazon Bedrock (Converse API)**
+
+- Empty assistant stream-error turns are repaired to a non-empty fallback text block
+  before replay. Bedrock Converse rejects assistant messages with `content: []`, so
+  persisted assistant turns with `stopReason: "error"` and empty content are also
+  repaired on disk before load.
+- Claude thinking blocks with missing, empty, or blank replay signatures are
+  stripped before Converse replay. If that empties an assistant turn, OpenClaw
+  keeps turn shape with non-empty omitted-reasoning text.
+- Older thinking-only assistant turns that must be stripped are replaced with
+  non-empty omitted-reasoning text so the Converse replay keeps strict turn shape.
+- Replay filters OpenClaw delivery-mirror and gateway-injected assistant turns.
+- Image sanitization applies through the global rule.
 
 **Mistral (including model-id based detection)**
 

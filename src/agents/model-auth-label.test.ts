@@ -23,6 +23,7 @@ vi.mock("./model-auth.js", () => ({
 }));
 
 vi.mock("./cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
 }));
 

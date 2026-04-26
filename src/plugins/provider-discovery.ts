@@ -2,10 +2,11 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  loadInstalledPluginIndex,
-  type InstalledPluginIndex,
-  type LoadInstalledPluginIndexParams,
-} from "./installed-plugin-index.js";
+  listPluginContributionIds,
+  loadPluginRegistrySnapshot,
+  type LoadPluginRegistryParams,
+  type PluginRegistrySnapshot,
+} from "./plugin-registry.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
@@ -43,8 +44,8 @@ export type ResolveRuntimePluginDiscoveryProvidersParams = {
   discoveryEntriesOnly?: boolean;
 };
 
-export type ResolveInstalledPluginProviderContributionIdsParams = LoadInstalledPluginIndexParams & {
-  index?: InstalledPluginIndex;
+export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {
+  index?: PluginRegistrySnapshot;
   includeDisabled?: boolean;
 };
 
@@ -55,15 +56,19 @@ function sortedValues(values: Iterable<string>): string[] {
 export function resolveInstalledPluginProviderContributionIds(
   params: ResolveInstalledPluginProviderContributionIdsParams = {},
 ): string[] {
-  const index = params.index ?? loadInstalledPluginIndex(params);
-  const providerIds: string[] = [];
-  for (const plugin of index.plugins) {
-    if (!params.includeDisabled && !plugin.enabled) {
-      continue;
-    }
-    providerIds.push(...plugin.contributions.providers);
-  }
-  return sortedValues(providerIds);
+  const registryParams =
+    params.candidates && params.preferPersisted === undefined
+      ? { ...params, preferPersisted: false }
+      : params;
+  const index = params.index ?? loadPluginRegistrySnapshot(registryParams);
+  return sortedValues(
+    listPluginContributionIds({
+      index,
+      contribution: "providers",
+      includeDisabled: params.includeDisabled,
+      config: params.config,
+    }),
+  );
 }
 
 export async function resolveRuntimePluginDiscoveryProviders(

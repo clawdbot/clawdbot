@@ -43,7 +43,7 @@ describe("opencode-go provider plugin", () => {
     });
   });
 
-  it("leaves OpenCode Go models to Pi's built-in registry", async () => {
+  it("keeps OpenCode Go catalog coverage aligned with upstream", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     expect(provider.catalog).toBeUndefined();
 
@@ -62,6 +62,27 @@ describe("opencode-go provider plugin", () => {
       "qwen3.5-plus",
       "qwen3.6-plus",
     ]);
+    const supplemental = await provider.augmentModelCatalog?.({
+      entries: [...models.values()].map((model) => ({
+        provider: model.provider,
+        id: model.id,
+        name: model.name,
+      })),
+    } as never);
+    expect(supplemental).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "opencode-go",
+          id: "deepseek-v4-pro",
+          name: "DeepSeek V4 Pro",
+        }),
+        expect.objectContaining({
+          provider: "opencode-go",
+          id: "deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+        }),
+      ]),
+    );
 
     expect(models.get("kimi-k2.6")).toMatchObject({
       api: "openai-completions",
@@ -92,6 +113,60 @@ describe("opencode-go provider plugin", () => {
       contextWindow: 262_144,
       maxTokens: 128_000,
     });
+    expect(
+      provider.resolveDynamicModel?.({
+        modelId: "deepseek-v4-pro",
+      } as never),
+    ).toMatchObject({
+      id: "deepseek-v4-pro",
+      api: "openai-completions",
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    });
+  });
+
+  it("disables invalid DeepSeek V4 reasoning_effort off payloads on OpenCode Go", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+      const payload = {
+        model: "deepseek-v4-flash",
+        reasoning_effort: "off",
+        reasoning: "off",
+      };
+      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as never;
+    };
+
+    const streamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn as never,
+      providerId: "opencode-go",
+      modelId: "deepseek-v4-flash",
+      thinkingLevel: "off",
+    } as never);
+
+    expect(streamFn).toBeTypeOf("function");
+    await streamFn?.(
+      { provider: "opencode-go", id: "deepseek-v4-flash" } as never,
+      {} as never,
+      {},
+    );
+
+    expect(capturedPayloads).toEqual([
+      {
+        model: "deepseek-v4-flash",
+        thinking: { type: "disabled" },
+      },
+    ]);
   });
 
   it("canonicalizes stale OpenCode Go base URLs", async () => {

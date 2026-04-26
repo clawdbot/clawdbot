@@ -182,6 +182,33 @@ describe("cli-session helpers", () => {
     ).toEqual({ sessionId: "cli-session-1" });
   });
 
+  it("accepts v3 bindings without authEpoch as binding upgrades to v4", () => {
+    // Pre-v4 google-gemini-cli sessions persisted with authEpochVersion: 3
+    // and no authEpoch (the local credential fingerprint returned undefined
+    // before id_token identity lifting). The version-gate must skip the
+    // epoch comparison for these so the next request after upgrade reuses
+    // the stored session instead of forcing a one-time invalidation.
+    const binding = {
+      sessionId: "cli-session-1",
+      authProfileId: undefined,
+      // authEpoch deliberately absent
+      authEpochVersion: 3,
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-a",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: undefined,
+        authEpoch: "v4-identity-hash",
+        authEpochVersion: 4,
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-a",
+      }),
+    ).toEqual({ sessionId: "cli-session-1" });
+  });
+
   it("does not treat model changes as a session mismatch", () => {
     const binding = {
       sessionId: "cli-session-1",

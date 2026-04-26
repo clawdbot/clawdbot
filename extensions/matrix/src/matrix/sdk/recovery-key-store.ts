@@ -228,6 +228,7 @@ export class MatrixRecoveryKeyStore {
       setupNewKeyBackup?: boolean;
       allowSecretStorageRecreateWithoutRecoveryKey?: boolean;
       forceNewSecretStorage?: boolean;
+      forceNewRecoveryKey?: boolean;
     } = {},
   ): Promise<void> {
     let status: MatrixSecretStorageStatus | null = null;
@@ -247,7 +248,8 @@ export class MatrixRecoveryKeyStore {
     let generatedRecoveryKey = false;
     const storedRecovery = this.loadStoredRecoveryKey();
     const stagedRecovery = this.stagedRecoveryKey;
-    const sourceRecovery = stagedRecovery ?? storedRecovery;
+    const sourceRecovery =
+      options.forceNewRecoveryKey === true ? null : (stagedRecovery ?? storedRecovery);
     let recoveryKey: MatrixGeneratedSecretStorageKey | null = sourceRecovery
       ? {
           keyInfo: sourceRecovery.keyInfo,

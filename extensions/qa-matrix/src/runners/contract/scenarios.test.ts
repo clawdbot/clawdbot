@@ -169,6 +169,16 @@ describe("matrix live qa scenarios", () => {
       "matrix-e2ee-recovery-key-lifecycle",
       "matrix-e2ee-recovery-owner-verification-required",
       "matrix-e2ee-cli-self-verification",
+      "matrix-e2ee-state-loss-external-recovery-key",
+      "matrix-e2ee-state-loss-stored-recovery-key",
+      "matrix-e2ee-state-loss-no-recovery-key",
+      "matrix-e2ee-stale-recovery-key-after-backup-reset",
+      "matrix-e2ee-server-backup-deleted-local-state-intact",
+      "matrix-e2ee-server-backup-deleted-local-reupload-restores",
+      "matrix-e2ee-corrupt-crypto-idb-snapshot",
+      "matrix-e2ee-server-device-deleted-local-state-intact",
+      "matrix-e2ee-sync-state-loss-crypto-intact",
+      "matrix-e2ee-history-exists-backup-empty",
       "matrix-e2ee-device-sas-verification",
       "matrix-e2ee-qr-verification",
       "matrix-e2ee-stale-device-hygiene",
@@ -178,7 +188,27 @@ describe("matrix live qa scenarios", () => {
       "matrix-e2ee-artifact-redaction",
       "matrix-e2ee-media-image",
       "matrix-e2ee-key-bootstrap-failure",
+      "matrix-e2ee-wrong-account-recovery-key",
     ]);
+  });
+
+  it("keeps account-mutating E2EE negative coverage at the suite tail", () => {
+    const scenarioIds = scenarioTesting.findMatrixQaScenarios().map((scenario) => scenario.id);
+    const destructiveScenarioId = "matrix-e2ee-wrong-account-recovery-key";
+    const destructiveIndex = scenarioIds.indexOf(destructiveScenarioId);
+
+    expect(scenarioIds.at(-1)).toBe(destructiveScenarioId);
+    const protectedScenarioIds = [
+      "matrix-e2ee-state-loss-external-recovery-key",
+      "matrix-e2ee-state-loss-stored-recovery-key",
+      "matrix-e2ee-device-sas-verification",
+      "matrix-e2ee-qr-verification",
+      "matrix-e2ee-dm-sas-verification",
+      "matrix-e2ee-media-image",
+    ] satisfies (typeof scenarioIds)[number][];
+    for (const scenarioId of protectedScenarioIds) {
+      expect(destructiveIndex).toBeGreaterThan(scenarioIds.indexOf(scenarioId));
+    }
   });
 
   it("uses the repo-wide exact marker prompt shape for Matrix mentions", () => {
@@ -201,6 +231,17 @@ describe("matrix live qa scenarios", () => {
       150_000,
     );
     expect(scenarios.get("matrix-e2ee-media-image")?.timeoutMs).toBeGreaterThanOrEqual(180_000);
+  });
+
+  it("keeps the Matrix subagent room policy compatible with leaf child sessions", () => {
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-subagent-thread-spawn",
+    );
+
+    expect(scenario?.configOverrides?.groupsByKey?.main?.tools?.allow).toEqual([
+      "sessions_spawn",
+      "sessions_yield",
+    ]);
   });
 
   it("requires Matrix replies to match the exact marker body", () => {
@@ -1311,7 +1352,7 @@ describe("matrix live qa scenarios", () => {
       }))
       .mockImplementationOnce(async () => {
         const childToken =
-          /task="Reply exactly `([^`]+)`/.exec(
+          /task="Finish with exactly ([^".]+)\./.exec(
             String(sendTextMessage.mock.calls[0]?.[0]?.body),
           )?.[1] ?? "MATRIX_QA_SUBAGENT_CHILD_FIXED";
         return {
@@ -1453,6 +1494,43 @@ describe("matrix live qa scenarios", () => {
 
     await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).rejects.toThrow(
       "missing hook error",
+    );
+
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails the subagent thread spawn scenario on surfaced tool errors", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$subagent-spawn-trigger");
+    const waitForRoomEvent = vi.fn().mockImplementationOnce(async (options) => {
+      const event = {
+        kind: "message",
+        roomId: "!main:matrix-qa.test",
+        eventId: "$sessions-spawn-error",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        body: "Protocol note: sessions_spawn failed: Matrix thread bind failed: no adapter",
+      } satisfies MatrixQaObservedEvent;
+      options.predicate(event);
+      return {
+        event,
+        since: "driver-sync-error",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-subagent-thread-spawn",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).rejects.toThrow(
+      "sessions_spawn failed",
     );
 
     expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
@@ -2624,6 +2702,19 @@ describe("matrix live qa scenarios", () => {
       previousVersion: "backup-v1",
       success: true,
     });
+    const ownerBootstrapOwnDeviceVerification = vi.fn().mockResolvedValue({
+      crossSigning: {
+        published: true,
+      },
+      success: true,
+      verification: {
+        backupVersion: "backup-v1",
+        crossSigningVerified: true,
+        recoveryKeyStored: true,
+        signedByOwner: true,
+        verified: true,
+      },
+    });
     const driverStop = vi.fn().mockResolvedValue(undefined);
     const recoveryStop = vi.fn().mockResolvedValue(undefined);
     createMatrixQaClient.mockReturnValue({
@@ -2636,19 +2727,7 @@ describe("matrix live qa scenarios", () => {
     });
     createMatrixQaE2eeScenarioClient
       .mockResolvedValueOnce({
-        bootstrapOwnDeviceVerification: vi.fn().mockResolvedValue({
-          crossSigning: {
-            published: true,
-          },
-          success: true,
-          verification: {
-            backupVersion: "backup-v1",
-            crossSigningVerified: true,
-            recoveryKeyStored: true,
-            signedByOwner: true,
-            verified: true,
-          },
-        }),
+        bootstrapOwnDeviceVerification: ownerBootstrapOwnDeviceVerification,
         deleteOwnDevices: vi.fn().mockResolvedValue(undefined),
         getRecoveryKey: vi.fn().mockResolvedValue({
           encodedPrivateKey: "encoded-recovery-key",
@@ -2658,6 +2737,10 @@ describe("matrix live qa scenarios", () => {
         stop: driverStop,
       })
       .mockResolvedValueOnce({
+        getRecoveryKey: vi.fn().mockResolvedValue({
+          encodedPrivateKey: "encoded-recovery-key",
+          keyId: "SSSS",
+        }),
         resetRoomKeyBackup,
         restoreRoomKeyBackup,
         stop: recoveryStop,
@@ -2719,6 +2802,9 @@ describe("matrix live qa scenarios", () => {
       },
     });
 
+    expect(ownerBootstrapOwnDeviceVerification).toHaveBeenCalledWith({
+      allowAutomaticCrossSigningReset: false,
+    });
     expect(verifyWithRecoveryKey).toHaveBeenCalledWith("encoded-recovery-key");
     expect(verifyWithRecoveryKey.mock.invocationCallOrder[0]).toBeLessThan(
       restoreRoomKeyBackup.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
@@ -2751,6 +2837,19 @@ describe("matrix live qa scenarios", () => {
         ruleId: "owner-signature-upload-blocked",
       },
     ]);
+    const ownerBootstrapOwnDeviceVerification = vi.fn().mockResolvedValue({
+      crossSigning: {
+        published: true,
+      },
+      success: true,
+      verification: {
+        backupVersion: "backup-v1",
+        crossSigningVerified: true,
+        recoveryKeyStored: true,
+        signedByOwner: true,
+        verified: true,
+      },
+    });
     startMatrixQaFaultProxy.mockResolvedValue({
       baseUrl: "http://127.0.0.1:39877",
       hits: proxyHits,
@@ -2766,19 +2865,7 @@ describe("matrix live qa scenarios", () => {
     });
     createMatrixQaE2eeScenarioClient
       .mockResolvedValueOnce({
-        bootstrapOwnDeviceVerification: vi.fn().mockResolvedValue({
-          crossSigning: {
-            published: true,
-          },
-          success: true,
-          verification: {
-            backupVersion: "backup-v1",
-            crossSigningVerified: true,
-            recoveryKeyStored: true,
-            signedByOwner: true,
-            verified: true,
-          },
-        }),
+        bootstrapOwnDeviceVerification: ownerBootstrapOwnDeviceVerification,
         deleteOwnDevices: driverDeleteOwnDevices,
         getRecoveryKey: vi.fn().mockResolvedValue({
           encodedPrivateKey: "encoded-recovery-key",
@@ -2889,6 +2976,9 @@ describe("matrix live qa scenarios", () => {
         scenarioId: "matrix-e2ee-recovery-owner-verification-required",
       }),
     );
+    expect(ownerBootstrapOwnDeviceVerification).toHaveBeenCalledWith({
+      allowAutomaticCrossSigningReset: false,
+    });
     expect(verifyWithRecoveryKey).toHaveBeenCalledWith("encoded-recovery-key");
     expect(restoreRoomKeyBackup).toHaveBeenCalledWith({
       recoveryKey: "encoded-recovery-key",
@@ -3017,8 +3107,10 @@ describe("matrix live qa scenarios", () => {
           "Verification id: verification-1\nCompleted: yes\nDevice verified by owner: yes\nCross-signing verified: yes\n",
       });
       const kill = vi.fn();
+      const endStdin = vi.fn();
       startMatrixQaOpenClawCli.mockReturnValue({
         args: ["matrix", "verify", "self", "--account", "cli"],
+        endStdin,
         kill,
         output: vi.fn(() => ({ stderr: "", stdout: "" })),
         wait,
@@ -3026,7 +3118,7 @@ describe("matrix live qa scenarios", () => {
         writeStdin,
       });
       let cliAccountConfigDuringRun: Record<string, unknown> | null = null;
-      runMatrixQaOpenClawCli.mockImplementation(async ({ args, env }) => {
+      runMatrixQaOpenClawCli.mockImplementation(async ({ args, env, stdin }) => {
         if (!cliAccountConfigDuringRun && env.OPENCLAW_CONFIG_PATH) {
           const cliConfig = JSON.parse(
             await readFile(String(env.OPENCLAW_CONFIG_PATH), "utf8"),
@@ -3036,8 +3128,16 @@ describe("matrix live qa scenarios", () => {
                 accounts?: Record<string, Record<string, unknown>>;
               };
             };
+            plugins?: {
+              allow?: string[];
+              entries?: Record<string, { enabled?: boolean }>;
+            };
           };
-          cliAccountConfigDuringRun = cliConfig.channels?.matrix?.accounts?.cli ?? null;
+          cliAccountConfigDuringRun = {
+            ...cliConfig.channels?.matrix?.accounts?.cli,
+            pluginAllow: cliConfig.plugins?.allow,
+            pluginEnabled: cliConfig.plugins?.entries?.matrix?.enabled,
+          };
         }
         const joined = args.join(" ");
         if (joined === "matrix verify status --account cli --json") {
@@ -3060,10 +3160,8 @@ describe("matrix live qa scenarios", () => {
             }),
           };
         }
-        if (
-          joined ===
-          "matrix verify backup restore --account cli --recovery-key encoded-recovery-key --json"
-        ) {
+        if (joined === "matrix verify backup restore --account cli --recovery-key-stdin --json") {
+          expect(stdin).toBe("encoded-recovery-key\n");
           return {
             args,
             exitCode: 0,
@@ -3118,6 +3216,7 @@ describe("matrix live qa scenarios", () => {
       ]);
       expect(waitForOutput).toHaveBeenCalledTimes(2);
       expect(writeStdin).toHaveBeenCalledWith("yes\n");
+      expect(endStdin).toHaveBeenCalledTimes(1);
       expect(wait).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledTimes(1);
       expect(runMatrixQaOpenClawCli).toHaveBeenCalledTimes(2);
@@ -3129,12 +3228,12 @@ describe("matrix live qa scenarios", () => {
           "restore",
           "--account",
           "cli",
-          "--recovery-key",
-          "encoded-recovery-key",
+          "--recovery-key-stdin",
           "--json",
         ],
         ["matrix", "verify", "status", "--account", "cli", "--json"],
       ]);
+      expect(runMatrixQaOpenClawCli.mock.calls[0]?.[0].stdin).toBe("encoded-recovery-key\n");
       const cliEnv = startMatrixQaOpenClawCli.mock.calls[0]?.[0].env;
       expect(cliEnv?.OPENCLAW_STATE_DIR).toContain("openclaw-matrix-cli-qa-");
       expect(cliEnv?.OPENCLAW_CONFIG_PATH).toContain("openclaw-matrix-cli-qa-");
@@ -3144,6 +3243,8 @@ describe("matrix live qa scenarios", () => {
         deviceId: "CLIDEVICE",
         encryption: true,
         homeserver: "http://127.0.0.1:28008/",
+        pluginAllow: expect.arrayContaining(["matrix"]),
+        pluginEnabled: true,
         startupVerification: "off",
         userId: "@driver:matrix-qa.test",
       });
@@ -3174,6 +3275,9 @@ describe("matrix live qa scenarios", () => {
       await expect(
         readFile(path.join(cliArtifactDir, "verify-status.stdout.txt"), "utf8"),
       ).resolves.toContain('"crossSigningVerified":true');
+      expect(bootstrapOwnDeviceVerification).toHaveBeenCalledWith({
+        allowAutomaticCrossSigningReset: false,
+      });
     } finally {
       await rm(outputDir, { force: true, recursive: true });
     }

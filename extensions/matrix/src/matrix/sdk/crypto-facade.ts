@@ -1,3 +1,4 @@
+import { ensureMatrixCryptoRuntime } from "../deps.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { EncryptedFile } from "./types.js";
 import type {
@@ -69,8 +70,17 @@ let matrixCryptoNodeRuntimePromise: Promise<MatrixCryptoNodeRuntime> | null = nu
 
 async function loadMatrixCryptoNodeRuntime(): Promise<MatrixCryptoNodeRuntime> {
   // Keep the native crypto package out of the main CLI startup graph.
-  matrixCryptoNodeRuntimePromise ??= import("./crypto-node.runtime.js");
+  matrixCryptoNodeRuntimePromise ??= import("./crypto-node.runtime.js").catch((error: unknown) => {
+    matrixCryptoNodeRuntimePromise = null;
+    throw error;
+  });
   return await matrixCryptoNodeRuntimePromise;
+}
+
+async function loadMatrixCryptoNodeBindings() {
+  await ensureMatrixCryptoRuntime();
+  const runtime = await loadMatrixCryptoNodeRuntime();
+  return runtime.loadMatrixCryptoNodeBindings();
 }
 
 function trackInProgressToDeviceVerifications(deps: {
@@ -133,7 +143,7 @@ export function createMatrixCryptoFacade(deps: {
     encryptMedia: async (
       buffer: Buffer,
     ): Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }> => {
-      const { Attachment } = await loadMatrixCryptoNodeRuntime();
+      const { Attachment } = await loadMatrixCryptoNodeBindings();
       const encrypted = Attachment.encrypt(new Uint8Array(buffer));
       const mediaInfoJson = encrypted.mediaEncryptionInfo;
       if (!mediaInfoJson) {
@@ -154,7 +164,7 @@ export function createMatrixCryptoFacade(deps: {
       file: EncryptedFile,
       opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
     ): Promise<Buffer> => {
-      const { Attachment, EncryptedAttachment } = await loadMatrixCryptoNodeRuntime();
+      const { Attachment, EncryptedAttachment } = await loadMatrixCryptoNodeBindings();
       const encrypted = await deps.downloadContent(file.url, opts);
       const metadata: EncryptedFile = {
         url: file.url,

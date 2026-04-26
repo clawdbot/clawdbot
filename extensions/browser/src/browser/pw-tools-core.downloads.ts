@@ -28,11 +28,18 @@ function buildTempDownloadPath(fileName: string): string {
 }
 
 function createPageDownloadWaiter(page: Page, timeoutMs: number) {
+  const state = ensurePageState(page);
+  state.downloadWaiterDepth += 1;
   let done = false;
   let timer: NodeJS.Timeout | undefined;
   let handler: ((download: unknown) => void) | undefined;
+  let depthReleased = false;
 
   const cleanup = () => {
+    if (!depthReleased) {
+      depthReleased = true;
+      state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
+    }
     if (timer) {
       clearTimeout(timer);
     }

@@ -1,6 +1,8 @@
 import { vi } from "vitest";
 import {
+  createAckReactionHandle,
   removeAckReactionAfterReply,
+  removeAckReactionHandleAfterReply,
   shouldAckReaction,
 } from "../../../src/channels/ack-reactions.js";
 import {
@@ -305,8 +307,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolveInboundMentionDecision,
       },
       reactions: {
+        createAckReactionHandle,
         shouldAckReaction,
         removeAckReactionAfterReply,
+        removeAckReactionHandleAfterReply,
       },
       groups: {
         resolveGroupPolicy: vi.fn(

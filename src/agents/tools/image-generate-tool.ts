@@ -8,6 +8,7 @@ import {
 } from "../../image-generation/runtime.js";
 import type {
   ImageGenerationIgnoredOverride,
+  ImageGenerationBackground,
   ImageGenerationOpenAIBackground,
   ImageGenerationOpenAIModeration,
   ImageGenerationOpenAIOptions,
@@ -19,7 +20,10 @@ import type {
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import {
+  resolveConfiguredMediaMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/image-ops.js";
 import {
   classifyMediaReferenceSource,
@@ -59,7 +63,7 @@ const MAX_INPUT_IMAGES = 5;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const SUPPORTED_QUALITIES = ["low", "medium", "high", "auto"] as const;
 const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
-const SUPPORTED_OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const SUPPORTED_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const SUPPORTED_OPENAI_MODERATIONS = ["low", "auto"] as const;
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
@@ -93,7 +97,10 @@ const ImageGenerateToolSchema = Type.Object({
     }),
   ),
   model: Type.Optional(
-    Type.String({ description: "Optional provider/model override, e.g. openai/gpt-image-2." }),
+    Type.String({
+      description:
+        "Optional provider/model override, e.g. openai/gpt-image-2; use openai/gpt-image-1.5 for transparent OpenAI backgrounds.",
+    }),
   ),
   filename: Type.Optional(
     Type.String({
@@ -125,10 +132,15 @@ const ImageGenerateToolSchema = Type.Object({
   outputFormat: optionalStringEnum(SUPPORTED_OUTPUT_FORMATS, {
     description: "Optional output format hint: png, jpeg, or webp when the provider supports it.",
   }),
+  background: optionalStringEnum(SUPPORTED_BACKGROUNDS, {
+    description:
+      "Optional background hint: transparent, opaque, or auto when the provider supports it. For transparent output use outputFormat png or webp.",
+  }),
   openai: Type.Optional(
     Type.Object({
-      background: optionalStringEnum(SUPPORTED_OPENAI_BACKGROUNDS, {
-        description: "OpenAI-only background hint: transparent, opaque, or auto.",
+      background: optionalStringEnum(SUPPORTED_BACKGROUNDS, {
+        description:
+          "OpenAI-only background hint: transparent, opaque, or auto. For transparent output use outputFormat png or webp; OpenClaw routes the default OpenAI image model to gpt-image-1.5 for this mode.",
       }),
       moderation: optionalStringEnum(SUPPORTED_OPENAI_MODERATIONS, {
         description: "OpenAI-only moderation hint: low or auto.",
@@ -263,10 +275,21 @@ function normalizeOpenAIBackground(
   if (!normalized) {
     return undefined;
   }
-  if ((SUPPORTED_OPENAI_BACKGROUNDS as readonly string[]).includes(normalized)) {
+  if ((SUPPORTED_BACKGROUNDS as readonly string[]).includes(normalized)) {
     return normalized as ImageGenerationOpenAIBackground;
   }
   throw new ToolInputError("openai.background must be one of transparent, opaque, or auto");
+}
+
+function normalizeBackground(raw: string | undefined): ImageGenerationBackground | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if ((SUPPORTED_BACKGROUNDS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationBackground;
+  }
+  throw new ToolInputError("background must be one of transparent, opaque, or auto");
 }
 
 function normalizeOpenAIModeration(
@@ -567,7 +590,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Generate new images or edit reference images with the configured or inferred image-generation model. Set agents.defaults.imageGenerationModel.primary to pick a provider/model. Providers declare their own auth/readiness; use action="list" to inspect registered providers, models, readiness, and auth hints. Generated images are delivered automatically from the tool result as MEDIA paths.',
+      'Generate new images or edit reference images with the configured or inferred image-generation model. For transparent backgrounds, use outputFormat="png" or "webp" and background="transparent"; OpenAI also accepts openai.background and OpenClaw routes the default OpenAI image model to gpt-image-1.5 for that mode. Set agents.defaults.imageGenerationModel.primary to pick a provider/model. Providers declare their own auth/readiness; use action="list" to inspect registered providers, models, readiness, and auth hints. Generated images are delivered automatically from the tool result as MEDIA paths.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -609,6 +632,12 @@ export function createImageGenerateTool(options?: {
           if ((provider.capabilities.geometry?.aspectRatios?.length ?? 0) > 0) {
             caps.push(`aspect ratios ${provider.capabilities.geometry?.aspectRatios?.join(", ")}`);
           }
+          if ((provider.capabilities.output?.formats?.length ?? 0) > 0) {
+            caps.push(`formats ${provider.capabilities.output?.formats?.join("/")}`);
+          }
+          if ((provider.capabilities.output?.backgrounds?.length ?? 0) > 0) {
+            caps.push(`backgrounds ${provider.capabilities.output?.backgrounds?.join("/")}`);
+          }
           const modelLine =
             provider.models.length > 0
               ? `models: ${provider.models.join(", ")}`
@@ -635,9 +664,10 @@ export function createImageGenerateTool(options?: {
       const size = readStringParam(params, "size");
       const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
       const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
-      const timeoutMs = readGenerationTimeoutMs(params);
+      const timeoutMs = readGenerationTimeoutMs(params) ?? imageGenerationModelConfig.timeoutMs;
       const quality = normalizeQuality(readStringParam(params, "quality"));
       const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
+      const background = normalizeBackground(readStringParam(params, "background"));
       const providerOptions = normalizeProviderOptions(params);
       const selectedProvider = resolveSelectedImageGenerationProvider({
         config: effectiveCfg,
@@ -646,6 +676,7 @@ export function createImageGenerateTool(options?: {
       });
       const count = resolveRequestedCount(params);
       const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
+      const mediaMaxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
         maxBytes: configuredMediaMaxBytes,
@@ -685,6 +716,7 @@ export function createImageGenerateTool(options?: {
         resolution,
         quality,
         outputFormat,
+        background,
         count,
         inputImages,
         timeoutMs,
@@ -728,7 +760,7 @@ export function createImageGenerateTool(options?: {
             image.buffer,
             image.mimeType,
             "tool-image-generation",
-            configuredMediaMaxBytes,
+            mediaMaxBytes,
             filename || image.fileName,
           ),
         ),
@@ -772,6 +804,7 @@ export function createImageGenerateTool(options?: {
             : {}),
           ...(quality ? { quality } : {}),
           ...(outputFormat ? { outputFormat } : {}),
+          ...(background ? { background } : {}),
           ...(filename ? { filename } : {}),
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
           attempts: result.attempts,

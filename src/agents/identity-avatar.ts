@@ -3,8 +3,10 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   AVATAR_MAX_BYTES,
+  hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
+  isWindowsAbsolutePath,
   isPathWithinRoot,
   isSupportedLocalAvatarExtension,
 } from "../shared/avatar-policy.js";
@@ -15,10 +17,18 @@ import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
 import { resolveAgentIdentity } from "./identity.js";
 
 export type AgentAvatarResolution =
-  | { kind: "none"; reason: string }
-  | { kind: "local"; filePath: string }
-  | { kind: "remote"; url: string }
-  | { kind: "data"; url: string };
+  | { kind: "none"; reason: string; source?: string }
+  | { kind: "local"; filePath: string; source: string }
+  | { kind: "remote"; url: string; source: string }
+  | { kind: "data"; url: string; source: string };
+
+type AgentAvatarPublicSourceInput = {
+  kind: AgentAvatarResolution["kind"];
+  source?: string | null;
+};
+
+const PUBLIC_AVATAR_SOURCE_MAX_CHARS = 256;
+const PUBLIC_DATA_AVATAR_HEADER_MAX_CHARS = 64;
 
 function resolveAvatarSource(
   cfg: OpenClawConfig,
@@ -80,6 +90,42 @@ function resolveLocalAvatarPath(params: {
   return { ok: true, filePath: realPath };
 }
 
+function isSafeRelativeAvatarSource(source: string): boolean {
+  if (
+    source.length > PUBLIC_AVATAR_SOURCE_MAX_CHARS ||
+    source.startsWith("~") ||
+    path.isAbsolute(source) ||
+    isWindowsAbsolutePath(source) ||
+    (hasAvatarUriScheme(source) && !isWindowsAbsolutePath(source)) ||
+    source.includes("\0")
+  ) {
+    return false;
+  }
+  const parts = source.replace(/\\/g, "/").split("/");
+  return parts.every((part) => part !== "..");
+}
+
+export function resolvePublicAgentAvatarSource(
+  resolved: AgentAvatarPublicSourceInput,
+): string | undefined {
+  const source = normalizeOptionalString(resolved.source) ?? null;
+  if (!source) {
+    return undefined;
+  }
+  if (isAvatarDataUrl(source)) {
+    const commaIndex = source.indexOf(",");
+    const header =
+      commaIndex > 0
+        ? source.slice(0, Math.min(commaIndex, PUBLIC_DATA_AVATAR_HEADER_MAX_CHARS))
+        : source.slice(0, PUBLIC_DATA_AVATAR_HEADER_MAX_CHARS);
+    return `${header},...`;
+  }
+  if (isAvatarHttpUrl(source)) {
+    return "remote URL";
+  }
+  return isSafeRelativeAvatarSource(source) ? source : undefined;
+}
+
 export function resolveAgentAvatar(
   cfg: OpenClawConfig,
   agentId: string,
@@ -90,15 +136,15 @@ export function resolveAgentAvatar(
     return { kind: "none", reason: "missing" };
   }
   if (isAvatarHttpUrl(source)) {
-    return { kind: "remote", url: source };
+    return { kind: "remote", url: source, source };
   }
   if (isAvatarDataUrl(source)) {
-    return { kind: "data", url: source };
+    return { kind: "data", url: source, source };
   }
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const resolved = resolveLocalAvatarPath({ raw: source, workspaceDir });
   if (!resolved.ok) {
-    return { kind: "none", reason: resolved.reason };
+    return { kind: "none", reason: resolved.reason, source };
   }
-  return { kind: "local", filePath: resolved.filePath };
+  return { kind: "local", filePath: resolved.filePath, source };
 }

@@ -168,6 +168,8 @@ type AgentCallParams = {
   channel?: string;
   to?: string;
   threadId?: string;
+  lane?: string;
+  timeout?: number;
 };
 type CrossAgentWorkspaceFixture = {
   workspaceRoot: string;
@@ -330,6 +332,12 @@ function expectAgentGatewayCall(overrides: AgentCallParams): void {
   expect(agentCall?.params?.channel).toBe(overrides.channel);
   expect(agentCall?.params?.to).toBe(overrides.to);
   expect(agentCall?.params?.threadId).toBe(overrides.threadId);
+  if (Object.hasOwn(overrides, "lane")) {
+    expect(agentCall?.params?.lane).toBe(overrides.lane);
+  }
+  if (Object.hasOwn(overrides, "timeout")) {
+    expect(agentCall?.params?.timeout).toBe(overrides.timeout);
+  }
 }
 
 function resolveMatrixRoomTargetForTest(value: string | undefined): string | undefined {
@@ -701,6 +709,7 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.to).toBe("channel:child-thread");
     expect(agentCall?.params?.threadId).toBe("child-thread");
     expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.lane).toBe("subagent");
     expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: expect.stringMatching(/^agent:codex:acp:/),
@@ -716,12 +725,13 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
-  it("passes model override into ACP session initialization", async () => {
+  it("passes model and thinking overrides into ACP session initialization", async () => {
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
         agentId: "codex",
         model: "openai-codex/gpt-5.4",
+        thinking: "high",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -735,7 +745,118 @@ describe("spawnAcpDirect", () => {
         agent: "codex",
         runtimeOptions: {
           model: "openai-codex/gpt-5.4",
+          thinking: "high",
         },
+      }),
+    );
+  });
+
+  it("applies ACP spawn run timeout to runtime options and dispatch", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        runTimeoutSeconds: 45,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: expect.stringMatching(/^agent:codex:acp:/),
+        agent: "codex",
+        runtimeOptions: {
+          timeoutSeconds: 45,
+        },
+      }),
+    );
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.lane).toBe("subagent");
+    expect(agentCall?.params?.timeout).toBe(45);
+  });
+
+  it("rejects OpenClaw config agent ids when runtime=acp targets a native agent", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        allowedAgents: ["codex"],
+      },
+      agents: {
+        list: [{ id: "pleres" }],
+        defaults: {
+          subagents: {
+            allowAgents: ["*"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "pleres",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      errorCode: "runtime_agent_mismatch",
+    });
+    expect(result).toHaveProperty("error", expect.stringContaining("OpenClaw config agent"));
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "agent" }),
+    );
+  });
+
+  it("maps OpenClaw ACP runtime agent aliases to their configured harness id", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            runtime: {
+              type: "acp",
+              acp: {
+                agent: "codex",
+              },
+            },
+          },
+        ],
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "reviewer",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "codex",
+        sessionKey: expect.stringMatching(/^agent:codex:acp:/),
       }),
     );
   });
@@ -2333,7 +2454,8 @@ describe("spawnAcpDirect", () => {
         conversation: expect.objectContaining({
           channel: "telegram",
           accountId: "default",
-          conversationId: "-1003342490704:topic:2",
+          conversationId: "2",
+          parentConversationId: "-1003342490704",
         }),
       }),
     );

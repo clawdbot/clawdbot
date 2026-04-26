@@ -427,7 +427,9 @@ export function resolveModelFromRegistry(params: {
   provider: string;
   modelId: string;
 }): Model<Api> {
-  const resolvedRef = normalizeModelRef(params.provider, params.modelId);
+  const resolvedRef = normalizeModelRef(params.provider, params.modelId, {
+    allowPluginNormalization: false,
+  });
   let model = params.modelRegistry.find(
     resolvedRef.provider,
     resolvedRef.model,

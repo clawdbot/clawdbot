@@ -18,9 +18,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 let createOllamaEmbeddingProvider: typeof import("./embedding-provider.js").createOllamaEmbeddingProvider;
+let ollamaMemoryEmbeddingProviderAdapter: typeof import("./memory-embedding-adapter.js").ollamaMemoryEmbeddingProviderAdapter;
 
 beforeAll(async () => {
   ({ createOllamaEmbeddingProvider } = await import("./embedding-provider.js"));
+  ({ ollamaMemoryEmbeddingProviderAdapter } = await import("./memory-embedding-adapter.js"));
 });
 
 beforeEach(() => {
@@ -146,5 +148,50 @@ describe("ollama embedding provider", () => {
         }),
       }),
     );
+  });
+
+  it("serializes batch embeddings to avoid flooding local Ollama", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const prompts: string[] = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      const rawBody = typeof init?.body === "string" ? init.body : "{}";
+      const body = JSON.parse(rawBody) as { prompt?: string };
+      prompts.push(body.prompt ?? "");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      inFlight -= 1;
+      return new Response(JSON.stringify({ embedding: [1, 0] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedBatch(["a", "bb", "ccc"])).resolves.toHaveLength(3);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(prompts).toEqual(["a", "bb", "ccc"]);
+    expect(maxInFlight).toBe(1);
+  });
+
+  it("marks inline memory batches as local-server timeout work", async () => {
+    const result = await ollamaMemoryEmbeddingProviderAdapter.create({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    expect(result.runtime?.inlineBatchTimeoutMs).toBe(600_000);
   });
 });

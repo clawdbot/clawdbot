@@ -4,13 +4,24 @@
 import type { JsonValue } from "../serde_json/JsonValue.js";
 import type { McpElicitationSchema } from "./McpElicitationSchema.js";
 
-export type McpServerElicitationRequestParams = { threadId: string,
-/**
- * Active Codex turn when this elicitation was observed, if app-server could correlate one.
- *
- * This is nullable because MCP models elicitation as a standalone server-to-client request
- * identified by the MCP server request id. It may be triggered during a turn, but turn
- * context is app-server correlation rather than part of the protocol identity of the
- * elicitation itself.
- */
-turnId: string | null, serverName: string, } & ({ "mode": "form", _meta: JsonValue | null, message: string, requestedSchema: McpElicitationSchema, } | { "mode": "url", _meta: JsonValue | null, message: string, url: string, elicitationId: string, });
+export type McpServerElicitationRequestParams = {
+  threadId: string;
+  /**
+   * Active Codex turn when this elicitation was observed, if app-server could correlate one.
+   *
+   * This is nullable because MCP models elicitation as a standalone server-to-client request
+   * identified by the MCP server request id. It may be triggered during a turn, but turn
+   * context is app-server correlation rather than part of the protocol identity of the
+   * elicitation itself.
+   */
+  turnId: string | null;
+  serverName: string;
+} & (
+  | {
+      mode: "form";
+      _meta: JsonValue | null;
+      message: string;
+      requestedSchema: McpElicitationSchema;
+    }
+  | { mode: "url"; _meta: JsonValue | null; message: string; url: string; elicitationId: string }
+);

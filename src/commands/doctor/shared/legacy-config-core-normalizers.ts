@@ -193,8 +193,8 @@ type ModelProviderEntry = Partial<
 >;
 type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
 type ModelDefinitionEntry = NonNullable<ModelProviderEntry["models"]>[number];
-type AgentEmbeddedHarnessPatch = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["embeddedHarness"]
+type AgentRuntimePolicyPatch = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["agentRuntime"]
 >;
 
 function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
@@ -273,24 +273,24 @@ function normalizeLegacyRuntimeAllowlistModels(
   return { value: next, changed };
 }
 
-function ensureEmbeddedHarnessRuntime(
+function ensureAgentRuntimePolicy(
   raw: unknown,
   selectedRuntime: string,
 ): {
-  value: AgentEmbeddedHarnessPatch;
+  value: AgentRuntimePolicyPatch;
   changed: boolean;
 } {
   if (!isRecord(raw)) {
-    return { value: { runtime: selectedRuntime }, changed: true };
+    return { value: { id: selectedRuntime }, changed: true };
   }
-  const currentRuntime = normalizeOptionalLowercaseString(raw.runtime);
+  const currentRuntime = normalizeOptionalLowercaseString(raw.id);
   if (!currentRuntime || currentRuntime === "auto") {
     return {
-      value: { ...raw, runtime: selectedRuntime } as AgentEmbeddedHarnessPatch,
+      value: { ...raw, id: selectedRuntime } as AgentRuntimePolicyPatch,
       changed: currentRuntime !== selectedRuntime,
     };
   }
-  return { value: raw as AgentEmbeddedHarnessPatch, changed: false };
+  return { value: raw as AgentRuntimePolicyPatch, changed: false };
 }
 
 function normalizeLegacyRuntimeAgentContainer(
@@ -321,9 +321,9 @@ function normalizeLegacyRuntimeAgentContainer(
   }
 
   if (model.selectedRuntime) {
-    const harness = ensureEmbeddedHarnessRuntime(raw.embeddedHarness, model.selectedRuntime);
-    if (harness.changed) {
-      next.embeddedHarness = harness.value;
+    const agentRuntime = ensureAgentRuntimePolicy(raw.agentRuntime, model.selectedRuntime);
+    if (agentRuntime.changed) {
+      next.agentRuntime = agentRuntime.value;
       changed = true;
     }
   }

@@ -37,6 +37,7 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
 };
 
 const ELEVENLABS_TTS_MODELS = [
+  "eleven_v3",
   "eleven_multilingual_v2",
   "eleven_turbo_v2_5",
   "eleven_monolingual_v1",

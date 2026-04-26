@@ -1,5 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as launchd from "../daemon/launchd.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
+import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
 
 const service = vi.hoisted(() => ({
   isLoaded: vi.fn(),
@@ -187,6 +190,22 @@ describe("maybeRepairGatewayDaemon", () => {
     });
   }
 
+  async function runAutoRepair() {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime,
+      prompter: createDoctorPrompter({
+        runtime,
+        options: { repair: true },
+      }),
+      options: { deep: false, repair: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+    return runtime;
+  }
+
   async function runScheduledGatewayRepair(confirmMessage: string) {
     setPlatform("linux");
     service.restart.mockResolvedValueOnce({ outcome: "scheduled" });
@@ -234,5 +253,57 @@ describe("maybeRepairGatewayDaemon", () => {
     await runNonInteractiveUpdateRepair();
 
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("skips gateway service install when service repair policy is external", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockResolvedValue(false);
+
+    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
+      await runAutoRepair();
+    });
+
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+  });
+
+  it("skips gateway service start when service repair policy is external", async () => {
+    setPlatform("linux");
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
+
+    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
+      await runAutoRepair();
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+  });
+
+  it("skips gateway service restart when service repair policy is external", async () => {
+    setPlatform("linux");
+
+    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
+      await runAutoRepair();
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+  });
+
+  it("skips LaunchAgent bootstrap repair when service repair policy is external", async () => {
+    setPlatform("darwin");
+    service.isLoaded.mockResolvedValue(false);
+    vi.mocked(launchd.isLaunchAgentListed).mockResolvedValue(true);
+    vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
+    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValue(true);
+
+    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
+      await runAutoRepair();
+    });
+
+    expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway LaunchAgent");
   });
 });

@@ -1,13 +1,16 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { buildPluginApi } from "../../src/plugins/api-builder.js";
 import type { PluginRuntime } from "../../src/plugins/runtime/types.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
 import amazonBedrockPlugin from "./index.js";
-import { resetBedrockAppProfileCacheEligibilityForTest } from "./register.sync.runtime.js";
+import {
+  resetBedrockAppProfileCacheEligibilityForTest,
+  setBedrockAppProfileControlPlaneForTest,
+} from "./register.sync.runtime.js";
 
 type BedrockClientResult =
   | {
@@ -211,6 +214,19 @@ describe("amazon-bedrock provider plugin", () => {
     sendBedrockCommand.mockClear();
     resetBedrockDiscoveryCacheForTest();
     resetBedrockAppProfileCacheEligibilityForTest();
+    setBedrockAppProfileControlPlaneForTest((region) => ({
+      async getInferenceProfile(input) {
+        class GetInferenceProfileCommand {
+          constructor(readonly input: Record<string, unknown> = {}) {}
+        }
+        bedrockClientConfigs.push(region ? { region } : {});
+        return await sendBedrockCommand(new GetInferenceProfileCommand(input));
+      },
+    }));
+  });
+
+  afterEach(() => {
+    setBedrockAppProfileControlPlaneForTest(undefined);
   });
 
   it("marks Claude 4.6 Bedrock models as adaptive by default", async () => {

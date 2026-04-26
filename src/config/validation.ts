@@ -13,10 +13,8 @@ import {
   listPluginDoctorLegacyConfigRules,
 } from "../plugins/doctor-contract-registry.js";
 import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
-import {
-  loadPluginManifestRegistry,
-  resolveManifestContractPluginIds,
-} from "../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { collectLegacySecretRefEnvMarkerCandidates } from "../secrets/legacy-secretref-env-marker.js";
@@ -760,7 +758,7 @@ function validateConfigObjectWithPluginsBase(
   };
 
   type RegistryInfo = {
-    registry: ReturnType<typeof loadPluginManifestRegistry>;
+    registry: PluginManifestRegistry;
     knownIds?: Set<string>;
     overriddenPluginIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
@@ -788,24 +786,27 @@ function validateConfigObjectWithPluginsBase(
       return compatPluginIds;
     }
     const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const registry = loadPluginManifestRegistryForPluginRegistry({
+      config,
+      workspaceDir: workspaceDir ?? undefined,
+      env: opts.env,
+      includeDisabled: true,
+    });
     const overriddenBundledPluginIds = new Set(
-      loadPluginManifestRegistry({
-        config,
-        workspaceDir: workspaceDir ?? undefined,
-        env: opts.env,
-      })
-        .diagnostics.filter((diag) => diag.message.includes("duplicate plugin id detected"))
+      registry.diagnostics
+        .filter((diag) => diag.message.includes("duplicate plugin id detected"))
         .map((diag) => diag.pluginId)
         .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
     );
     compatPluginIds = new Set(
-      resolveManifestContractPluginIds({
-        contract: "webSearchProviders",
-        origin: "bundled",
-        config,
-        workspaceDir: workspaceDir ?? undefined,
-        env: opts.env,
-      }).filter((pluginId) => !overriddenBundledPluginIds.has(pluginId)),
+      registry.plugins
+        .filter(
+          (plugin) =>
+            plugin.origin === "bundled" &&
+            (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 &&
+            !overriddenBundledPluginIds.has(plugin.id),
+        )
+        .map((plugin) => plugin.id),
     );
     return compatPluginIds;
   };
@@ -838,10 +839,11 @@ function validateConfigObjectWithPluginsBase(
       effectiveConfig,
       resolveDefaultAgentId(effectiveConfig),
     );
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryForPluginRegistry({
       config: effectiveConfig,
       workspaceDir: workspaceDir ?? undefined,
       env: opts.env,
+      includeDisabled: true,
     });
 
     for (const diag of registry.diagnostics) {

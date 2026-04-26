@@ -7,10 +7,12 @@ export type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+export type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   command: string;
+  commandSource?: CodexAppServerCommandSource;
   args: string[];
   url?: string;
   authToken?: string;
@@ -125,8 +127,14 @@ export function resolveCodexAppServerRuntimeOptions(
   const env = params.env ?? process.env;
   const config = readCodexPluginConfig(params.pluginConfig).appServer ?? {};
   const transport = resolveTransport(config.transport);
-  const command =
-    readNonEmptyString(config.command) ?? env.OPENCLAW_CODEX_APP_SERVER_BIN ?? "codex";
+  const configCommand = readNonEmptyString(config.command);
+  const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
+  const command = configCommand ?? envCommand ?? "codex";
+  const commandSource: CodexAppServerCommandSource = configCommand
+    ? "config"
+    : envCommand
+      ? "env"
+      : "managed";
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const authToken = readNonEmptyString(config.authToken);
@@ -146,6 +154,7 @@ export function resolveCodexAppServerRuntimeOptions(
     start: {
       transport,
       command,
+      commandSource,
       args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
       ...(url ? { url } : {}),
       ...(authToken ? { authToken } : {}),
@@ -174,6 +183,7 @@ export function codexAppServerStartOptionsKey(
   return JSON.stringify({
     transport: options.transport,
     command: options.command,
+    commandSource: options.commandSource ?? null,
     args: options.args,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken),

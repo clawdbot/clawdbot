@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
+const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
 const loadPluginMetadataRegistrySnapshotMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredChannelPluginIdsMock = vi.hoisted(() => vi.fn());
 
@@ -11,6 +12,10 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveConfiguredChannelPluginIds: (...args: unknown[]) =>
     resolveConfiguredChannelPluginIdsMock(...args),
+}));
+
+vi.mock("../plugins/runtime.js", () => ({
+  getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
 }));
 
 vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
@@ -36,6 +41,7 @@ function createAuditContext(params: {
     stateDir: "/tmp/openclaw-test-state",
     configPath: "/tmp/openclaw-test-config.json",
     plugins: params.plugins,
+    loadPluginSecurityCollectors: true,
     configSnapshot: null,
     codeSafetySummaryCache: new Map<string, Promise<unknown>>(),
   };
@@ -48,8 +54,10 @@ describe("security audit read-only plugin scope", () => {
 
   beforeEach(() => {
     applyPluginAutoEnableMock.mockReset();
+    getActivePluginRegistryMock.mockReset();
     loadPluginMetadataRegistrySnapshotMock.mockReset();
     resolveConfiguredChannelPluginIdsMock.mockReset();
+    getActivePluginRegistryMock.mockReturnValue(null);
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
       config: params.config,
       changes: [],
@@ -126,5 +134,26 @@ describe("security audit read-only plugin scope", () => {
         onlyPluginIds: ["audit-plugin"],
       }),
     );
+  });
+
+  it("skips plugin runtime and collector discovery when collector loading is disabled", async () => {
+    const sourceConfig = {
+      plugins: {
+        allow: ["audit-plugin"],
+      },
+    };
+
+    const findings = await collectPluginSecurityAuditFindings({
+      ...createAuditContext({
+        sourceConfig,
+        plugins: [],
+      }),
+      loadPluginSecurityCollectors: false,
+    });
+
+    expect(findings).toEqual([]);
+    expect(getActivePluginRegistryMock).not.toHaveBeenCalled();
+    expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
+    expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();
   });
 });

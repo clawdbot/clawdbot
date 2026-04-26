@@ -70,6 +70,12 @@ const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
 
 const OPENAI_CODEX_PROVIDER = "openai-codex";
 
+type RunTuiOptions = TuiOptions & {
+  backend?: TuiBackend;
+  config?: OpenClawConfig;
+  title?: string;
+};
+
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export function resolveCodexCliBin(): string | null {
   try {
@@ -284,9 +290,9 @@ export function resolveCtrlCAction(params: {
   };
 }
 
-export async function runTui(opts: TuiOptions): Promise<TuiResult> {
-  const isLocalMode = opts.local === true;
-  const config = loadConfig();
+export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
+  const isLocalMode = opts.local === true || opts.backend !== undefined;
+  const config = opts.config ?? loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
@@ -496,13 +502,15 @@ export async function runTui(opts: TuiOptions): Promise<TuiResult> {
     localBtwRunIds.clear();
   };
 
-  const client: TuiBackend = opts.local
-    ? new EmbeddedTuiBackend()
-    : await GatewayChatClient.connect({
-        url: opts.url,
-        token: opts.token,
-        password: opts.password,
-      });
+  const client: TuiBackend = opts.backend
+    ? opts.backend
+    : opts.local
+      ? new EmbeddedTuiBackend()
+      : await GatewayChatClient.connect({
+          url: opts.url,
+          token: opts.token,
+          password: opts.password,
+        });
   const previousConsoleSubsystemFilter = isLocalMode
     ? loggingState.consoleSubsystemFilter
       ? [...loggingState.consoleSubsystemFilter]
@@ -577,9 +585,10 @@ export async function runTui(opts: TuiOptions): Promise<TuiResult> {
   const updateHeader = () => {
     const sessionLabel = formatSessionKey(currentSessionKey);
     const agentLabel = formatAgentLabel(currentAgentId);
+    const title = opts.title ?? "openclaw tui";
     header.setText(
       theme.header(
-        `openclaw tui - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
+        `${title} - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
       ),
     );
   };
@@ -923,6 +932,10 @@ export async function runTui(opts: TuiOptions): Promise<TuiResult> {
       finishTui?.();
     });
   };
+  const exitAwareClient = client as TuiBackend & {
+    setRequestExitHandler?: (handler: () => void) => void;
+  };
+  exitAwareClient.setRequestExitHandler?.(() => requestExit());
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
     createCommandHandlers({

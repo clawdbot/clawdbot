@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { diagnosticErrorCategory, diagnosticHttpStatusCode } from "./diagnostic-error-metadata.js";
+import {
+  diagnosticErrorCategory,
+  diagnosticHttpStatusCode,
+  diagnosticProviderRequestIdHash,
+} from "./diagnostic-error-metadata.js";
 
 describe("diagnostic error metadata", () => {
   it("returns stable categories without reading mutable Error.name", () => {
@@ -46,5 +50,30 @@ describe("diagnostic error metadata", () => {
     );
 
     expect(diagnosticHttpStatusCode(errorLike)).toBeUndefined();
+  });
+
+  it("extracts bounded provider request id hashes without exposing raw ids", () => {
+    expect(diagnosticProviderRequestIdHash({ requestId: "req_123" })).toMatch(
+      /^sha256:[a-f0-9]{12}$/,
+    );
+    expect(
+      diagnosticProviderRequestIdHash(
+        new Error("Provider API error (429): quota [request_id=req_456]"),
+      ),
+    ).toMatch(/^sha256:[a-f0-9]{12}$/);
+    expect(
+      diagnosticProviderRequestIdHash({ requestId: "https://example.invalid/secret" }),
+    ).toBeUndefined();
+  });
+
+  it("does not invoke throwing getters while extracting provider request ids", () => {
+    const errorLike = {};
+    Object.defineProperty(errorLike, "requestId", {
+      get() {
+        throw new Error("should not read getter");
+      },
+    });
+
+    expect(diagnosticProviderRequestIdHash(errorLike)).toBeUndefined();
   });
 });

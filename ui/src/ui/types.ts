@@ -344,6 +344,9 @@ export type AgentIdentityResult = {
   agentId: string;
   name: string;
   avatar: string;
+  avatarSource?: string | null;
+  avatarStatus?: "none" | "local" | "remote" | "data" | null;
+  avatarReason?: string | null;
   emoji?: string;
 };
 

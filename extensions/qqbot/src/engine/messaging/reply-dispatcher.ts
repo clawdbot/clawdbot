@@ -37,7 +37,12 @@ import {
 /** TTS provider interface — injected from the outer layer. */
 export interface TTSProvider {
   /** Framework TTS: text → audio file path. */
-  textToSpeech(params: { text: string; cfg: unknown; channel: string }): Promise<{
+  textToSpeech(params: {
+    text: string;
+    cfg: unknown;
+    channel: string;
+    accountId?: string;
+  }): Promise<{
     success: boolean;
     audioPath?: string;
     provider?: string;
@@ -380,16 +385,25 @@ async function handleAudioPayload(
   payload: MediaPayload,
   deps?: ReplyDispatcherDeps,
 ): Promise<void> {
+  const ttsText = payload.caption || payload.path;
+  await sendTextAsVoiceReply(ctx, ttsText, deps);
+}
+
+export async function sendTextAsVoiceReply(
+  ctx: ReplyContext,
+  text: string | undefined,
+  deps?: ReplyDispatcherDeps,
+): Promise<boolean> {
   const { target, account, cfg, log } = ctx;
   if (!deps) {
     log?.error(`TTS deps not provided, cannot handle audio payload`);
-    return;
+    return false;
   }
   try {
-    const ttsText = payload.caption || payload.path;
+    const ttsText = text;
     if (!ttsText?.trim()) {
       log?.error(`Voice missing text`);
-      return;
+      return false;
     }
 
     log?.debug?.(`TTS: "${ttsText.slice(0, 50)}..."`);
@@ -397,10 +411,11 @@ async function handleAudioPayload(
       text: ttsText,
       cfg,
       channel: "qqbot",
+      accountId: account.accountId,
     });
     if (!ttsResult.success || !ttsResult.audioPath) {
       log?.error(`TTS failed: ${ttsResult.error ?? "unknown"}`);
-      return;
+      return false;
     }
 
     const providerLabel = ttsResult.provider ?? "unknown";
@@ -411,7 +426,7 @@ async function handleAudioPayload(
     const silkBase64 = await deps.tts.audioFileToSilkBase64(ttsResult.audioPath);
     if (!silkBase64) {
       log?.error(`Failed to convert TTS audio to SILK`);
-      return;
+      return false;
     }
     const silkPath = ttsResult.audioPath;
 
@@ -439,8 +454,10 @@ async function handleAudioPayload(
       account.accountId,
     );
     log?.debug?.(`Voice message sent`);
+    return true;
   } catch (err) {
     log?.error(`TTS/voice send failed: ${formatErrorMessage(err)}`);
+    return false;
   }
 }
 

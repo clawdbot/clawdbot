@@ -16,8 +16,9 @@ export async function resolveAndPersistSessionFile(params: {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey, sessionStore, storePath } = params;
+  const now = Date.now();
   const baseEntry = params.sessionEntry ??
-    sessionStore[sessionKey] ?? { sessionId, updatedAt: Date.now() };
+    sessionStore[sessionKey] ?? { sessionId, updatedAt: now, sessionStartedAt: now };
   const shouldReusePersistedSessionFile = baseEntry.sessionId === sessionId;
   const fallbackSessionFile = params.fallbackSessionFile?.trim();
   const entryForResolve = !shouldReusePersistedSessionFile
@@ -34,7 +35,8 @@ export async function resolveAndPersistSessionFile(params: {
   const persistedEntry: SessionEntry = {
     ...baseEntry,
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
+    sessionStartedAt: baseEntry.sessionId === sessionId ? (baseEntry.sessionStartedAt ?? now) : now,
     sessionFile,
   };
   if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== sessionFile) {

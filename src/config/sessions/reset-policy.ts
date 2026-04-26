@@ -71,24 +71,32 @@ export function resolveSessionResetPolicy(params: {
 
 export function evaluateSessionFreshness(params: {
   updatedAt: number;
+  sessionStartedAt?: number;
+  lastInteractionAt?: number;
   now: number;
   policy: SessionResetPolicy;
 }): SessionFreshness {
+  const sessionStartedAt = resolveTimestamp(params.sessionStartedAt) ?? params.updatedAt;
+  const lastInteractionAt = resolveTimestamp(params.lastInteractionAt) ?? sessionStartedAt;
   const dailyResetAt =
     params.policy.mode === "daily"
       ? resolveDailyResetAtMs(params.now, params.policy.atHour)
       : undefined;
   const idleExpiresAt =
     params.policy.idleMinutes != null && params.policy.idleMinutes > 0
-      ? params.updatedAt + params.policy.idleMinutes * 60_000
+      ? lastInteractionAt + params.policy.idleMinutes * 60_000
       : undefined;
-  const staleDaily = dailyResetAt != null && params.updatedAt < dailyResetAt;
+  const staleDaily = dailyResetAt != null && sessionStartedAt < dailyResetAt;
   const staleIdle = idleExpiresAt != null && params.now > idleExpiresAt;
   return {
     fresh: !(staleDaily || staleIdle),
     dailyResetAt,
     idleExpiresAt,
   };
+}
+
+function resolveTimestamp(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function normalizeResetAtHour(value: number | undefined): number {

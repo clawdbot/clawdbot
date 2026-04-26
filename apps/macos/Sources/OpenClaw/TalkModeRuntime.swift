@@ -70,6 +70,7 @@ actor TalkModeRuntime {
     private var defaultOutputFormat: String?
     private var interruptOnSpeech: Bool = true
     private var activeTalkProvider = TalkModeRuntime.defaultTalkProvider
+    private var speechLocaleID: String?
     private var lastInterruptedAtSeconds: Double?
     private var voiceAliases: [String: String] = [:]
     private var lastSpokenText: String?
@@ -186,12 +187,23 @@ actor TalkModeRuntime {
         self.recognitionGeneration &+= 1
         let generation = self.recognitionGeneration
 
-        let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
-        self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
+        let voiceWakeLocale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        let supportedLocaleIDs = Set(SFSpeechRecognizer.supportedLocales().map(\.identifier))
+        let localeID = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
+            preferredLocaleIDs: [
+                self.speechLocaleID,
+                voiceWakeLocale,
+                Locale.autoupdatingCurrent.identifier,
+            ],
+            supportedLocaleIDs: supportedLocaleIDs)
+        self.recognizer = localeID
+            .map { SFSpeechRecognizer(locale: Locale(identifier: $0)) }
+            ?? SFSpeechRecognizer()
         guard let recognizer, recognizer.isAvailable else {
             self.logger.error("talk recognizer unavailable")
             return
         }
+        self.logger.debug("talk recognizer locale=\(recognizer.locale.identifier, privacy: .public)")
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         Self.configureRecognitionRequest(request)
@@ -1009,11 +1021,22 @@ extension TalkModeRuntime {
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.activeTalkProvider = cfg.activeProvider
-        self.silenceWindow = TimeInterval(cfg.silenceTimeoutMs) / 1000
+        let configuredSilenceMs = cfg.silenceTimeoutMs
+        let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")
+        let effectiveSilenceMs = isCJKLocale ? max(configuredSilenceMs, 2000) : configuredSilenceMs
+        if isCJKLocale, configuredSilenceMs < 2000 {
+            self.logger
+                .info(
+                    "talk CJK locale: silence timeout clamped " +
+                        "\(configuredSilenceMs, privacy: .public)ms -> 2000ms")
+        }
+        self.silenceWindow = TimeInterval(effectiveSilenceMs) / 1000
+        self.speechLocaleID = cfg.speechLocaleID
         self.apiKey = cfg.apiKey
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
-        let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
-        let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
+        let voiceLabel = cfg.voiceId.flatMap { $0.isEmpty ? nil : $0 } ?? "none"
+        let modelLabel = cfg.modelId.flatMap { $0.isEmpty ? nil : $0 } ?? "none"
         self.logger
             .info(
                 "talk config provider=\(cfg.activeProvider, privacy: .public) " +
@@ -1021,7 +1044,8 @@ extension TalkModeRuntime {
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
-                    "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public)")
+                    "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public) " +
+                    "speechLocale=\(cfg.speechLocaleID ?? "device", privacy: .public)")
     }
 
     static func selectTalkProviderConfig(

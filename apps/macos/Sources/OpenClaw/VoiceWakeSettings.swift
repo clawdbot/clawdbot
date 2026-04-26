@@ -72,6 +72,31 @@ struct VoiceWakeSettings: View {
                     binding: self.$state.voicePushToTalkEnabled)
                     .disabled(!voiceWakeSupported)
 
+                if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
+                    Text("Push-to-Talk is paused while Talk Mode is active. It resumes when Talk Mode is turned off.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 20)
+                }
+
+                SettingsToggleRow(
+                    title: "Play phase-transition sounds",
+                    subtitle: """
+                    Play short system sounds when Talk Mode switches between
+                    listening, thinking, and speaking.
+                    """,
+                    binding: self.$state.talkPhaseSoundsEnabled)
+                    .disabled(!voiceWakeSupported)
+
+                SettingsToggleRow(
+                    title: "Press Right Option to stop speech",
+                    subtitle: """
+                    Tap the right Option key to interrupt the assistant while it is
+                    speaking and return to listening.
+                    """,
+                    binding: self.$state.talkShiftToStopEnabled)
+                    .disabled(!voiceWakeSupported)
+
                 if !voiceWakeSupported {
                     Label("Voice Wake requires macOS 26 or newer.", systemImage: "exclamationmark.triangle.fill")
                         .font(.callout)

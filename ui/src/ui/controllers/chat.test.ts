@@ -818,6 +818,33 @@ describe("loadChatHistory", () => {
     expect(state.chatStream).toBeNull();
   });
 
+  it("keeps local optimistic messages when history reload returns empty", async () => {
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "first ask" }],
+      timestamp: 10,
+    };
+    const optimisticAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "first answer" }],
+      timestamp: 11,
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [optimisticUser, optimisticAssistant],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([optimisticUser, optimisticAssistant]);
+    expect(state.chatStream).toBeNull();
+  });
+
   it("does not duplicate optimistic tail messages after history catches up", async () => {
     const optimisticUser = {
       role: "user",

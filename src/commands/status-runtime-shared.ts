@@ -30,6 +30,7 @@ export async function resolveStatusSecurityAudit(params: {
   const { runSecurityAudit } = await loadSecurityAuditModule();
   const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(params.config, {
     activationSourceConfig: params.sourceConfig,
+    includeSetupRuntimeFallback: false,
   });
   return await runSecurityAudit({
     config: params.config,
@@ -37,6 +38,7 @@ export async function resolveStatusSecurityAudit(params: {
     deep: false,
     includeFilesystem: true,
     includeChannelSecurity: true,
+    loadPluginSecurityCollectors: false,
     ...(readOnlyPlugins.missingConfiguredChannelIds.length === 0
       ? { plugins: readOnlyPlugins.plugins }
       : {}),

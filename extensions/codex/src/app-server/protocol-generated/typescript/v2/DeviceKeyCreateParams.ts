@@ -7,7 +7,10 @@ import type { DeviceKeyProtectionPolicy } from "./DeviceKeyProtectionPolicy.js";
  * Create a controller-local device key with a random key id.
  */
 export type DeviceKeyCreateParams = {
-/**
- * Defaults to `hardware_only` when omitted.
- */
-protectionPolicy?: DeviceKeyProtectionPolicy | null, accountUserId: string, clientId: string, };
+  /**
+   * Defaults to `hardware_only` when omitted.
+   */
+  protectionPolicy?: DeviceKeyProtectionPolicy | null;
+  accountUserId: string;
+  clientId: string;
+};

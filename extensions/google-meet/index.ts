@@ -566,10 +566,10 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "googlemeet.setup",
-      async ({ respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          respond(true, await rt.setupStatus());
+          respond(true, await rt.setupStatus({ transport: normalizeTransport(params?.transport) }));
         } catch (err) {
           sendError(respond, err);
         }
@@ -741,7 +741,7 @@ export default definePluginEntry({
       name: "google_meet",
       label: "Google Meet",
       description:
-        "Join and track Google Meet sessions through Chrome or Twilio. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
+        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_speech; if it reports a Chrome node offline or local audio missing, surface that blocker instead of retrying or switching transports. Offline nodes are diagnostics only, not usable candidates. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
       parameters: GoogleMeetToolSchema,
       async execute(_toolCallId, params) {
         const raw = asParamRecord(params);
@@ -797,7 +797,7 @@ export default definePluginEntry({
             }
             case "setup_status": {
               const rt = await ensureRuntime();
-              return json(await rt.setupStatus());
+              return json(await rt.setupStatus({ transport: normalizeTransport(raw.transport) }));
             }
             case "resolve_space": {
               const { token: _token, ...result } = await resolveSpaceFromParams(config, raw);

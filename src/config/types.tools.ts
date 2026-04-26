@@ -433,6 +433,11 @@ export type MemorySearchConfig = {
     watch?: boolean;
     watchDebounceMs?: number;
     intervalMinutes?: number;
+    /**
+     * Timeout in seconds for inline embedding batches during memory indexing.
+     * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
+     */
+    embeddingBatchTimeoutSeconds?: number;
     sessions?: {
       /** Minimum appended bytes before session transcripts are reindexed. */
       deltaBytes?: number;

@@ -71,7 +71,7 @@ function buildPreparedCliRunContext(params: {
           modelArg: "--model",
           sessionArg: "--session-id",
           sessionMode: "always" as const,
-          systemPromptArg: "--append-system-prompt",
+          systemPromptFileArg: "--append-system-prompt-file",
           systemPromptWhen: "first" as const,
           serialize: true,
         }
@@ -242,6 +242,41 @@ describe("runCliAgent spawn path", () => {
     };
     expect(input.input).toContain("Explain this diff");
     expect(input.argv).not.toContain("Explain this diff");
+  });
+
+  it("passes Claude system prompts through a file instead of argv", async () => {
+    let systemPromptPath = "";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      const systemPromptArgIndex = input.argv?.indexOf("--append-system-prompt-file") ?? -1;
+      expect(systemPromptArgIndex).toBeGreaterThanOrEqual(0);
+      systemPromptPath = input.argv?.[systemPromptArgIndex + 1] ?? "";
+      expect(systemPromptPath).toContain("openclaw-cli-system-prompt-");
+      await expect(fs.readFile(systemPromptPath, "utf-8")).resolves.toBe(
+        "You are a helpful assistant.",
+      );
+      expect(input.argv).not.toContain("You are a helpful assistant.");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-system-prompt-file",
+      }),
+    );
+
+    await expect(fs.access(systemPromptPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("passes --session-id for new Claude sessions", async () => {
@@ -461,6 +496,22 @@ describe("runCliAgent spawn path", () => {
 
     expect(params.extraSystemPrompt).toBe("dynamic\n\nstatic");
     expect(params.extraSystemPromptStatic).toBe("static");
+  });
+
+  it("forwards cron jobId through the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      timeoutMs: 1_000,
+      runId: "run-claude-jobid-wrapper",
+      trigger: "cron",
+      jobId: "cron-job-123",
+    });
+
+    expect(params.trigger).toBe("cron");
+    expect(params.jobId).toBe("cron-job-123");
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -796,6 +847,50 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("accepts Claude live stream-json lines larger than 256 KiB", async () => {
+    const largeText = "x".repeat(270 * 1024);
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          JSON.stringify({
+            type: "result",
+            session_id: "live-session-large",
+            result: largeText,
+          }) + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-large",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-large-line",
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      }),
+    );
+
+    expect(result.text).toHaveLength(largeText.length);
+    expect(result.text).toBe(largeText);
+  });
+
   it("reports Claude live session reply backends as streaming until the turn finishes", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let markWriteReady: (() => void) | undefined;
@@ -990,10 +1085,9 @@ describe("runCliAgent spawn path", () => {
     await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledOnce());
     releaseSpawn?.();
 
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      expect.objectContaining({ text: "one" }),
-      expect.objectContaining({ text: "two" }),
-    ]);
+    const results = await Promise.all([first, second]);
+    expect(results.map((result) => result.text).toSorted()).toEqual(["one", "two"]);
+    expect(stdin.write).toHaveBeenCalledTimes(2);
     expect(supervisorSpawnMock).toHaveBeenCalledOnce();
   });
 
@@ -1087,6 +1181,7 @@ describe("runCliAgent spawn path", () => {
       input: "stdin",
       sessionArg: "--session-id",
       systemPromptArg: "--append-system-prompt",
+      systemPromptFileArg: "--append-system-prompt-file",
     };
 
     const args = buildClaudeLiveArgs({
@@ -1100,6 +1195,8 @@ describe("runCliAgent spawn path", () => {
         "openclaw-session",
         "--append-system-prompt",
         "old prompt",
+        "--append-system-prompt-file",
+        "/tmp/system-prompt.md",
       ],
       backend,
       systemPrompt: "current prompt",
@@ -1110,6 +1207,8 @@ describe("runCliAgent spawn path", () => {
     expect(args).toContain("claude-session");
     expect(args).not.toContain("--session-id");
     expect(args).not.toContain("openclaw-session");
+    expect(args).not.toContain("--append-system-prompt-file");
+    expect(args).not.toContain("/tmp/system-prompt.md");
     expect(args).not.toContain("--append-system-prompt");
     expect(args).not.toContain("old prompt");
     expect(args).not.toContain("current prompt");

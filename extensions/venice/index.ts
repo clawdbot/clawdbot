@@ -3,6 +3,7 @@ import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-tools";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { applyVeniceConfig, VENICE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildVeniceProvider } from "./provider-catalog.js";
+import { createVeniceDeepSeekV4Wrapper } from "./stream.js";
 
 const PROVIDER_ID = "venice";
 
@@ -44,5 +45,6 @@ export default defineSingleProviderPluginEntry({
     },
     normalizeResolvedModel: ({ modelId, model }) =>
       isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
+    wrapStreamFn: (ctx) => createVeniceDeepSeekV4Wrapper(ctx.streamFn, ctx.thinkingLevel),
   },
 });

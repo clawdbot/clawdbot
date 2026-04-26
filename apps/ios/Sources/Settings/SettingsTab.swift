@@ -21,6 +21,7 @@ struct SettingsTab: View {
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
+    @AppStorage(TalkSpeechLocale.storageKey) private var talkSpeechLocale: String = TalkSpeechLocale.automaticID
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
@@ -278,6 +279,11 @@ struct SettingsTab: View {
                             help: "Enables voice conversation mode with your connected OpenClaw agent.") { newValue in
                                 self.appModel.setTalkEnabled(newValue)
                             }
+                        Picker("Speech Language", selection: self.$talkSpeechLocale) {
+                            ForEach(TalkSpeechLocale.supportedOptions()) { option in
+                                Text(option.label).tag(option.id)
+                            }
+                        }
                         self.featureToggle(
                             "Background Listening",
                             isOn: self.$talkBackgroundEnabled,

@@ -20,6 +20,23 @@ const FeishuDomainSchema = z.union([
   z.string().url().startsWith("https://"),
 ]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
+const TtsOverrideSchema = z
+  .object({
+    auto: z.enum(["off", "always", "inbound", "tagged"]).optional(),
+    enabled: z.boolean().optional(),
+    mode: z.enum(["final", "all"]).optional(),
+    provider: z.string().optional(),
+    persona: z.string().optional(),
+    personas: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+    summaryModel: z.string().optional(),
+    modelOverrides: z.record(z.string(), z.unknown()).optional(),
+    providers: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+    prefsPath: z.string().optional(),
+    maxTextLength: z.number().int().min(1).optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  })
+  .strict()
+  .optional();
 
 const ToolPolicySchema = z
   .object({
@@ -183,6 +200,7 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  tts: TtsOverrideSchema,
 };
 
 /**

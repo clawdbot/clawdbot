@@ -1,5 +1,5 @@
 import { beforeEach, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 
 const providerRegistryAllowlistMocks = vi.hoisted(() => ({
   resolveRuntimePluginRegistry: vi.fn<

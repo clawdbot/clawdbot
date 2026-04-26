@@ -2,6 +2,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentEndEvent,
+  PluginHookBeforeAgentFinalizeEvent,
+  PluginHookBeforeAgentFinalizeResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
@@ -51,4 +53,43 @@ export function runAgentHarnessAgentEndHook(params: {
   void hookRunner.runAgentEnd(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
     log.warn(`agent_end hook failed: ${String(error)}`);
   });
+}
+
+export type AgentHarnessBeforeAgentFinalizeOutcome =
+  | { action: "continue" }
+  | { action: "revise"; reason: string }
+  | { action: "finalize"; reason?: string };
+
+export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
+  event: PluginHookBeforeAgentFinalizeEvent;
+  ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
+}): Promise<AgentHarnessBeforeAgentFinalizeOutcome> {
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_agent_finalize")) {
+    return { action: "continue" };
+  }
+  try {
+    return normalizeBeforeAgentFinalizeResult(
+      await hookRunner.runBeforeAgentFinalize(params.event, buildAgentHookContext(params.ctx)),
+    );
+  } catch (error) {
+    log.warn(`before_agent_finalize hook failed: ${String(error)}`);
+    return { action: "continue" };
+  }
+}
+
+function normalizeBeforeAgentFinalizeResult(
+  result: PluginHookBeforeAgentFinalizeResult | undefined,
+): AgentHarnessBeforeAgentFinalizeOutcome {
+  if (result?.action === "finalize") {
+    return result.reason?.trim()
+      ? { action: "finalize", reason: result.reason.trim() }
+      : { action: "finalize" };
+  }
+  if (result?.action === "revise") {
+    const reason = result.reason?.trim();
+    return reason ? { action: "revise", reason } : { action: "continue" };
+  }
+  return { action: "continue" };
 }

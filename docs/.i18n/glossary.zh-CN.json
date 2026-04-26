@@ -12,6 +12,14 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "Azure Speech",
+    "target": "Azure Speech"
+  },
+  {
+    "source": "Azure Speech provider",
+    "target": "Azure Speech provider"
+  },
+  {
     "source": "Status",
     "target": "Status"
   },
@@ -110,6 +118,10 @@
   {
     "source": "BytePlus (International)",
     "target": "BytePlus（国际版）"
+  },
+  {
+    "source": "Volcengine TTS HTTP API",
+    "target": "Volcengine TTS HTTP API"
   },
   {
     "source": "Amazon Bedrock Mantle",

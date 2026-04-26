@@ -27,10 +27,8 @@ const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
-const CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS = 10_000;
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
-type TelegramApiAbortSignal = Parameters<TelegramBot["api"]["getUpdates"]>[1];
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -48,9 +46,6 @@ const waitForGracefulStop = async (stop: () => Promise<void>) => {
     }
   }
 };
-
-const telegramApiTimeoutSignal = (timeoutMs: number): TelegramApiAbortSignal =>
-  AbortSignal.timeout(timeoutMs) as unknown as TelegramApiAbortSignal;
 
 const resolvePollingStallThresholdMs = (value: number | undefined): number => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -225,24 +220,7 @@ export class TelegramPollingSession {
     }
   }
 
-  async #confirmPersistedOffset(bot: TelegramBot): Promise<void> {
-    const lastUpdateId = this.opts.getLastUpdateId();
-    if (lastUpdateId === null || lastUpdateId >= Number.MAX_SAFE_INTEGER) {
-      return;
-    }
-    try {
-      await bot.api.getUpdates(
-        { offset: lastUpdateId + 1, limit: 1, timeout: 0 },
-        telegramApiTimeoutSignal(CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS),
-      );
-    } catch {
-      // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
-    }
-  }
-
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
-    await this.#confirmPersistedOffset(bot);
-
     const liveness = new TelegramPollingLivenessTracker({
       onPollSuccess: (finishedAt) => this.#status.notePollSuccess(finishedAt),
     });
@@ -317,7 +295,6 @@ export class TelegramPollingSession {
 
       const stall = liveness.detectStall({
         thresholdMs: this.#stallThresholdMs,
-        runnerIsRunning: runner.isRunning(),
       });
       if (stall) {
         this.#transportState.markDirty();
@@ -381,11 +358,14 @@ export class TelegramPollingSession {
       }
       const reason = isConflict ? "getUpdates conflict" : "network error";
       const errMsg = formatErrorMessage(err);
+      const conflictHint = isConflict
+        ? " Another OpenClaw gateway, script, or Telegram poller may be using this bot token; stop the duplicate poller or switch this account to webhook mode."
+        : "";
       this.opts.log(
-        `[telegram][diag] polling cycle error reason=${reason} ${liveness.formatDiagnosticFields("lastGetUpdatesError")} err=${errMsg}`,
+        `[telegram][diag] polling cycle error reason=${reason} ${liveness.formatDiagnosticFields("lastGetUpdatesError")} err=${errMsg}${conflictHint}`,
       );
       const shouldRestart = await this.#waitBeforeRestart(
-        (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
+        (delay) => `Telegram ${reason}: ${errMsg};${conflictHint} retrying in ${delay}.`,
       );
       return shouldRestart ? "continue" : "exit";
     } finally {

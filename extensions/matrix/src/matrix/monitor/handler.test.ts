@@ -1260,11 +1260,11 @@ describe("matrix monitor handler pairing account scope", () => {
     const finalized = vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0];
     expect(finalized).toEqual(
       expect.objectContaining({
+        GroupChannel: "!room:example.org",
         GroupSubject: "Ops Room",
         GroupId: "!room:example.org",
       }),
     );
-    expect(finalized).not.toHaveProperty("GroupChannel");
   });
 
   it("routes bound Matrix threads to the target session key", async () => {

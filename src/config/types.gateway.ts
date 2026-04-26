@@ -67,6 +67,8 @@ export type TalkConfig = {
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
+  /** BCP 47 locale id used for Talk speech recognition on device nodes. */
+  speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
@@ -206,10 +208,11 @@ export type GatewayReloadConfig = {
   /** Debounce window for config reloads (ms). Default: 300. */
   debounceMs?: number;
   /**
-   * Maximum time (ms) to wait for in-flight operations to complete before
-   * forcing a SIGUSR1 restart. Default: 300000 (5 minutes).
-   * Lower values risk aborting active subagent LLM calls.
-   * @see https://github.com/openclaw/openclaw/issues/47711
+   * Optional maximum time (ms) to wait for in-flight operations to complete
+   * before forcing a restart. Absent or 0 waits indefinitely and logs periodic
+   * still-pending warnings.
+   * Lower positive values risk aborting active subagent LLM calls.
+   * @see https://github.com/openclaw/openclaw/issues/65485
    */
   deferralTimeoutMs?: number;
 };

@@ -1,10 +1,37 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import {
   resolveEnvApiKeyVarName,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secret-helpers.js";
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider: () => undefined,
+}));
+
+vi.mock("../infra/shell-env.js", () => ({
+  getShellEnvAppliedKeys: () => [],
+}));
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+vi.mock("./model-auth-env-vars.js", () => {
+  const candidates = {
+    minimax: ["MINIMAX_API_KEY"],
+    "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
+    nvidia: ["NVIDIA_API_KEY"],
+    vllm: ["VLLM_API_KEY"],
+  } as const;
+  return {
+    PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
+    listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
+    resolveProviderEnvApiKeyCandidates: () => candidates,
+  };
+});
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const MINIMAX_BASE_URL = "https://api.minimax.io/anthropic";

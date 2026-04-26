@@ -6,7 +6,7 @@ import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger } from "./logger.js";
-import { resolveNodeRequireFromMeta } from "./node-require.js";
+import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatLocalIsoWithOffset, formatTimestamp } from "./timestamps.js";
 import type { ConsoleStyle, LoggerSettings } from "./types.js";
@@ -18,20 +18,8 @@ type ConsoleSettings = {
 };
 export type ConsoleLoggerSettings = ConsoleSettings;
 
-const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
-const loadConfigFallbackDefault: ConsoleConfigLoader = () => {
-  try {
-    const loaded = requireConfig?.("../config/config.js") as
-      | {
-          loadConfig?: () => OpenClawConfig;
-        }
-      | undefined;
-    return loaded?.loadConfig?.().logging;
-  } catch {
-    return undefined;
-  }
-};
+const loadConfigFallbackDefault: ConsoleConfigLoader = () => undefined;
 let loadConfigFallback: ConsoleConfigLoader = loadConfigFallbackDefault;
 
 export function setConsoleConfigLoaderForTests(loader?: ConsoleConfigLoader): void {
@@ -148,8 +136,7 @@ export function shouldLogSubsystemToConsole(subsystem?: string | null): boolean 
     return false;
   }
   return filter.some(
-    (prefix) =>
-      normalizedSubsystem === prefix || normalizedSubsystem.startsWith(`${prefix}/`),
+    (prefix) => normalizedSubsystem === prefix || normalizedSubsystem.startsWith(`${prefix}/`),
   );
 }
 
@@ -276,7 +263,8 @@ export function enableConsoleCapture(): void {
       if (loggingState.forceConsoleToStderr) {
         // In --json mode, all console.* writes are diagnostics and should stay off stdout.
         try {
-          const line = timestamp ? `${timestamp} ${formatted}` : formatted;
+          const redacted = redactSensitiveText(formatted);
+          const line = timestamp ? `${timestamp} ${redacted}` : redacted;
           process.stderr.write(`${line}\n`);
         } catch (err) {
           if (isEpipeError(err)) {
@@ -286,19 +274,16 @@ export function enableConsoleCapture(): void {
         }
       } else {
         try {
+          const redacted = redactSensitiveText(formatted);
           if (!timestamp) {
-            orig.apply(console, args as []);
+            if (args.length === 0) {
+              orig.apply(console, args as []);
+              return;
+            }
+            orig.call(console, redacted);
             return;
           }
-          if (args.length === 0) {
-            orig.call(console, timestamp);
-            return;
-          }
-          if (typeof args[0] === "string") {
-            orig.call(console, `${timestamp} ${args[0]}`, ...args.slice(1));
-            return;
-          }
-          orig.call(console, timestamp, ...args);
+          orig.call(console, redacted ? `${timestamp} ${redacted}` : timestamp);
         } catch (err) {
           if (isEpipeError(err)) {
             return;

@@ -1,6 +1,8 @@
 import path from "node:path";
-import { fileTypeFromBuffer } from "file-type";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
+
+/** @internal */
+export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
 
 // Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
@@ -63,6 +65,8 @@ const AUDIO_FILE_EXTENSIONS = new Set([
   ".wav",
 ]);
 
+let fileTypeModulePromise: Promise<typeof import("file-type")> | undefined;
+
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
@@ -71,12 +75,22 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   return cleaned || undefined;
 }
 
+/** @internal */
+export function sliceMimeSniffBuffer(buffer: Buffer): Buffer {
+  if (buffer.byteLength <= FILE_TYPE_SNIFF_MAX_BYTES) {
+    return buffer;
+  }
+  return buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES);
+}
+
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   if (!buffer) {
     return undefined;
   }
   try {
-    const type = await fileTypeFromBuffer(buffer);
+    fileTypeModulePromise ??= import("file-type");
+    const { fileTypeFromBuffer } = await fileTypeModulePromise;
+    const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
     return type?.mime ?? undefined;
   } catch {
     return undefined;

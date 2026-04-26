@@ -44,6 +44,22 @@ describe("resolveCodexAppServerSpawnInvocation", () => {
     });
   });
 
+  it("requires managed Codex commands to be resolved before spawn", () => {
+    expect(() =>
+      resolveCodexAppServerSpawnInvocation(
+        {
+          ...startOptions("codex"),
+          commandSource: "managed",
+        },
+        {
+          platform: "darwin",
+          env: {},
+          execPath: "/usr/local/bin/node",
+        },
+      ),
+    ).toThrow("must be resolved before spawn");
+  });
+
   it("resolves Windows npm .cmd Codex shims through Node instead of raw spawn", async () => {
     const binDir = await createTempDir();
     const entryPath = path.join(binDir, "node_modules", "@openai", "codex", "bin", "codex.js");

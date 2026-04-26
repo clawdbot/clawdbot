@@ -258,7 +258,7 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    MODEL_ID="openai/gpt-5.4"
+    MODEL_ID="openai/gpt-5.5"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
@@ -1452,13 +1452,13 @@ EOF
 
 verify_gateway() {
   local attempt
-  for attempt in 1 2 3 4; do
-    if guest_current_user_exec "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 5000; then
+  for attempt in 1 2 3 4 5 6 7 8; do
+    if guest_current_user_exec "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 15000; then
       return 0
     fi
-    if (( attempt < 4 )); then
+    if (( attempt < 8 )); then
       printf 'gateway-status retry %s\n' "$attempt" >&2
-      sleep 3
+      sleep 5
     fi
   done
   return 1

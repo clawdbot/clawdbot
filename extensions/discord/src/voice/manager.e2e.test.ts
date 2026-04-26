@@ -506,6 +506,39 @@ describe("DiscordVoiceManager", () => {
     expect(commandArgs?.senderIsOwner).toBe(false);
   });
 
+  it("passes configured model override to agent command in voice flow", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          model: "openai/gpt-5.4-mini",
+        },
+      },
+      client,
+      {
+        commands: { useAccessGroups: false },
+      },
+    );
+    await processVoiceSegment(manager, "u-guest");
+
+    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
+      | { allowModelOverride?: boolean; model?: string }
+      | undefined;
+
+    expect(commandArgs?.allowModelOverride).toBe(true);
+    expect(commandArgs?.model).toBe("openai/gpt-5.4-mini");
+  });
+
   it("reuses speaker context cache for repeated segments from the same speaker", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({

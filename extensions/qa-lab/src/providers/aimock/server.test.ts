@@ -24,7 +24,7 @@ describe("qa aimock server", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "aimock/gpt-5.4",
+          model: "aimock/gpt-5.5",
           stream: false,
           input: [makeResponsesInput("hello aimock")],
         }),
@@ -32,7 +32,7 @@ describe("qa aimock server", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
         status: "completed",
-        model: "aimock/gpt-5.4",
+        model: "aimock/gpt-5.5",
       });
 
       const debug = await fetch(`${server.baseUrl}/debug/last-request`);
@@ -40,7 +40,7 @@ describe("qa aimock server", () => {
       expect(await debug.json()).toMatchObject({
         prompt: "hello aimock",
         allInputText: "hello aimock",
-        model: "aimock/gpt-5.4",
+        model: "aimock/gpt-5.5",
         providerVariant: "openai",
       });
     } finally {
@@ -58,7 +58,7 @@ describe("qa aimock server", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "aimock/gpt-5.4",
+          model: "aimock/gpt-5.5",
           stream: false,
           input: [makeResponsesInput("@openclaw explain the QA lab")],
         }),
@@ -90,7 +90,7 @@ describe("qa aimock server", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "openai-codex/gpt-5.4",
+          model: "openai-codex/gpt-5.5",
           stream: false,
           input: [makeResponsesInput("hello codex-compatible aimock")],
         }),
@@ -100,7 +100,7 @@ describe("qa aimock server", () => {
       const debug = await fetch(`${server.baseUrl}/debug/last-request`);
       expect(debug.status).toBe(200);
       expect(await debug.json()).toMatchObject({
-        model: "openai-codex/gpt-5.4",
+        model: "openai-codex/gpt-5.5",
         providerVariant: "openai",
       });
     } finally {

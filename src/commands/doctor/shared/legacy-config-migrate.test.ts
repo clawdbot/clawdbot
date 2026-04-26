@@ -98,6 +98,49 @@ describe("legacy migrate mention routing", () => {
 });
 
 describe("legacy migrate sandbox scope aliases", () => {
+  it("moves legacy embeddedHarness runtime policy into agentRuntime", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          embeddedHarness: {
+            runtime: "claude-cli",
+            fallback: "none",
+          },
+        },
+        list: [
+          {
+            id: "reviewer",
+            agentRuntime: { fallback: "pi" },
+            embeddedHarness: {
+              runtime: "codex",
+              fallback: "none",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved agents.defaults.embeddedHarness → agents.defaults.agentRuntime.",
+        "Moved agents.list.0.embeddedHarness → agents.list.0.agentRuntime.",
+      ]),
+    );
+    expect(res.config?.agents?.defaults).toEqual({
+      agentRuntime: {
+        id: "claude-cli",
+        fallback: "none",
+      },
+    });
+    expect(res.config?.agents?.list?.[0]).toEqual({
+      id: "reviewer",
+      agentRuntime: {
+        id: "codex",
+        fallback: "pi",
+      },
+    });
+  });
+
   it("moves agents.defaults.sandbox.perSession into scope", () => {
     const res = migrateLegacyConfigForTest({
       agents: {

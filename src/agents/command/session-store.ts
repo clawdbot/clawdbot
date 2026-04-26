@@ -49,6 +49,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   fallbackProvider?: string;
   fallbackModel?: string;
   result: RunResult;
+  touchInteraction?: boolean;
 }) {
   const {
     cfg,
@@ -62,6 +63,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     fallbackModel,
     result,
   } = params;
+  const now = Date.now();
+  const touchInteraction = params.touchInteraction !== false;
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
@@ -85,12 +88,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
 
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
+    sessionStartedAt: now,
   };
   const next: SessionEntry = {
     ...entry,
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
+    sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
+    lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
     contextTokens,
   };
   setSessionRuntimeModel(next, {
@@ -186,6 +192,32 @@ export async function clearCliSessionInStore(params: {
 
   const next = { ...entry };
   clearCliSession(next, provider);
+  next.updatedAt = Date.now();
+
+  const persisted = await updateSessionStore(storePath, (store) => {
+    const merged = mergeSessionEntry(store[sessionKey], next);
+    store[sessionKey] = merged;
+    return merged;
+  });
+  sessionStore[sessionKey] = persisted;
+  return persisted;
+}
+
+export async function recordCliCompactionInStore(params: {
+  provider: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+}): Promise<SessionEntry | undefined> {
+  const { provider, sessionKey, sessionStore, storePath } = params;
+  const entry = sessionStore[sessionKey];
+  if (!entry) {
+    return undefined;
+  }
+
+  const next = { ...entry };
+  clearCliSession(next, provider);
+  next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
 
   const persisted = await updateSessionStore(storePath, (store) => {

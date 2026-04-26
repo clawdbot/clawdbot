@@ -34,7 +34,9 @@ const policyMocks = vi.hoisted(() => ({
 }));
 
 const routeMocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn<
+    (_params: unknown) => Promise<{ ok: true; messageId: string } | { ok: false; error: string }>
+  >(async () => ({ ok: true, messageId: "mock" })),
 }));
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -76,6 +78,10 @@ const sessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionEntry: vi.fn<
     (params: { sessionKey: string; cfg?: OpenClawConfig }) => AcpSessionStoreEntry | null
   >(() => null),
+}));
+
+const transcriptMocks = vi.hoisted(() => ({
+  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
 }));
 
 const bindingServiceMocks = vi.hoisted(() => ({
@@ -160,6 +166,11 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
 vi.mock("./dispatch-acp-session.runtime.js", () => ({
   readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
     sessionMetaMocks.readAcpSessionEntry(params),
+}));
+
+vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
+  persistAcpDispatchTranscript: (params: unknown) =>
+    transcriptMocks.persistAcpDispatchTranscript(params),
 }));
 
 const sessionKey = "agent:codex-acp:session-1";
@@ -359,6 +370,7 @@ describe("tryDispatchAcpReply", () => {
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
+    transcriptMocks.persistAcpDispatchTranscript.mockClear();
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
@@ -385,6 +397,26 @@ describe("tryDispatchAcpReply", () => {
       }),
     );
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("persists ACP transcript when routed delivery fails", async () => {
+    setReadyAcpResolution();
+    mockRoutedTextTurn("hello");
+    routeMocks.routeReply.mockResolvedValue({ ok: false, error: "missing channel adapter" });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      shouldRouteToOriginating: true,
+    });
+
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        promptText: "reply",
+        finalText: "hello",
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(expect.objectContaining({ mirror: false }));
   });
 
   it("edits ACP tool lifecycle updates in place when supported", async () => {

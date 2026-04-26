@@ -23,79 +23,134 @@ import type { PatchApplyStatus } from "./PatchApplyStatus.js";
 import type { UserInput } from "./UserInput.js";
 import type { WebSearchAction } from "./WebSearchAction.js";
 
-export type ThreadItem = { "type": "userMessage", id: string, content: Array<UserInput>, } | { "type": "hookPrompt", id: string, fragments: Array<HookPromptFragment>, } | { "type": "agentMessage", id: string, text: string, phase: MessagePhase | null, memoryCitation: MemoryCitation | null, } | { "type": "plan", id: string, text: string, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>, } | { "type": "commandExecution", id: string,
-/**
- * The command to be executed.
- */
-command: string,
-/**
- * The command's working directory.
- */
-cwd: AbsolutePathBuf,
-/**
- * Identifier for the underlying PTY process (when available).
- */
-processId: string | null, source: CommandExecutionSource, status: CommandExecutionStatus,
-/**
- * A best-effort parsing of the command to understand the action(s) it will perform.
- * This returns a list of CommandAction objects because a single shell command may
- * be composed of many commands piped together.
- */
-commandActions: Array<CommandAction>,
-/**
- * The command's output, aggregated from stdout and stderr.
- */
-aggregatedOutput: string | null,
-/**
- * The command's exit code.
- */
-exitCode: number | null,
-/**
- * The duration of the command execution in milliseconds.
- */
-durationMs: number | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: PatchApplyStatus, } | { "type": "mcpToolCall", id: string, server: string, tool: string, status: McpToolCallStatus, arguments: JsonValue, mcpAppResourceUri?: string, result: McpToolCallResult | null, error: McpToolCallError | null,
-/**
- * The duration of the MCP tool call in milliseconds.
- */
-durationMs: number | null, } | { "type": "dynamicToolCall", id: string, namespace: string | null, tool: string, arguments: JsonValue, status: DynamicToolCallStatus, contentItems: Array<DynamicToolCallOutputContentItem> | null, success: boolean | null,
-/**
- * The duration of the dynamic tool call in milliseconds.
- */
-durationMs: number | null, } | { "type": "collabAgentToolCall",
-/**
- * Unique identifier for this collab tool call.
- */
-id: string,
-/**
- * Name of the collab tool that was invoked.
- */
-tool: CollabAgentTool,
-/**
- * Current status of the collab tool call.
- */
-status: CollabAgentToolCallStatus,
-/**
- * Thread ID of the agent issuing the collab request.
- */
-senderThreadId: string,
-/**
- * Thread ID of the receiving agent, when applicable. In case of spawn operation,
- * this corresponds to the newly spawned agent.
- */
-receiverThreadIds: Array<string>,
-/**
- * Prompt text sent as part of the collab tool call, when available.
- */
-prompt: string | null,
-/**
- * Model requested for the spawned agent, when applicable.
- */
-model: string | null,
-/**
- * Reasoning effort requested for the spawned agent, when applicable.
- */
-reasoningEffort: ReasoningEffort | null,
-/**
- * Last known status of the target agents, when available.
- */
-agentsStates: { [key in string]?: CollabAgentState }, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, } | { "type": "imageView", id: string, path: AbsolutePathBuf, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, savedPath?: AbsolutePathBuf, } | { "type": "enteredReviewMode", id: string, review: string, } | { "type": "exitedReviewMode", id: string, review: string, } | { "type": "contextCompaction", id: string, };
+export type ThreadItem =
+  | { type: "userMessage"; id: string; content: Array<UserInput> }
+  | { type: "hookPrompt"; id: string; fragments: Array<HookPromptFragment> }
+  | {
+      type: "agentMessage";
+      id: string;
+      text: string;
+      phase: MessagePhase | null;
+      memoryCitation: MemoryCitation | null;
+    }
+  | { type: "plan"; id: string; text: string }
+  | { type: "reasoning"; id: string; summary: Array<string>; content: Array<string> }
+  | {
+      type: "commandExecution";
+      id: string;
+      /**
+       * The command to be executed.
+       */
+      command: string;
+      /**
+       * The command's working directory.
+       */
+      cwd: AbsolutePathBuf;
+      /**
+       * Identifier for the underlying PTY process (when available).
+       */
+      processId: string | null;
+      source: CommandExecutionSource;
+      status: CommandExecutionStatus;
+      /**
+       * A best-effort parsing of the command to understand the action(s) it will perform.
+       * This returns a list of CommandAction objects because a single shell command may
+       * be composed of many commands piped together.
+       */
+      commandActions: Array<CommandAction>;
+      /**
+       * The command's output, aggregated from stdout and stderr.
+       */
+      aggregatedOutput: string | null;
+      /**
+       * The command's exit code.
+       */
+      exitCode: number | null;
+      /**
+       * The duration of the command execution in milliseconds.
+       */
+      durationMs: number | null;
+    }
+  | { type: "fileChange"; id: string; changes: Array<FileUpdateChange>; status: PatchApplyStatus }
+  | {
+      type: "mcpToolCall";
+      id: string;
+      server: string;
+      tool: string;
+      status: McpToolCallStatus;
+      arguments: JsonValue;
+      mcpAppResourceUri?: string;
+      result: McpToolCallResult | null;
+      error: McpToolCallError | null;
+      /**
+       * The duration of the MCP tool call in milliseconds.
+       */
+      durationMs: number | null;
+    }
+  | {
+      type: "dynamicToolCall";
+      id: string;
+      namespace: string | null;
+      tool: string;
+      arguments: JsonValue;
+      status: DynamicToolCallStatus;
+      contentItems: Array<DynamicToolCallOutputContentItem> | null;
+      success: boolean | null;
+      /**
+       * The duration of the dynamic tool call in milliseconds.
+       */
+      durationMs: number | null;
+    }
+  | {
+      type: "collabAgentToolCall";
+      /**
+       * Unique identifier for this collab tool call.
+       */
+      id: string;
+      /**
+       * Name of the collab tool that was invoked.
+       */
+      tool: CollabAgentTool;
+      /**
+       * Current status of the collab tool call.
+       */
+      status: CollabAgentToolCallStatus;
+      /**
+       * Thread ID of the agent issuing the collab request.
+       */
+      senderThreadId: string;
+      /**
+       * Thread ID of the receiving agent, when applicable. In case of spawn operation,
+       * this corresponds to the newly spawned agent.
+       */
+      receiverThreadIds: Array<string>;
+      /**
+       * Prompt text sent as part of the collab tool call, when available.
+       */
+      prompt: string | null;
+      /**
+       * Model requested for the spawned agent, when applicable.
+       */
+      model: string | null;
+      /**
+       * Reasoning effort requested for the spawned agent, when applicable.
+       */
+      reasoningEffort: ReasoningEffort | null;
+      /**
+       * Last known status of the target agents, when available.
+       */
+      agentsStates: { [key in string]?: CollabAgentState };
+    }
+  | { type: "webSearch"; id: string; query: string; action: WebSearchAction | null }
+  | { type: "imageView"; id: string; path: AbsolutePathBuf }
+  | {
+      type: "imageGeneration";
+      id: string;
+      status: string;
+      revisedPrompt: string | null;
+      result: string;
+      savedPath?: AbsolutePathBuf;
+    }
+  | { type: "enteredReviewMode"; id: string; review: string }
+  | { type: "exitedReviewMode"; id: string; review: string }
+  | { type: "contextCompaction"; id: string };

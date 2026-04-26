@@ -34,6 +34,7 @@ function createVerificationStatus(
       keyLoadError: null,
     },
     ...overrides,
+    serverDeviceKnown: overrides.serverDeviceKnown ?? true,
   };
 }
 

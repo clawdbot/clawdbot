@@ -40,4 +40,17 @@ describe("resolveAssistantIdentity avatar normalization", () => {
 
     expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe("avatars/openclaw.png");
   });
+
+  it("preserves long image data URLs without truncating past 200 chars", () => {
+    const dataUrl = `data:image/png;base64,${"A".repeat(50_000)}`;
+    const cfg: OpenClawConfig = {
+      ui: {
+        assistant: {
+          avatar: dataUrl,
+        },
+      },
+    };
+
+    expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe(dataUrl);
+  });
 });

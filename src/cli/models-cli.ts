@@ -282,7 +282,7 @@ export function registerModelsCli(program: Command) {
   });
 
   const auth = models.command("auth").description("Manage model auth profiles");
-  auth.option("--agent <id>", "Agent id for auth order get/set/clear");
+  auth.option("--agent <id>", "Agent id for auth commands");
   auth.action(() => {
     auth.help();
   });
@@ -290,10 +290,13 @@ export function registerModelsCli(program: Command) {
   auth
     .command("add")
     .description("Interactive auth helper (provider auth or paste token)")
-    .action(async () => {
+    .action(async (command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ??
+        resolveOptionFromCommand<string>(auth, "agent");
       await runModelsCommand(async () => {
         const { modelsAuthAddCommand } = await import("../commands/models/auth.js");
-        await modelsAuthAddCommand({}, defaultRuntime);
+        await modelsAuthAddCommand({ agent }, defaultRuntime);
       });
     });
 
@@ -303,7 +306,8 @@ export function registerModelsCli(program: Command) {
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")
     .option("--set-default", "Apply the provider's default model recommendation", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
+      const agent = resolveOptionFromCommand<string>(command, "agent");
       await runModelsCommand(async () => {
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand(
@@ -311,6 +315,7 @@ export function registerModelsCli(program: Command) {
             provider: opts.provider as string | undefined,
             method: opts.method as string | undefined,
             setDefault: Boolean(opts.setDefault),
+            agent,
           },
           defaultRuntime,
         );
@@ -322,13 +327,15 @@ export function registerModelsCli(program: Command) {
     .description("Run a provider CLI to create/sync a token (TTY required)")
     .option("--provider <name>", "Provider id")
     .option("--yes", "Skip confirmation", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
+      const agent = resolveOptionFromCommand<string>(command, "agent");
       await runModelsCommand(async () => {
         const { modelsAuthSetupTokenCommand } = await import("../commands/models/auth.js");
         await modelsAuthSetupTokenCommand(
           {
             provider: opts.provider as string | undefined,
             yes: Boolean(opts.yes),
+            agent,
           },
           defaultRuntime,
         );
@@ -344,7 +351,8 @@ export function registerModelsCli(program: Command) {
       "--expires-in <duration>",
       "Optional expiry duration (e.g. 365d, 12h). Stored as absolute expiresAt.",
     )
-    .action(async (opts) => {
+    .action(async (opts, command) => {
+      const agent = resolveOptionFromCommand<string>(command, "agent");
       await runModelsCommand(async () => {
         const { modelsAuthPasteTokenCommand } = await import("../commands/models/auth.js");
         await modelsAuthPasteTokenCommand(
@@ -352,6 +360,7 @@ export function registerModelsCli(program: Command) {
             provider: opts.provider as string | undefined,
             profileId: opts.profileId as string | undefined,
             expiresIn: opts.expiresIn as string | undefined,
+            agent,
           },
           defaultRuntime,
         );
@@ -362,7 +371,8 @@ export function registerModelsCli(program: Command) {
     .command("login-github-copilot")
     .description("Login to GitHub Copilot via GitHub device flow (TTY required)")
     .option("--yes", "Overwrite existing profile without prompting", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
+      const agent = resolveOptionFromCommand<string>(command, "agent");
       await runModelsCommand(async () => {
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand(
@@ -370,6 +380,7 @@ export function registerModelsCli(program: Command) {
             provider: "github-copilot",
             method: "device",
             yes: Boolean(opts.yes),
+            agent,
           },
           defaultRuntime,
         );

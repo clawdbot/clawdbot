@@ -7,6 +7,7 @@ const loadChatHistoryMock = vi.fn();
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   flushChatQueueForEvent: vi.fn(),
+  refreshChatAvatar: vi.fn(),
 }));
 vi.mock("./app-settings.ts", () => ({
   applySettings: vi.fn(),

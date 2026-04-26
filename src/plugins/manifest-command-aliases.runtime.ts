@@ -4,7 +4,7 @@ import {
   type PluginManifestCommandAliasRegistry,
   type PluginManifestCommandAliasRecord,
 } from "./manifest-command-aliases.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 export function resolveManifestCommandAliasOwner(params: {
   command: string | undefined;
@@ -15,10 +15,11 @@ export function resolveManifestCommandAliasOwner(params: {
 }): PluginManifestCommandAliasRecord | undefined {
   const registry =
     params.registry ??
-    loadPluginManifestRegistry({
+    loadPluginManifestRegistryForPluginRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      includeDisabled: true,
     });
   return resolveManifestCommandAliasOwnerInRegistry({
     command: params.command,

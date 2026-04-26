@@ -3,10 +3,13 @@ import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ContextEngine } from "../context-engine/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { CallGatewayOptions } from "./call.js";
 import type { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -34,9 +37,18 @@ const CODEX_HARNESS_IMAGE_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE,
 );
 const CODEX_HARNESS_MCP_PROBE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE);
+const CODEX_HARNESS_SUBAGENT_PROBE = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE,
+);
 const CODEX_HARNESS_GUARDIAN_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE,
 );
+const CODEX_HARNESS_SUBAGENT_ONLY =
+  CODEX_HARNESS_SUBAGENT_PROBE &&
+  !CODEX_HARNESS_IMAGE_PROBE &&
+  !CODEX_HARNESS_MCP_PROBE &&
+  !CODEX_HARNESS_GUARDIAN_PROBE &&
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY !== "0";
 const CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS,
 );
@@ -77,6 +89,10 @@ function logCodexLiveStep(step: string, details?: Record<string, unknown>): void
 
 function isCodexAccountTokenError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Failed to extract accountId from token");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
 async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => void> {
@@ -179,7 +195,7 @@ async function writeLiveGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspace,
-        embeddedHarness: { runtime: "codex", fallback: "none" },
+        agentRuntime: { id: "codex", fallback: "none" },
         skipBootstrap: true,
         timeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
         model: { primary: params.modelKey },
@@ -498,6 +514,172 @@ async function verifyCodexCronMcpProbe(params: {
   }
 }
 
+async function readSpawnedChildRow(params: {
+  childSessionKey: string;
+  client: GatewayClient;
+  parentSessionKey: string;
+}): Promise<Record<string, unknown> | undefined> {
+  const result = await params.client.request(
+    "sessions.list",
+    {
+      spawnedBy: params.parentSessionKey,
+      includeLastMessage: true,
+      limit: 20,
+    },
+    { timeoutMs: 10_000 },
+  );
+  const sessions = asRecord(result)?.sessions;
+  if (!Array.isArray(sessions)) {
+    return undefined;
+  }
+  return sessions
+    .map((entry) => asRecord(entry))
+    .find((entry): entry is Record<string, unknown> => entry?.key === params.childSessionKey);
+}
+
+async function waitForCodexSubagentStarted(params: {
+  childSessionKey: string;
+  client: GatewayClient;
+  events: CapturedAgentEvent[];
+  parentSessionKey: string;
+}): Promise<Record<string, unknown> | undefined> {
+  const deadline = Date.now() + Math.min(CODEX_HARNESS_REQUEST_TIMEOUT_MS, 30_000);
+  let lastRow: Record<string, unknown> | undefined;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      lastRow = await readSpawnedChildRow({
+        childSessionKey: params.childSessionKey,
+        client: params.client,
+        parentSessionKey: params.parentSessionKey,
+      });
+      if (
+        lastRow &&
+        params.events.some(
+          (event) =>
+            event.sessionKey === params.childSessionKey &&
+            event.stream === "codex_app_server.lifecycle",
+        )
+      ) {
+        return lastRow;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(2_000);
+  }
+  throw new Error(
+    [
+      `subagent ${params.childSessionKey} did not start through the Codex app-server harness`,
+      `lastRow=${JSON.stringify(lastRow)}`,
+      `events=${JSON.stringify(params.events)}`,
+      `lastError=${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    ].join("\n"),
+  );
+}
+
+async function verifyCodexSubagentProbe(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<void> {
+  const runId = randomUUID();
+  const expectedToken = `CODEX-SUBAGENT-${runId.slice(0, 6).toUpperCase()}`;
+  const events: CapturedAgentEvent[] = [];
+  const { onAgentEvent } = await import("../infra/agent-events.js");
+  const unsubscribe = onAgentEvent((event) => {
+    if (!event.stream.startsWith("codex_app_server.")) {
+      return;
+    }
+    events.push({
+      stream: event.stream,
+      sessionKey: event.sessionKey,
+      data: event.data,
+    });
+  });
+  try {
+    const { __testing: subagentSpawnTesting, spawnSubagentDirect } =
+      await import("../agents/subagent-spawn.js");
+    const noOpContextEngine: ContextEngine = {
+      info: { id: "codex-harness-subagent-smoke", name: "Codex harness subagent smoke" },
+      ingest: async () => ({ ingested: false }),
+      assemble: async () => ({ messages: [], estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+    };
+    const gatewayTrace: Array<{
+      durationMs: number;
+      error?: string;
+      method: string;
+      status: "error" | "ok";
+      timeoutMs?: number;
+    }> = [];
+    subagentSpawnTesting.setDepsForTest({
+      resolveContextEngine: async () => noOpContextEngine,
+      callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> => {
+        const startedAt = Date.now();
+        try {
+          const result = await params.client.request(opts.method, opts.params, {
+            expectFinal: opts.method === "agent" ? false : opts.expectFinal,
+            timeoutMs: opts.timeoutMs,
+          });
+          gatewayTrace.push({
+            durationMs: Date.now() - startedAt,
+            method: opts.method,
+            status: "ok",
+            timeoutMs: opts.timeoutMs,
+          });
+          return result as T;
+        } catch (err) {
+          gatewayTrace.push({
+            durationMs: Date.now() - startedAt,
+            error: err instanceof Error ? err.message : String(err),
+            method: opts.method,
+            status: "error",
+            timeoutMs: opts.timeoutMs,
+          });
+          throw err;
+        }
+      },
+    });
+    const spawnResult = await spawnSubagentDirect(
+      {
+        task: `Reply exactly ${expectedToken} and nothing else.`,
+        agentId: "dev",
+        thinking: "low",
+        mode: "run",
+        cleanup: "keep",
+        context: "isolated",
+        expectsCompletionMessage: false,
+        runTimeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
+      },
+      {
+        agentSessionKey: params.sessionKey,
+      },
+    );
+    if (spawnResult.status !== "accepted") {
+      throw new Error(
+        `Codex subagent spawn failed: ${JSON.stringify(spawnResult)} trace=${JSON.stringify(gatewayTrace)}`,
+      );
+    }
+    const childSessionKey = spawnResult.childSessionKey;
+    if (!childSessionKey?.includes(":subagent:")) {
+      throw new Error(
+        `subagent spawn did not return a child session key: ${JSON.stringify(spawnResult)}`,
+      );
+    }
+    const childRow = await waitForCodexSubagentStarted({
+      childSessionKey,
+      client: params.client,
+      events,
+      parentSessionKey: params.sessionKey,
+    });
+    expect(childRow?.key).toBe(childSessionKey);
+  } finally {
+    const { __testing: subagentSpawnTesting } = await import("../agents/subagent-spawn.js");
+    subagentSpawnTesting.setDepsForTest();
+    unsubscribe();
+  }
+}
+
 describeLive("gateway live (Codex harness)", () => {
   it(
     "runs gateway agent turns through the plugin-owned Codex app-server harness",
@@ -569,6 +751,16 @@ describeLive("gateway live (Codex harness)", () => {
       try {
         try {
           const sessionKey = "agent:dev:live-codex-harness";
+
+          if (CODEX_HARNESS_SUBAGENT_PROBE) {
+            logCodexLiveStep("subagent-probe:start", { sessionKey });
+            await verifyCodexSubagentProbe({ client, sessionKey });
+            logCodexLiveStep("subagent-probe:done");
+            if (CODEX_HARNESS_SUBAGENT_ONLY) {
+              return;
+            }
+          }
+
           const unsubscribeDebugEvents = await subscribeCodexLiveDebugEvents(sessionKey);
           const firstNonce = randomBytes(3).toString("hex").toUpperCase();
           try {
@@ -609,6 +801,7 @@ describeLive("gateway live (Codex harness)", () => {
               "model `codex/",
               "session `agent:dev:live-codex-harness`",
               "Model/status card shown above",
+              "Status shown above.",
             ],
           });
           logCodexLiveStep("codex-status-command", { statusText });

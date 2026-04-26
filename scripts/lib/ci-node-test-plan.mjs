@@ -66,10 +66,8 @@ function createAutoReplyReplySplitShards() {
   }
 
   const mergedGroups = {
-    "auto-reply-reply-agent-dispatch": [
-      ...groups["auto-reply-reply-agent-runner"],
-      ...groups["auto-reply-reply-dispatch"],
-    ],
+    "auto-reply-reply-agent-runner": groups["auto-reply-reply-agent-runner"],
+    "auto-reply-reply-dispatch": groups["auto-reply-reply-dispatch"],
     "auto-reply-reply-commands-state-routing": [
       ...groups["auto-reply-reply-commands"],
       ...groups["auto-reply-reply-state-routing"],

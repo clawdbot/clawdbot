@@ -648,6 +648,89 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(persisted[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
     });
   });
+
+  it("preserves lastInteractionAt for non-interactive system runs", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-system-run";
+      const sessionId = "test-system-run-session";
+      const lastInteractionAt = Date.now() - 60 * 60_000;
+      const sessionStartedAt = Date.now() - 2 * 60 * 60_000;
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now() - 10_000,
+          sessionStartedAt,
+          lastInteractionAt,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        },
+        touchInteraction: false,
+      });
+
+      expect(sessionStore[sessionKey]?.lastInteractionAt).toBe(lastInteractionAt);
+      expect(sessionStore[sessionKey]?.sessionStartedAt).toBe(sessionStartedAt);
+      expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThan(lastInteractionAt);
+    });
+  });
+
+  it("advances lastInteractionAt for interactive runs", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-user-run";
+      const sessionId = "test-user-run-session";
+      const lastInteractionAt = Date.now() - 60 * 60_000;
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now() - 10_000,
+          lastInteractionAt,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.lastInteractionAt).toBeGreaterThan(lastInteractionAt);
+    });
+  });
 });
 
 describe("clearCliSessionInStore", () => {

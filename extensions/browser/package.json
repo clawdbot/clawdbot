@@ -1,15 +1,15 @@
 {
   "name": "@openclaw/browser-plugin",
-  "version": "2026.4.20",
+  "version": "2026.4.25",
   "private": true,
   "description": "OpenClaw browser tool plugin",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "commander": "^14.0.3",
-    "express": "^5.2.1",
+    "express": "5.2.1",
     "playwright-core": "1.59.1",
-    "typebox": "1.1.31",
+    "typebox": "1.1.32",
     "undici": "8.1.0",
     "ws": "^8.20.0"
   },

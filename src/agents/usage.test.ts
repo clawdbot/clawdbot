@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  normalizeUsage,
-  hasNonzeroUsage,
+  deriveContextPromptTokens,
   derivePromptTokens,
   deriveSessionTotalTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
   toOpenAiChatCompletionsUsage,
 } from "./usage.js";
 
@@ -279,6 +280,35 @@ describe("derivePromptTokens", () => {
   it("returns undefined for empty usage", () => {
     const promptTokens = derivePromptTokens({});
     expect(promptTokens).toBeUndefined();
+  });
+});
+
+describe("deriveContextPromptTokens", () => {
+  it("prefers explicit prompt snapshot over provider usage", () => {
+    expect(
+      deriveContextPromptTokens({
+        promptTokens: 44_000,
+        lastCallUsage: { input: 55_000, cacheRead: 25_000 },
+        usage: { input: 75_000, cacheRead: 25_000, output: 5_000, total: 105_000 },
+      }),
+    ).toBe(44_000);
+  });
+
+  it("falls back to last-call prompt usage before accumulated usage", () => {
+    expect(
+      deriveContextPromptTokens({
+        lastCallUsage: { input: 55_000, cacheRead: 25_000, cacheWrite: 1_000 },
+        usage: { input: 75_000, cacheRead: 25_000, output: 5_000, total: 105_000 },
+      }),
+    ).toBe(81_000);
+  });
+
+  it("falls back to accumulated usage when no prompt snapshot exists", () => {
+    expect(
+      deriveContextPromptTokens({
+        usage: { input: 75_000, cacheRead: 25_000, output: 5_000, total: 105_000 },
+      }),
+    ).toBe(100_000);
   });
 });
 

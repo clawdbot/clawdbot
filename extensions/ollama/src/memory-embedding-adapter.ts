@@ -19,6 +19,7 @@ export const ollamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
       provider,
       runtime: {
         id: "ollama",
+        inlineBatchTimeoutMs: 10 * 60_000,
         cacheKeyData: {
           provider: "ollama",
           model: client.model,

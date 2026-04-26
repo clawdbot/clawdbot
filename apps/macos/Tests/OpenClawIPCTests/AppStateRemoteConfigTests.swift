@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenClaw
 
@@ -34,6 +35,130 @@ struct AppStateRemoteConfigTests {
                 remoteTokenDirty: true))
 
         #expect((remote["token"] as? String) == nil)
+    }
+
+    @Test
+    func updatedRemoteGatewayConfigPinsLoopbackUrlForSshTransport() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: ["url": "ws://gateway.example:18789"],
+            draft: .init(
+                transport: .ssh,
+                remoteUrl: "",
+                remoteHost: "gateway.example",
+                remoteTarget: "alice@gateway.example",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false))
+
+        #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
+        #expect((remote["transport"] as? String) == nil)
+        #expect(remote["sshTarget"] as? String == "alice@gateway.example")
+    }
+
+    @Test
+    func updatedRemoteGatewayConfigPreservesCustomLoopbackTunnelPort() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: ["url": "ws://localhost.:29876"],
+            draft: .init(
+                transport: .ssh,
+                remoteUrl: "",
+                remoteHost: "gateway.example",
+                remoteTarget: "alice@gateway.example",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false))
+
+        #expect(remote["url"] as? String == "ws://127.0.0.1:29876")
+    }
+
+    @Test
+    func updatedRemoteGatewayConfigPreservesCustomPortWhenExistingHostMatchesSshTarget() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: ["url": "ws://gateway.example:19999"],
+            draft: .init(
+                transport: .ssh,
+                remoteUrl: "",
+                remoteHost: nil,
+                remoteTarget: "alice@gateway.example",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false))
+
+        #expect(remote["url"] as? String == "ws://127.0.0.1:19999")
+    }
+
+    @Test
+    func updatedRemoteGatewayConfigDropsCustomPortWhenExistingHostDoesNotMatchSshTarget() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: ["url": "ws://other-host.example:19999"],
+            draft: .init(
+                transport: .ssh,
+                remoteUrl: "",
+                remoteHost: "gateway.example",
+                remoteTarget: "alice@gateway.example",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false))
+
+        #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
+    }
+
+    @Test
+    func updatedRemoteGatewayConfigDoesNotPreservePortForHostnamePrefixCollision() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: ["url": "ws://example.attacker.tld:19999"],
+            draft: .init(
+                transport: .ssh,
+                remoteUrl: "",
+                remoteHost: nil,
+                remoteTarget: "alice@example.com",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false))
+
+        #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
+    }
+
+    @Test
+    func appStateInitDoesNotInferLoopbackHostIntoRemoteTarget() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [remoteTargetKey: nil])
+        {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "url": "ws://127.0.0.1:19999",
+                    ],
+                ],
+            ])
+
+            let state = AppState(preview: true)
+            #expect(state.remoteTarget == "")
+        }
+    }
+
+    @Test
+    func appStateInitPreservesExistingRemoteTargetWhenRemoteUrlIsLoopback() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [remoteTargetKey: "alice@gateway.example"])
+        {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "url": "ws://127.0.0.1:19999",
+                    ],
+                ],
+            ])
+
+            let state = AppState(preview: true)
+            #expect(state.remoteTarget == "alice@gateway.example")
+        }
     }
 
     @Test

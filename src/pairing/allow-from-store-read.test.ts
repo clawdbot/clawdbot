@@ -1,14 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   clearAllowFromStoreReadCacheForTest,
   readChannelAllowFromStoreEntriesSync,
   resolveChannelAllowFromPath,
 } from "./allow-from-store-read.js";
 
-const tempDirs: string[] = [];
+let fixtureRoot = "";
+let caseId = 0;
 
 function makeEnv(homeDir: string): NodeJS.ProcessEnv {
   return {
@@ -18,8 +19,8 @@ function makeEnv(homeDir: string): NodeJS.ProcessEnv {
 }
 
 function makeHomeDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-allow-from-read-"));
-  tempDirs.push(dir);
+  const dir = path.join(fixtureRoot, `case-${caseId++}`);
+  fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
@@ -38,11 +39,18 @@ function writeAllowFromFile(params: {
   );
 }
 
+beforeAll(() => {
+  fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-allow-from-read-"));
+});
+
+afterAll(() => {
+  if (fixtureRoot) {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 afterEach(() => {
   clearAllowFromStoreReadCacheForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 describe("allow-from-store-read", () => {

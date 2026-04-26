@@ -509,6 +509,7 @@ const DiscordVoiceAutoJoinSchema = z
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
+    model: z.string().min(1).optional(),
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
     daveEncryption: z.boolean().optional(),
     decryptionFailureTolerance: z.number().int().min(0).optional(),

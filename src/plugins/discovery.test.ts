@@ -391,6 +391,68 @@ describe("discoverOpenClawPlugins", () => {
     expect(diagnostics).toEqual([]);
   });
 
+  it("ignores packaged bundled plugin paths in configured load paths", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const bundledPluginDir = path.join(bundledRoot, "feishu");
+    mkdirSafe(bundledPluginDir);
+    writePluginManifest({ pluginDir: bundledPluginDir, id: "feishu" });
+    writePluginEntry(path.join(bundledPluginDir, "index.js"));
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      extraPaths: [bundledPluginDir],
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      },
+    });
+
+    expect(candidates.filter((candidate) => candidate.idHint === "feishu")).toEqual([
+      expect.objectContaining({ origin: "bundled" }),
+    ]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        source: bundledPluginDir,
+        message: expect.stringContaining("ignored plugins.load.paths entry"),
+      }),
+    ]);
+  });
+
+  it("ignores legacy bundled plugin load paths that would shadow packaged bundled plugins", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist-runtime", "extensions");
+    const bundledPluginDir = path.join(bundledRoot, "telegram");
+    const legacyPluginDir = path.join(packageRoot, "extensions", "telegram");
+    mkdirSafe(bundledPluginDir);
+    mkdirSafe(legacyPluginDir);
+    writePluginManifest({ pluginDir: bundledPluginDir, id: "telegram" });
+    writePluginManifest({ pluginDir: legacyPluginDir, id: "telegram" });
+    writePluginEntry(path.join(bundledPluginDir, "index.js"));
+    writePluginEntry(path.join(legacyPluginDir, "index.js"));
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      extraPaths: [legacyPluginDir],
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      },
+    });
+
+    expect(candidates.filter((candidate) => candidate.idHint === "telegram")).toEqual([
+      expect.objectContaining({ origin: "bundled" }),
+    ]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        source: legacyPluginDir,
+        message: expect.stringContaining("legacy bundled plugin directory"),
+      }),
+    ]);
+  });
+
   it("loads package extension packs", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "pack");

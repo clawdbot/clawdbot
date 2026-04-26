@@ -6,16 +6,12 @@
       "oneOf": [
         {
           "description": "Plain text turns and tool payloads.",
-          "enum": [
-            "text"
-          ],
+          "enum": ["text"],
           "type": "string"
         },
         {
           "description": "Image attachments included in user turns.",
-          "enum": [
-            "image"
-          ],
+          "enum": ["image"],
           "type": "string"
         }
       ]
@@ -55,10 +51,7 @@
           "type": "string"
         },
         "inputModalities": {
-          "default": [
-            "text",
-            "image"
-          ],
+          "default": ["text", "image"],
           "items": {
             "$ref": "#/definitions/InputModality"
           },
@@ -81,10 +74,7 @@
           "type": "boolean"
         },
         "upgrade": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "upgradeInfo": {
           "anyOf": [
@@ -115,50 +105,30 @@
           "type": "string"
         }
       },
-      "required": [
-        "message"
-      ],
+      "required": ["message"],
       "type": "object"
     },
     "ModelUpgradeInfo": {
       "properties": {
         "migrationMarkdown": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "model": {
           "type": "string"
         },
         "modelLink": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "upgradeCopy": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         }
       },
-      "required": [
-        "model"
-      ],
+      "required": ["model"],
       "type": "object"
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
       "type": "string"
     },
     "ReasoningEffortOption": {
@@ -170,10 +140,7 @@
           "$ref": "#/definitions/ReasoningEffort"
         }
       },
-      "required": [
-        "description",
-        "reasoningEffort"
-      ],
+      "required": ["description", "reasoningEffort"],
       "type": "object"
     }
   },
@@ -186,15 +153,10 @@
     },
     "nextCursor": {
       "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": ["string", "null"]
     }
   },
-  "required": [
-    "data"
-  ],
+  "required": ["data"],
   "title": "ModelListResponse",
   "type": "object"
 }

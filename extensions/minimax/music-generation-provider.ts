@@ -15,7 +15,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
-const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.5+";
+const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.6";
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 type MinimaxBaseResp = {
@@ -38,8 +38,9 @@ type MinimaxMusicCreateResponse = {
 
 function resolveMinimaxMusicBaseUrl(
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
+  providerId: string,
 ): string {
-  const direct = normalizeOptionalString(cfg?.models?.providers?.minimax?.baseUrl);
+  const direct = normalizeOptionalString(cfg?.models?.providers?.[providerId]?.baseUrl);
   if (!direct) {
     return DEFAULT_MINIMAX_MUSIC_BASE_URL;
   }
@@ -120,15 +121,15 @@ function resolveMinimaxMusicModel(model: string | undefined): string {
   return trimmed;
 }
 
-export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
+function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider {
   return {
-    id: "minimax",
+    id: providerId,
     label: "MiniMax",
     defaultModel: DEFAULT_MINIMAX_MUSIC_MODEL,
-    models: [DEFAULT_MINIMAX_MUSIC_MODEL, "music-2.5", "music-2.0"],
+    models: [DEFAULT_MINIMAX_MUSIC_MODEL, "music-2.6-free", "music-cover", "music-cover-free"],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
-        provider: "minimax",
+        provider: providerId,
         agentDir,
       }),
     capabilities: {
@@ -156,7 +157,7 @@ export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
       }
 
       const auth = await resolveApiKeyForProvider({
-        provider: "minimax",
+        provider: providerId,
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
@@ -168,12 +169,15 @@ export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
       const fetchFn = fetch;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolveMinimaxMusicBaseUrl(req.cfg),
+          baseUrl: resolveMinimaxMusicBaseUrl(req.cfg, providerId),
           defaultBaseUrl: DEFAULT_MINIMAX_MUSIC_BASE_URL,
           allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },
+          provider: providerId,
+          capability: "audio",
+          transport: "http",
         });
       const jsonHeaders = new Headers(headers);
       jsonHeaders.set("Content-Type", "application/json");
@@ -256,4 +260,12 @@ export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
       }
     },
   };
+}
+
+export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
+  return buildMinimaxMusicProvider("minimax");
+}
+
+export function buildMinimaxPortalMusicGenerationProvider(): MusicGenerationProvider {
+  return buildMinimaxMusicProvider("minimax-portal");
 }

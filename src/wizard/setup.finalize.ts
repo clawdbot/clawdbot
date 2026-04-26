@@ -242,6 +242,7 @@ export async function finalizeSetupWizard(
       port: settings.port,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
     // Daemon install/restart can briefly flap the WS; wait a bit so health check doesn't false-fail.
     gatewayProbe = await waitForGatewayReachable({
@@ -319,6 +320,7 @@ export async function finalizeSetupWizard(
     port: settings.port,
     customBindHost: settings.customBindHost,
     basePath: controlUiBasePath,
+    tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
   });
   const authedUrl =
     settings.authMode === "token" && settings.gatewayToken

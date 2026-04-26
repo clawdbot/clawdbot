@@ -583,10 +583,10 @@ describe("model-pricing-cache", () => {
     expect(warnings).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          "OpenRouter pricing fetch failed (timeout 30s): TimeoutError: The operation was aborted due to timeout",
+          "OpenRouter pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
         ),
         expect.stringContaining(
-          "LiteLLM pricing fetch failed (timeout 30s): TimeoutError: The operation was aborted due to timeout",
+          "LiteLLM pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
         ),
       ]),
     );

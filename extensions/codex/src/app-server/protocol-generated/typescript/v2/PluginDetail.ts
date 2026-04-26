@@ -6,4 +6,12 @@ import type { AppSummary } from "./AppSummary.js";
 import type { PluginSummary } from "./PluginSummary.js";
 import type { SkillSummary } from "./SkillSummary.js";
 
-export type PluginDetail = { marketplaceName: string, marketplacePath: AbsolutePathBuf | null, summary: PluginSummary, description: string | null, skills: Array<SkillSummary>, apps: Array<AppSummary>, mcpServers: Array<string>, };
+export type PluginDetail = {
+  marketplaceName: string;
+  marketplacePath: AbsolutePathBuf | null;
+  summary: PluginSummary;
+  description: string | null;
+  skills: Array<SkillSummary>;
+  apps: Array<AppSummary>;
+  mcpServers: Array<string>;
+};

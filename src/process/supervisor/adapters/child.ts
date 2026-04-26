@@ -283,11 +283,20 @@ export async function createChildAdapter(params: {
     return waitPromise;
   };
 
+  // The actual detachment of the spawned child can differ from `useDetached`:
+  // when the detached spawn fails, `spawnWithFallback` retries with the
+  // `no-detach` fallback (detached:false). In that case the child shares the
+  // gateway's process group regardless of intent, so the kill must avoid
+  // group-kill. (#71662 follow-up — caught by Greptile review)
+  const childIsDetached = useDetached && !spawned.usedFallback;
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       if (pid) {
-        killProcessTree(pid);
+        // Pass through whether the child is actually detached. Without this,
+        // `killProcessTree` group-kills via `-pid` and takes out the gateway's
+        // own process group along with the child. (#71662)
+        killProcessTree(pid, { detached: childIsDetached });
       }
       try {
         child.kill("SIGKILL");

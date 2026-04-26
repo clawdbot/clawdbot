@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { SessionSendPolicyConfig } from "../../config/types.base.js";
 import type {

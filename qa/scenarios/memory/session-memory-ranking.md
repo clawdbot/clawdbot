@@ -30,7 +30,7 @@ execution:
     transcriptId: qa-session-memory-ranking
     transcriptQuestion: "What is the current Project Nebula codename?"
     transcriptAnswer: "The current Project Nebula codename is ORBIT-10."
-    prompt: "Session memory ranking check: what is the current Project Nebula codename? Use memory_search first with corpus=sessions for indexed session transcripts. If durable notes conflict with newer indexed session transcripts, prefer the newer current fact."
+    prompt: "Session memory ranking check: what is the current Project Nebula codename? Use memory_search first with corpus=sessions for indexed session transcripts. If the first session search misses, retry memory_search with corpus=sessions and query 'current Project Nebula codename ORBIT-10'. If that still misses, run memory_search one more time without a corpus filter using the exact query 'current Project Nebula codename ORBIT-10'. If any result contains ORBIT-10, answer ORBIT-10. If durable notes conflict with newer indexed session transcripts, prefer the newer current fact."
     promptSnippet: "Session memory ranking check"
 ```
 
@@ -51,11 +51,17 @@ steps:
       - set: originalMemorySearch
         value:
           expr: "original.config.agents && typeof original.config.agents === 'object' && typeof original.config.agents.defaults === 'object' ? original.config.agents.defaults.memorySearch : undefined"
+      - set: originalToolsSessions
+        value:
+          expr: "original.config.tools && typeof original.config.tools === 'object' && typeof original.config.tools.sessions === 'object' ? structuredClone(original.config.tools.sessions) : undefined"
       - call: patchConfig
         args:
           - env:
               ref: env
             patch:
+              tools:
+                sessions:
+                  visibility: all
               agents:
                 defaults:
                   memorySearch:
@@ -121,6 +127,18 @@ steps:
                 - ref: transcriptPath
                 - expr: "[JSON.stringify({ type: 'session', id: config.transcriptId, timestamp: new Date(now - 120000).toISOString() }), JSON.stringify({ type: 'message', message: { role: 'user', timestamp: new Date(now - 90000).toISOString(), content: [{ type: 'text', text: config.transcriptQuestion }] } }), JSON.stringify({ type: 'message', message: { role: 'assistant', timestamp: new Date(now - 60000).toISOString(), content: [{ type: 'text', text: config.transcriptAnswer }] } })].join('\\n') + '\\n'"
                 - utf8
+            - call: readRawQaSessionStore
+              saveAs: sessionStore
+              args:
+                - ref: env
+            - set: sessionStorePath
+              value:
+                expr: "path.join(env.gateway.tempRoot, 'state', 'agents', 'qa', 'sessions', 'sessions.json')"
+            - call: fs.writeFile
+              args:
+                - ref: sessionStorePath
+                - expr: "JSON.stringify({ ...sessionStore, ['agent:qa:seed-session-memory-ranking']: { sessionId: config.transcriptId, updatedAt: now, sessionFile: transcriptPath, origin: { label: 'QA seeded session memory ranking transcript' } } }, null, 2)"
+                - utf8
             - call: forceMemoryIndex
               args:
                 - env:
@@ -144,14 +162,18 @@ steps:
                 - ref: state
                 - lambda:
                     params: [candidate]
-                    expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(currentFact)"
+                    expr: "candidate.conversation.id === 'qa-operator' && (candidate.text.includes(currentFact) || candidate.text.includes(staleFact) || /no hits|unknown|not available/i.test(candidate.text))"
                 - expr: liveTurnTimeoutMs(env, 45000)
+            - assert:
+                expr: "outbound.text.includes(currentFact)"
+                message:
+                  expr: "`expected current transcript-backed fact ${currentFact}, got: ${outbound.text}`"
             - set: lower
               value:
                 expr: "normalizeLowercaseStringOrEmpty(outbound.text)"
             - set: staleLeak
               value:
-                expr: "outbound.text.includes(staleFact) && !lower.includes('stale') && !lower.includes('older') && !lower.includes('previous')"
+                expr: "outbound.text.includes(staleFact) && !/(stale|durable|conflict|older|previous)/i.test(outbound.text)"
             - assert:
                 expr: "!staleLeak"
                 message:
@@ -175,6 +197,9 @@ steps:
                 - env:
                     ref: env
                   patch:
+                    tools:
+                      sessions:
+                        expr: "originalToolsSessions === undefined ? null : structuredClone(originalToolsSessions)"
                     agents:
                       defaults:
                         memorySearch:

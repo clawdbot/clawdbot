@@ -4,10 +4,12 @@ import { mediaKindFromMime } from "./constants.js";
 import {
   detectMime,
   extensionForMime,
+  FILE_TYPE_SNIFF_MAX_BYTES,
   imageMimeFromFormat,
   isAudioFileName,
   kindFromMime,
   normalizeMimeType,
+  sliceMimeSniffBuffer,
 } from "./mime.js";
 
 async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promise<Buffer> {
@@ -114,6 +116,14 @@ describe("mime detection", () => {
   it("detects AAC from a bare filename when buffer sniffing is inconclusive", async () => {
     const mime = await detectMime({ buffer: Buffer.alloc(16), filePath: "voice.aac" });
     expect(mime).toBe("audio/aac");
+  });
+
+  it("caps dependency sniffing to a bounded prefix", () => {
+    const small = Buffer.alloc(32);
+    const large = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 16);
+
+    expect(sliceMimeSniffBuffer(small)).toBe(small);
+    expect(sliceMimeSniffBuffer(large)).toHaveLength(FILE_TYPE_SNIFF_MAX_BYTES);
   });
 });
 
