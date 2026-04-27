@@ -276,6 +276,8 @@ export const pl: TranslationMap = {
       tailscaleDocsLink: "Dokumentacja: Tailscale Serve",
       insecureHttpDocsTitle: "Dokumentacja niezabezpieczonego HTTP (otwiera się w nowej karcie)",
       insecureHttpDocsLink: "Dokumentacja: Niezabezpieczone HTTP",
+      copyCommand: "Kopiuj polecenie",
+      copyCommandAria: "Kopiuj polecenie: {command}",
     },
     cards: {
       cost: "Koszt",
@@ -312,6 +314,30 @@ export const pl: TranslationMap = {
     palette: {
       placeholder: "Wpisz polecenie…",
       noResults: "Brak wyników",
+      categories: {
+        search: "Szukaj",
+        navigation: "Nawigacja",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Przegląd",
+        sessions: "Sesje",
+        scheduled: "Zaplanowane",
+        skills: "Skills",
+        settings: "Ustawienia",
+        agents: "Agenci",
+        shellCommand: "Polecenie powłoki",
+        debugMode: "Tryb debugowania",
+      },
+      descriptions: {
+        shellCommand: "Uruchom powłokę",
+        debugMode: "Przełącz debugowanie",
+      },
+      footer: {
+        navigate: "nawiguj",
+        select: "wybierz",
+        close: "zamknij",
+      },
     },
   },
   dreaming: {
@@ -325,6 +351,15 @@ export const pl: TranslationMap = {
       refreshing: "Odświeżanie…",
       on: "Dreaming włączone",
       off: "Dreaming wyłączone",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming aktywne",

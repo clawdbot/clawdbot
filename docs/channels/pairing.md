@@ -52,8 +52,9 @@ Account scoping behavior:
 
 Treat these as sensitive (they gate access to your assistant).
 
-Important: this store is for DM access. Group authorization is separate.
-Approving a DM pairing code does not automatically allow that sender to run group commands or control the bot in groups. For group access, configure the channel's explicit group allowlists (for example `groupAllowFrom`, `groups`, or per-group/per-topic overrides depending on the channel).
+<Note>
+This store is for DM access. Group authorization is separate. Approving a DM pairing code does not automatically allow that sender to run group commands or control the bot in groups. For group access, configure the channel's explicit group allowlists (for example `groupAllowFrom`, `groups`, or per-group or per-topic overrides depending on the channel).
+</Note>
 
 ## 2) Node device pairing (iOS/Android/macOS/headless nodes)
 
@@ -100,11 +101,9 @@ If the same device retries with different auth details (for example different
 role/scopes/public key), the previous pending request is superseded and a new
 `requestId` is created.
 
-Important: an already paired device does not get broader access silently. If it
-reconnects asking for more scopes or a broader role, OpenClaw keeps the
-existing approval as-is and creates a fresh pending upgrade request. Use
-`openclaw devices list` to compare the currently approved access with the newly
-requested access before you approve.
+<Note>
+An already paired device does not get broader access silently. If it reconnects asking for more scopes or a broader role, OpenClaw keeps the existing approval as-is and creates a fresh pending upgrade request. Use `openclaw devices list` to compare the currently approved access with the newly requested access before you approve.
+</Note>
 
 ### Optional trusted-CIDR node auto-approve
 

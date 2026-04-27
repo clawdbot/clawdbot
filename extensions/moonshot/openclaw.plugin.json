@@ -3,6 +3,18 @@
   "enabledByDefault": true,
   "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["moonshot"],
+  "modelPricing": {
+    "providers": {
+      "moonshot": {
+        "openRouter": {
+          "provider": "moonshotai"
+        },
+        "liteLLM": {
+          "provider": "moonshot"
+        }
+      }
+    }
+  },
   "modelCatalog": {
     "providers": {
       "moonshot": {

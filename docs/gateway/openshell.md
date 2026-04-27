@@ -110,9 +110,9 @@ Best for:
 - You want lower per-turn sync overhead.
 - You do not want host-local edits to silently overwrite remote sandbox state.
 
-Important: if you edit files on the host outside OpenClaw after the initial seed,
-the remote sandbox does **not** see those changes. Use
-`openclaw sandbox recreate` to re-seed.
+<Warning>
+If you edit files on the host outside OpenClaw after the initial seed, the remote sandbox does **not** see those changes. Use `openclaw sandbox recreate` to re-seed.
+</Warning>
 
 ### Choosing a mode
 

@@ -294,7 +294,7 @@ export function stopSharedClientInstance(client: MatrixClient): void {
 
 export async function releaseSharedClientInstance(
   client: MatrixClient,
-  mode: "stop" | "persist" = "stop",
+  mode: "stop" | "persist" | "discard" = "stop",
 ): Promise<boolean> {
   const state = findSharedClientStateByInstance(client);
   if (!state) {
@@ -307,6 +307,8 @@ export async function releaseSharedClientInstance(
   deleteSharedClientState(state);
   if (mode === "persist") {
     await client.stopAndPersist();
+  } else if (mode === "discard") {
+    client.stopWithoutPersist();
   } else {
     client.stop();
   }

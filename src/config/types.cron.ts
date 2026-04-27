@@ -16,6 +16,7 @@ export type CronFailureAlertConfig = {
   enabled?: boolean;
   after?: number;
   cooldownMs?: number;
+  includeSkipped?: boolean;
   mode?: "announce" | "webhook";
   accountId?: string;
 };

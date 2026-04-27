@@ -167,7 +167,7 @@ describe("CodexAppServerEventProjector", () => {
             outputTokens: 100_000,
           },
           last: {
-            totalTokens: 14,
+            totalTokens: 12,
             inputTokens: 5,
             cachedInputTokens: 2,
             outputTokens: 7,
@@ -186,12 +186,12 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
-    expect(result.attemptUsage).toMatchObject({ input: 5, output: 7, cacheRead: 2, total: 14 });
+    expect(result.attemptUsage).toMatchObject({ input: 3, output: 7, cacheRead: 2, total: 12 });
     expect(result.lastAssistant?.usage).toMatchObject({
-      input: 5,
+      input: 3,
       output: 7,
       cacheRead: 2,
-      totalTokens: 14,
+      totalTokens: 12,
     });
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
@@ -289,7 +289,7 @@ describe("CodexAppServerEventProjector", () => {
         tokenUsage: {
           total: { total_tokens: 1_000_000 },
           last_token_usage: {
-            total_tokens: 20,
+            total_tokens: 17,
             input_tokens: 8,
             cached_input_tokens: 3,
             output_tokens: 9,
@@ -300,12 +300,12 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.attemptUsage).toMatchObject({ input: 8, output: 9, cacheRead: 3, total: 20 });
+    expect(result.attemptUsage).toMatchObject({ input: 5, output: 9, cacheRead: 3, total: 17 });
     expect(result.lastAssistant?.usage).toMatchObject({
-      input: 8,
+      input: 5,
       output: 9,
       cacheRead: 3,
-      totalTokens: 20,
+      totalTokens: 17,
     });
   });
 

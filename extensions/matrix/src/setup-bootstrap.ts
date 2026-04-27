@@ -22,10 +22,15 @@ export async function maybeBootstrapNewEncryptedMatrixAccount(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
+  const previousAccountConfig = resolveMatrixAccountConfig({
+    cfg: params.previousCfg,
+    accountId: params.accountId,
+  });
 
   if (
-    hasExplicitMatrixAccountConfig(params.previousCfg, params.accountId) ||
-    accountConfig.encryption !== true
+    accountConfig.encryption !== true ||
+    (hasExplicitMatrixAccountConfig(params.previousCfg, params.accountId) &&
+      previousAccountConfig.encryption === true)
   ) {
     return {
       attempted: false,
@@ -36,7 +41,10 @@ export async function maybeBootstrapNewEncryptedMatrixAccount(params: {
   }
 
   try {
-    const bootstrap = await bootstrapMatrixVerification({ accountId: params.accountId });
+    const bootstrap = await bootstrapMatrixVerification({
+      accountId: params.accountId,
+      cfg: params.cfg,
+    });
     return {
       attempted: true,
       success: bootstrap.success,

@@ -2,6 +2,13 @@
   "id": "lmstudio",
   "enabledByDefault": true,
   "providers": ["lmstudio"],
+  "modelPricing": {
+    "providers": {
+      "lmstudio": {
+        "external": false
+      }
+    }
+  },
   "nonSecretAuthMarkers": ["lmstudio-local"],
   "providerAuthEnvVars": {
     "lmstudio": ["LM_API_TOKEN"]

@@ -87,6 +87,26 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("invalid", "^1.2.0")).toBe(false);
   });
 
+  it.each(["*", "x", "X", "=*", "=x", ">=*", ">=x", "<=*", "^*", "~*"] as const)(
+    "accepts plugin api wildcard range %s for valid runtime versions",
+    (range) => {
+      expect(satisfiesPluginApiRange("2026.3.24", range)).toBe(true);
+      expect(satisfiesPluginApiRange("1.0.0", range)).toBe(true);
+    },
+  );
+
+  it("keeps wildcard plugin api ranges intersected with concrete comparators", () => {
+    expect(satisfiesPluginApiRange("2026.3.24", "* >=2026.3.22")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.3.21", "* >=2026.3.22")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.3.24", "x <2026.3.24")).toBe(false);
+  });
+
+  it("rejects invalid runtime versions and impossible wildcard comparators", () => {
+    expect(satisfiesPluginApiRange("invalid", "*")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.3.24", ">*")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.3.24", "<*")).toBe(false);
+  });
+
   it("checks min gateway versions with loose host labels", () => {
     expect(satisfiesGatewayMinimum("2026.3.22", "2026.3.0")).toBe(true);
     expect(satisfiesGatewayMinimum("OpenClaw 2026.3.22", "2026.3.0")).toBe(true);

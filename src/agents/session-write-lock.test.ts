@@ -259,6 +259,23 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("reclaims payload-less orphan lock files after the short init grace", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      await fs.writeFile(lockPath, "", "utf8");
+      const orphanDate = new Date(Date.now() - 10_000);
+      await fs.utimes(lockPath, orphanDate, orphanDate);
+
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 10_000,
+        staleMs: 60_000,
+      });
+      const raw = await fs.readFile(lockPath, "utf8");
+      expect(JSON.parse(raw)).toMatchObject({ pid: process.pid });
+      await lock.release();
+    });
+  });
+
   it("reclaims malformed lock files once they are old enough", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       await fs.writeFile(lockPath, "{}", "utf8");

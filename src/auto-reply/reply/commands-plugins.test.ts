@@ -114,7 +114,9 @@ describe("handlePluginsCommand", () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       valid: true,
       path: "/tmp/openclaw.json",
+      sourceConfig: buildCfg(),
       resolved: buildCfg(),
+      hash: "config-1",
     });
     validateConfigObjectWithPluginsMock.mockReturnValue({
       ok: true,

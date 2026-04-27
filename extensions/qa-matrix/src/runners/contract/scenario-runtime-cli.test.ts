@@ -140,4 +140,40 @@ describe("Matrix QA CLI runtime", () => {
       await rm(root, { force: true, recursive: true });
     }
   });
+
+  it("includes timed-out CLI output in diagnostics", async () => {
+    const root = await mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-timeout-"),
+    );
+    try {
+      await mkdir(path.join(root, "dist"));
+      await writeFile(
+        path.join(root, "dist", "index.mjs"),
+        [
+          "process.stdout.write('waiting for verification\\n');",
+          "process.stderr.write('matrix sdk still syncing\\n');",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+
+      await expect(
+        runMatrixQaOpenClawCli({
+          args: ["matrix", "verify", "self"],
+          cwd: root,
+          env: process.env,
+          timeoutMs: 250,
+        }),
+      ).rejects.toThrow(/stdout:\nwaiting for verification/);
+      await expect(
+        runMatrixQaOpenClawCli({
+          args: ["matrix", "verify", "self"],
+          cwd: root,
+          env: process.env,
+          timeoutMs: 250,
+        }),
+      ).rejects.toThrow(/stderr:\nmatrix sdk still syncing/);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
 });

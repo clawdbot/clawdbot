@@ -710,6 +710,7 @@ describe("runGatewayUpdate", () => {
   it("does not fail a good windows dev preflight only because worktree cleanup hit long paths", async () => {
     await setupGitPackageManagerFixture();
     const calls: string[] = [];
+    const cleanupTimeouts: Array<number | undefined> = [];
     const upstreamSha = "upstream123";
     const doctorNodePath = await resolveStableNodePath(process.execPath);
     const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
@@ -718,7 +719,7 @@ describe("runGatewayUpdate", () => {
     try {
       const runCommand = async (
         argv: string[],
-        _options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+        options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
       ) => {
         const key = argv.join(" ");
         calls.push(key);
@@ -772,6 +773,7 @@ describe("runGatewayUpdate", () => {
           key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
           preflightPrefixPattern.test(key)
         ) {
+          cleanupTimeouts.push(options?.timeoutMs);
           return {
             stdout: "",
             stderr: "error: failed to delete worktree: Filename too long",
@@ -798,12 +800,108 @@ describe("runGatewayUpdate", () => {
       expect(result.status).toBe("ok");
       const cleanupStep = result.steps.find((step) => step.name === "preflight cleanup");
       expect(cleanupStep?.exitCode).toBe(0);
+      expect(cleanupTimeouts[0]).toBeLessThanOrEqual(60_000);
       expect(cleanupStep?.stderrTail ?? "").toContain(
         "windows fallback cleanup removed preflight tree",
       );
     } finally {
       platformSpy.mockRestore();
     }
+  });
+
+  it("falls back when dev preflight worktree cleanup times out", async () => {
+    await setupGitPackageManagerFixture();
+    const calls: string[] = [];
+    const cleanupTimeouts: Array<number | undefined> = [];
+    const upstreamSha = "upstream123";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+
+    const runCommand = async (
+      argv: string[],
+      options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+    ) => {
+      const key = argv.join(" ");
+      calls.push(key);
+
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return { stdout: tempDir, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return { stdout: "abc123", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+        return { stdout: "main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
+        return { stdout: "origin/main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
+        return { stdout: upstreamSha, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`) {
+        return { stdout: `${upstreamSha}\n`, stderr: "", code: 0 };
+      }
+      if (key === "pnpm --version") {
+        return { stdout: "10.0.0", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.endsWith(` ${upstreamSha}`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith("git -C /tmp/") &&
+        preflightPrefixPattern.test(key) &&
+        key.includes(" checkout --detach ") &&
+        key.endsWith(upstreamSha)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm install" || key === "pnpm build" || key === "pnpm lint") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        cleanupTimeouts.push(options?.timeoutMs);
+        return {
+          stdout: "",
+          stderr: "Command timed out after 60000ms",
+          code: null,
+        };
+      }
+      if (key === `git -C ${tempDir} worktree prune`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rebase ${upstreamSha}`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === doctorCommand) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm ui:build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "dev" });
+
+    expect(result.status).toBe("ok");
+    const cleanupStep = result.steps.find((step) => step.name === "preflight cleanup");
+    expect(cleanupStep?.exitCode).toBe(0);
+    expect(cleanupTimeouts[0]).toBeLessThanOrEqual(60_000);
+    expect(cleanupStep?.stderrTail ?? "").toContain("fallback cleanup removed preflight tree");
   });
 
   it("adds heap headroom to windows pnpm build steps during dev updates", async () => {

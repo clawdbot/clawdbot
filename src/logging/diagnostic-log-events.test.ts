@@ -4,6 +4,11 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import {
+  createDiagnosticTraceContext,
+  resetDiagnosticTraceContextForTest,
+  runWithDiagnosticTraceContext,
+} from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, resetLogger, setLoggerOverride } from "./logger.js";
 
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
@@ -22,6 +27,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetDiagnosticEventsForTest();
+  resetDiagnosticTraceContextForTest();
   setLoggerOverride(null);
   resetLogger();
 });
@@ -57,6 +63,29 @@ describe("diagnostic log events", () => {
         spanId: SPAN_ID,
       },
     });
+  });
+
+  it("uses active request trace context for unbound log records", async () => {
+    const trace = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+    });
+    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      if (evt.type === "log.record") {
+        received.push(evt);
+      }
+    });
+
+    runWithDiagnosticTraceContext(trace, () => {
+      const logger = getChildLogger({ subsystem: "diagnostic" });
+      logger.info({ runId: "run-1" }, "request-scoped diagnostic log");
+    });
+    await flushDiagnosticEvents();
+    unsubscribe();
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.trace).toEqual(trace);
   });
 
   it("redacts and bounds internal log records before diagnostic emission", async () => {

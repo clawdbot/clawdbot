@@ -23,8 +23,10 @@ import {
 import {
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_DEFAULT_BASE_URL,
+  OLLAMA_DOCKER_HOST_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
 } from "./defaults.js";
+import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   buildOllamaProvider,
@@ -41,6 +43,8 @@ const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
 const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"];
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_CLOUD_MAX_DISCOVERED_MODELS = 500;
+const OLLAMA_PULL_RESPONSE_TIMEOUT_MS = 30_000;
+const OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS = 300_000;
 
 type OllamaSetupOptions = {
   customBaseUrl?: string;
@@ -52,6 +56,16 @@ type OllamaSetupResult = {
   credential: SecretInput;
   credentialMode?: SecretInputMode;
 };
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
+}
+
+function resolveOllamaSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return isTruthyEnvValue(env.OPENCLAW_DOCKER_SETUP)
+    ? OLLAMA_DOCKER_HOST_BASE_URL
+    : OLLAMA_DEFAULT_BASE_URL;
+}
 
 type OllamaInteractiveMode = "cloud-local" | "cloud-only" | "local-only";
 type HostBackedOllamaInteractiveMode = Exclude<OllamaInteractiveMode, "cloud-only">;
@@ -156,6 +170,48 @@ type OllamaPullChunk = {
 
 type OllamaPullResult = { ok: true } | { ok: false; message: string };
 
+async function readOllamaPullChunkWithIdleTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  return await new Promise((resolve, reject) => {
+    const clear = () => {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+    };
+
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      clear();
+      void reader.cancel().catch(() => undefined);
+      reject(
+        new Error(
+          `Ollama pull stalled: no data received for ${Math.round(OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS / 1000)}s`,
+        ),
+      );
+    }, OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS);
+
+    void reader.read().then(
+      (result) => {
+        clear();
+        if (!timedOut) {
+          resolve(result);
+        }
+      },
+      (err) => {
+        clear();
+        if (!timedOut) {
+          reject(err);
+        }
+      },
+    );
+  });
+}
+
 async function pullOllamaModelCore(params: {
   baseUrl: string;
   modelName: string;
@@ -163,6 +219,11 @@ async function pullOllamaModelCore(params: {
 }): Promise<OllamaPullResult> {
   const baseUrl = resolveOllamaApiBase(params.baseUrl);
   const modelName = normalizeOllamaModelName(params.modelName) ?? params.modelName.trim();
+  const responseController = new AbortController();
+  const responseTimeout = setTimeout(
+    responseController.abort.bind(responseController),
+    OLLAMA_PULL_RESPONSE_TIMEOUT_MS,
+  );
   try {
     const { response, release } = await fetchWithSsrFGuard({
       url: `${baseUrl}/api/pull`,
@@ -171,9 +232,11 @@ async function pullOllamaModelCore(params: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: modelName }),
       },
+      signal: responseController.signal,
       policy: buildOllamaBaseUrlSsrFPolicy(baseUrl),
       auditContext: "ollama-setup.pull",
     });
+    clearTimeout(responseTimeout);
     try {
       if (!response.ok) {
         return { ok: false, message: `Failed to download ${modelName} (HTTP ${response.status})` };
@@ -222,7 +285,7 @@ async function pullOllamaModelCore(params: {
       };
 
       for (;;) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readOllamaPullChunkWithIdleTimeout(reader);
         if (done) {
           break;
         }
@@ -252,6 +315,8 @@ async function pullOllamaModelCore(params: {
   } catch (err) {
     const reason = formatErrorMessage(err);
     return { ok: false, message: `Failed to download ${modelName}: ${reason}` };
+  } finally {
+    clearTimeout(responseTimeout);
   }
 }
 
@@ -403,14 +468,18 @@ async function storeOllamaCredential(agentDir?: string): Promise<void> {
   });
 }
 
-async function promptForOllamaBaseUrl(prompter: WizardPrompter): Promise<string> {
+async function promptForOllamaBaseUrl(
+  prompter: WizardPrompter,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const defaultBaseUrl = resolveOllamaSetupDefaultBaseUrl(env);
   const baseUrlRaw = await prompter.text({
     message: "Ollama base URL",
-    initialValue: OLLAMA_DEFAULT_BASE_URL,
-    placeholder: OLLAMA_DEFAULT_BASE_URL,
+    initialValue: defaultBaseUrl,
+    placeholder: defaultBaseUrl,
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
-  return resolveOllamaApiBase((baseUrlRaw ?? "").trim().replace(/\/+$/, ""));
+  return resolveOllamaApiBase((baseUrlRaw ?? defaultBaseUrl).trim().replace(/\/+$/, ""));
 }
 
 async function resolveHostBackedSuggestedModelNames(params: {
@@ -439,8 +508,9 @@ async function promptAndConfigureHostBackedOllama(params: {
   cfg: OpenClawConfig;
   mode: HostBackedOllamaInteractiveMode;
   prompter: WizardPrompter;
+  env?: NodeJS.ProcessEnv;
 }): Promise<OllamaSetupResult> {
-  const baseUrl = await promptForOllamaBaseUrl(params.prompter);
+  const baseUrl = await promptForOllamaBaseUrl(params.prompter, params.env);
   const { reachable, models } = await fetchOllamaModels(baseUrl);
 
   if (!reachable) {
@@ -532,6 +602,7 @@ export async function promptAndConfigureOllama(params: {
     cfg: params.cfg,
     mode,
     prompter: params.prompter,
+    env: params.env,
   });
 }
 
@@ -542,7 +613,7 @@ export async function configureOllamaNonInteractive(params: {
   agentDir?: string;
 }): Promise<OpenClawConfig> {
   const baseUrl = resolveOllamaApiBase(
-    (params.opts.customBaseUrl?.trim() || OLLAMA_DEFAULT_BASE_URL).replace(/\/+$/, ""),
+    (params.opts.customBaseUrl?.trim() || resolveOllamaSetupDefaultBaseUrl()).replace(/\/+$/, ""),
   );
   const { reachable, models } = await fetchOllamaModels(baseUrl);
   const explicitModel = normalizeOllamaModelName(params.opts.customModelId);
@@ -631,7 +702,8 @@ export async function ensureOllamaModelPulled(params: {
   if (!params.model.startsWith("ollama/")) {
     return;
   }
-  const baseUrl = params.config.models?.providers?.ollama?.baseUrl ?? OLLAMA_DEFAULT_BASE_URL;
+  const baseUrl =
+    readProviderBaseUrl(params.config.models?.providers?.ollama) ?? OLLAMA_DEFAULT_BASE_URL;
   const modelName = params.model.slice("ollama/".length);
   if (isOllamaCloudModel(modelName)) {
     return;

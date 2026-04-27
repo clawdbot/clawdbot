@@ -8,9 +8,19 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveManifestContractPluginIds } from "../plugins/plugin-registry.js";
+import { planManifestModelCatalogRows, type ModelCatalogCost } from "../model-catalog/index.js";
+import type {
+  PluginManifestModelPricingModelIdTransform,
+  PluginManifestModelPricingProvider,
+  PluginManifestModelPricingSource,
+} from "../plugins/manifest.js";
+import {
+  loadPluginManifestRegistryForPluginRegistry,
+  resolveManifestContractPluginIds,
+} from "../plugins/plugin-registry.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
@@ -34,6 +44,18 @@ type OpenRouterModelPayload = {
   pricing?: unknown;
 };
 
+type ExternalPricingPolicy = {
+  external: boolean;
+  openRouter?: ExternalPricingSourcePolicy;
+  liteLLM?: ExternalPricingSourcePolicy;
+};
+
+type ExternalPricingSourcePolicy = {
+  provider?: string;
+  passthroughProviderModel?: boolean;
+  modelIdTransforms: readonly PluginManifestModelPricingModelIdTransform[];
+};
+
 export { getCachedGatewayModelPricing };
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
@@ -42,22 +64,6 @@ const LITELLM_PRICING_URL =
 const CACHE_TTL_MS = 24 * 60 * 60_000;
 const FETCH_TIMEOUT_MS = 60_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
-const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
-  "google-gemini-cli": "google",
-  kimi: "moonshotai",
-  "kimi-coding": "moonshotai",
-  moonshot: "moonshotai",
-  moonshotai: "moonshotai",
-  "openai-codex": "openai",
-  xai: "x-ai",
-  zai: "z-ai",
-};
-const WRAPPER_PROVIDERS = new Set([
-  "cloudflare-ai-gateway",
-  "kilocode",
-  "openrouter",
-  "vercel-ai-gateway",
-]);
 const log = createSubsystemLogger("gateway").child("model-pricing");
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -146,6 +152,57 @@ function parseOpenRouterPricing(value: unknown): CachedModelPricing | null {
     output: toPricePerMillion(completion),
     cacheRead: toPricePerMillion(parseNumberString(pricing.input_cache_read)),
     cacheWrite: toPricePerMillion(parseNumberString(pricing.input_cache_write)),
+  };
+}
+
+function toCachedPricingTier(value: unknown): CachedPricingTier | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const tier = value as Record<string, unknown>;
+  const input = parseNumberString(tier.input);
+  const output = parseNumberString(tier.output);
+  const range = tier.range;
+  if (input === null || output === null || !Array.isArray(range) || range.length < 1) {
+    return null;
+  }
+  const start = parseNumberString(range[0]);
+  if (start === null) {
+    return null;
+  }
+  const rawEnd = range.length >= 2 ? parseNumberString(range[1]) : null;
+  const end = rawEnd === null || rawEnd <= start ? Infinity : rawEnd;
+  return {
+    input,
+    output,
+    cacheRead: parseNumberString(tier.cacheRead) ?? 0,
+    cacheWrite: parseNumberString(tier.cacheWrite) ?? 0,
+    range: [start, end],
+  };
+}
+
+function toCachedModelPricing(
+  value: ModelCatalogCost | ModelDefinitionConfig["cost"] | undefined,
+): CachedModelPricing | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const input = parseNumberString(value.input) ?? 0;
+  const output = parseNumberString(value.output) ?? 0;
+  const cacheRead = parseNumberString(value.cacheRead) ?? 0;
+  const cacheWrite = parseNumberString(value.cacheWrite) ?? 0;
+  const tieredPricing = Array.isArray(value.tieredPricing)
+    ? value.tieredPricing
+        .map((tier) => toCachedPricingTier(tier))
+        .filter((tier): tier is CachedPricingTier => Boolean(tier))
+        .toSorted((left, right) => left.range[0] - right.range[0])
+    : [];
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    ...(tieredPricing.length > 0 ? { tieredPricing } : {}),
   };
 }
 
@@ -272,17 +329,89 @@ async function fetchLiteLLMPricingCatalog(fetchImpl: typeof fetch): Promise<Lite
   return catalog;
 }
 
-function resolveLiteLLMPricingForRef(params: {
-  ref: ModelRef;
-  catalog: LiteLLMPricingCatalog;
-}): CachedModelPricing | undefined {
-  // Only use provider-qualified key to avoid cross-provider pricing collisions.
-  return params.catalog.get(`${params.ref.provider}/${params.ref.model}`);
+function normalizeExternalPricingSource(
+  value: PluginManifestModelPricingSource | false | undefined,
+): ExternalPricingSourcePolicy | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return {
+    ...(value.provider
+      ? { provider: normalizeModelRef(value.provider, "placeholder").provider }
+      : {}),
+    ...(value.passthroughProviderModel ? { passthroughProviderModel: true } : {}),
+    modelIdTransforms: value.modelIdTransforms ?? [],
+  };
 }
 
-function canonicalizeOpenRouterProvider(provider: string): string {
-  const normalized = normalizeModelRef(provider, "placeholder").provider;
-  return PROVIDER_ALIAS_TO_OPENROUTER[normalized] ?? normalized;
+function normalizeExternalPricingPolicy(
+  value: PluginManifestModelPricingProvider | undefined,
+): ExternalPricingPolicy | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return {
+    external: value.external !== false,
+    ...(normalizeExternalPricingSource(value.openRouter) !== undefined
+      ? { openRouter: normalizeExternalPricingSource(value.openRouter) }
+      : {}),
+    ...(normalizeExternalPricingSource(value.liteLLM) !== undefined
+      ? { liteLLM: normalizeExternalPricingSource(value.liteLLM) }
+      : {}),
+  };
+}
+
+function loadManifestPricingContext(config: OpenClawConfig): {
+  policies: Map<string, ExternalPricingPolicy>;
+  catalogPricing: Map<string, CachedModelPricing>;
+} {
+  const registry = loadPluginManifestRegistryForPluginRegistry({ config });
+  const policies = new Map<string, ExternalPricingPolicy>();
+  for (const plugin of registry.plugins) {
+    for (const [provider, rawPolicy] of Object.entries(plugin.modelPricing?.providers ?? {})) {
+      const policy = normalizeExternalPricingPolicy(rawPolicy);
+      if (policy) {
+        policies.set(provider, policy);
+      }
+    }
+  }
+
+  const catalogPricing = new Map<string, CachedModelPricing>();
+  for (const row of planManifestModelCatalogRows({ registry }).rows) {
+    const pricing = toCachedModelPricing(row.cost);
+    if (pricing) {
+      catalogPricing.set(modelKey(row.provider, row.id), pricing);
+    }
+  }
+
+  return { policies, catalogPricing };
+}
+
+function applyModelIdTransform(
+  model: string,
+  transform: PluginManifestModelPricingModelIdTransform,
+): string {
+  switch (transform) {
+    case "version-dots":
+      return model
+        .replace(/^claude-(\d+)-(\d+)-/u, "claude-$1.$2-")
+        .replace(/^claude-([a-z]+)-(\d+)-(\d+)$/u, "claude-$1-$2.$3");
+  }
+  return model;
+}
+
+function applyModelIdTransforms(
+  model: string,
+  transforms: readonly PluginManifestModelPricingModelIdTransform[],
+): string[] {
+  const variants = new Set([model]);
+  for (const transform of transforms) {
+    const snapshot = Array.from(variants);
+    for (const variant of snapshot) {
+      variants.add(applyModelIdTransform(variant, transform));
+    }
+  }
+  return [...variants];
 }
 
 function canonicalizeOpenRouterLookupId(id: string): string {
@@ -294,17 +423,12 @@ function canonicalizeOpenRouterLookupId(id: string): string {
   if (slash === -1) {
     return trimmed;
   }
-  const provider = canonicalizeOpenRouterProvider(trimmed.slice(0, slash));
-  let model = trimmed.slice(slash + 1).trim();
+  const provider = normalizeModelRef(trimmed.slice(0, slash), "placeholder").provider;
+  const model = trimmed.slice(slash + 1).trim();
   if (!model) {
     return provider;
   }
-  if (provider === "anthropic") {
-    model = model
-      .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
-      .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3");
-  }
-  model =
+  const normalizedModel =
     normalizeProviderModelIdWithPlugin({
       provider,
       context: {
@@ -312,37 +436,53 @@ function canonicalizeOpenRouterLookupId(id: string): string {
         modelId: model,
       },
     }) ?? model;
-  return `${provider}/${model}`;
+  return modelKey(provider, normalizedModel);
 }
 
-function buildOpenRouterExactCandidates(ref: ModelRef, seen = new Set<string>()): string[] {
+function buildExternalCatalogCandidates(params: {
+  ref: ModelRef;
+  source: "openRouter" | "liteLLM";
+  policies: ReadonlyMap<string, ExternalPricingPolicy>;
+  seen?: Set<string>;
+}): string[] {
+  const { ref, source, policies } = params;
   const refKey = modelKey(ref.provider, ref.model);
+  const seen = params.seen ?? new Set<string>();
   if (seen.has(refKey)) {
     return [];
   }
   const nextSeen = new Set(seen);
   nextSeen.add(refKey);
 
+  const policy = policies.get(ref.provider);
+  if (policy?.external === false) {
+    return [];
+  }
+  const sourcePolicy = policy?.[source];
+  if (sourcePolicy === undefined && policy && source === "openRouter") {
+    return [];
+  }
+  if (sourcePolicy === undefined && policy && source === "liteLLM") {
+    return [];
+  }
+  const provider = sourcePolicy?.provider ?? ref.provider;
+  const transforms = sourcePolicy?.modelIdTransforms ?? [];
   const candidates = new Set<string>();
-  const canonicalProvider = canonicalizeOpenRouterProvider(ref.provider);
-  const canonicalFullId = canonicalizeOpenRouterLookupId(modelKey(canonicalProvider, ref.model));
-  if (canonicalFullId) {
-    candidates.add(canonicalFullId);
+
+  for (const model of applyModelIdTransforms(ref.model, transforms)) {
+    const candidate = modelKey(provider, model);
+    candidates.add(source === "openRouter" ? canonicalizeOpenRouterLookupId(candidate) : candidate);
   }
 
-  if (canonicalProvider === "anthropic") {
-    const slash = canonicalFullId.indexOf("/");
-    const model = slash === -1 ? canonicalFullId : canonicalFullId.slice(slash + 1);
-    const dotted = model
-      .replace(/^claude-(\d+)-(\d+)-/u, "claude-$1.$2-")
-      .replace(/^claude-([a-z]+)-(\d+)-(\d+)$/u, "claude-$1-$2.$3");
-    candidates.add(`${canonicalProvider}/${dotted}`);
-  }
-
-  if (WRAPPER_PROVIDERS.has(ref.provider) && ref.model.includes("/")) {
+  if (sourcePolicy?.passthroughProviderModel && ref.model.includes("/")) {
     const nestedRef = parseModelRef(ref.model, DEFAULT_PROVIDER);
     if (nestedRef) {
-      for (const candidate of buildOpenRouterExactCandidates(nestedRef, nextSeen)) {
+      for (const candidate of buildExternalCatalogCandidates({
+        ref: nestedRef,
+        source,
+        policies,
+        seen: nextSeen,
+      })) {
         candidates.add(candidate);
       }
     }
@@ -420,6 +560,103 @@ function addConfiguredWebSearchPluginModels(params: {
       refs: params.refs,
     });
   }
+}
+
+function isPrivateOrLoopbackHost(hostname: string): boolean {
+  const host = hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+  if (
+    host === "localhost" ||
+    host === "localhost.localdomain" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local")
+  ) {
+    return true;
+  }
+  if (host === "::1" || host === "0:0:0:0:0:0:0:1" || host.startsWith("fe80:")) {
+    return true;
+  }
+  if (host.startsWith("fc") || host.startsWith("fd")) {
+    return true;
+  }
+  if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.")) {
+    return true;
+  }
+  return /^172\.(1[6-9]|2\d|3[0-1])\./u.test(host) || host.startsWith("169.254.");
+}
+
+function isPrivateOrLoopbackBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    return isPrivateOrLoopbackHost(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function findConfiguredProviderModel(
+  config: OpenClawConfig,
+  ref: ModelRef,
+): ModelDefinitionConfig | undefined {
+  const providerConfig = config.models?.providers?.[ref.provider];
+  return providerConfig?.models?.find((model) => {
+    const normalized = normalizeModelRef(ref.provider, model.id);
+    return modelKey(normalized.provider, normalized.model) === modelKey(ref.provider, ref.model);
+  });
+}
+
+function getConfiguredModelPricing(
+  config: OpenClawConfig,
+  ref: ModelRef,
+): CachedModelPricing | undefined {
+  return toCachedModelPricing(findConfiguredProviderModel(config, ref)?.cost);
+}
+
+function hasPrivateOrLoopbackConfiguredEndpoint(config: OpenClawConfig, ref: ModelRef): boolean {
+  const providerConfig = config.models?.providers?.[ref.provider];
+  const model = findConfiguredProviderModel(config, ref);
+  return (
+    isPrivateOrLoopbackBaseUrl(model?.baseUrl) ||
+    isPrivateOrLoopbackBaseUrl(providerConfig?.baseUrl)
+  );
+}
+
+function shouldFetchExternalPricingForRef(params: {
+  config: OpenClawConfig;
+  ref: ModelRef;
+  policies: ReadonlyMap<string, ExternalPricingPolicy>;
+  seededPricing: ReadonlyMap<string, CachedModelPricing>;
+}): boolean {
+  if (params.seededPricing.has(modelKey(params.ref.provider, params.ref.model))) {
+    return false;
+  }
+  if (hasPrivateOrLoopbackConfiguredEndpoint(params.config, params.ref)) {
+    return false;
+  }
+  if (params.policies.get(params.ref.provider)?.external === false) {
+    return false;
+  }
+  return true;
+}
+
+function filterExternalPricingRefs(params: {
+  config: OpenClawConfig;
+  refs: ModelRef[];
+  policies: ReadonlyMap<string, ExternalPricingPolicy>;
+  seededPricing: ReadonlyMap<string, CachedModelPricing>;
+}): ModelRef[] {
+  return params.refs.filter((ref) =>
+    shouldFetchExternalPricingForRef({
+      config: params.config,
+      ref,
+      policies: params.policies,
+      seededPricing: params.seededPricing,
+    }),
+  );
 }
 
 export function collectConfiguredModelPricingRefs(config: OpenClawConfig): ModelRef[] {
@@ -506,16 +743,22 @@ async function fetchOpenRouterPricingCatalog(
 
 function resolveCatalogPricingForRef(params: {
   ref: ModelRef;
+  policies: ReadonlyMap<string, ExternalPricingPolicy>;
   catalogById: Map<string, OpenRouterPricingEntry>;
   catalogByNormalizedId: Map<string, OpenRouterPricingEntry>;
 }): CachedModelPricing | undefined {
-  for (const candidate of buildOpenRouterExactCandidates(params.ref)) {
+  const candidates = buildExternalCatalogCandidates({
+    ref: params.ref,
+    source: "openRouter",
+    policies: params.policies,
+  });
+  for (const candidate of candidates) {
     const exact = params.catalogById.get(candidate);
     if (exact) {
       return exact.pricing;
     }
   }
-  for (const candidate of buildOpenRouterExactCandidates(params.ref)) {
+  for (const candidate of candidates) {
     const normalized = canonicalizeOpenRouterLookupId(candidate);
     if (!normalized) {
       continue;
@@ -523,6 +766,24 @@ function resolveCatalogPricingForRef(params: {
     const match = params.catalogByNormalizedId.get(normalized);
     if (match) {
       return match.pricing;
+    }
+  }
+  return undefined;
+}
+
+function resolveLiteLLMPricingForRef(params: {
+  ref: ModelRef;
+  policies: ReadonlyMap<string, ExternalPricingPolicy>;
+  catalog: LiteLLMPricingCatalog;
+}): CachedModelPricing | undefined {
+  for (const candidate of buildExternalCatalogCandidates({
+    ref: params.ref,
+    source: "liteLLM",
+    policies: params.policies,
+  })) {
+    const pricing = params.catalog.get(candidate);
+    if (pricing) {
+      return pricing;
     }
   }
   return undefined;
@@ -538,6 +799,27 @@ function scheduleRefresh(params: { config: OpenClawConfig; fetchImpl: typeof fet
   }, CACHE_TTL_MS);
 }
 
+function collectSeededPricing(params: {
+  config: OpenClawConfig;
+  refs: readonly ModelRef[];
+  catalogPricing: ReadonlyMap<string, CachedModelPricing>;
+}): Map<string, CachedModelPricing> {
+  const seeded = new Map<string, CachedModelPricing>();
+  for (const ref of params.refs) {
+    const key = modelKey(ref.provider, ref.model);
+    const configuredPricing = getConfiguredModelPricing(params.config, ref);
+    if (configuredPricing) {
+      seeded.set(key, configuredPricing);
+      continue;
+    }
+    const catalogPricing = params.catalogPricing.get(key);
+    if (catalogPricing) {
+      seeded.set(key, catalogPricing);
+    }
+  }
+  return seeded;
+}
+
 export async function refreshGatewayModelPricingCache(params: {
   config: OpenClawConfig;
   fetchImpl?: typeof fetch;
@@ -547,9 +829,21 @@ export async function refreshGatewayModelPricingCache(params: {
   }
   const fetchImpl = params.fetchImpl ?? fetch;
   inFlightRefresh = (async () => {
-    const refs = collectConfiguredModelPricingRefs(params.config);
+    const pricingContext = loadManifestPricingContext(params.config);
+    const allRefs = collectConfiguredModelPricingRefs(params.config);
+    const seededPricing = collectSeededPricing({
+      config: params.config,
+      refs: allRefs,
+      catalogPricing: pricingContext.catalogPricing,
+    });
+    const refs = filterExternalPricingRefs({
+      config: params.config,
+      refs: allRefs,
+      policies: pricingContext.policies,
+      seededPricing,
+    });
     if (refs.length === 0) {
-      replaceGatewayModelPricingCache(new Map());
+      replaceGatewayModelPricingCache(seededPricing);
       clearRefreshTimer();
       return;
     }
@@ -580,11 +874,12 @@ export async function refreshGatewayModelPricingCache(params: {
       catalogByNormalizedId.set(normalizedId, entry);
     }
 
-    const nextPricing = new Map<string, CachedModelPricing>();
+    const nextPricing = new Map<string, CachedModelPricing>(seededPricing);
     for (const ref of refs) {
       // 1. Try OpenRouter first (existing behavior — flat pricing)
       const openRouterPricing = resolveCatalogPricingForRef({
         ref,
+        policies: pricingContext.policies,
         catalogById,
         catalogByNormalizedId,
       });
@@ -592,6 +887,7 @@ export async function refreshGatewayModelPricingCache(params: {
       // 2. Try LiteLLM (may contain tiered pricing)
       const litellmPricing = resolveLiteLLMPricingForRef({
         ref,
+        policies: pricingContext.policies,
         catalog: litellmCatalog,
       });
 

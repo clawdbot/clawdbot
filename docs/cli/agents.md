@@ -11,9 +11,9 @@ Manage isolated agents (workspaces + auth + routing).
 
 Related:
 
-- Multi-agent routing: [Multi-Agent Routing](/concepts/multi-agent)
-- Agent workspace: [Agent workspace](/concepts/agent-workspace)
-- Skill visibility config: [Skills config](/tools/skills-config)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Agent workspace](/concepts/agent-workspace)
+- [Skills config](/tools/skills-config): skill visibility configuration.
 
 ## Examples
 
@@ -34,10 +34,7 @@ openclaw agents delete work
 
 Use routing bindings to pin inbound channel traffic to a specific agent.
 
-If you also want different visible skills per agent, configure
-`agents.defaults.skills` and `agents.list[].skills` in `openclaw.json`. See
-[Skills config](/tools/skills-config) and
-[Configuration Reference](/gateway/config-agents#agents-defaults-skills).
+If you also want different visible skills per agent, configure `agents.defaults.skills` and `agents.list[].skills` in `openclaw.json`. See [Skills config](/tools/skills-config) and [Configuration reference](/gateway/config-agents#agents-defaults-skills).
 
 List bindings:
 

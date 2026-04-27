@@ -860,6 +860,10 @@ function mergeCronFailureAlert(
         : -1;
     next.cooldownMs = cooldownMs >= 0 ? Math.floor(cooldownMs) : undefined;
   }
+  if ("includeSkipped" in patch) {
+    next.includeSkipped =
+      typeof patch.includeSkipped === "boolean" ? patch.includeSkipped : undefined;
+  }
   if ("mode" in patch) {
     const mode = normalizeOptionalString(patch.mode) ?? "";
     next.mode = mode === "announce" || mode === "webhook" ? mode : undefined;

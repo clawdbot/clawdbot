@@ -1,4 +1,4 @@
-import { normalizeConfiguredMcpServers } from "../config/mcp-config.js";
+import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadEnabledBundleMcpConfig,

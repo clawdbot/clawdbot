@@ -49,6 +49,12 @@ vi.mock("../commands/models/list.js", () => ({
   modelsListCommand: mocks.noopAsync,
   modelsStatusCommand: mocks.modelsStatusCommand,
 }));
+vi.mock("../commands/models/list.list-command.js", () => ({
+  modelsListCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/list.status-command.js", () => ({
+  modelsStatusCommand: mocks.modelsStatusCommand,
+}));
 vi.mock("../commands/models/auth.js", () => ({
   modelsAuthAddCommand: mocks.modelsAuthAddCommand,
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,

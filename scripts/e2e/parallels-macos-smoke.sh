@@ -13,6 +13,7 @@ API_KEY_ENV=""
 AUTH_CHOICE=""
 AUTH_KEY_FLAG=""
 MODEL_ID=""
+MODEL_ID_EXPLICIT=0
 INSTALL_URL="https://openclaw.ai/install.sh"
 HOST_PORT="18425"
 HOST_PORT_EXPLICIT=0
@@ -52,7 +53,7 @@ TIMEOUT_UPDATE_DEV_S="${OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S:-1200}"
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=180
-TIMEOUT_AGENT_S=240
+TIMEOUT_AGENT_S="${OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S:-240}"
 TIMEOUT_PERMISSION_S=60
 TIMEOUT_DASHBOARD_S=180
 TIMEOUT_SNAPSHOT_S=360
@@ -142,6 +143,8 @@ Options:
                              both    = run both lanes
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
+  --model <provider/model>    Override the model used for the agent-turn smoke.
+                             Default: openai/gpt-5.5 for the OpenAI lane
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
@@ -182,6 +185,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --provider)
       PROVIDER="$2"
+      shift 2
+      ;;
+    --model)
+      MODEL_ID="$2"
+      MODEL_ID_EXPLICIT=1
       shift 2
       ;;
     --api-key-env|--openai-api-key-env)
@@ -258,19 +266,19 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    MODEL_ID="openai/gpt-5.5"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.5}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
     AUTH_CHOICE="apiKey"
     AUTH_KEY_FLAG="anthropic-api-key"
-    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_ANTHROPIC_MODEL:-anthropic/claude-sonnet-4-6}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
     ;;
   minimax)
     AUTH_CHOICE="minimax-global-api"
     AUTH_KEY_FLAG="minimax-api-key"
-    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_MINIMAX_MODEL:-minimax/MiniMax-M2.7}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
     ;;
   *)
@@ -1141,6 +1149,7 @@ run_dev_channel_update() {
 rm -rf $(shell_quote "$update_root")
 export PATH=$(shell_quote "$bootstrap_bin:$GUEST_EXEC_PATH")
 /usr/bin/env NODE_OPTIONS=--max-old-space-size=4096 \
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 \
   $GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY update --channel dev --yes --json
 EOF
 )" "$update_log" "$update_done" "$TIMEOUT_UPDATE_DEV_S" "$update_runner"
@@ -1474,11 +1483,28 @@ show_gateway_status_compat() {
 
 verify_turn() {
   guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" models set "$MODEL_ID"
+  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" config set agents.defaults.skipBootstrap true --strict-json
   guest_current_user_sh "$(cat <<EOF
 export PATH=$(shell_quote "$GUEST_EXEC_PATH")
+workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
+mkdir -p "\$workspace/.openclaw"
+cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels macOS smoke test assistant.
+IDENTITY_EOF
+cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "\$workspace/BOOTSTRAP.md"
 exec /usr/bin/env $(shell_quote "$API_KEY_ENV=$API_KEY_VALUE") \
   $(shell_quote "$GUEST_NODE_BIN") $(shell_quote "$GUEST_OPENCLAW_ENTRY") agent \
   --agent main \
+  --session-id parallels-macos-smoke \
   --message $(shell_quote "Reply with exact ASCII text OK only.") \
   --json
 EOF
@@ -1526,7 +1552,7 @@ if [ -z "\$dashboard_port" ] || [ "\$dashboard_port" = "\$dashboard_http_url" ];
   echo "failed to parse dashboard port from \$dashboard_http_url" >&2
   exit 1
 fi
-deadline=\$((SECONDS + 30))
+deadline=\$((SECONDS + 120))
 dashboard_ready=0
 while [ \$SECONDS -lt \$deadline ]; do
   if curl -fsSL --connect-timeout 2 --max-time 5 "\$dashboard_http_url" >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then

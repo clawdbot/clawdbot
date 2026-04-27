@@ -29,7 +29,7 @@ jobs:
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
-      - name: Mark stale issues and pull requests (primary)
+      - name: Mark stale unassigned issues and pull requests (primary)
         id: stale-primary
         continue-on-error: true
         uses: actions/stale@v10
@@ -41,7 +41,7 @@ jobs:
           days-before-pr-close: 3
           stale-issue-label: stale
           stale-pr-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
@@ -56,11 +56,59 @@ jobs:
           close-issue-message: |
             Closing due to inactivity.
             If this is still an issue, please retry on the latest OpenClaw release and share updated details.
-            If you are absolutely sure it still happens on the latest release, open a new issue with fresh repro steps.
+            If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
           close-issue-reason: not_planned
           close-pr-message: |
             Closing due to inactivity.
-            If you believe this PR should be revived, post in #pr-thunderdome-dangerzone on Discord to talk to a maintainer.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
+            That channel is the escape hatch for high-quality PRs that get auto-closed.
+      - name: Mark stale assigned issues (primary)
+        id: assigned-issue-stale-primary
+        continue-on-error: true
+        uses: actions/stale@v10
+        with:
+          repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          days-before-issue-stale: 30
+          days-before-issue-close: 10
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
+          operations-per-run: 2000
+          ascending: true
+          include-only-assigned: true
+          remove-stale-when-updated: true
+          stale-issue-message: |
+            This assigned issue has been automatically marked as stale after 30 days of inactivity.
+            Please add updates or it will be closed.
+          close-issue-message: |
+            Closing due to inactivity.
+            If this is still an issue, please retry on the latest OpenClaw release and share updated details.
+            If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
+          close-issue-reason: not_planned
+      - name: Mark stale assigned pull requests (primary)
+        id: assigned-stale-primary
+        continue-on-error: true
+        uses: actions/stale@v10
+        with:
+          repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          days-before-pr-stale: 27
+          days-before-pr-close: 3
+          stale-pr-label: stale
+          exempt-pr-labels: maintainer,no-stale,bad-barnacle
+          operations-per-run: 2000
+          ascending: true
+          include-only-assigned: true
+          ignore-pr-updates: true
+          remove-stale-when-updated: true
+          stale-pr-message: |
+            This assigned pull request has been automatically marked as stale after being open for 27 days.
+            Please add updates or it will be closed.
+          close-pr-message: |
+            Closing due to inactivity.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Check stale state cache
         id: stale-state
@@ -86,7 +134,7 @@ jobs:
               core.warning(`Failed to check stale state cache: ${message}`);
               core.setOutput("has_state", "false");
             }
-      - name: Mark stale issues and pull requests (fallback)
+      - name: Mark stale unassigned issues and pull requests (fallback)
         if: (steps.stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
         uses: actions/stale@v10
         with:
@@ -97,7 +145,7 @@ jobs:
           days-before-pr-close: 3
           stale-issue-label: stale
           stale-pr-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
@@ -112,11 +160,57 @@ jobs:
           close-issue-message: |
             Closing due to inactivity.
             If this is still an issue, please retry on the latest OpenClaw release and share updated details.
-            If you are absolutely sure it still happens on the latest release, open a new issue with fresh repro steps.
+            If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
           close-issue-reason: not_planned
           close-pr-message: |
             Closing due to inactivity.
-            If you believe this PR should be revived, post in #pr-thunderdome-dangerzone on Discord to talk to a maintainer.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
+            That channel is the escape hatch for high-quality PRs that get auto-closed.
+      - name: Mark stale assigned issues (fallback)
+        if: (steps.assigned-issue-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
+        uses: actions/stale@v10
+        with:
+          repo-token: ${{ steps.app-token-fallback.outputs.token }}
+          days-before-issue-stale: 30
+          days-before-issue-close: 10
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
+          operations-per-run: 2000
+          ascending: true
+          include-only-assigned: true
+          remove-stale-when-updated: true
+          stale-issue-message: |
+            This assigned issue has been automatically marked as stale after 30 days of inactivity.
+            Please add updates or it will be closed.
+          close-issue-message: |
+            Closing due to inactivity.
+            If this is still an issue, please retry on the latest OpenClaw release and share updated details.
+            If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
+          close-issue-reason: not_planned
+      - name: Mark stale assigned pull requests (fallback)
+        if: (steps.assigned-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
+        uses: actions/stale@v10
+        with:
+          repo-token: ${{ steps.app-token-fallback.outputs.token }}
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          days-before-pr-stale: 27
+          days-before-pr-close: 3
+          stale-pr-label: stale
+          exempt-pr-labels: maintainer,no-stale,bad-barnacle
+          operations-per-run: 2000
+          ascending: true
+          include-only-assigned: true
+          ignore-pr-updates: true
+          remove-stale-when-updated: true
+          stale-pr-message: |
+            This assigned pull request has been automatically marked as stale after being open for 27 days.
+            Please add updates or it will be closed.
+          close-pr-message: |
+            Closing due to inactivity.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
 
   lock-closed-issues:

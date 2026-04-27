@@ -138,6 +138,59 @@ describe("cron store", () => {
     });
   });
 
+  it("compares split state identity for flat legacy cron rows", async () => {
+    const { storePath } = await makeStorePath();
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "legacy-flat-cron",
+              name: "legacy flat cron",
+              enabled: true,
+              kind: "cron",
+              cron: "*/10 * * * *",
+              tz: "UTC",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            "legacy-flat-cron": {
+              updatedAtMs: 1,
+              scheduleIdentity: JSON.stringify({
+                version: 1,
+                enabled: true,
+                schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+              }),
+              state: { nextRunAtMs: 123 },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = await loadCronStore(storePath);
+
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+  });
+
   it("does not create a backup file when saving unchanged content", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-1", true);
@@ -199,8 +252,51 @@ describe("cron store", () => {
     expect(stateFile.jobs[first.jobs[0].id].state.nextRunAtMs).toBe(
       first.jobs[0].createdAtMs + 60_000,
     );
+    expect(typeof stateFile.jobs[first.jobs[0].id].scheduleIdentity).toBe("string");
 
     await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
+  });
+
+  it("drops stale split runtime nextRunAtMs when schedule identity changes across restart", async () => {
+    const { storePath } = await makeStorePath();
+    const payload = makeStore("job-restart-drift", true);
+    const staleNextRunAtMs = payload.jobs[0].createdAtMs + 3_600_000;
+    payload.jobs[0].schedule = { kind: "cron", expr: "0 6 * * *", tz: "UTC" };
+    payload.jobs[0].state = { nextRunAtMs: staleNextRunAtMs };
+
+    await saveCronStore(storePath, payload);
+
+    const config = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    config.jobs[0].schedule = { kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" };
+    await fs.writeFile(storePath, JSON.stringify(config, null, 2), "utf-8");
+
+    const loaded = await loadCronStore(storePath);
+
+    expect(loaded.jobs[0]?.schedule).toEqual({ kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" });
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+  });
+
+  it("drops stale split runtime nextRunAtMs in sync loads when schedule identity changes", async () => {
+    const { storePath } = await makeStorePath();
+    const payload = makeStore("job-sync-restart-drift", true);
+    const staleNextRunAtMs = payload.jobs[0].createdAtMs + 3_600_000;
+    payload.jobs[0].schedule = { kind: "every", everyMs: 60_000, anchorMs: 1 };
+    payload.jobs[0].state = { nextRunAtMs: staleNextRunAtMs };
+
+    await saveCronStore(storePath, payload);
+
+    const config = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    config.jobs[0].schedule = { kind: "every", everyMs: 60_000, anchorMs: 2 };
+    await fs.writeFile(storePath, JSON.stringify(config, null, 2), "utf-8");
+
+    const loaded = loadCronStoreSync(storePath);
+
+    expect(loaded.jobs[0]?.schedule).toEqual({ kind: "every", everyMs: 60_000, anchorMs: 2 });
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
   });
 
   it("keeps state separate for custom store paths without a json suffix", async () => {

@@ -929,7 +929,12 @@ describe("QmdMemoryManager", () => {
         const child = createMockChild({ autoClose: false });
         const pathArg = args[2] ?? "";
         const name = args[args.indexOf("--name") + 1] ?? "";
-        const pattern = args[args.indexOf("--glob") + 1] ?? args[args.indexOf("--mask") + 1] ?? "";
+        const patternIndex = args.includes("--glob")
+          ? args.indexOf("--glob") + 1
+          : args.includes("--mask")
+            ? args.indexOf("--mask") + 1
+            : -1;
+        const pattern = patternIndex >= 0 ? (args[patternIndex] ?? "") : "";
         const hasConflict = [...listedCollections.entries()].some(
           ([existingName, info]) =>
             existingName !== name && info.path === pathArg && info.pattern === pattern,
@@ -1023,7 +1028,12 @@ describe("QmdMemoryManager", () => {
       if (args[0] === "collection" && args[1] === "add") {
         const child = createMockChild({ autoClose: false });
         const name = args[args.indexOf("--name") + 1] ?? "";
-        const pattern = args[args.indexOf("--glob") + 1] ?? args[args.indexOf("--mask") + 1] ?? "";
+        const patternIndex = args.includes("--glob")
+          ? args.indexOf("--glob") + 1
+          : args.includes("--mask")
+            ? args.indexOf("--mask") + 1
+            : -1;
+        const pattern = patternIndex >= 0 ? (args[patternIndex] ?? "") : "";
         const attempts = addAttempts.get(name) ?? 0;
         addAttempts.set(name, attempts + 1);
         if (name === "memory-root-main" && attempts === 0) {
@@ -1097,7 +1107,12 @@ describe("QmdMemoryManager", () => {
       if (args[0] === "collection" && args[1] === "add") {
         const child = createMockChild({ autoClose: false });
         const name = args[args.indexOf("--name") + 1] ?? "";
-        const pattern = args[args.indexOf("--glob") + 1] ?? args[args.indexOf("--mask") + 1] ?? "";
+        const patternIndex = args.includes("--glob")
+          ? args.indexOf("--glob") + 1
+          : args.includes("--mask")
+            ? args.indexOf("--mask") + 1
+            : -1;
+        const pattern = patternIndex >= 0 ? (args[patternIndex] ?? "") : "";
         added.set(name, pattern);
         queueMicrotask(() => child.closeWith(0));
         return child;
@@ -1113,7 +1128,7 @@ describe("QmdMemoryManager", () => {
     expect(removed).not.toContain("memory-dir-main");
   });
 
-  it("falls back to --mask when qmd collection add rejects --glob", async () => {
+  it("falls back to --glob when qmd collection add rejects --mask", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -1137,8 +1152,8 @@ describe("QmdMemoryManager", () => {
         const child = createMockChild({ autoClose: false });
         const flag = args.includes("--glob") ? "--glob" : args.includes("--mask") ? "--mask" : "";
         addFlagCalls.push(flag);
-        if (flag === "--glob") {
-          emitAndClose(child, "stderr", "unknown flag: --glob", 1);
+        if (flag === "--mask") {
+          emitAndClose(child, "stderr", "unknown flag: --mask", 1);
           return child;
         }
         queueMicrotask(() => child.closeWith(0));
@@ -1150,7 +1165,7 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager({ mode: "full" });
     await manager.close();
 
-    expect(addFlagCalls).toEqual(["--glob", "--mask", "--mask"]);
+    expect(addFlagCalls).toEqual(["--mask", "--glob", "--glob"]);
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("retrying with legacy compatibility flag"),
     );

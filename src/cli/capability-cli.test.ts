@@ -170,6 +170,10 @@ vi.mock("../commands/models/list.js", () => ({
   modelsStatusCommand:
     mocks.modelsStatusCommand as typeof import("../commands/models/list.js").modelsStatusCommand,
 }));
+vi.mock("../commands/models/list.status-command.js", () => ({
+  modelsStatusCommand:
+    mocks.modelsStatusCommand as typeof import("../commands/models/list.status-command.js").modelsStatusCommand,
+}));
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway as typeof import("../gateway/call.js").callGateway,

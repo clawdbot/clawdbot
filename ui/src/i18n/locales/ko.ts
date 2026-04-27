@@ -274,6 +274,8 @@ export const ko: TranslationMap = {
       tailscaleDocsLink: "문서: Tailscale Serve",
       insecureHttpDocsTitle: "안전하지 않은 HTTP 문서(새 탭에서 열림)",
       insecureHttpDocsLink: "문서: 안전하지 않은 HTTP",
+      copyCommand: "명령 복사",
+      copyCommandAria: "명령 복사: {command}",
     },
     cards: {
       cost: "비용",
@@ -309,6 +311,30 @@ export const ko: TranslationMap = {
     palette: {
       placeholder: "명령을 입력하세요…",
       noResults: "결과 없음",
+      categories: {
+        search: "검색",
+        navigation: "탐색",
+        skills: "Skills",
+      },
+      items: {
+        overview: "개요",
+        sessions: "세션",
+        scheduled: "예약됨",
+        skills: "Skills",
+        settings: "설정",
+        agents: "에이전트",
+        shellCommand: "셸 명령",
+        debugMode: "디버그 모드",
+      },
+      descriptions: {
+        shellCommand: "셸 실행",
+        debugMode: "디버그 전환",
+      },
+      footer: {
+        navigate: "탐색",
+        select: "선택",
+        close: "닫기",
+      },
     },
   },
   dreaming: {
@@ -322,6 +348,15 @@ export const ko: TranslationMap = {
       refreshing: "새로 고치는 중…",
       on: "드리밍 켜짐",
       off: "드리밍 꺼짐",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "드리밍 활성",

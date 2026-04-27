@@ -96,9 +96,11 @@ describe("agent defaults schema", () => {
     const result = AgentDefaultsSchema.parse({
       compaction: {
         truncateAfterCompaction: true,
+        maxActiveTranscriptBytes: "20mb",
       },
     })!;
     expect(result.compaction?.truncateAfterCompaction).toBe(true);
+    expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 
   it("accepts focused contextLimits on defaults and agent entries", () => {

@@ -12,8 +12,7 @@ The Gateway serves a small **browser Control UI** (Vite + Lit) from the same por
 - with `gateway.tls.enabled: true`: `https://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
-Capabilities live in [Control UI](/web/control-ui).
-This page focuses on bind modes, security, and web-facing surfaces.
+Capabilities live in [Control UI](/web/control-ui). The rest of this page focuses on bind modes, security, and web-facing surfaces.
 
 ## Webhooks
 

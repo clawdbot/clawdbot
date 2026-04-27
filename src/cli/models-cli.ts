@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { modelsListCommand, modelsStatusCommand } from "../commands/models/list.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -35,6 +34,7 @@ export function registerModelsCli(program: Command) {
     .option("--plain", "Plain line output", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const { modelsListCommand } = await import("../commands/models/list.list-command.js");
         await modelsListCommand(opts, defaultRuntime);
       });
     });
@@ -71,6 +71,7 @@ export function registerModelsCli(program: Command) {
       const agent =
         resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
       await runModelsCommand(async () => {
+        const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
         await modelsStatusCommand(
           {
             json: Boolean(opts.json),
@@ -270,6 +271,7 @@ export function registerModelsCli(program: Command) {
 
   models.action(async (opts) => {
     await runModelsCommand(async () => {
+      const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
       await modelsStatusCommand(
         {
           json: Boolean(opts?.statusJson),

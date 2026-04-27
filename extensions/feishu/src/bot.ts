@@ -38,6 +38,7 @@ import {
 } from "./bot-runtime-api.js";
 import type { ClawdbotConfig, RuntimeEnv } from "./bot-runtime-api.js";
 import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
+import { getChatInfo } from "./chat.js";
 import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
@@ -59,6 +60,7 @@ import {
   type FeishuMessageContext,
   type FeishuMediaInfo,
   type FeishuMessageInfo,
+  type ResolvedFeishuAccount,
 } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -68,6 +70,86 @@ export { toMessageResourceType } from "./bot-content.js";
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
+const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const GROUP_NAME_CACHE_MAX_SIZE = 500; // hard cap
+
+function evictGroupNameCache(): void {
+  const now = Date.now();
+  for (const [key, val] of groupNameCache) {
+    if (val.expiresAt <= now) {
+      groupNameCache.delete(key);
+    }
+  }
+
+  if (groupNameCache.size > GROUP_NAME_CACHE_MAX_SIZE) {
+    const excess = groupNameCache.size - GROUP_NAME_CACHE_MAX_SIZE;
+    let removed = 0;
+    for (const key of groupNameCache.keys()) {
+      if (removed >= excess) {
+        break;
+      }
+      groupNameCache.delete(key);
+      removed++;
+    }
+  }
+}
+
+function setCacheEntry(key: string, value: { name: string; expiresAt: number }): void {
+  groupNameCache.delete(key);
+  groupNameCache.set(key, value);
+}
+
+export function clearGroupNameCache(): void {
+  groupNameCache.clear();
+}
+
+export async function resolveGroupName(params: {
+  account: ResolvedFeishuAccount;
+  chatId: string;
+  log: (...args: unknown[]) => void;
+}): Promise<string | undefined> {
+  const { account, chatId, log } = params;
+  if (!account.configured) {
+    return undefined;
+  }
+
+  const cacheKey = `${account.accountId}:${chatId}`;
+
+  const cached = groupNameCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.name || undefined;
+  }
+
+  try {
+    const client = createFeishuClient(account);
+    const chatInfo = await getChatInfo(client, chatId);
+    const name = chatInfo?.name?.trim();
+    if (name) {
+      setCacheEntry(cacheKey, {
+        name,
+        expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
+      });
+    } else {
+      setCacheEntry(cacheKey, {
+        name: "",
+        expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
+      });
+    }
+  } catch (err) {
+    log(`feishu[${account.accountId}]: getChatInfo failed for ${chatId}: ${String(err)}`);
+    setCacheEntry(cacheKey, {
+      name: "",
+      expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
+    });
+  }
+
+  const result = groupNameCache.get(cacheKey)?.name || undefined;
+  evictGroupNameCache();
+
+  return result;
+}
 
 async function resolveFeishuAudioPreflightTranscript(params: {
   cfg: ClawdbotConfig;
@@ -932,7 +1014,20 @@ export async function handleFeishuMessage(params: {
       }
       return rootMessageInfo ?? null;
     };
-    const resolveThreadContextForAgent = async (agentId: string, agentSessionKey: string) => {
+    let groupNamePromise: Promise<string | undefined> | undefined;
+    const resolveGroupNameForLabel = (): Promise<string | undefined> => {
+      if (!isGroup) {
+        return Promise.resolve(undefined);
+      }
+      groupNamePromise ??= resolveGroupName({ account, chatId: ctx.chatId, log });
+      return groupNamePromise;
+    };
+
+    const resolveThreadContextForAgent = async (
+      agentId: string,
+      agentSessionKey: string,
+      groupName: string | undefined,
+    ) => {
       const cached = threadContextBySessionKey.get(agentSessionKey);
       if (cached) {
         return cached;
@@ -945,7 +1040,7 @@ export async function handleFeishuMessage(params: {
       } = {
         threadLabel:
           (ctx.rootId || ctx.threadId) && isTopicSessionForThread
-            ? `Feishu thread in ${ctx.chatId}`
+            ? `Feishu thread in ${groupName ?? ctx.chatId}`
             : undefined,
       };
 
@@ -1047,7 +1142,8 @@ export async function handleFeishuMessage(params: {
       agentAccountId: string,
       wasMentioned: boolean,
     ) => {
-      const threadContext = await resolveThreadContextForAgent(agentId, agentSessionKey);
+      const groupName = await resolveGroupNameForLabel();
+      const threadContext = await resolveThreadContextForAgent(agentId, agentSessionKey, groupName);
       return core.channel.reply.finalizeInboundContext({
         Body: combinedBody,
         BodyForAgent: messageBody,
@@ -1062,7 +1158,8 @@ export async function handleFeishuMessage(params: {
         SessionKey: agentSessionKey,
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
-        GroupSubject: isGroup ? ctx.chatId : undefined,
+        GroupSubject: isGroup ? groupName || ctx.chatId : undefined,
+        ConversationLabel: isGroup && groupName && !isTopicSessionForThread ? groupName : undefined,
         SenderName: ctx.senderName ?? ctx.senderOpenId,
         SenderId: ctx.senderOpenId,
         Provider: "feishu" as const,

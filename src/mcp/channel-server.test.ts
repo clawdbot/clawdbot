@@ -2,6 +2,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
+import { GatewayClientRequestError } from "../gateway/client.js";
+import { shouldRetryInitialMcpGatewayConnect } from "./channel-bridge.js";
 import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
 import { extractAttachmentsFromMessage } from "./channel-shared.js";
 
@@ -73,6 +75,30 @@ async function flushMcpNotifications() {
 }
 
 describe("openclaw channel mcp server", () => {
+  test("keeps initial MCP gateway connection alive through transient connect errors", () => {
+    expect(
+      shouldRetryInitialMcpGatewayConnect(new Error("gateway request timeout for connect")),
+    ).toBe(true);
+    expect(
+      shouldRetryInitialMcpGatewayConnect(
+        new GatewayClientRequestError({
+          code: "BUSY",
+          message: "gateway busy",
+          retryable: true,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryInitialMcpGatewayConnect(
+        new GatewayClientRequestError({
+          code: "UNAUTHORIZED",
+          message: "auth failed",
+          retryable: false,
+        }),
+      ),
+    ).toBe(false);
+  });
+
   describe("gateway-backed flows", () => {
     describe("gateway integration", () => {
       test("lists conversations and reads messages", async () => {
@@ -93,7 +119,7 @@ describe("openclaw channel mcp server", () => {
               ],
             };
           }
-          if (method === "chat.history") {
+          if (method === "sessions.get") {
             return {
               messages: [
                 {

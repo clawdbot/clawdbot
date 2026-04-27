@@ -150,4 +150,14 @@ describe("enablePluginInConfig", () => {
       assert,
     });
   });
+
+  it("can enable a built-in channel plugin entry without mutating channel config", () => {
+    const result = enablePluginInConfig({} as OpenClawConfig, "twitch", {
+      updateChannelConfig: false,
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.twitch?.enabled).toBe(true);
+    expect(result.config.channels?.twitch).toBeUndefined();
+  });
 });

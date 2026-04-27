@@ -380,6 +380,10 @@
     "target": "插件 SDK"
   },
   {
+    "source": "Plugins",
+    "target": "插件"
+  },
+  {
     "source": "Building plugins",
     "target": "构建插件"
   },
@@ -434,6 +438,30 @@
   {
     "source": "Setup",
     "target": "设置"
+  },
+  {
+    "source": "Migrate",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating from Hermes",
+    "target": "从 Hermes 迁移"
+  },
+  {
+    "source": "Migration",
+    "target": "迁移"
+  },
+  {
+    "source": "Hermes",
+    "target": "Hermes"
+  },
+  {
+    "source": "Archive-only",
+    "target": "仅归档"
   },
   {
     "source": "Channel Plugin SDK",

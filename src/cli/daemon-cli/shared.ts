@@ -144,7 +144,7 @@ export function normalizeListenerAddress(raw: string): string {
 }
 
 export function renderRuntimeHints(
-  runtime: { missingUnit?: boolean; status?: string } | undefined,
+  runtime: { missingUnit?: boolean; missingSupervision?: boolean; status?: string } | undefined,
   env: NodeJS.ProcessEnv = process.env,
   logFile?: string | null,
 ): string[] {
@@ -155,6 +155,15 @@ export function renderRuntimeHints(
   const fileLog = logFile ?? null;
   if (runtime.missingUnit) {
     hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
+    if (fileLog) {
+      hints.push(`File logs: ${fileLog}`);
+    }
+    return hints;
+  }
+  if (runtime.missingSupervision) {
+    hints.push(
+      `LaunchAgent installed but not loaded. Run: ${formatCliCommand("openclaw gateway restart", env)}`,
+    );
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }

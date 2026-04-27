@@ -342,20 +342,54 @@ function resolveSystemctlDirectUserScopeArgs(): string[] {
   return ["--user"];
 }
 
-function resolveSystemctlMachineScopeUser(env: GatewayServiceEnv): string | null {
-  const sudoUser = env.SUDO_USER?.trim();
-  if (sudoUser && sudoUser !== "root") {
-    return sudoUser;
-  }
-  const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
+function readSystemctlEnvUser(env: GatewayServiceEnv): string | null {
+  return env.USER?.trim() || env.LOGNAME?.trim() || null;
+}
+
+function readSystemctlEffectiveUser(): string | null {
   try {
     return os.userInfo().username;
   } catch {
     return null;
   }
+}
+
+function readSystemctlEffectiveUid(): number | null {
+  if (typeof process.geteuid !== "function") {
+    return null;
+  }
+  try {
+    return process.geteuid();
+  } catch {
+    return null;
+  }
+}
+
+function isNonRootUser(user: string | null): user is string {
+  return Boolean(user && user !== "root");
+}
+
+function resolveSystemctlUserScope(env: GatewayServiceEnv): {
+  machineUser: string | null;
+  preferMachineScope: boolean;
+} {
+  const sudoUser = env.SUDO_USER?.trim() || null;
+  const envUser = readSystemctlEnvUser(env);
+  const effectiveUid = readSystemctlEffectiveUid();
+  const effectiveUser = readSystemctlEffectiveUser();
+  const isEffectiveRoot = effectiveUid === null ? effectiveUser === "root" : effectiveUid === 0;
+  const isSudoToRoot = isEffectiveRoot && isNonRootUser(sudoUser);
+  const machineUser = isSudoToRoot
+    ? sudoUser
+    : isNonRootUser(envUser)
+      ? envUser
+      : isNonRootUser(sudoUser)
+        ? sudoUser
+        : effectiveUser || envUser || sudoUser || null;
+  return {
+    machineUser,
+    preferMachineScope: isSudoToRoot,
+  };
 }
 
 function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
@@ -380,11 +414,10 @@ async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  const machineUser = resolveSystemctlMachineScopeUser(env);
-  const sudoUser = env.SUDO_USER?.trim();
+  const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
 
-  // Under sudo, prefer the invoking non-root user's scope directly via machine scope.
-  if (sudoUser && sudoUser !== "root" && machineUser) {
+  // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
+  if (preferMachineScope && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
       // Do not fall through to bare --user: under sudo that can target root's user manager.
@@ -554,9 +587,19 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
   const serviceName = resolveSystemdServiceName(params.env);
   const unitName = `${serviceName}.service`;
   const reloadSystemd = async () => await execSystemctlUser(params.env, ["daemon-reload"]);
+  const throwActivationFailure = (
+    action: "daemon-reload" | "enable" | "restart",
+    result: { stdout: string; stderr: string },
+  ): never => {
+    const detail = readSystemctlDetail(result);
+    if (isSystemdUserScopeUnavailable(detail)) {
+      throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+    }
+    throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
+  };
   const reload = await reloadSystemd();
   if (reload.code !== 0) {
-    throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
+    throwActivationFailure("daemon-reload", reload);
   }
 
   const runAfterReloadRetry = async (action: "enable" | "restart") => {
@@ -566,21 +609,19 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
     }
     const retryReload = await reloadSystemd();
     if (retryReload.code !== 0) {
-      throw new Error(
-        `systemctl daemon-reload failed: ${retryReload.stderr || retryReload.stdout}`.trim(),
-      );
+      throwActivationFailure("daemon-reload", retryReload);
     }
     return await execSystemctlUser(params.env, [action, unitName]);
   };
 
   const enable = await runAfterReloadRetry("enable");
   if (enable.code !== 0) {
-    throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
+    throwActivationFailure("enable", enable);
   }
 
   const restart = await runAfterReloadRetry("restart");
   if (restart.code !== 0) {
-    throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
+    throwActivationFailure("restart", restart);
   }
 }
 

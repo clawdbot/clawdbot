@@ -12,6 +12,13 @@ const getPluginCliCommandDescriptorsMock = vi.fn(
 );
 
 vi.mock("./core-command-descriptors.js", () => ({
+  CORE_CLI_COMMAND_DESCRIPTORS: [
+    {
+      name: "status",
+      description: "Show status",
+      hasSubcommands: false,
+    },
+  ],
   getCoreCliCommandDescriptors: () => [
     {
       name: "status",
@@ -23,6 +30,13 @@ vi.mock("./core-command-descriptors.js", () => ({
 }));
 
 vi.mock("./subcli-descriptors.js", () => ({
+  SUB_CLI_DESCRIPTORS: [
+    {
+      name: "config",
+      description: "Manage config",
+      hasSubcommands: true,
+    },
+  ],
   getSubCliEntries: () => [
     {
       name: "config",

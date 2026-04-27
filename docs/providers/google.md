@@ -308,6 +308,9 @@ Gemini Live API for backend audio bridges such as Voice Call and Google Meet.
 | VAD start sensitivity | `...google.startSensitivity`                                        | (unset)                                                                               |
 | VAD end sensitivity   | `...google.endSensitivity`                                          | (unset)                                                                               |
 | Silence duration      | `...google.silenceDurationMs`                                       | (unset)                                                                               |
+| Activity handling     | `...google.activityHandling`                                        | Google default, `start-of-activity-interrupts`                                        |
+| Turn coverage         | `...google.turnCoverage`                                            | Google default, `only-activity`                                                       |
+| Disable auto VAD      | `...google.automaticActivityDetectionDisabled`                      | `false`                                                                               |
 | API key               | `...google.apiKey`                                                  | Falls back to `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
 
 Example Voice Call realtime config:
@@ -326,6 +329,8 @@ Example Voice Call realtime config:
               google: {
                 model: "gemini-2.5-flash-native-audio-preview-12-2025",
                 voice: "Kore",
+                activityHandling: "start-of-activity-interrupts",
+                turnCoverage: "only-activity",
               },
             },
           },

@@ -1156,6 +1156,7 @@ export async function installPluginFromMarketplace(
       logger: params.logger,
       mode: params.mode,
       extensionsDir: params.extensionsDir,
+      timeoutMs: params.timeoutMs,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
     });

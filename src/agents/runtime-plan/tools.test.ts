@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNativeOpenAIResponsesModel,
   createParameterFreeTool,
@@ -8,7 +8,22 @@ import {
 import { logAgentRuntimeToolDiagnostics, normalizeAgentRuntimeTools } from "./tools.js";
 import type { AgentRuntimePlan } from "./types.js";
 
+const mocks = vi.hoisted(() => ({
+  logProviderToolSchemaDiagnostics: vi.fn(),
+  normalizeProviderToolSchemas: vi.fn(),
+}));
+
+vi.mock("../pi-embedded-runner/tool-schema-runtime.js", () => ({
+  logProviderToolSchemaDiagnostics: mocks.logProviderToolSchemaDiagnostics,
+  normalizeProviderToolSchemas: mocks.normalizeProviderToolSchemas,
+}));
+
 describe("AgentRuntimePlan tool policy helpers", () => {
+  beforeEach(() => {
+    mocks.logProviderToolSchemaDiagnostics.mockReset();
+    mocks.normalizeProviderToolSchemas.mockReset();
+  });
+
   it("uses RuntimePlan-owned tool normalization when a plan is available", () => {
     const tools = [createParameterFreeTool()] as AgentTool[];
     const normalized = [{ ...tools[0], name: "normalized" }] as AgentTool[];
@@ -65,6 +80,13 @@ describe("AgentRuntimePlan tool policy helpers", () => {
   });
 
   it("falls back to legacy provider schema normalization when no plan is available", () => {
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([
+      {
+        ...createParameterFreeTool(),
+        parameters: normalizedParameterFreeSchema(),
+      },
+    ]);
+
     const normalized = normalizeAgentRuntimeTools({
       tools: [createParameterFreeTool()] as AgentTool[],
       provider: "openai",
@@ -75,6 +97,14 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(normalized[0]?.parameters).toEqual(normalizedParameterFreeSchema());
+    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        workspaceDir: "/tmp/openclaw-runtime-plan-tools",
+      }),
+    );
   });
 
   it("routes diagnostics through RuntimePlan when a plan is available", () => {

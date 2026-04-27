@@ -44,23 +44,13 @@ cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
         \"id\": \"GATEWAY_AUTH_TOKEN_REF\"
       }
     },
+    \"channelHealthCheckMinutes\": 1,
     \"controlUi\": {
       \"enabled\": false
     },
     \"reload\": {
       \"mode\": \"hybrid\",
       \"debounceMs\": 0
-    }
-  },
-  \"plugins\": {
-    \"installs\": {
-      \"lossless-claw\": {
-        \"source\": \"npm\",
-        \"spec\": \"@martian-engineering/lossless-claw\",
-        \"installPath\": \"/tmp/lossless-claw\",
-        \"installedAt\": \"2026-04-22T00:00:00.000Z\",
-        \"resolvedAt\": \"2026-04-22T00:00:00.000Z\"
-      }
     }
   }
 }
@@ -110,7 +100,7 @@ entry=dist/index.mjs
 node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 30000 >/tmp/config-reload-status-before.log
 "
 
-echo "Mutating plugin install timestamp metadata..."
+echo "Mutating hot-reload gateway metadata..."
 docker exec "$CONTAINER_NAME" bash -lc "node --input-type=module - <<'NODE'
 import fs from 'node:fs';
 import os from 'node:os';
@@ -118,8 +108,7 @@ import path from 'node:path';
 
 const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-config.plugins.installs['lossless-claw'].installedAt = '2026-04-22T00:01:00.000Z';
-config.plugins.installs['lossless-claw'].resolvedAt = '2026-04-22T00:01:00.000Z';
+config.gateway.channelHealthCheckMinutes = 2;
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 NODE"
 

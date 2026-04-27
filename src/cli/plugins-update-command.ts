@@ -10,6 +10,7 @@ import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
+import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
   resolveHookPackUpdateSelection,
   resolvePluginUpdateSelection,
@@ -92,29 +93,10 @@ export async function runPluginUpdateCommand(params: {
     },
   });
 
-  for (const outcome of pluginResult.outcomes) {
-    if (outcome.status === "error") {
-      defaultRuntime.log(theme.error(outcome.message));
-      continue;
-    }
-    if (outcome.status === "skipped") {
-      defaultRuntime.log(theme.warn(outcome.message));
-      continue;
-    }
-    defaultRuntime.log(outcome.message);
-  }
-
-  for (const outcome of hookResult.outcomes) {
-    if (outcome.status === "error") {
-      defaultRuntime.log(theme.error(outcome.message));
-      continue;
-    }
-    if (outcome.status === "skipped") {
-      defaultRuntime.log(theme.warn(outcome.message));
-      continue;
-    }
-    defaultRuntime.log(outcome.message);
-  }
+  const outcomeSummary = logPluginUpdateOutcomes({
+    outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
+    log: (message) => defaultRuntime.log(message),
+  });
 
   if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
     const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
@@ -145,5 +127,9 @@ export async function runPluginUpdateCommand(params: {
       });
     }
     defaultRuntime.log("Restart the gateway to load plugins and hooks.");
+  }
+
+  if (outcomeSummary.hasErrors) {
+    defaultRuntime.exit(1);
   }
 }

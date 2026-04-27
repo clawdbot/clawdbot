@@ -14,6 +14,7 @@ export function applyProviderNativeStreamingUsagePolicy(
   return (
     applyProviderNativeStreamingUsageCompatWithPlugin({
       provider: runtimeProviderKey,
+      allowRuntimePluginLoad: false,
       context: {
         provider: providerKey,
         providerConfig: provider,
@@ -30,6 +31,7 @@ export function normalizeProviderConfigPolicy(
   return (
     normalizeProviderConfigWithPlugin({
       provider: runtimeProviderKey,
+      allowRuntimePluginLoad: false,
       context: {
         provider: providerKey,
         providerConfig: provider,
@@ -46,6 +48,7 @@ export function resolveProviderConfigApiKeyPolicy(
   return (env) =>
     resolveProviderConfigApiKeyWithPlugin({
       provider: runtimeProviderKey,
+      allowRuntimePluginLoad: false,
       context: {
         provider: providerKey,
         env,

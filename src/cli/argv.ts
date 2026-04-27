@@ -4,15 +4,75 @@ import {
   FLAG_TERMINATOR,
   isValueToken,
 } from "../infra/cli-root-options.js";
+import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
+import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
+const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_DESCRIPTORS];
+const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set(
+  ROOT_COMMAND_DESCRIPTORS.map((descriptor) => descriptor.name),
+);
+const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
+  ROOT_COMMAND_DESCRIPTORS.filter((descriptor) => descriptor.hasSubcommands).map(
+    (descriptor) => descriptor.name,
+  ),
+);
 
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
     argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
   );
+}
+
+export function isHelpOrVersionInvocation(argv: string[]): boolean {
+  if (hasRootVersionAlias(argv)) {
+    return true;
+  }
+
+  const args = argv.slice(2);
+  let sawCommandOption = false;
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const rootConsumed = consumeRootOptionToken(args, i);
+    if (rootConsumed > 0) {
+      i += rootConsumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) {
+      return true;
+    }
+    if (arg.startsWith("-")) {
+      sawCommandOption = true;
+      continue;
+    }
+    positionals.push(arg);
+    if (arg !== "help") {
+      continue;
+    }
+    if (sawCommandOption) {
+      return false;
+    }
+    if (positionals.length === 1) {
+      return true;
+    }
+    const [primary] = positionals;
+    // Positional `help` may be a command argument for known leaf commands.
+    // Unknown roots are treated as plugin command namespaces.
+    if (!primary || !KNOWN_ROOT_COMMANDS.has(primary)) {
+      return true;
+    }
+    if (positionals.length === 2 && ROOT_COMMANDS_WITH_SUBCOMMANDS.has(primary)) {
+      return true;
+    }
+    return false;
+  }
+  return false;
 }
 
 function parsePositiveInt(value: string): number | undefined {

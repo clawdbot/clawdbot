@@ -62,6 +62,24 @@ scenario through qa-channel, decodes the emitted protobuf spans, and verifies
 the exported trace names and privacy contract. It does not require Opik,
 Langfuse, or external collector credentials.
 
+## Matrix live profiles
+
+`pnpm openclaw qa matrix` defaults to the full `all` profile. Use explicit
+profiles for faster CI/release proof:
+
+```bash
+OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
+pnpm openclaw qa matrix --profile fast --fail-fast
+```
+
+- `fast`: release-critical transport contract, excluding generated image and
+  deep E2EE recovery inventory.
+- `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, `e2ee-cli`: sharded full
+  Matrix coverage.
+- `QA-Lab - All Lanes` uses explicit `fast` Matrix on scheduled runs. Manual
+  dispatch keeps `matrix_profile=all` as the default and always shards that full
+  Matrix selection.
+
 ## QA credentials and 1Password
 
 - Use `op` only inside `tmux` for QA secret lookup in this repo.

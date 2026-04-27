@@ -1,9 +1,10 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { CliDeps } from "./deps.types.js";
-import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
-import { createChannelOutboundRuntimeSend } from "./send-runtime/channel-outbound-send.js";
+import {
+  CLI_OUTBOUND_SEND_FACTORY,
+  createOutboundSendDepsFromCliSource,
+} from "./outbound-send-mapping.js";
 
 /**
  * Lazy-loaded per-channel send functions, keyed by channel ID.
@@ -16,6 +17,35 @@ type RuntimeSend = {
 type RuntimeSendModule = {
   runtimeSend: RuntimeSend;
 };
+
+const NON_CHANNEL_DEP_KEYS = new Set([
+  "__proto__",
+  "constructor",
+  "cron",
+  "cronConfig",
+  "cronEnabled",
+  "defaultAgentId",
+  "enqueueSystemEvent",
+  "getQueueSize",
+  "hasOwnProperty",
+  "inspect",
+  "log",
+  "migrateOrphanedSessionKeys",
+  "nowMs",
+  "onEvent",
+  "requestHeartbeatNow",
+  "resolveSessionStorePath",
+  "runHeartbeatOnce",
+  "runIsolatedAgentJob",
+  "runtime",
+  "sendCronFailureAlert",
+  "sessionStorePath",
+  "storePath",
+  "then",
+  "toJSON",
+  "toString",
+  "valueOf",
+]);
 
 // Per-channel module caches for lazy loading.
 const senderCache = new Map<string, Promise<RuntimeSend>>();
@@ -41,22 +71,40 @@ function createLazySender(
 }
 
 export function createDefaultDeps(): CliDeps {
-  // Keep the default dependency barrel limited to lazy senders so callers that
-  // only need outbound deps do not pull channel runtime boundaries on import.
   const deps: CliDeps = {};
-  for (const plugin of listChannelPlugins()) {
-    deps[plugin.id] = createLazySender(
-      plugin.id,
-      async () =>
-        ({
-          runtimeSend: createChannelOutboundRuntimeSend({
-            channelId: plugin.id,
-            unavailableMessage: `${plugin.meta.label ?? plugin.id} outbound adapter is unavailable.`,
-          }) as RuntimeSend,
-        }) satisfies RuntimeSendModule,
-    );
-  }
-  return deps;
+  const resolveSender = (channelId: string) =>
+    createLazySender(channelId, async () => {
+      const { createChannelOutboundRuntimeSend } =
+        await import("./send-runtime/channel-outbound-send.js");
+      return {
+        runtimeSend: createChannelOutboundRuntimeSend({
+          channelId: channelId as import("../channels/plugins/types.public.js").ChannelId,
+          unavailableMessage: `${channelId} outbound adapter is unavailable.`,
+        }) as RuntimeSend,
+      } satisfies RuntimeSendModule;
+    });
+
+  Object.defineProperty(deps, CLI_OUTBOUND_SEND_FACTORY, {
+    configurable: false,
+    enumerable: false,
+    value: resolveSender,
+    writable: false,
+  });
+
+  return new Proxy(deps, {
+    get(target, property, receiver) {
+      if (typeof property !== "string") {
+        return Reflect.get(target, property, receiver);
+      }
+      const existing = Reflect.get(target, property, receiver);
+      if (existing !== undefined || NON_CHANNEL_DEP_KEYS.has(property)) {
+        return existing;
+      }
+      const sender = resolveSender(property);
+      Reflect.set(target, property, sender, receiver);
+      return sender;
+    },
+  });
 }
 
 export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {

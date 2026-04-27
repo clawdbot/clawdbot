@@ -172,9 +172,10 @@ function mapCommand(
 function buildPluginCommandEntries(params: {
   provider?: string;
   nameSurface: CommandNameSurface;
+  cfg: OpenClawConfig;
 }): CommandEntry[] {
   const pluginTextSpecs = listPluginCommands();
-  const pluginNativeSpecs = getPluginCommandSpecs(params.provider);
+  const pluginNativeSpecs = getPluginCommandSpecs(params.provider, { config: params.cfg });
   const entries: CommandEntry[] = [];
 
   for (const [index, textSpec] of pluginTextSpecs.entries()) {
@@ -233,7 +234,7 @@ export function buildCommandsListResult(params: {
     );
   }
 
-  commands.push(...buildPluginCommandEntries({ provider, nameSurface }));
+  commands.push(...buildPluginCommandEntries({ provider, nameSurface, cfg: params.cfg }));
 
   return { commands: commands.slice(0, COMMAND_LIST_MAX_ITEMS) };
 }

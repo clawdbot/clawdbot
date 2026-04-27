@@ -99,6 +99,7 @@ import fs from "node:fs";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
   pinActivePluginChannelRegistry,
@@ -159,37 +160,15 @@ function makeSkipInstallPrompter() {
   return { prompter, select };
 }
 
-function makeManifestRecord(plugin: {
-  id: string;
-  channels?: string[];
-  origin?: "bundled" | "global" | "workspace";
-  activation?: { onChannels?: string[] };
-}) {
-  const rootDir = `/tmp/openclaw-plugins/${plugin.id}`;
-  return {
-    id: plugin.id,
-    origin: plugin.origin ?? "bundled",
-    channels: plugin.channels ?? [],
-    providers: [],
-    cliBackends: [],
-    hooks: [],
-    skills: [],
-    rootDir,
-    source: path.join(rootDir, "index.js"),
-    manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-    ...(plugin.activation ? { activation: plugin.activation } : {}),
-  };
-}
-
 function mockActivationOnlyPlugin(plugin: {
   id: string;
   origin?: "bundled" | "global" | "workspace";
 }) {
   loadPluginManifestRegistry.mockReturnValue({
     plugins: [
-      makeManifestRecord({
+      createManifestRecord({
         id: plugin.id,
-        origin: plugin.origin,
+        ...(plugin.origin === undefined ? {} : { origin: plugin.origin }),
         activation: {
           onChannels: ["external-chat"],
         },
@@ -197,6 +176,27 @@ function mockActivationOnlyPlugin(plugin: {
     ],
     diagnostics: [],
   });
+}
+
+function createManifestRecord(
+  overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
+): PluginManifestRecord {
+  const { id, ...rest } = overrides;
+  return {
+    id,
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    syntheticAuthRefs: [],
+    nonSecretAuthMarkers: [],
+    skills: [],
+    hooks: [],
+    origin: "bundled",
+    rootDir: `/tmp/openclaw-test/${id}`,
+    source: `/tmp/openclaw-test/${id}/index.ts`,
+    manifestPath: `/tmp/openclaw-test/${id}/openclaw.plugin.json`,
+    ...rest,
+  };
 }
 
 function expectSetupSnapshotDoesNotScopeToPlugin(params: {
@@ -216,10 +216,10 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
       onlyPluginIds: [params.pluginId],
     }),
   );
-  expect(
-    (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
-      .onlyPluginIds,
-  ).toBeUndefined();
+  const firstLoadCall = vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as
+    | { onlyPluginIds?: string[] }
+    | undefined;
+  expect(firstLoadCall?.onlyPluginIds).toBeUndefined();
 }
 
 beforeEach(() => {
@@ -427,6 +427,27 @@ describe("ensureChannelSetupPluginInstalled", () => {
           }),
         ]),
       }),
+    );
+  });
+
+  it("uses the bundled default install source without prompting in non-interactive mode", async () => {
+    const runtime = makeRuntime();
+    const { prompter, select } = makeSkipInstallPrompter();
+    const cfg: OpenClawConfig = { update: { channel: "beta" } };
+    mockBundledChatSource();
+
+    const result = await ensureChannelSetupPluginInstalled({
+      cfg,
+      entry: baseEntry,
+      prompter,
+      runtime,
+      promptInstall: false,
+    });
+
+    expect(select).not.toHaveBeenCalled();
+    expect(result.installed).toBe(true);
+    expect(result.cfg.plugins?.load?.paths).toContain(
+      bundledPluginRootAt("/opt/openclaw", "bundled-chat"),
     );
   });
 
@@ -768,7 +789,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const cfg: OpenClawConfig = {};
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
-        makeManifestRecord({
+        createManifestRecord({
           id: "custom-external-chat-plugin",
           channels: ["external-chat"],
         }),

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveEmbeddingTimeoutMs } from "./manager-embedding-ops.js";
+import {
+  resolveEmbeddingTimeoutMs,
+  resolveMemoryIndexConcurrency,
+} from "./manager-embedding-ops.js";
 
 describe("memory embedding timeout resolution", () => {
   it("uses hosted defaults for inline embedding calls", () => {
@@ -31,5 +34,32 @@ describe("memory embedding timeout resolution", () => {
         configuredBatchTimeoutSeconds: 45,
       }),
     ).toBe(45_000);
+  });
+});
+
+describe("memory index concurrency resolution", () => {
+  it("uses the default index concurrency when batch mode is disabled and unconfigured", () => {
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: false, concurrency: 2 },
+      }),
+    ).toBe(4);
+  });
+
+  it("respects configured concurrency even when batch mode is disabled", () => {
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: false, concurrency: 1 },
+        configuredConcurrency: 1,
+      }),
+    ).toBe(1);
+  });
+
+  it("uses resolved batch concurrency when batch mode is enabled", () => {
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: true, concurrency: 3 },
+      }),
+    ).toBe(3);
   });
 });

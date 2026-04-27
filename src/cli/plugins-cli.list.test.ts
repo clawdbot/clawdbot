@@ -71,7 +71,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith();
+    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ effectiveOnly: true });
     expect(runtimeLogs).toContain("No plugin issues detected.");
   });
 

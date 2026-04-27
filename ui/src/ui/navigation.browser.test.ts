@@ -46,6 +46,257 @@ describe("control UI routing", () => {
 
     const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreaming"]');
     expect(dreamsLink).not.toBeNull();
+  });
+
+  it("renders the dreaming view on the /dreaming route", async () => {
+    const app = mountApp("/dreaming");
+    app.dreamingStatus = {
+      enabled: true,
+      timezone: "Europe/Madrid",
+      verboseLogging: false,
+      storageMode: "inline",
+      separateReports: false,
+      shortTermCount: 2,
+      recallSignalCount: 1,
+      dailySignalCount: 1,
+      groundedSignalCount: 0,
+      totalSignalCount: 2,
+      phaseSignalCount: 0,
+      lightPhaseHitCount: 0,
+      remPhaseHitCount: 0,
+      promotedTotal: 1,
+      promotedToday: 1,
+      shortTermEntries: [],
+      signalEntries: [],
+      promotedEntries: [],
+      phases: {
+        light: { enabled: true, cron: "", managedCronPresent: false, lookbackDays: 7, limit: 20 },
+        deep: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          limit: 20,
+          minScore: 0.75,
+          minRecallCount: 3,
+          minUniqueQueries: 2,
+          recencyHalfLifeDays: 7,
+        },
+        rem: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          lookbackDays: 7,
+          limit: 20,
+          minPatternStrength: 0.6,
+        },
+      },
+    };
+    app.dreamDiaryPath = "DREAMS.md";
+    app.dreamDiaryContent = [
+      "# Dream Diary",
+      "",
+      "<!-- openclaw:dreaming:diary:start -->",
+      "",
+      "---",
+      "",
+      "*January 1, 2026*",
+      "",
+      "What Happened",
+      "1. Stable operator rule surfaced.",
+      "",
+      "<!-- openclaw:dreaming:diary:end -->",
+    ].join("\n");
+    app.requestUpdate();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("dreams");
+    expect(app.querySelector(".dreams__tab")).not.toBeNull();
+    expect(app.querySelector(".dreams__lobster")).not.toBeNull();
+  });
+
+  it("requires confirmation before sending dreaming restart patch", async () => {
+    const app = mountApp("/dreaming");
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.schema.lookup") {
+        return {
+          schema: {
+            additionalProperties: true,
+          },
+          children: [{ key: "dreaming" }],
+        };
+      }
+      if (method === "config.patch") {
+        return { ok: true };
+      }
+      if (method === "config.get") {
+        return {
+          hash: "hash-2",
+          config: {
+            plugins: {
+              slots: {
+                memory: "memory-core",
+              },
+              entries: {
+                "memory-core": {
+                  config: {
+                    dreaming: {
+                      enabled: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (method === "doctor.memory.status") {
+        return {
+          dreaming: {
+            enabled: true,
+            timezone: "UTC",
+            verboseLogging: false,
+            storageMode: "inline",
+            separateReports: false,
+            shortTermCount: 0,
+            recallSignalCount: 0,
+            dailySignalCount: 0,
+            groundedSignalCount: 0,
+            totalSignalCount: 0,
+            phaseSignalCount: 0,
+            lightPhaseHitCount: 0,
+            remPhaseHitCount: 0,
+            promotedTotal: 0,
+            promotedToday: 0,
+            shortTermEntries: [],
+            signalEntries: [],
+            promotedEntries: [],
+            phases: {
+              light: {
+                enabled: true,
+                cron: "",
+                managedCronPresent: false,
+                lookbackDays: 7,
+                limit: 20,
+              },
+              deep: {
+                enabled: true,
+                cron: "",
+                managedCronPresent: false,
+                limit: 20,
+                minScore: 0.75,
+                minRecallCount: 3,
+                minUniqueQueries: 2,
+                recencyHalfLifeDays: 7,
+              },
+              rem: {
+                enabled: true,
+                cron: "",
+                managedCronPresent: false,
+                lookbackDays: 7,
+                limit: 20,
+                minPatternStrength: 0.6,
+              },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    app.client = {
+      request,
+      stop: vi.fn(),
+    } as unknown as NonNullable<typeof app.client>;
+    app.connected = true;
+    app.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    app.dreamingStatus = {
+      enabled: true,
+      timezone: "UTC",
+      verboseLogging: false,
+      storageMode: "inline",
+      separateReports: false,
+      shortTermCount: 0,
+      recallSignalCount: 0,
+      dailySignalCount: 0,
+      groundedSignalCount: 0,
+      totalSignalCount: 0,
+      phaseSignalCount: 0,
+      lightPhaseHitCount: 0,
+      remPhaseHitCount: 0,
+      promotedTotal: 0,
+      promotedToday: 0,
+      shortTermEntries: [],
+      signalEntries: [],
+      promotedEntries: [],
+      phases: {
+        light: { enabled: true, cron: "", managedCronPresent: false, lookbackDays: 7, limit: 20 },
+        deep: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          limit: 20,
+          minScore: 0.75,
+          minRecallCount: 3,
+          minUniqueQueries: 2,
+          recencyHalfLifeDays: 7,
+        },
+        rem: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          lookbackDays: 7,
+          limit: 20,
+          minPatternStrength: 0.6,
+        },
+      },
+    };
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const toggle = app.querySelector<HTMLButtonElement>(".dreams__phase-toggle--on");
+    expect(toggle).not.toBeNull();
+    toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await app.updateComplete;
+
+    expect(request).not.toHaveBeenCalledWith("config.patch", expect.anything());
+    const confirmRestart = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Confirm Restart",
+    );
+    expect(confirmRestart).not.toBeUndefined();
+    confirmRestart?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    await nextFrame();
+    await app.updateComplete;
+
+    expect(request).toHaveBeenCalledWith(
+      "config.patch",
+      expect.objectContaining({
+        baseHash: "hash-1",
+      }),
+    );
+  });
+
+  it("renders the refreshed top navigation shell", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
 
     expect(app.querySelector(".topnav-shell")).not.toBeNull();
     expect(app.querySelector(".topnav-shell__content")).not.toBeNull();

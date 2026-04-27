@@ -23,7 +23,7 @@ This page assumes exe.dev's default **exeuntu** image. If you picked a different
 - exe.dev account
 - `ssh exe.dev` access to [exe.dev](https://exe.dev) virtual machines (optional)
 
-## Automated Install with Shelley
+## Automated install with Shelley
 
 Shelley, [exe.dev](https://exe.dev)'s agent, can install OpenClaw instantly with our
 prompt. The prompt used is as below:
@@ -48,9 +48,9 @@ Then connect:
 ssh <vm-name>.exe.xyz
 ```
 
-Tip: keep this VM **stateful**. OpenClaw stores `openclaw.json`, per-agent
-`auth-profiles.json`, sessions, and channel/provider state under
-`~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
+<Tip>
+Keep this VM **stateful**. OpenClaw stores `openclaw.json`, per-agent `auth-profiles.json`, sessions, and channel/provider state under `~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
+</Tip>
 
 ## 2) Install prerequisites (on the VM)
 
@@ -113,7 +113,7 @@ with `openclaw config get gateway.auth.token` (or generate one with `openclaw do
 If you changed the gateway to password auth, use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead.
 Approve devices with `openclaw devices list` and `openclaw devices approve <requestId>`. When in doubt, use Shelley from your browser!
 
-## Remote Access
+## Remote access
 
 Remote access is handled by [exe.dev](https://exe.dev)'s authentication. By
 default, HTTP traffic from port 8000 is forwarded to `https://<vm-name>.exe.xyz`

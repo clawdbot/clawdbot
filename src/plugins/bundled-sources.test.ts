@@ -48,10 +48,24 @@ function setBundledDiscoveryCandidates(candidates: unknown[]) {
   });
 }
 
-function setBundledManifestIdsByRoot(manifestIds: Record<string, string>) {
+function setBundledManifestIdsByRoot(
+  manifestIds: Record<string, string | { id: string; required?: string[] }>,
+) {
   loadPluginManifestMock.mockImplementation((rootDir: string) =>
     rootDir in manifestIds
-      ? { ok: true, manifest: { id: manifestIds[rootDir] } }
+      ? {
+          ok: true,
+          manifest:
+            typeof manifestIds[rootDir] === "string"
+              ? { id: manifestIds[rootDir] }
+              : {
+                  id: manifestIds[rootDir].id,
+                  configSchema: {
+                    type: "object",
+                    required: manifestIds[rootDir].required,
+                  },
+                },
+        }
       : {
           ok: false,
           error: "invalid manifest",
@@ -81,11 +95,15 @@ function createResolvedBundledSource(params: {
   pluginId: string;
   localPath: string;
   npmSpec?: string;
+  configSchema?: Record<string, unknown>;
+  requiresConfig?: boolean;
 }) {
   return {
     pluginId: params.pluginId,
     localPath: params.localPath,
     npmSpec: params.npmSpec ?? `@openclaw/${params.pluginId}`,
+    ...(params.configSchema ? { configSchema: params.configSchema } : {}),
+    requiresConfig: params.requiresConfig ?? false,
   };
 }
 
@@ -210,6 +228,33 @@ describe("bundled plugin sources", () => {
       workspaceDir: "/workspace",
       env,
     });
+  });
+
+  it("marks bundled sources that require plugin config before activation", () => {
+    setBundledDiscoveryCandidates([
+      createBundledCandidate({
+        rootDir: appBundledPluginRoot("memory-lancedb"),
+        packageName: "@openclaw/memory-lancedb",
+      }),
+    ]);
+    setBundledManifestIdsByRoot({
+      [appBundledPluginRoot("memory-lancedb")]: {
+        id: "memory-lancedb",
+        required: ["embedding"],
+      },
+    });
+
+    expect(resolveBundledPluginSources({}).get("memory-lancedb")).toEqual(
+      createResolvedBundledSource({
+        pluginId: "memory-lancedb",
+        localPath: appBundledPluginRoot("memory-lancedb"),
+        configSchema: {
+          type: "object",
+          required: ["embedding"],
+        },
+        requiresConfig: true,
+      }),
+    );
   });
 
   it("reuses a pre-resolved bundled map for repeated lookups", () => {

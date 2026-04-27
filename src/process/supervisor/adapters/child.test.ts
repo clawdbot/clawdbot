@@ -7,10 +7,16 @@ import {
   expectWaitStaysPendingUntilSigkillFallback,
 } from "./test-support.js";
 
-const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
-  spawnWithFallbackMock: vi.fn(),
-  killProcessTreeMock: vi.fn(),
-}));
+const { spawnWithFallbackMock, killProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
+  () => ({
+    spawnWithFallbackMock: vi.fn(),
+    killProcessTreeMock: vi.fn(),
+    createWindowsOutputDecoderMock: vi.fn(() => ({
+      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+      flush: () => "",
+    })),
+  }),
+);
 
 vi.mock("../../spawn-utils.js", () => ({
   spawnWithFallback: spawnWithFallbackMock,
@@ -18,6 +24,10 @@ vi.mock("../../spawn-utils.js", () => ({
 
 vi.mock("../../kill-tree.js", () => ({
   killProcessTree: killProcessTreeMock,
+}));
+
+vi.mock("../../../infra/windows-encoding.js", () => ({
+  createWindowsOutputDecoder: createWindowsOutputDecoderMock,
 }));
 
 let createChildAdapter: typeof import("./child.js").createChildAdapter;
@@ -84,6 +94,11 @@ describe("createChildAdapter", () => {
   beforeEach(() => {
     spawnWithFallbackMock.mockClear();
     killProcessTreeMock.mockClear();
+    createWindowsOutputDecoderMock.mockClear();
+    createWindowsOutputDecoderMock.mockImplementation(() => ({
+      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+      flush: () => "",
+    }));
     delete process.env.OPENCLAW_SERVICE_MARKER;
     vi.useRealTimers();
   });
@@ -326,5 +341,35 @@ describe("createChildAdapter", () => {
       options?: { env?: Record<string, string> };
     };
     expect(spawnArgs.options?.env).toEqual({ FOO: "bar", COUNT: "12" });
+  });
+
+  it("uses a separate stdout decoder for each listener", async () => {
+    const decoderOutputs = ["first", "second"];
+    createWindowsOutputDecoderMock.mockImplementation(() => {
+      const output = decoderOutputs.shift() ?? "";
+      return {
+        decode: () => output,
+        flush: () => "",
+      };
+    });
+    const { child } = createStubChild(5555);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "process.exit(0)"],
+      stdinMode: "pipe-open",
+    });
+    const first = vi.fn();
+    const second = vi.fn();
+
+    adapter.onStdout(first);
+    adapter.onStdout(second);
+    child.stdout?.emit("data", Buffer.from([0xb2]));
+
+    expect(createWindowsOutputDecoderMock).toHaveBeenCalledTimes(2);
+    expect(first).toHaveBeenCalledWith("first");
+    expect(second).toHaveBeenCalledWith("second");
   });
 });

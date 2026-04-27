@@ -4,7 +4,7 @@ import { repeat } from "lit/directives/repeat.js";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
-  isSupportedChatAttachmentMimeType,
+  isSupportedChatAttachmentFile,
 } from "../chat/attachment-support.ts";
 import { buildChatItems } from "../chat/build-chat-items.ts";
 import { renderChatQueue } from "../chat/chat-queue.ts";
@@ -205,6 +205,19 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
+  return {
+    id: generateAttachmentId(),
+    dataUrl,
+    mimeType: file.type || "application/octet-stream",
+    fileName: file.name || undefined,
+  };
+}
+
+function isImageAttachment(att: ChatAttachment): boolean {
+  return att.mimeType.startsWith("image/");
+}
+
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
@@ -229,11 +242,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
-        id: generateAttachmentId(),
-        dataUrl,
-        mimeType: file.type,
-      };
+      const newAttachment = chatAttachmentFromFile(file, dataUrl);
       const current = props.attachments ?? [];
       props.onAttachmentsChange?.([...current, newAttachment]);
     });
@@ -250,17 +259,13 @@ function handleFileSelect(e: Event, props: ChatProps) {
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of input.files) {
-    if (!isSupportedChatAttachmentMimeType(file.type)) {
+    if (!isSupportedChatAttachmentFile(file)) {
       continue;
     }
     pending++;
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      additions.push({
-        id: generateAttachmentId(),
-        dataUrl: reader.result as string,
-        mimeType: file.type,
-      });
+      additions.push(chatAttachmentFromFile(file, reader.result as string));
       pending--;
       if (pending === 0) {
         props.onAttachmentsChange?.([...current, ...additions]);
@@ -281,17 +286,13 @@ function handleDrop(e: DragEvent, props: ChatProps) {
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of files) {
-    if (!isSupportedChatAttachmentMimeType(file.type)) {
+    if (!isSupportedChatAttachmentFile(file)) {
       continue;
     }
     pending++;
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      additions.push({
-        id: generateAttachmentId(),
-        dataUrl: reader.result as string,
-        mimeType: file.type,
-      });
+      additions.push(chatAttachmentFromFile(file, reader.result as string));
       pending--;
       if (pending === 0) {
         props.onAttachmentsChange?.([...current, ...additions]);
@@ -310,8 +311,24 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
     <div class="chat-attachments-preview">
       ${attachments.map(
         (att) => html`
-          <div class="chat-attachment-thumb">
-            <img src=${att.dataUrl} alt="Attachment preview" />
+          <div
+            class=${[
+              "chat-attachment-thumb",
+              isImageAttachment(att) ? "" : "chat-attachment-thumb--file",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            ${isImageAttachment(att)
+              ? html`<img src=${att.dataUrl} alt="Attachment preview" />`
+              : html`
+                  <div class="chat-attachment-file" title=${att.fileName ?? "Attached file"}>
+                    <span class="chat-attachment-file__icon">${icons.paperclip}</span>
+                    <span class="chat-attachment-file__name"
+                      >${att.fileName ?? "Attached file"}</span
+                    >
+                  </div>
+                `}
             <button
               class="chat-attachment-remove"
               type="button"

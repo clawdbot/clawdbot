@@ -7,7 +7,9 @@ read_when:
 title: "Android app"
 ---
 
-> **Note:** The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
+<Note>
+The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
+</Note>
 
 ## Support snapshot
 
@@ -21,7 +23,7 @@ title: "Android app"
 
 System control (launchd/systemd) lives on the Gateway host. See [Gateway](/gateway).
 
-## Connection Runbook
+## Connection runbook
 
 Android node app ⇄ (mDNS/NSD + WebSocket) ⇄ **Gateway**
 
@@ -170,7 +172,9 @@ The Android Chat tab supports session selection (default `main`, plus other exis
 
 If you want the node to show real HTML/CSS/JS that the agent can edit on disk, point the node at the Gateway canvas host.
 
-Note: nodes load canvas from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
+<Note>
+Nodes load canvas from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
+</Note>
 
 1. Create `~/.openclaw/workspace/canvas/index.html` on the gateway host.
 

@@ -5,6 +5,7 @@ import type { PluginCandidate } from "./discovery.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
+import type { BundledChannelConfigCollector } from "./manifest-registry.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
@@ -88,6 +89,7 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
   includeDisabled?: boolean;
+  bundledChannelConfigCollector?: BundledChannelConfigCollector;
 }): PluginManifestRegistry {
   if (params.pluginIds && params.pluginIds.length === 0) {
     return { plugins: [], diagnostics: [] };
@@ -111,5 +113,8 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
     candidates,
     diagnostics: [...diagnostics],
     installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),
+    ...(params.bundledChannelConfigCollector
+      ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
+      : {}),
   });
 }

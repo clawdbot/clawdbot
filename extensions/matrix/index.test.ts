@@ -69,8 +69,7 @@ describe("matrix plugin", () => {
     expect(entry.setChannelRuntime).toEqual(expect.any(Function));
   });
 
-  it("registers CLI metadata during discovery registration", () => {
-    const registerChannel = vi.fn();
+  it("wires CLI metadata through the bundled entry", () => {
     const registerCli = vi.fn();
     const registerGatewayMethod = vi.fn();
     const api = createTestPluginApi({
@@ -79,15 +78,13 @@ describe("matrix plugin", () => {
       source: "test",
       config: {},
       runtime: {} as never,
-      registrationMode: "discovery",
-      registerChannel,
+      registrationMode: "cli-metadata",
       registerCli,
       registerGatewayMethod,
     });
 
     entry.register(api);
 
-    expect(registerChannel).toHaveBeenCalledTimes(1);
     expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
       descriptors: [
         {
@@ -116,6 +113,7 @@ describe("matrix plugin", () => {
 
     registerMatrixFullRuntime(api);
 
+    expect(runtimeMocks.ensureMatrixCryptoRuntime).not.toHaveBeenCalled();
     expect(on.mock.calls.map(([hookName]) => hookName)).toEqual([
       "subagent_spawning",
       "subagent_ended",

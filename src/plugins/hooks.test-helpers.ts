@@ -42,6 +42,7 @@ export function createMockPluginRegistry(
     musicGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    migrationProviders: [],
     codexAppServerExtensionFactories: [],
     agentToolResultMiddlewares: [],
     memoryEmbeddingProviders: [],

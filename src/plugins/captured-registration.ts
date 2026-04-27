@@ -16,6 +16,7 @@ import type {
   OpenClawPluginApi,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  MigrationProviderPlugin,
   MusicGenerationProviderPlugin,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
@@ -53,6 +54,7 @@ export type CapturedPluginRegistration = {
   musicGenerationProviders: MusicGenerationProviderPlugin[];
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
+  migrationProviders: MigrationProviderPlugin[];
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   tools: AnyAgentTool[];
 };
@@ -77,6 +79,7 @@ export function createCapturedPluginRegistration(params?: {
   const musicGenerationProviders: MusicGenerationProviderPlugin[] = [];
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
+  const migrationProviders: MigrationProviderPlugin[] = [];
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const tools: AnyAgentTool[] = [];
   const noopLogger = {
@@ -103,6 +106,7 @@ export function createCapturedPluginRegistration(params?: {
     musicGenerationProviders,
     webFetchProviders,
     webSearchProviders,
+    migrationProviders,
     memoryEmbeddingProviders,
     tools,
     api: buildPluginApi({
@@ -193,6 +197,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerWebSearchProvider(provider: WebSearchProviderPlugin) {
           webSearchProviders.push(provider);
+        },
+        registerMigrationProvider(provider: MigrationProviderPlugin) {
+          migrationProviders.push(provider);
         },
         registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter) {
           memoryEmbeddingProviders.push(adapter);

@@ -6,7 +6,7 @@
   "dependencies": {
     "@lancedb/lancedb": "^0.27.2",
     "openai": "^6.34.0",
-    "typebox": "1.1.32"
+    "typebox": "1.1.33"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

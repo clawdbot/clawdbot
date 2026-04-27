@@ -856,12 +856,9 @@ Set a token so **all** WS clients must authenticate:
 
 Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 
-Note: `gateway.remote.token` / `.password` are client credential sources. They
-do **not** protect local WS access by themselves.
-Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*`
-is unset.
-If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via
-SecretRef and unresolved, resolution fails closed (no remote fallback masking).
+<Note>
+`gateway.remote.token` and `gateway.remote.password` are client credential sources. They do **not** protect local WS access by themselves. Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset. If `gateway.auth.token` or `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
+</Note>
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
 Plaintext `ws://` is loopback-only by default. For trusted private-network
 paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
@@ -999,7 +996,7 @@ Logs and transcripts can leak sensitive info even when access controls are corre
 
 Recommendations:
 
-- Keep tool summary redaction on (`logging.redactSensitive: "tools"`; default).
+- Keep log and transcript redaction on (`logging.redactSensitive: "tools"`; default).
 - Add custom patterns for your environment via `logging.redactPatterns` (tokens, hostnames, internal URLs).
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
 - Prune old session transcripts and log files if you don’t need long retention.
@@ -1092,9 +1089,9 @@ Two complementary approaches:
 - **Run the full Gateway in Docker** (container boundary): [Docker](/install/docker)
 - **Tool sandbox** (`agents.defaults.sandbox`, host gateway + sandbox-isolated tools; Docker is the default backend): [Sandboxing](/gateway/sandboxing)
 
-Note: to prevent cross-agent access, keep `agents.defaults.sandbox.scope` at `"agent"` (default)
-or `"session"` for stricter per-session isolation. `scope: "shared"` uses a
-single container/workspace.
+<Note>
+To prevent cross-agent access, keep `agents.defaults.sandbox.scope` at `"agent"` (default) or `"session"` for stricter per-session isolation. `scope: "shared"` uses a single container or workspace.
+</Note>
 
 Also consider agent workspace access inside the sandbox:
 
@@ -1103,7 +1100,9 @@ Also consider agent workspace access inside the sandbox:
 - `agents.defaults.sandbox.workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
 - Extra `sandbox.docker.binds` are validated against normalized and canonicalized source paths. Parent-symlink tricks and canonical home aliases still fail closed if they resolve into blocked roots such as `/etc`, `/var/run`, or credential directories under the OS home.
 
-Important: `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
+<Warning>
+`tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated mode](/tools/elevated).
+</Warning>
 
 ### Sub-agent delegation guardrail
 

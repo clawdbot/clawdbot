@@ -37,6 +37,11 @@ daemon (`tailscale whois`) and matching it to the header before accepting it.
 OpenClaw only treats a request as Serve when it arrives from loopback with
 Tailscale’s `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
 headers.
+For Control UI operator sessions that include browser device identity, this
+verified Serve path also skips the device-pairing round trip. It does not bypass
+browser device identity: device-less clients are still rejected, and node-role
+or non-Control UI WebSocket connections still follow the normal pairing and
+auth checks.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
 do **not** use Tailscale identity-header auth. They still follow the gateway's
 normal HTTP auth mode: shared-secret auth by default, or an intentionally
@@ -80,7 +85,9 @@ Connect from another Tailnet device:
 - Control UI: `http://<tailscale-ip>:18789/`
 - WebSocket: `ws://<tailscale-ip>:18789`
 
-Note: loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
+<Note>
+Loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
+</Note>
 
 ### Public internet (Funnel + shared password)
 

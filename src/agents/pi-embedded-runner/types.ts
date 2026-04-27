@@ -4,6 +4,7 @@ import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
+  sessionFile?: string;
   provider: string;
   model: string;
   contextTokens?: number;
@@ -102,6 +103,15 @@ export type ContextManagementTrace = {
 
 export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
 
+export type EmbeddedRunFailureSignal = {
+  kind: "execution_denied";
+  source: "tool";
+  toolName?: string;
+  code: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
+  message: string;
+  fatalForCron: true;
+};
+
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
@@ -123,6 +133,7 @@ export type EmbeddedPiRunMeta = {
       | "retry_limit";
     message: string;
   };
+  failureSignal?: EmbeddedRunFailureSignal;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
   /** Pending tool calls when stopReason is "tool_calls". */
@@ -174,6 +185,8 @@ export type EmbeddedPiCompactResult = {
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;
+    sessionId?: string;
+    sessionFile?: string;
   };
 };
 

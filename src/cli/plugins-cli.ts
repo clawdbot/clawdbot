@@ -5,49 +5,14 @@ import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
-import {
-  loadInstalledPluginIndexInstallRecords,
-  removePluginInstallRecordFromRecords,
-  withoutPluginInstallRecords,
-  withPluginInstallRecords,
-} from "../plugins/installed-plugin-index-records.js";
-import { listMarketplacePlugins } from "../plugins/marketplace.js";
-import { inspectPluginRegistry, refreshPluginRegistry } from "../plugins/plugin-registry.js";
-import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
-import {
-  buildAllPluginInspectReports,
-  buildPluginDiagnosticsReport,
-  buildPluginCompatibilityNotices,
-  buildPluginInspectReport,
-  buildPluginRegistrySnapshotReport,
-  formatPluginCompatibilityNotice,
-} from "../plugins/status.js";
 import type { PluginLogger } from "../plugins/types.js";
-import {
-  resolveUninstallChannelConfigKeys,
-  resolveUninstallDirectoryTarget,
-  uninstallPlugin,
-} from "../plugins/uninstall.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
-import {
-  applySlotSelectionForPlugin,
-  createPluginInstallLogger,
-  logSlotWarnings,
-} from "./plugins-command-helpers.js";
-import { setPluginEnabledInConfig } from "./plugins-config.js";
-import { runPluginInstallCommand } from "./plugins-install-command.js";
-import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
 import { formatPluginLine } from "./plugins-list-format.js";
-import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
-import { resolvePluginUninstallId } from "./plugins-uninstall-selection.js";
-import { runPluginUpdateCommand } from "./plugins-update-command.js";
-import { promptYesNo } from "./prompt.js";
 
 export type PluginsListOptions = {
   json?: boolean;
@@ -180,7 +145,8 @@ export function registerPluginsCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--enabled", "Only show enabled plugins", false)
     .option("--verbose", "Show detailed entries", false)
-    .action((opts: PluginsListOptions) => {
+    .action(async (opts: PluginsListOptions) => {
+      const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
       const cfg = loadConfig();
       const report = buildPluginRegistrySnapshotReport({
         config: cfg,
@@ -288,6 +254,14 @@ export function registerPluginsCli(program: Command) {
     .option("--all", "Inspect all plugins")
     .option("--json", "Print JSON")
     .action(async (id: string | undefined, opts: PluginInspectOptions) => {
+      const {
+        buildAllPluginInspectReports,
+        buildPluginDiagnosticsReport,
+        buildPluginInspectReport,
+        formatPluginCompatibilityNotice,
+      } = await import("../plugins/status.js");
+      const { loadInstalledPluginIndexInstallRecords } =
+        await import("../plugins/installed-plugin-index-records.js");
       const cfg = loadConfig();
       const installRecords = await loadInstalledPluginIndexInstallRecords();
       const report = buildPluginDiagnosticsReport({
@@ -521,6 +495,11 @@ export function registerPluginsCli(program: Command) {
     .description("Enable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
+      const { enablePluginInConfig } = await import("../plugins/enable.js");
+      const { applySlotSelectionForPlugin, logSlotWarnings } =
+        await import("./plugins-command-helpers.js");
+      const { refreshPluginRegistryAfterConfigMutation } =
+        await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
       const enableResult = enablePluginInConfig(cfg, id);
@@ -555,6 +534,9 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
+      const { setPluginEnabledInConfig } = await import("./plugins-config.js");
+      const { refreshPluginRegistryAfterConfigMutation } =
+        await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
       const next = setPluginEnabledInConfig(cfg, id, false);
@@ -581,6 +563,27 @@ export function registerPluginsCli(program: Command) {
     .option("--force", "Skip confirmation prompt", false)
     .option("--dry-run", "Show what would be removed without making changes", false)
     .action(async (id: string, opts: PluginUninstallOptions) => {
+      const {
+        loadInstalledPluginIndexInstallRecords,
+        removePluginInstallRecordFromRecords,
+        withoutPluginInstallRecords,
+        withPluginInstallRecords,
+      } = await import("../plugins/installed-plugin-index-records.js");
+      const { buildPluginDiagnosticsReport } = await import("../plugins/status.js");
+      const {
+        applyPluginUninstallDirectoryRemoval,
+        formatUninstallActionLabels,
+        formatUninstallSlotResetPreview,
+        planPluginUninstall,
+        resolveUninstallChannelConfigKeys,
+        UNINSTALL_ACTION_LABELS,
+      } = await import("../plugins/uninstall.js");
+      const { commitPluginInstallRecordsWithConfig } =
+        await import("./plugins-install-record-commit.js");
+      const { refreshPluginRegistryAfterConfigMutation } =
+        await import("./plugins-registry-refresh.js");
+      const { resolvePluginUninstallId } = await import("./plugins-uninstall-selection.js");
+      const { promptYesNo } = await import("./prompt.js");
       const snapshot = await readConfigFileSnapshot();
       const sourceConfig = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
       const installRecords = await loadInstalledPluginIndexInstallRecords();
@@ -612,47 +615,51 @@ export function registerPluginsCli(program: Command) {
         return defaultRuntime.exit(1);
       }
 
-      const install = cfg.plugins?.installs?.[pluginId];
-      const isLinked = install?.source === "path";
-      const preview: string[] = [];
-      if (hasEntry) {
-        preview.push("config entry");
-      }
-      if (hasInstall) {
-        preview.push("install record");
-      }
-      if (cfg.plugins?.allow?.includes(pluginId)) {
-        preview.push("allowlist entry");
-      }
-      if (
-        isLinked &&
-        install?.sourcePath &&
-        cfg.plugins?.load?.paths?.includes(install.sourcePath)
-      ) {
-        preview.push("load path");
-      }
-      if (cfg.plugins?.slots?.memory === pluginId) {
-        preview.push(`memory slot (will reset to "${defaultSlotIdForKey("memory")}")`);
-      }
       const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
+      const plan = planPluginUninstall({
+        config: cfg,
+        pluginId,
+        channelIds,
+        deleteFiles: !keepFiles,
+        extensionsDir,
+      });
+      if (!plan.ok) {
+        defaultRuntime.error(plan.error);
+        return defaultRuntime.exit(1);
+      }
+
+      const preview: string[] = [];
+      if (plan.actions.entry) {
+        preview.push(UNINSTALL_ACTION_LABELS.entry);
+      }
+      if (plan.actions.install) {
+        preview.push(UNINSTALL_ACTION_LABELS.install);
+      }
+      if (plan.actions.allowlist) {
+        preview.push(UNINSTALL_ACTION_LABELS.allowlist);
+      }
+      if (plan.actions.denylist) {
+        preview.push(UNINSTALL_ACTION_LABELS.denylist);
+      }
+      if (plan.actions.loadPath) {
+        preview.push(UNINSTALL_ACTION_LABELS.loadPath);
+      }
+      if (plan.actions.memorySlot) {
+        preview.push(formatUninstallSlotResetPreview("memory"));
+      }
+      if (plan.actions.contextEngineSlot) {
+        preview.push(formatUninstallSlotResetPreview("contextEngine"));
+      }
       const channels = cfg.channels as Record<string, unknown> | undefined;
-      if (hasInstall && channels) {
+      if (plan.actions.channelConfig && hasInstall && channels) {
         for (const key of resolveUninstallChannelConfigKeys(pluginId, { channelIds })) {
           if (Object.hasOwn(channels, key)) {
-            preview.push(`channel config (channels.${key})`);
+            preview.push(`${UNINSTALL_ACTION_LABELS.channelConfig} (channels.${key})`);
           }
         }
       }
-      const deleteTarget = !keepFiles
-        ? resolveUninstallDirectoryTarget({
-            pluginId,
-            hasInstall,
-            installRecord: install,
-            extensionsDir,
-          })
-        : null;
-      if (deleteTarget) {
-        preview.push(`directory: ${shortenHomePath(deleteTarget)}`);
+      if (plan.directoryRemoval) {
+        preview.push(`directory: ${shortenHomePath(plan.directoryRemoval.target)}`);
       }
 
       const pluginName = plugin?.name || pluginId;
@@ -674,30 +681,18 @@ export function registerPluginsCli(program: Command) {
         }
       }
 
-      const result = await uninstallPlugin({
-        config: cfg,
-        pluginId,
-        channelIds,
-        deleteFiles: !keepFiles,
-        extensionsDir,
-      });
-
-      if (!result.ok) {
-        defaultRuntime.error(result.error);
-        return defaultRuntime.exit(1);
-      }
-      for (const warning of result.warnings) {
-        defaultRuntime.log(theme.warn(warning));
-      }
-
       const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
-      const nextConfig = withoutPluginInstallRecords(result.config);
+      const nextConfig = withoutPluginInstallRecords(plan.config);
       await commitPluginInstallRecordsWithConfig({
         previousInstallRecords: installRecords,
         nextInstallRecords,
         nextConfig,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
       });
+      const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+      for (const warning of directoryResult.warnings) {
+        defaultRuntime.log(theme.warn(warning));
+      }
       await refreshPluginRegistryAfterConfigMutation({
         config: nextConfig,
         reason: "source-changed",
@@ -707,28 +702,10 @@ export function registerPluginsCli(program: Command) {
         },
       });
 
-      const removed: string[] = [];
-      if (result.actions.entry) {
-        removed.push("config entry");
-      }
-      if (result.actions.install) {
-        removed.push("install record");
-      }
-      if (result.actions.allowlist) {
-        removed.push("allowlist");
-      }
-      if (result.actions.loadPath) {
-        removed.push("load path");
-      }
-      if (result.actions.memorySlot) {
-        removed.push("memory slot");
-      }
-      if (result.actions.channelConfig) {
-        removed.push("channel config");
-      }
-      if (result.actions.directory) {
-        removed.push("directory");
-      }
+      const removed = formatUninstallActionLabels({
+        ...plan.actions,
+        directory: directoryResult.directoryRemoved,
+      });
 
       defaultRuntime.log(
         `Uninstalled plugin "${pluginId}". Removed: ${removed.length > 0 ? removed.join(", ") : "nothing"}.`,
@@ -768,6 +745,7 @@ export function registerPluginsCli(program: Command) {
           marketplace?: string;
         },
       ) => {
+        const { runPluginInstallCommand } = await import("./plugins-install-command.js");
         await runPluginInstallCommand({ raw, opts });
       },
     );
@@ -784,6 +762,7 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
+      const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
       await runPluginUpdateCommand({ id, opts });
     });
 
@@ -793,6 +772,8 @@ export function registerPluginsCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--refresh", "Rebuild the persisted registry from current plugin manifests", false)
     .action(async (opts: PluginRegistryOptions) => {
+      const { inspectPluginRegistry, refreshPluginRegistry } =
+        await import("../plugins/plugin-registry.js");
       const cfg = loadConfig();
 
       if (opts.refresh) {
@@ -849,8 +830,13 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("doctor")
     .description("Report plugin load issues")
-    .action(() => {
-      const report = buildPluginDiagnosticsReport();
+    .action(async () => {
+      const {
+        buildPluginCompatibilityNotices,
+        buildPluginDiagnosticsReport,
+        formatPluginCompatibilityNotice,
+      } = await import("../plugins/status.js");
+      const report = buildPluginDiagnosticsReport({ effectiveOnly: true });
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
       const compatibility = buildPluginCompatibilityNotices({ report });
@@ -904,6 +890,8 @@ export function registerPluginsCli(program: Command) {
     .argument("<source>", "Local marketplace path/repo or git/GitHub source")
     .option("--json", "Print JSON")
     .action(async (source: string, opts: PluginMarketplaceListOptions) => {
+      const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
+      const { createPluginInstallLogger } = await import("./plugins-command-helpers.js");
       const result = await listMarketplacePlugins({
         marketplace: source,
         logger: createPluginInstallLogger(),

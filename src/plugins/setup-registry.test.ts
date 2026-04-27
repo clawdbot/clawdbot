@@ -8,6 +8,15 @@ import {
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
+// jiti-loader-cache prefers native require() for compiled .js before falling
+// back to jiti. These tests scripts plugin-loading behaviour through the
+// jiti mock — disable the native-require fast path so the mocked jiti loader
+// stays authoritative for the test fixture files on disk.
+vi.mock("./native-module-require.js", () => ({
+  isJavaScriptModulePath: (_modulePath: string) => false,
+  tryNativeRequireJavaScriptModule: (_modulePath: string) => ({ ok: false }),
+}));
+
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 

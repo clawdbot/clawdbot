@@ -29,61 +29,61 @@ function getPaletteBaseItems(): PaletteItem[] {
   return [
     {
       id: "nav-overview",
-      label: "Overview",
+      label: t("overview.palette.items.overview"),
       icon: "barChart",
       category: "navigation",
       action: "nav:overview",
     },
     {
       id: "nav-sessions",
-      label: "Sessions",
+      label: t("overview.palette.items.sessions"),
       icon: "fileText",
       category: "navigation",
       action: "nav:sessions",
     },
     {
       id: "nav-cron",
-      label: "Scheduled",
+      label: t("overview.palette.items.scheduled"),
       icon: "scrollText",
       category: "navigation",
       action: "nav:cron",
     },
     {
       id: "nav-skills",
-      label: "Skills",
+      label: t("overview.palette.items.skills"),
       icon: "zap",
       category: "navigation",
       action: "nav:skills",
     },
     {
       id: "nav-config",
-      label: "Settings",
+      label: t("overview.palette.items.settings"),
       icon: "settings",
       category: "navigation",
       action: "nav:config",
     },
     {
       id: "nav-agents",
-      label: "Agents",
+      label: t("overview.palette.items.agents"),
       icon: "folder",
       category: "navigation",
       action: "nav:agents",
     },
     {
       id: "skill-shell",
-      label: "Shell Command",
+      label: t("overview.palette.items.shellCommand"),
       icon: "monitor",
       category: "skills",
       action: "/skill shell",
-      description: "Run shell",
+      description: t("overview.palette.descriptions.shellCommand"),
     },
     {
       id: "skill-debug",
-      label: "Debug Mode",
+      label: t("overview.palette.items.debugMode"),
       icon: "bug",
       category: "skills",
       action: "/verbose full",
-      description: "Toggle debug",
+      description: t("overview.palette.descriptions.debugMode"),
     },
   ];
 }
@@ -118,6 +118,10 @@ function filteredItems(query: string): PaletteItem[] {
       normalizeLowercaseStringOrEmpty(item.label).includes(q) ||
       normalizeLowercaseStringOrEmpty(item.description).includes(q),
   );
+}
+
+export function getFilteredPaletteItems(query: string): readonly PaletteItem[] {
+  return filteredItems(query);
 }
 
 function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
@@ -190,11 +194,18 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
   }
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  search: "Search",
-  navigation: "Navigation",
-  skills: "Skills",
-};
+function getCategoryLabel(category: string): string {
+  switch (category) {
+    case "search":
+      return t("overview.palette.categories.search");
+    case "navigation":
+      return t("overview.palette.categories.navigation");
+    case "skills":
+      return t("overview.palette.categories.skills");
+    default:
+      return category;
+  }
+}
 
 function focusInput(el: Element | undefined) {
   if (el) {
@@ -244,9 +255,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
               </div>`
             : grouped.map(
                 ([category, groupedItems]) => html`
-                  <div class="cmd-palette__group-label">
-                    ${CATEGORY_LABELS[category] ?? category}
-                  </div>
+                  <div class="cmd-palette__group-label">${getCategoryLabel(category)}</div>
                   ${groupedItems.map((item) => {
                     const globalIndex = items.indexOf(item);
                     const isActive = globalIndex === props.activeIndex;
@@ -273,9 +282,9 @@ export function renderCommandPalette(props: CommandPaletteProps) {
               )}
         </div>
         <div class="cmd-palette__footer">
-          <span><kbd>↑↓</kbd> navigate</span>
-          <span><kbd>↵</kbd> select</span>
-          <span><kbd>esc</kbd> close</span>
+          <span><kbd>↑↓</kbd> ${t("overview.palette.footer.navigate")}</span>
+          <span><kbd>↵</kbd> ${t("overview.palette.footer.select")}</span>
+          <span><kbd>esc</kbd> ${t("overview.palette.footer.close")}</span>
         </div>
       </div>
     </div>

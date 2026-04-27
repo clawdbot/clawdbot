@@ -10,6 +10,7 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
@@ -44,6 +45,13 @@ function mergeInstallInvocationEnv(params: {
       continue;
     }
     const upper = key.toUpperCase();
+    if (upper === OPENCLAW_WRAPPER_ENV_KEY) {
+      const value = rawValue.trim();
+      if (value) {
+        preservedServiceEnv[OPENCLAW_WRAPPER_ENV_KEY] = value;
+      }
+      continue;
+    }
     if (
       upper === "HOME" ||
       upper === "PATH" ||
@@ -99,6 +107,19 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
+  let wrapperPath: string | undefined;
+  if (opts.wrapper !== undefined) {
+    try {
+      wrapperPath = await resolveOpenClawWrapperPath(opts.wrapper);
+      if (!wrapperPath) {
+        fail("Invalid --wrapper");
+        return;
+      }
+    } catch (err) {
+      fail(`Invalid --wrapper: ${String(err)}`);
+      return;
+    }
+  }
 
   const service = resolveGatewayService();
   let loaded = false;
@@ -114,14 +135,20 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return;
     }
   }
-  if (loaded) {
-    existingServiceCommand = await service.readCommand(process.env).catch(() => null);
-    existingServiceEnv = existingServiceCommand?.environment;
-  }
+  existingServiceCommand = await service.readCommand(process.env).catch(() => null);
+  existingServiceEnv = existingServiceCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv,
   });
+  if (!wrapperPath) {
+    try {
+      wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
+    } catch (err) {
+      fail(`Invalid ${OPENCLAW_WRAPPER_ENV_KEY}: ${String(err)}`);
+      return;
+    }
+  }
   if (loaded) {
     if (!opts.force) {
       const autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
@@ -130,6 +157,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         installEnv,
         port,
         runtime: runtimeRaw,
+        wrapperPath,
         existingEnvironment: existingServiceEnv,
         config: cfg,
       });
@@ -182,6 +210,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     env: installEnv,
     port,
     runtime: runtimeRaw,
+    wrapperPath,
     existingEnvironment: existingServiceEnv,
     warn: (message) => {
       if (json) {
@@ -217,6 +246,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
   installEnv: NodeJS.ProcessEnv;
   port: number;
   runtime: GatewayDaemonRuntime;
+  wrapperPath?: string;
   existingEnvironment?: Record<string, string | undefined>;
   config: OpenClawConfig;
 }): Promise<string | undefined> {
@@ -231,6 +261,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         env: params.installEnv,
         port: params.port,
         runtime: params.runtime,
+        wrapperPath: params.wrapperPath,
         existingEnvironment: params.existingEnvironment,
         warn: () => undefined,
         config: params.config,
@@ -240,6 +271,35 @@ async function getGatewayServiceAutoRefreshMessage(params: {
       );
       if (currentEmbeddedToken !== plannedEmbeddedToken) {
         return "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.";
+      }
+    }
+    const wrapperRequested = Boolean(
+      params.wrapperPath || normalizeOptionalString(params.installEnv[OPENCLAW_WRAPPER_ENV_KEY]),
+    );
+    if (wrapperRequested) {
+      const plannedInstall = await buildGatewayInstallPlan({
+        env: params.installEnv,
+        port: params.port,
+        runtime: params.runtime,
+        wrapperPath: params.wrapperPath,
+        existingEnvironment: params.existingEnvironment,
+        warn: () => undefined,
+        config: params.config,
+      });
+      if (
+        plannedInstall.programArguments.join("\u0000") !==
+        currentCommand.programArguments.join("\u0000")
+      ) {
+        return "Gateway service command differs from the current wrapper install plan; refreshing the install.";
+      }
+      const plannedWrapperPath = normalizeOptionalString(
+        plannedInstall.environment[OPENCLAW_WRAPPER_ENV_KEY],
+      );
+      const currentWrapperPath = normalizeOptionalString(
+        currentCommand.environment?.[OPENCLAW_WRAPPER_ENV_KEY],
+      );
+      if (plannedWrapperPath !== currentWrapperPath) {
+        return `Gateway service ${OPENCLAW_WRAPPER_ENV_KEY} differs from the current wrapper install plan; refreshing the install.`;
       }
     }
     const currentExecPath = currentCommand.programArguments[0]?.trim();

@@ -101,7 +101,7 @@ describe("resolveNativeSkillsEnabled", () => {
     ).toBe(false);
   });
 
-  it("uses package channel metadata for bundled auto defaults before runtime loads", () => {
+  it("uses only enabled package channel metadata for bundled auto defaults before runtime loads", () => {
     setActivePluginRegistry(createTestRegistry([]));
     const env = {
       ...process.env,
@@ -117,12 +117,44 @@ describe("resolveNativeSkillsEnabled", () => {
         globalSetting: "auto",
         env,
       }),
+    ).toBe(false);
+    expect(
+      resolveNativeSkillsEnabled({
+        providerId: "discord",
+        globalSetting: "auto",
+        env,
+        config: {
+          plugins: {
+            entries: {
+              discord: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      }),
     ).toBe(true);
     expect(
       resolveNativeCommandsEnabled({
         providerId: "slack",
         globalSetting: "auto",
         env,
+      }),
+    ).toBe(false);
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "discord",
+        globalSetting: "auto",
+        env,
+        config: {
+          plugins: {
+            entries: {
+              discord: {
+                enabled: false,
+              },
+            },
+          },
+        },
       }),
     ).toBe(false);
   });

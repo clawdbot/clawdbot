@@ -12,8 +12,8 @@ import {
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   createMatrixQaScenarioClient,
-  NO_REPLY_WINDOW_MS,
   advanceMatrixQaActorCursor,
+  resolveMatrixQaNoReplyWindowMs,
   runConfigurableTopLevelScenario,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
@@ -98,7 +98,7 @@ async function runDmSharedSessionFlow(params: {
         event.body.includes("channels.matrix.dm.sessionScope"),
       roomId: secondRoomId,
       since: noticeSince,
-      timeoutMs: Math.min(NO_REPLY_WINDOW_MS, params.context.timeoutMs),
+      timeoutMs: resolveMatrixQaNoReplyWindowMs(params.context.timeoutMs),
     }),
   ]);
 

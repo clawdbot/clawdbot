@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 vi.mock("./document-extractor-public-artifacts.js", () => ({
   loadBundledDocumentExtractorEntriesFromDir: vi.fn(
@@ -78,6 +79,13 @@ vi.mock("./manifest-registry.js", () => ({
 }));
 
 describe("resolvePluginDocumentExtractors", () => {
+  it("reuses one manifest registry pass for compat and enabled bundled extractors", () => {
+    vi.mocked(loadPluginManifestRegistryForPluginRegistry).mockClear();
+
+    expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
+    expect(loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledOnce();
+  });
+
   it("respects global plugin disablement", () => {
     expect(
       resolvePluginDocumentExtractors({

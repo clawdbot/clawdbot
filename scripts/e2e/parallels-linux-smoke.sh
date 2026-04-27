@@ -13,6 +13,7 @@ API_KEY_ENV=""
 AUTH_CHOICE=""
 AUTH_KEY_FLAG=""
 MODEL_ID=""
+MODEL_ID_EXPLICIT=0
 INSTALL_URL="https://openclaw.ai/install.sh"
 HOST_PORT="18427"
 HOST_PORT_EXPLICIT=0
@@ -41,6 +42,7 @@ TIMEOUT_ONBOARD_S=180
 TIMEOUT_AGENT_S="${OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S:-300}"
 TIMEOUT_GATEWAY_S=240
 PHASE_STALE_WARN_S=60
+DISABLE_BONJOUR_FOR_GATEWAY=0
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -103,6 +105,8 @@ Options:
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
+  --model <provider/model>    Override the model used for the agent-turn smoke.
+                             Default: openai/gpt-5.5 for the OpenAI lane
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
@@ -140,6 +144,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --provider)
       PROVIDER="$2"
+      shift 2
+      ;;
+    --model)
+      MODEL_ID="$2"
+      MODEL_ID_EXPLICIT=1
       shift 2
       ;;
     --api-key-env|--openai-api-key-env)
@@ -200,19 +209,19 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    MODEL_ID="openai/gpt-5.5"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.5}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
     AUTH_CHOICE="apiKey"
     AUTH_KEY_FLAG="anthropic-api-key"
-    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_ANTHROPIC_MODEL:-anthropic/claude-sonnet-4-6}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
     ;;
   minimax)
     AUTH_CHOICE="minimax-global-api"
     AUTH_KEY_FLAG="minimax-api-key"
-    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_MINIMAX_MODEL:-minimax/MiniMax-M2.7}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
     ;;
   *)
@@ -222,6 +231,11 @@ esac
 
 API_KEY_VALUE="${!API_KEY_ENV:-}"
 [[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
+case "${OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR:-}" in
+  1|true|TRUE|yes|YES|on|ON)
+    DISABLE_BONJOUR_FOR_GATEWAY=1
+    ;;
+esac
 
 resolve_vm_name() {
   local json requested explicit
@@ -452,7 +466,18 @@ restore_snapshot() {
   wait_for_guest_ready || die "guest did not become ready in $VM_NAME"
 }
 
+sync_guest_clock() {
+  local host_now
+  host_now="@$(date -u '+%s')"
+  guest_exec date -u -s "$host_now" >/dev/null
+  guest_exec hwclock --systohc >/dev/null 2>&1 || true
+  guest_exec timedatectl set-ntp true >/dev/null 2>&1 || true
+  guest_exec systemctl restart systemd-timesyncd >/dev/null 2>&1 || true
+  guest_exec date -u
+}
+
 bootstrap_guest() {
+  sync_guest_clock
   guest_exec apt-get -o Acquire::Check-Date=false update
   guest_exec apt-get install -y curl ca-certificates
 }
@@ -717,12 +742,16 @@ EOF
 }
 
 start_gateway_background() {
-  local cmd api_key_value_q
+  local cmd api_key_value_q bonjour_env
   api_key_value_q="$(shell_quote "$API_KEY_VALUE")"
+  bonjour_env=""
+  if [[ "$DISABLE_BONJOUR_FOR_GATEWAY" -eq 1 ]]; then
+    bonjour_env=" OPENCLAW_DISABLE_BONJOUR=1"
+  fi
   cmd="$(cat <<EOF
 pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
 rm -f /tmp/openclaw-parallels-linux-gateway.log
-setsid sh -lc 'exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json ${API_KEY_ENV}=${api_key_value_q} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1' >/dev/null 2>&1 < /dev/null &
+setsid sh -lc 'exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json${bonjour_env} ${API_KEY_ENV}=${api_key_value_q} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1' >/dev/null 2>&1 < /dev/null &
 EOF
 )"
   guest_exec bash -lc "$cmd"
@@ -764,13 +793,38 @@ verify_gateway_status() {
   return 1
 }
 
+prepare_agent_workspace() {
+  guest_exec /bin/sh -lc 'set -eu
+workspace="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+mkdir -p "$workspace/.openclaw"
+cat > "$workspace/IDENTITY.md" <<'"'"'IDENTITY_EOF'"'"'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels Linux smoke test assistant.
+IDENTITY_EOF
+cat > "$workspace/.openclaw/workspace-state.json" <<'"'"'STATE_EOF'"'"'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "$workspace/BOOTSTRAP.md"'
+}
+
 verify_local_turn() {
   guest_exec openclaw models set "$MODEL_ID"
-  guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" openclaw agent \
-    --local \
-    --agent main \
-    --message ping \
-    --json
+  guest_exec openclaw config set agents.defaults.skipBootstrap true --strict-json
+  prepare_agent_workspace
+  guest_exec /bin/sh -lc "$(cat <<EOF
+exec /usr/bin/env $(shell_quote "$API_KEY_ENV=$API_KEY_VALUE") openclaw agent \
+  --local \
+  --agent main \
+  --session-id parallels-linux-smoke \
+  --message $(shell_quote "Reply with exact ASCII text OK only.") \
+  --json
+EOF
+)"
 }
 
 phase_log_path() {

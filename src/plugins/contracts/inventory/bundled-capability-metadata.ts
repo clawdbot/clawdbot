@@ -28,6 +28,7 @@ export type BundledPluginContractSnapshot = {
   webContentExtractorIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
+  migrationProviderIds: string[];
   toolNames: string[];
 };
 
@@ -164,6 +165,9 @@ export function buildBundledPluginContractSnapshot(
     webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders, (value) =>
       value.trim(),
     ),
+    migrationProviderIds: uniqueStrings(manifest.contracts?.migrationProviders, (value) =>
+      value.trim(),
+    ),
     toolNames: uniqueStrings(manifest.contracts?.tools, (value) => value.trim()),
   };
 }
@@ -185,6 +189,7 @@ export function hasBundledPluginContractSnapshotCapabilities(
     entry.webContentExtractorIds.length > 0 ||
     entry.webFetchProviderIds.length > 0 ||
     entry.webSearchProviderIds.length > 0 ||
+    entry.migrationProviderIds.length > 0 ||
     entry.toolNames.length > 0
   );
 }

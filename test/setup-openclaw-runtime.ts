@@ -153,6 +153,7 @@ function createTestRegistryForSetup(
     videoGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    migrationProviders: [],
     memoryEmbeddingProviders: [],
     gatewayHandlers: {},
     gatewayMethodScopes: {},

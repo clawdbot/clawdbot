@@ -3,6 +3,18 @@
   "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli"],
   "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
+  "modelPricing": {
+    "providers": {
+      "google-gemini-cli": {
+        "openRouter": {
+          "provider": "google"
+        },
+        "liteLLM": {
+          "provider": "google"
+        }
+      }
+    }
+  },
   "cliBackends": ["google-gemini-cli"],
   "providerAuthEnvVars": {
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]

@@ -10,6 +10,7 @@ import {
   getVerboseFlag,
   hasHelpOrVersion,
   hasFlag,
+  isHelpOrVersionInvocation,
   isRootHelpInvocation,
   isRootVersionInvocation,
   shouldMigrateState,
@@ -65,6 +66,71 @@ describe("argv helpers", () => {
     },
   ])("detects help/version flags: $name", ({ argv, expected }) => {
     expect(hasHelpOrVersion(argv)).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "root help command",
+      argv: ["node", "openclaw", "help"],
+      expected: true,
+    },
+    {
+      name: "root help command with target",
+      argv: ["node", "openclaw", "help", "matrix"],
+      expected: true,
+    },
+    {
+      name: "nested help command",
+      argv: ["node", "openclaw", "matrix", "encryption", "help"],
+      expected: true,
+    },
+    {
+      name: "known subcommand root help command",
+      argv: ["node", "openclaw", "config", "help"],
+      expected: true,
+    },
+    {
+      name: "known leaf command positional help",
+      argv: ["node", "openclaw", "docs", "help"],
+      expected: false,
+    },
+    {
+      name: "known subcommand leaf positional help",
+      argv: ["node", "openclaw", "config", "set", "some.path", "help"],
+      expected: false,
+    },
+    {
+      name: "unknown plugin command help",
+      argv: ["node", "openclaw", "external-plugin", "tools", "help"],
+      expected: true,
+    },
+    {
+      name: "help flag",
+      argv: ["node", "openclaw", "matrix", "encryption", "--help"],
+      expected: true,
+    },
+    {
+      name: "help as option value",
+      argv: ["node", "openclaw", "agent", "--message", "help"],
+      expected: false,
+    },
+    {
+      name: "help after terminator",
+      argv: ["node", "openclaw", "nodes", "invoke", "--", "help"],
+      expected: false,
+    },
+    {
+      name: "help flag after terminator",
+      argv: ["node", "openclaw", "nodes", "invoke", "--", "--help"],
+      expected: false,
+    },
+    {
+      name: "version flag after terminator",
+      argv: ["node", "openclaw", "nodes", "invoke", "--", "--version"],
+      expected: false,
+    },
+  ])("detects help/version invocations: $name", ({ argv, expected }) => {
+    expect(isHelpOrVersionInvocation(argv)).toBe(expected);
   });
 
   it.each([

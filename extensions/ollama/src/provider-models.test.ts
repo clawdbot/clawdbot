@@ -3,6 +3,7 @@ import { jsonResponse, requestBodyText, requestUrl } from "../../../src/test-hel
 import {
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
+  parseOllamaNumCtxParameter,
   resetOllamaModelShowInfoCacheForTest,
   resolveOllamaApiBase,
   type OllamaTagModel,
@@ -40,6 +41,58 @@ describe("ollama provider models", () => {
       { name: "llama3:8b", contextWindow: 65536, capabilities: undefined },
       { name: "deepseek-r1:14b", contextWindow: undefined, capabilities: undefined },
     ]);
+  });
+
+  it("uses Modelfile num_ctx when it expands the discovered context window", async () => {
+    const models: OllamaTagModel[] = [{ name: "llama3-32k:latest" }];
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model_info: { "llama.context_length": 8192 },
+        parameters: 'stop "<|eot_id|>"\nnum_ctx 32768\nnum_keep 5',
+        capabilities: ["completion"],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched).toEqual([
+      {
+        name: "llama3-32k:latest",
+        contextWindow: 32768,
+        capabilities: ["completion"],
+      },
+    ]);
+  });
+
+  it("keeps the larger native context window when Modelfile num_ctx is smaller", async () => {
+    const models: OllamaTagModel[] = [{ name: "llama3.2:latest" }];
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model_info: { "llama.context_length": 131072 },
+        parameters: "num_ctx 4096",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched[0]?.contextWindow).toBe(131072);
+  });
+
+  it("uses positive num_ctx when /api/show omits model context metadata", async () => {
+    const models: OllamaTagModel[] = [{ name: "custom-model:latest" }];
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model_info: {},
+        parameters: "num_ctx 16384",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched[0]?.contextWindow).toBe(16384);
   });
 
   it("sets models with vision capability from /api/show capabilities", async () => {
@@ -203,13 +256,33 @@ describe("ollama provider models", () => {
       "vision",
       "completion",
       "tools",
+      "thinking",
     ]);
     expect(visionModel.input).toEqual(["text", "image"]);
+    expect(visionModel.reasoning).toBe(true);
+    expect(visionModel.compat?.supportsTools).toBe(true);
 
     const textModel = buildOllamaModelDefinition("glm-5.1:cloud", 202752, ["completion", "tools"]);
     expect(textModel.input).toEqual(["text"]);
+    expect(textModel.reasoning).toBe(false);
+    expect(textModel.compat?.supportsTools).toBe(true);
 
     const noCapabilities = buildOllamaModelDefinition("unknown-model", 65536);
     expect(noCapabilities.input).toEqual(["text"]);
+    expect(noCapabilities.compat).toBeUndefined();
+  });
+
+  it("disables tool support when Ollama capabilities omit tools", () => {
+    const model = buildOllamaModelDefinition("embeddinggemma:latest", 2048, ["embedding"]);
+
+    expect(model.reasoning).toBe(false);
+    expect(model.compat?.supportsTools).toBe(false);
+  });
+
+  it("parses the last positive Modelfile num_ctx value", () => {
+    expect(parseOllamaNumCtxParameter("num_ctx 8192\nnum_ctx 32768")).toBe(32768);
+    expect(parseOllamaNumCtxParameter("temperature 0.8\nnum_ctx -1\nnum_ctx 0")).toBeUndefined();
+    expect(parseOllamaNumCtxParameter('stop "<|eot_id|>"')).toBeUndefined();
+    expect(parseOllamaNumCtxParameter({ num_ctx: 8192 })).toBeUndefined();
   });
 });

@@ -251,6 +251,47 @@ describe("ws connect policy", () => {
     expect(shouldSkipControlUiPairing(controlUi, "operator", false)).toBe(false);
   });
 
+  test("tailscale auth skips pairing only for operator control-ui with device identity", () => {
+    const device = {
+      id: "dev-1",
+      publicKey: "pk",
+      signature: "sig",
+      signedAt: Date.now(),
+      nonce: "nonce-1",
+    };
+    const controlUiWithDevice = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: undefined,
+      deviceRaw: device,
+    });
+    const controlUiWithoutDevice = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: undefined,
+      deviceRaw: null,
+    });
+    const nonControlUiWithDevice = resolveControlUiAuthPolicy({
+      isControlUi: false,
+      controlUiConfig: undefined,
+      deviceRaw: device,
+    });
+
+    expect(
+      shouldSkipControlUiPairing(controlUiWithDevice, "operator", false, "token", "tailscale"),
+    ).toBe(true);
+    expect(
+      shouldSkipControlUiPairing(controlUiWithoutDevice, "operator", false, "token", "tailscale"),
+    ).toBe(false);
+    expect(
+      shouldSkipControlUiPairing(controlUiWithDevice, "node", false, "token", "tailscale"),
+    ).toBe(false);
+    expect(
+      shouldSkipControlUiPairing(nonControlUiWithDevice, "operator", false, "token", "tailscale"),
+    ).toBe(false);
+    expect(
+      shouldSkipControlUiPairing(controlUiWithDevice, "operator", false, "token", "token"),
+    ).toBe(false);
+  });
+
   test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {
     const cases: Array<{
       role: "operator" | "node";

@@ -44,6 +44,7 @@ export type RunCliAgentParams = {
   agentAccountId?: string;
   senderIsOwner?: boolean;
   abortSignal?: AbortSignal;
+  onExecutionStarted?: () => void;
   replyOperation?: ReplyOperation;
   /**
    * Close any long-lived CLI live session created for this run after the run

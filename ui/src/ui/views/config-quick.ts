@@ -376,7 +376,7 @@ function renderCardHeader(icon: TemplateResult, title: string, action?: Template
 
 function renderModelCard(props: QuickSettingsProps) {
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--model">
       ${renderCardHeader(icons.brain, "Model & Thinking")}
       <div class="qs-card__body">
         <div class="qs-row">
@@ -426,7 +426,7 @@ function renderChannelsCard(props: QuickSettingsProps) {
       : undefined;
 
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--channels">
       ${renderCardHeader(icons.send, "Channels", badge)}
       <div class="qs-card__body">
         ${props.channels.length === 0
@@ -460,7 +460,7 @@ function renderAutomationsCard(props: QuickSettingsProps) {
   const { cronJobCount, skillCount, mcpServerCount } = props.automation;
 
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--automations">
       ${renderCardHeader(icons.zap, "Automations")}
       <div class="qs-card__body">
         <div class="qs-row">
@@ -490,7 +490,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
   const { gatewayAuth, execPolicy, deviceAuth } = props.security;
 
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--security">
       ${renderCardHeader(
         icons.eye,
         "Security",
@@ -525,7 +525,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
 function renderAppearanceCard(props: QuickSettingsProps) {
   const themeOptions: ThemeOption[] = [...BUILTIN_THEME_OPTIONS, { id: "custom", label: "Custom" }];
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--appearance">
       ${renderCardHeader(icons.spark, "Appearance")}
       <div class="qs-card__body">
         <div class="qs-row">
@@ -976,10 +976,6 @@ function renderConnectionFooter(props: QuickSettingsProps) {
   `;
 }
 
-function renderStack(...cards: TemplateResult[]) {
-  return html`<div class="qs-stack">${cards}</div>`;
-}
-
 // ── Main render ──
 
 export function renderQuickSettings(props: QuickSettingsProps) {
@@ -993,9 +989,11 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       </div>
 
       <div class="qs-grid">
-        ${renderStack(renderModelCard(props), renderSecurityCard(props))}
-        ${renderChannelsCard(props)} ${renderPersonalCard(props)}
-        ${renderStack(renderAppearanceCard(props), renderAutomationsCard(props))}
+        ${renderModelCard(props)} ${renderChannelsCard(props)} ${renderSecurityCard(props)}
+        ${renderPersonalCard(props)}
+        <div class="qs-side-stack">
+          ${renderAppearanceCard(props)} ${renderAutomationsCard(props)}
+        </div>
         ${renderPresetsCard(props)}
       </div>
 

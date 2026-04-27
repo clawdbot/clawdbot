@@ -15,6 +15,13 @@ const PROVIDER_REQUEST_ID_TEXT_PATTERNS = [
   /\((?:request_id|trace_id)\s*:\s*([A-Za-z0-9._:-]{1,128})\)/i,
 ] as const;
 
+export type DiagnosticErrorFailureKind =
+  | "aborted"
+  | "connection_closed"
+  | "connection_reset"
+  | "terminated"
+  | "timeout";
+
 function isObjectLike(value: unknown): value is object {
   return (typeof value === "object" || typeof value === "function") && value !== null;
 }
@@ -101,6 +108,11 @@ function readDirectMessage(err: unknown): string | undefined {
   return typeof message === "string" ? message : undefined;
 }
 
+function readDirectCode(err: unknown): string | undefined {
+  const code = readOwnDataProperty(err, "code");
+  return typeof code === "string" ? code : undefined;
+}
+
 function extractProviderRequestIdFromText(text: string | undefined): string | undefined {
   if (!text) {
     return undefined;
@@ -154,6 +166,47 @@ export function diagnosticHttpStatusCode(err: unknown): string | undefined {
   const statusCode = readOwnDataProperty(err, "statusCode");
   if (isHttpStatusCode(statusCode)) {
     return String(statusCode);
+  }
+  return undefined;
+}
+
+export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailureKind | undefined {
+  const code = findDiagnosticErrorProperty(err, readDirectCode)?.trim().toUpperCase();
+  switch (code) {
+    case undefined:
+      break;
+    case "ABORT_ERR":
+    case "ECONNABORTED":
+    case "ERR_ABORTED":
+      return "aborted";
+    case "ECONNRESET":
+      return "connection_reset";
+    case "ERR_STREAM_PREMATURE_CLOSE":
+    case "UND_ERR_SOCKET":
+      return "connection_closed";
+    case "ETIMEDOUT":
+    case "ERR_SOCKET_CONNECTION_TIMEOUT":
+      return "timeout";
+  }
+
+  const message = findDiagnosticErrorProperty(err, readDirectMessage);
+  if (!message) {
+    return undefined;
+  }
+  if (/\b(?:terminated|sigkill|sigterm)\b/i.test(message)) {
+    return "terminated";
+  }
+  if (/\b(?:econnreset|connection reset)\b/i.test(message)) {
+    return "connection_reset";
+  }
+  if (/\b(?:socket hang up|premature close|connection closed|other side closed)\b/i.test(message)) {
+    return "connection_closed";
+  }
+  if (/\b(?:timed out|timeout|etimedout)\b/i.test(message)) {
+    return "timeout";
+  }
+  if (/\b(?:aborted|abort_err|operation was aborted)\b/i.test(message)) {
+    return "aborted";
   }
   return undefined;
 }

@@ -111,6 +111,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     onCommands: ["models", ""],
     onChannels: ["web", ""],
     onRoutes: ["gateway-webhook", ""],
+    onConfigPaths: ["browser", ""],
     onCapabilities: ["provider", "tool", "wat"]
   },
   setup: {
@@ -133,6 +134,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
         onCommands: ["models"],
         onChannels: ["web"],
         onRoutes: ["gateway-webhook"],
+        onConfigPaths: ["browser"],
         onCapabilities: ["provider", "tool"],
       });
       expect(result.manifest.setup).toEqual({

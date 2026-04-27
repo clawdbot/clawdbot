@@ -105,6 +105,9 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   if (ids.length > 0) {
     return ids;
   }
+  if (params.origin || scopedPluginIds !== undefined) {
+    return [];
+  }
   return undefined;
 }
 

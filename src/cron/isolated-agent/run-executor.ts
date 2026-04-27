@@ -63,6 +63,7 @@ export function createCronPromptExecutor(params: {
   agentId: string;
   agentDir: string;
   agentSessionKey: string;
+  runSessionKey: string;
   workspaceDir: string;
   lane?: string;
   resolvedVerboseLevel: VerboseLevel;
@@ -86,6 +87,7 @@ export function createCronPromptExecutor(params: {
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
   abortReason: () => string;
+  onExecutionStarted?: () => void;
 }) {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
@@ -127,7 +129,7 @@ export function createCronPromptExecutor(params: {
             : await getCliSessionId(params.cronSession.sessionEntry, providerOverride);
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
-            sessionKey: params.agentSessionKey,
+            sessionKey: params.runSessionKey,
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
@@ -143,6 +145,8 @@ export function createCronPromptExecutor(params: {
             cliSessionId,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
+            abortSignal: params.abortSignal,
+            onExecutionStarted: params.onExecutionStarted,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: true,
@@ -152,7 +156,7 @@ export function createCronPromptExecutor(params: {
           );
           return result;
         }
-        const { resolveFastModeState, resolveNestedAgentLane, runEmbeddedPiAgent } =
+        const { resolveCronAgentLane, resolveFastModeState, runEmbeddedPiAgent } =
           await loadCronEmbeddedRuntime();
         const currentChannelId = await resolveCurrentChannelTarget({
           channel: params.messageChannel,
@@ -161,7 +165,7 @@ export function createCronPromptExecutor(params: {
         });
         const result = await runEmbeddedPiAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
-          sessionKey: params.agentSessionKey,
+          sessionKey: params.runSessionKey,
           agentId: params.agentId,
           trigger: "cron",
           jobId: params.job.id,
@@ -179,7 +183,7 @@ export function createCronPromptExecutor(params: {
           config: params.cfgWithAgentDefaults,
           skillsSnapshot: params.skillsSnapshot,
           prompt: promptText,
-          lane: resolveNestedAgentLane(params.lane),
+          lane: resolveCronAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
           authProfileId: params.liveSelection.authProfileId,
@@ -211,6 +215,7 @@ export function createCronPromptExecutor(params: {
           forceMessageTool: params.toolPolicy.forceMessageTool,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
+          onExecutionStarted: params.onExecutionStarted,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
         });
@@ -247,6 +252,7 @@ export async function executeCronRun(params: {
   agentId: string;
   agentDir: string;
   agentSessionKey: string;
+  runSessionKey: string;
   workspaceDir: string;
   lane?: string;
   resolvedDelivery: {
@@ -270,6 +276,7 @@ export async function executeCronRun(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
   isAborted: () => boolean;
+  onExecutionStarted?: () => void;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   suppressExecNotifyOnExit: boolean;
@@ -280,7 +287,7 @@ export async function executeCronRun(params: {
     normalizeVerboseLevel(params.agentVerboseDefault) ??
     "off";
   registerAgentRunContext(params.cronSession.sessionEntry.sessionId, {
-    sessionKey: params.agentSessionKey,
+    sessionKey: params.runSessionKey,
     verboseLevel: resolvedVerboseLevel,
   });
   const executor = createCronPromptExecutor({
@@ -290,6 +297,7 @@ export async function executeCronRun(params: {
     agentId: params.agentId,
     agentDir: params.agentDir,
     agentSessionKey: params.agentSessionKey,
+    runSessionKey: params.runSessionKey,
     workspaceDir: params.workspaceDir,
     lane: params.lane,
     resolvedVerboseLevel,
@@ -305,6 +313,7 @@ export async function executeCronRun(params: {
     cronSession: params.cronSession,
     abortSignal: params.abortSignal,
     abortReason: params.abortReason,
+    onExecutionStarted: params.onExecutionStarted,
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();
@@ -355,10 +364,12 @@ export async function executeCronRun(params: {
     const interimPayloads = runResult.payloads ?? [];
     const {
       deliveryPayloadHasStructuredContent: interimPayloadHasStructuredContent,
+      hasFatalErrorPayload: interimHasFatalErrorPayload,
       outputText: interimOutputText,
     } = resolveCronPayloadOutcome({
       payloads: interimPayloads,
       runLevelError: runResult.meta?.error,
+      failureSignal: runResult.meta?.failureSignal,
       finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
       preferFinalAssistantVisibleText: (
         await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel)
@@ -367,6 +378,7 @@ export async function executeCronRun(params: {
     const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =
       !runResult.meta?.error &&
+      !interimHasFatalErrorPayload &&
       !runResult.didSendViaMessagingTool &&
       !interimPayloadHasStructuredContent &&
       !interimPayloads.some((payload) => payload?.isError === true) &&
@@ -377,12 +389,12 @@ export async function executeCronRun(params: {
     if (shouldRetryInterimAck) {
       const { countActiveDescendantRuns, listDescendantRunsForRequester } =
         await loadCronSubagentRegistryRuntime();
-      hasFreshDescendants = listDescendantRunsForRequester(params.agentSessionKey).some((entry) => {
+      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
         const descendantStartedAt =
           typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
         return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
       });
-      hasActiveDescendants = countActiveDescendantRuns(params.agentSessionKey) > 0;
+      hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;
     }
 
     if (shouldRetryInterimAck && !hasFreshDescendants && !hasActiveDescendants) {

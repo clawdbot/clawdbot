@@ -569,6 +569,82 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
+  it("persists the concrete announce delivery error when cleanup gives up", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    const runSubagentAnnounceFlow = vi.fn(
+      async (announceParams: {
+        onDeliveryResult?: (delivery: {
+          delivered: false;
+          path: "direct";
+          error: string;
+          phases: Array<{
+            phase: "direct-primary" | "queue-fallback";
+            delivered: boolean;
+            path: "direct" | "none";
+            error?: string;
+          }>;
+        }) => void;
+      }) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          error: "UNAVAILABLE: requester wake failed",
+          phases: [
+            {
+              phase: "direct-primary",
+              delivered: false,
+              path: "direct",
+              error: "UNAVAILABLE: requester wake failed",
+            },
+            {
+              phase: "queue-fallback",
+              delivered: false,
+              path: "none",
+            },
+          ],
+        });
+        return false;
+      },
+    );
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: entry.runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
+        deliveryStatus: "failed",
+        error:
+          "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
+      }),
+    );
+    expect(entry.lastAnnounceDeliveryError).toBe(
+      "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
+    );
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    expect(persist).toHaveBeenCalled();
+  });
+
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: false,

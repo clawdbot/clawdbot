@@ -146,6 +146,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 ## Runtime model
 
 - Gateway owns the WhatsApp socket and reconnect loop.
+- The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window.
 - Outbound sends require an active WhatsApp listener for the target account.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
@@ -510,6 +511,10 @@ Behavior notes:
   <Accordion title="Linked but disconnected / reconnect loop">
     Symptom: linked account with repeated disconnects or reconnect attempts.
 
+    Quiet accounts can stay connected past the normal message timeout; the watchdog
+    restarts when WhatsApp Web transport activity stops, the socket closes, or
+    application-level activity stays silent beyond the longer safety window.
+
     Fix:
 
     ```bash
@@ -562,7 +567,9 @@ The effective `direct` map is determined first: if the account defines its own `
 1. **Direct-specific system prompt** (`direct["<peerId>"].systemPrompt`): used when the specific peer entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
 2. **Direct wildcard system prompt** (`direct["*"].systemPrompt`): used when the specific peer entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
-Note: `dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`); prompt overrides live under `direct`.
+<Note>
+`dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`). Prompt overrides live under `direct`.
+</Note>
 
 **Difference from Telegram multi-account behavior:** In Telegram, root `groups` is intentionally suppressed for all accounts in a multi-account setup — even accounts that define no `groups` of their own — to prevent a bot from receiving group messages for groups it does not belong to. WhatsApp does not apply this guard: root `groups` and root `direct` are always inherited by accounts that define no account-level override, regardless of how many accounts are configured. In a multi-account WhatsApp setup, if you want per-account group or direct prompts, define the full map under each account explicitly rather than relying on root-level defaults.
 

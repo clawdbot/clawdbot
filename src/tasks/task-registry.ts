@@ -1672,15 +1672,20 @@ function updateTaskDeliveryByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 }) {
   ensureTaskRegistryReady();
+  const patch: Partial<TaskRecord> = {
+    deliveryStatus: params.deliveryStatus,
+  };
+  if (params.error !== undefined) {
+    patch.error = params.error;
+  }
   return updateTasksByRunId({
     runId: params.runId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
-    patch: {
-      deliveryStatus: params.deliveryStatus,
-    },
+    patch,
   });
 }
 
@@ -1772,6 +1777,7 @@ export function setTaskRunDeliveryStatusByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 }) {
   return updateTaskDeliveryByRunId(params);
 }

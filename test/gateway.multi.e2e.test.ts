@@ -116,6 +116,7 @@ describe("gateway multi-instance e2e", () => {
         events: chatEvents,
         runId: String(runId),
         sessionKey,
+        timeoutMs: 45_000,
       });
       const finalText = extractFirstTextBlock(finalEvent.message);
       expect(typeof finalText).toBe("string");

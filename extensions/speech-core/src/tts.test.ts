@@ -1,6 +1,10 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type {
   SpeechProviderPlugin,
@@ -163,6 +167,7 @@ async function expectTtsPayloadResult(params: {
 
 describe("speech-core native voice-note routing", () => {
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     synthesizeMock.mockClear();
     prepareSynthesisMock.mockClear();
     installSpeechProviders([createMockSpeechProvider()]);
@@ -212,6 +217,63 @@ describe("speech-core native voice-note routing", () => {
       target: "audio-file",
       audioAsVoice: undefined,
     });
+  });
+
+  it("uses the active runtime snapshot when source config still contains TTS SecretRefs", async () => {
+    const sourceConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          providers: {
+            mock: {
+              apiKey: { source: "exec", provider: "mockexec", id: "minimax/tts/apiKey" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          providers: {
+            mock: {
+              apiKey: "resolved-minimax-key",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        isConfigured: ({ providerConfig }) => providerConfig.apiKey === "resolved-minimax-key",
+        resolveConfig: ({ rawConfig }) => {
+          const providers = rawConfig.providers as Record<string, { apiKey?: unknown }> | undefined;
+          return {
+            apiKey: providers?.mock?.apiKey,
+          };
+        },
+      }),
+    ]);
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const result = await synthesizeSpeech({
+      text: "Runtime snapshot TTS SecretRef",
+      cfg: sourceConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: runtimeConfig,
+        providerConfig: expect.objectContaining({
+          apiKey: "resolved-minimax-key",
+        }),
+      }),
+    );
   });
 
   it.each(["feishu", "whatsapp"] as const)(

@@ -353,7 +353,7 @@ function parseDiscordExplicitTarget(raw: string) {
       return null;
     }
     return {
-      to: target.id,
+      to: target.normalized,
       chatType: target.kind === "user" ? ("direct" as const) : ("channel" as const),
     };
   } catch {

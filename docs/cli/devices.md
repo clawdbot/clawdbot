@@ -55,10 +55,9 @@ is omitted or `--latest` is passed, OpenClaw only prints the selected pending
 request and exits; rerun approval with the exact request ID after verifying
 the details.
 
-Note: if a device retries pairing with changed auth details (role/scopes/public
-key), OpenClaw supersedes the previous pending entry and issues a new
-`requestId`. Run `openclaw devices list` right before approval to use the
-current ID.
+<Note>
+If a device retries pairing with changed auth details (role, scopes, or public key), OpenClaw supersedes the previous pending entry and issues a new `requestId`. Run `openclaw devices list` right before approval to use the current ID.
+</Note>
 
 If the device is already paired and asks for broader scopes or a broader role,
 OpenClaw keeps the existing approval in place and creates a new pending upgrade
@@ -128,8 +127,9 @@ Returns the revoke result as JSON.
 - `--timeout <ms>`: RPC timeout.
 - `--json`: JSON output (recommended for scripting).
 
-Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
-Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+<Warning>
+When you set `--url`, the CLI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+</Warning>
 
 ## Notes
 

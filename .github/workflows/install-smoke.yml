@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      update_baseline_version:
+        description: Baseline openclaw version or dist-tag for installer update smoke
+        required: false
+        default: latest
+        type: string
   workflow_call:
     inputs:
       ref:
@@ -21,6 +26,11 @@ on:
         required: false
         default: true
         type: boolean
+      update_baseline_version:
+        description: Baseline openclaw version or dist-tag for installer update smoke
+        required: false
+        default: latest
+        type: string
 
 permissions:
   contents: read
@@ -103,7 +113,6 @@ jobs:
           context: .
           file: ./Dockerfile
           build-args: |
-            OPENCLAW_DOCKER_APT_UPGRADE=0
             OPENCLAW_EXTENSIONS=matrix
           tags: |
             openclaw-dockerfile-smoke:local
@@ -218,7 +227,6 @@ jobs:
           context: .
           file: ./Dockerfile
           build-args: |
-            OPENCLAW_DOCKER_APT_UPGRADE=0
             OPENCLAW_EXTENSIONS=matrix
           tags: |
             openclaw-dockerfile-smoke:local
@@ -332,7 +340,7 @@ jobs:
           OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: "0"
           OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
-          OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: latest
+          OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: ${{ inputs.update_baseline_version || 'latest' }}
           OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: openclaw-dockerfile-smoke:local
           OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
         run: bash scripts/test-install-sh-docker.sh

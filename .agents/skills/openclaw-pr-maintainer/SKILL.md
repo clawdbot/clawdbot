@@ -7,20 +7,20 @@ description: Review, triage, close, label, comment on, or land OpenClaw PRs/issu
 
 Use this skill for maintainer-facing GitHub workflow, not for ordinary code changes.
 
-## Start issue and PR triage with ghcrawl
+## Start issue and PR triage with gitcrawl
 
-- Anytime you inspect OpenClaw issues or PRs, check local `ghcrawl` data first for related threads, duplicate attempts, and already-landed fixes.
-- Use `ghcrawl` for candidate discovery and clustering; use `gh`, `gh api`, and the current checkout to verify live state before commenting, labeling, closing, or landing.
-- If `ghcrawl` is missing, stale, lacks the target thread, or has no embeddings for neighbor/search commands, fall back to the GitHub search workflow below.
-- Do not run expensive/update commands such as `ghcrawl refresh`, `ghcrawl embed`, or `ghcrawl cluster` unless the user asked to update the local store or the stale data is blocking the decision.
+- Anytime you inspect OpenClaw issues or PRs, check local `gitcrawl` data first for related threads, duplicate attempts, and already-landed fixes.
+- Use `gitcrawl` for candidate discovery and clustering; use `gh`, `gh api`, and the current checkout to verify live state before commenting, labeling, closing, or landing.
+- If `gitcrawl` is missing, stale, lacks the target thread, or has no embeddings for neighbor/search commands, fall back to the GitHub search workflow below.
+- Do not run expensive/update commands such as `gitcrawl sync --include-comments`, future enrichment commands, or broad reclustering unless the user asked to update the local store or stale data is blocking the decision.
 
 Common read-only path:
 
 ```bash
-ghcrawl threads openclaw/openclaw --numbers <issue-or-pr-number> --include-closed --json
-ghcrawl neighbors openclaw/openclaw --number <issue-or-pr-number> --limit 12 --json
-ghcrawl search openclaw/openclaw --query "<scope or title keywords>" --mode hybrid --json
-ghcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
+gitcrawl threads openclaw/openclaw --numbers <issue-or-pr-number> --include-closed --json
+gitcrawl neighbors openclaw/openclaw --number <issue-or-pr-number> --limit 12 --json
+gitcrawl search openclaw/openclaw --query "<scope or title keywords>" --mode hybrid --json
+gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
 ```
 
 ## Apply close and triage labels correctly
@@ -75,7 +75,7 @@ ghcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --b
 
 ## Search broadly before deciding
 
-- Prefer `ghcrawl` first. Then use targeted GitHub keyword search to verify gaps, live status, comments, and candidates not present in the local store.
+- Prefer `gitcrawl` first. Then use targeted GitHub keyword search to verify gaps, live status, comments, and candidates not present in the local store.
 - Use `--repo openclaw/openclaw` with `--match title,body` first when using `gh search`.
 - Add `--match comments` when triaging follow-up discussion or closed-as-duplicate chains.
 - Do not stop at the first 500 results when the task requires a full search.

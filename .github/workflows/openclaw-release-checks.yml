@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Existing release tag or current full 40-character workflow-branch commit SHA to validate (for example v2026.4.12 or 0123456789abcdef0123456789abcdef01234567)
+        description: Branch, tag, or full commit SHA to validate
         required: true
         type: string
       provider:
@@ -63,8 +63,8 @@ jobs:
           RELEASE_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "Expected an existing release tag or current full 40-character workflow-branch commit SHA, got: ${RELEASE_REF}" >&2
+          if [[ -z "${RELEASE_REF// }" ]] || [[ "${RELEASE_REF}" == -* ]]; then
+            echo "Expected a branch, tag, or full commit SHA; got: ${RELEASE_REF}" >&2
             exit 1
           fi
 
@@ -78,23 +78,26 @@ jobs:
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate selected ref is on workflow branch
+      - name: Validate selected ref belongs to this repository
         env:
           RELEASE_REF: ${{ inputs.ref }}
-          WORKFLOW_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          RELEASE_BRANCH_REF="refs/remotes/origin/${WORKFLOW_REF_NAME}"
-          git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
-          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            BRANCH_SHA="$(git rev-parse "${RELEASE_BRANCH_REF}")"
-            if [[ "$(git rev-parse HEAD)" != "${BRANCH_SHA}" ]]; then
-              echo "Commit SHA mode only supports the current ${WORKFLOW_REF_NAME} HEAD. Use a release tag for older commits." >&2
-              exit 1
-            fi
-          else
-            git merge-base --is-ancestor HEAD "${RELEASE_BRANCH_REF}"
+          SELECTED_SHA="$(git rev-parse HEAD)"
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git fetch --tags origin '+refs/tags/*:refs/tags/*'
+
+          if git tag --points-at "${SELECTED_SHA}" | grep -Eq '^v'; then
+            exit 0
           fi
+
+          if git for-each-ref --format='%(refname:short)' --contains "${SELECTED_SHA}" refs/remotes/origin | grep -Eq '^origin/'; then
+            exit 0
+          fi
+
+          echo "Ref '${RELEASE_REF}' resolved to ${SELECTED_SHA}, but that commit is not reachable from an OpenClaw branch or release tag." >&2
+          echo "Secret-bearing release checks only run repository-owned branch/tag history, not arbitrary unreferenced commits." >&2
+          exit 1
 
       - name: Capture selected inputs
         id: inputs
@@ -155,6 +158,7 @@ jobs:
   live_and_e2e_release_checks:
     needs: [resolve_target]
     permissions:
+      actions: read
       contents: read
       packages: write
       pull-requests: read
@@ -210,6 +214,69 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+
+  package_acceptance_release_checks:
+    name: Run package acceptance
+    needs: [resolve_target]
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      pull-requests: read
+    uses: ./.github/workflows/package-acceptance.yml
+    with:
+      workflow_ref: ${{ github.ref_name }}
+      source: ref
+      package_ref: ${{ needs.resolve_target.outputs.ref }}
+      suite_profile: package
+      telegram_mode: mock-openai
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+      BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
 
   qa_lab_parity_release_checks:
     name: Run QA Lab parity gate
@@ -332,6 +399,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS: "3000"
         run: |
           set -euo pipefail
 
@@ -344,7 +412,9 @@ jobs:
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --fast
+            --profile fast \
+            --fast \
+            --fail-fast
 
       - name: Upload Matrix QA artifacts
         if: always()
@@ -438,3 +508,40 @@ jobs:
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: warn
+
+  summary:
+    name: Verify release checks
+    needs:
+      - install_smoke_release_checks
+      - cross_os_release_checks
+      - live_and_e2e_release_checks
+      - package_acceptance_release_checks
+      - qa_lab_parity_release_checks
+      - qa_live_matrix_release_checks
+      - qa_live_telegram_release_checks
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify release check results
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          for item in \
+            "install_smoke_release_checks=${{ needs.install_smoke_release_checks.result }}" \
+            "cross_os_release_checks=${{ needs.cross_os_release_checks.result }}" \
+            "live_and_e2e_release_checks=${{ needs.live_and_e2e_release_checks.result }}" \
+            "package_acceptance_release_checks=${{ needs.package_acceptance_release_checks.result }}" \
+            "qa_lab_parity_release_checks=${{ needs.qa_lab_parity_release_checks.result }}" \
+            "qa_live_matrix_release_checks=${{ needs.qa_live_matrix_release_checks.result }}" \
+            "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}"
+          do
+            name="${item%%=*}"
+            result="${item#*=}"
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "::error::${name} ended with ${result}"
+              failed=1
+            fi
+          done
+          exit "$failed"

@@ -7,8 +7,7 @@ read_when:
 title: "Messages"
 ---
 
-This page ties together how OpenClaw handles inbound messages, sessions, queueing,
-streaming, and reasoning visibility.
+OpenClaw handles inbound messages through a pipeline of session resolution, queueing, streaming, tool execution, and reasoning visibility. This page maps the path from inbound message to reply.
 
 ## Message flow (high level)
 

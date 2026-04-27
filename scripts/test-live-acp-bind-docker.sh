@@ -148,6 +148,7 @@ exec "\$script_dir/claude-real" "\$@"
 WRAP
       chmod +x "$NPM_CONFIG_PREFIX/bin/claude"
     fi
+    export CLAUDE_CODE_EXECUTABLE="$NPM_CONFIG_PREFIX/bin/claude"
     claude auth status || true
     ;;
   codex)
@@ -162,14 +163,40 @@ WRAP
     fi
     droid --version
     if [ -z "${FACTORY_API_KEY:-}" ]; then
-      echo "Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
-      exit 1
+      echo "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
+      exit 0
     fi
     ;;
   gemini)
     mkdir -p "$HOME/.gemini"
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/gemini" ]; then
       npm install -g @google/gemini-cli
+    fi
+    if [ -n "${GEMINI_API_KEY:-}" ] || [ -n "${GOOGLE_API_KEY:-}" ]; then
+      gemini_auth_type="gemini-api-key"
+      if [ -z "${GEMINI_API_KEY:-}" ] && [ -n "${GOOGLE_API_KEY:-}" ]; then
+        gemini_auth_type="vertex-ai"
+        export GOOGLE_GENAI_USE_VERTEXAI="${GOOGLE_GENAI_USE_VERTEXAI:-true}"
+      fi
+      GEMINI_CLI_AUTH_TYPE="$gemini_auth_type" node <<'NODE'
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const settingsPath = path.join(os.homedir(), ".gemini", "settings.json");
+let settings = {};
+try {
+  settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+} catch {}
+settings.security = settings.security && typeof settings.security === "object" ? settings.security : {};
+settings.security.auth =
+  settings.security.auth && typeof settings.security.auth === "object" ? settings.security.auth : {};
+settings.security.auth.selectedType = process.env.GEMINI_CLI_AUTH_TYPE;
+settings.security.auth.enforcedType = process.env.GEMINI_CLI_AUTH_TYPE;
+fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+NODE
+      echo "Using Gemini CLI auth type $gemini_auth_type"
     fi
     ;;
   opencode)
@@ -260,6 +287,16 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
     openclaw_live_stage_auth_into_home "$DOCKER_HOME_DIR" "${AUTH_DIRS[@]}" --files "${AUTH_FILES[@]}"
     DOCKER_AUTH_PRESTAGED=1
+  fi
+
+  if [[ "$ACP_AGENT" == "droid" && -z "${FACTORY_API_KEY:-}" ]]; then
+    echo "==> Run ACP bind live test in Docker"
+    echo "==> Agent: $ACP_AGENT"
+    echo "==> Profile file: $PROFILE_STATUS"
+    echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
+    echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
+    echo "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
+    continue
   fi
 
   EXTERNAL_AUTH_MOUNTS=()

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -19,6 +20,15 @@ export function resolveMemoryFlushContextWindowTokens(params: {
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS
   );
+}
+
+export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
+  const compaction = cfg?.agents?.defaults?.compaction;
+  if (compaction?.truncateAfterCompaction !== true) {
+    return undefined;
+  }
+  const parsed = parseNonNegativeByteSize(compaction.maxActiveTranscriptBytes);
+  return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
 }
 
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {

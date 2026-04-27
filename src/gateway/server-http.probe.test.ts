@@ -265,6 +265,27 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("serves /healthz before loading gateway config", async () => {
+    const loadConfig = vi.fn(() => {
+      throw new Error("config load blocked");
+    });
+
+    await withGatewayServer({
+      prefix: "probe-healthz-before-config",
+      resolvedAuth: AUTH_NONE,
+      overrides: { loadConfig },
+      run: async (server) => {
+        const req = createRequest({ path: "/healthz" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+        expect(loadConfig).not.toHaveBeenCalled();
+      },
+    });
+  });
+
   it("serves probes before stalled request stages", async () => {
     const handleHooksRequest = vi.fn((): Promise<boolean> => new Promise(() => {}));
     const getReadiness = vi.fn(() => ({

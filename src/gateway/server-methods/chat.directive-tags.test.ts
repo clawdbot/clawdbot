@@ -1789,6 +1789,71 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("persists non-image chat.send attachments as media refs without dispatch images", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-file-");
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.savedMediaResults = [
+      { path: "/tmp/chat-send-brief.pdf", contentType: "application/pdf" },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-file",
+      message: "summarize this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "brief.pdf",
+            content: Buffer.from("%PDF-1.4\n").toString("base64"),
+          },
+        ],
+      },
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    await waitForAssertion(() => {
+      const userUpdate = mockState.emittedTranscriptUpdates.find(
+        (update) =>
+          typeof update.message === "object" &&
+          update.message !== null &&
+          (update.message as { role?: unknown }).role === "user",
+      );
+      const message = userUpdate?.message as
+        | {
+            content?: unknown;
+            MediaPath?: string;
+            MediaPaths?: string[];
+            MediaType?: string;
+            MediaTypes?: string[];
+          }
+        | undefined;
+      expect(mockState.lastDispatchImages).toBeUndefined();
+      expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
+      expect(mockState.lastDispatchCtx?.Body).toMatch(
+        /^summarize this\n\[media attached: media:\/\/inbound\//,
+      );
+      expect(mockState.savedMediaCalls).toEqual([
+        expect.objectContaining({
+          contentType: "application/pdf",
+          subdir: "inbound",
+          size: expect.any(Number),
+        }),
+      ]);
+      expect(message?.content).toMatch(/^summarize this\n\[media attached: media:\/\/inbound\//);
+      expect(message?.MediaPath).toBe("/tmp/chat-send-brief.pdf");
+      expect(message?.MediaPaths).toEqual(["/tmp/chat-send-brief.pdf"]);
+      expect(message?.MediaType).toBe("application/pdf");
+      expect(message?.MediaTypes).toEqual(["application/pdf"]);
+    });
+  });
+
   it("preserves offloaded attachment media paths in transcript order", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-offloaded-");
     mockState.finalText = "ok";

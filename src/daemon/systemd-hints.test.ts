@@ -7,6 +7,12 @@ describe("isSystemdUnavailableDetail", () => {
     expect(
       isSystemdUnavailableDetail("systemctl --user unavailable: Failed to connect to bus"),
     ).toBe(true);
+    expect(isSystemdUnavailableDetail("systemctl --user unavailable: ENOMEDIUM")).toBe(true);
+    expect(
+      isSystemdUnavailableDetail(
+        "systemctl --user unavailable: Failed to connect to bus: Permission denied",
+      ),
+    ).toBe(true);
     expect(
       isSystemdUnavailableDetail(
         "systemctl not available; systemd user services are required on Linux.",

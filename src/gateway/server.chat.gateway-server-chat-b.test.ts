@@ -5,9 +5,11 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
+  dispatchInboundMessageMock,
   getReplyFromConfig,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
@@ -46,6 +48,16 @@ const sendReq = (
     }),
   );
 };
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
@@ -123,6 +135,130 @@ async function prepareMainHistoryHarness(params: {
 }
 
 describe("gateway server chat", () => {
+  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchRelease = createDeferred<void>();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "vision-model",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const firstCatalog =
+        createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockImplementationOnce(() => firstCatalog.promise)
+          .mockResolvedValue([
+            {
+              id: "vision-model",
+              name: "Vision Model",
+              provider: "test-provider",
+              input: ["text", "image"],
+            },
+          ]),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
+
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      const params = {
+        sessionKey: "main",
+        message: "see image",
+        idempotencyKey: "idem-attachment-race",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: pngB64,
+          },
+        ],
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const callSend = (id: string) =>
+        chatHandlers["chat.send"]({
+          req: { type: "req", id, method: "chat.send", params },
+          params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            responses.push({ id, ok, payload, error });
+          }) as RespondFn,
+          context,
+        });
+
+      const first = Promise.resolve(callSend("first"));
+      await vi.waitFor(() => {
+        expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+
+      await callSend("duplicate");
+      expect(responses).toContainEqual({
+        id: "duplicate",
+        ok: true,
+        payload: { runId: "idem-attachment-race", status: "started" },
+        error: undefined,
+      });
+
+      firstCatalog.resolve([
+        {
+          id: "vision-model",
+          name: "Vision Model",
+          provider: "test-provider",
+          input: ["text", "image"],
+        },
+      ]);
+      await first;
+
+      expect(responses).toContainEqual({
+        id: "first",
+        ok: true,
+        payload: { runId: "idem-attachment-race", status: "in_flight" },
+        error: undefined,
+      });
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(context.addChatRun).toHaveBeenCalledTimes(1);
+      dispatchRelease.resolve();
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   test("chat.history backfills claude-cli sessions from Claude project files", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);

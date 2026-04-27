@@ -168,6 +168,7 @@ describe("createSlackBoltApp", () => {
       receiver,
       clientOptions,
       ignoreSelf: false,
+      tokenVerificationEnabled: false,
     });
     expect((app as unknown as FakeApp).middleware).toHaveLength(1);
   });
@@ -198,8 +199,36 @@ describe("createSlackBoltApp", () => {
       receiver,
       clientOptions,
       ignoreSelf: false,
+      tokenVerificationEnabled: false,
     });
     expect((app as unknown as FakeApp).middleware).toHaveLength(1);
+  });
+
+  it("prevents Bolt's constructor-time token verification side effect", () => {
+    let eagerAuthTestCalls = 0;
+    class BoltLikeEagerAuthApp extends FakeApp {
+      constructor(args: Record<string, unknown>) {
+        super(args);
+        if (args.tokenVerificationEnabled !== false) {
+          eagerAuthTestCalls += 1;
+        }
+      }
+    }
+
+    createSlackBoltApp({
+      interop: {
+        App: BoltLikeEagerAuthApp as never,
+        HTTPReceiver: FakeHTTPReceiver as never,
+        SocketModeReceiver: FakeSocketModeReceiver as never,
+      },
+      slackMode: "socket",
+      botToken: "xoxb-invalid",
+      appToken: "xapp-test",
+      slackWebhookPath: "/slack/events",
+      clientOptions: {},
+    });
+
+    expect(eagerAuthTestCalls).toBe(0);
   });
 
   it("keeps Bolt self filtering except assistant message_changed events", () => {

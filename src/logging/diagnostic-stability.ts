@@ -31,6 +31,9 @@ export type DiagnosticStabilityEventRecord = {
   provider?: string;
   model?: string;
   durationMs?: number;
+  requestBytes?: number;
+  responseBytes?: number;
+  timeToFirstByteMs?: number;
   resultCount?: number;
   commandLength?: number;
   exitCode?: number;
@@ -46,6 +49,7 @@ export type DiagnosticStabilityEventRecord = {
   queueDepth?: number;
   queueSize?: number;
   waitMs?: number;
+  failureKind?: string;
   active?: number;
   waiting?: number;
   queued?: number;
@@ -290,6 +294,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.commandLength = event.commandLength;
       record.exitCode = event.exitCode;
       record.timedOut = event.timedOut;
+      record.failureKind = event.failureKind;
       assignReasonCode(record, event.failureKind);
       break;
     case "run.started":
@@ -341,11 +346,19 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.provider = event.provider;
       record.model = event.model;
       record.durationMs = event.durationMs;
+      record.requestBytes = event.requestPayloadBytes;
+      record.responseBytes = event.responseStreamBytes;
+      record.timeToFirstByteMs = event.timeToFirstByteMs;
       break;
     case "model.call.error":
       record.provider = event.provider;
       record.model = event.model;
       record.durationMs = event.durationMs;
+      record.requestBytes = event.requestPayloadBytes;
+      record.responseBytes = event.responseStreamBytes;
+      record.timeToFirstByteMs = event.timeToFirstByteMs;
+      record.failureKind = event.failureKind;
+      record.memory = event.memory ? copyMemory(event.memory) : undefined;
       assignReasonCode(record, event.errorCategory);
       break;
     case "log.record":

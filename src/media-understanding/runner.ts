@@ -2,12 +2,6 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
-import {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "../agents/model-catalog.js";
 import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
@@ -58,11 +52,44 @@ export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.
 export type { ActiveMediaModel } from "./active-model.types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+type HasAvailableAuthForProvider =
+  typeof import("../agents/model-auth.js").hasAvailableAuthForProvider;
+type ModelCatalogApi = typeof import("../agents/model-catalog.js");
+type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadModelCatalog"]>>;
 
 export type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
   decision: MediaUnderstandingDecision;
 };
+
+let cachedHasAvailableAuthForProvider: HasAvailableAuthForProvider | null = null;
+let cachedModelCatalogApi: ModelCatalogApi | null = null;
+
+async function loadModelCatalogApi(): Promise<ModelCatalogApi> {
+  cachedModelCatalogApi ??= await import("../agents/model-catalog.js");
+  return cachedModelCatalogApi;
+}
+
+function resolveLiteralProviderApiKey(
+  cfg: OpenClawConfig | undefined,
+  providerId: string,
+): string | null {
+  const value = cfg?.models?.providers?.[providerId]?.apiKey;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+async function hasProviderAuthAvailable(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Promise<boolean> {
+  if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
+    return true;
+  }
+  cachedHasAvailableAuthForProvider ??= (await import("../agents/model-auth.js"))
+    .hasAvailableAuthForProvider;
+  return await cachedHasAvailableAuthForProvider(params);
+}
 
 function resolveConfiguredKeyProviderOrder(params: {
   cfg: OpenClawConfig;
@@ -113,11 +140,13 @@ function resolveConfiguredImageModel(params: {
 
 function resolveCatalogImageModelId(params: {
   providerId: string;
-  catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  catalog: ModelCatalog;
+  modelSupportsVision: ModelCatalogApi["modelSupportsVision"];
 }): string | undefined {
   const matches = params.catalog.filter(
     (entry) =>
-      normalizeMediaProviderId(entry.provider) === params.providerId && modelSupportsVision(entry),
+      normalizeMediaProviderId(entry.provider) === params.providerId &&
+      params.modelSupportsVision(entry),
   );
   if (matches.length === 0) {
     return undefined;
@@ -135,6 +164,7 @@ async function explicitImageModelVisionStatus(params: {
   if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
     return "supported";
   }
+  const { findModelInCatalog, loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
   const catalog = await loadModelCatalog({ config: params.cfg });
   const entry = findModelInCatalog(catalog, params.providerId, params.model);
   if (!entry) {
@@ -171,10 +201,12 @@ async function resolveAutoImageModelId(params: {
   if (defaultModel) {
     return defaultModel;
   }
+  const { loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
   const catalog = await loadModelCatalog({ config: params.cfg });
   return resolveCatalogImageModelId({
     providerId: params.providerId,
     catalog,
+    modelSupportsVision,
   });
 }
 
@@ -457,7 +489,7 @@ async function resolveKeyEntry(params: {
       return null;
     }
     if (
-      !(await hasAvailableAuthForProvider({
+      !(await hasProviderAuthAvailable({
         provider: providerId,
         cfg,
         agentDir,
@@ -649,7 +681,7 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "video" && !provider.describeVideo) {
     return null;
   }
-  const hasAuth = await hasAvailableAuthForProvider({
+  const hasAuth = await hasProviderAuthAvailable({
     provider: providerId,
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -824,6 +856,8 @@ export async function runCapability(params: {
     activeProvider &&
     !hasExplicitImageUnderstandingConfig({ cfg, config })
   ) {
+    const { findModelInCatalog, loadModelCatalog, modelSupportsVision } =
+      await loadModelCatalogApi();
     const catalog = await loadModelCatalog({ config: cfg });
     const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
     if (modelSupportsVision(entry)) {

@@ -1,7 +1,3 @@
-import type {
-  RunEmbeddedAgentFn,
-  RunEmbeddedPiAgentFn,
-} from "../../agents/pi-embedded-runtime.types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
@@ -60,8 +56,8 @@ export type PluginRuntimeCore = {
       model: string;
       catalog?: import("../../agents/model-catalog.types.js").ModelCatalogEntry[];
     }) => import("../../auto-reply/thinking.js").ThinkLevel;
-    runEmbeddedAgent: RunEmbeddedAgentFn;
-    runEmbeddedPiAgent: RunEmbeddedPiAgentFn;
+    runEmbeddedAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedAgentFn;
+    runEmbeddedPiAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedPiAgentFn;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {

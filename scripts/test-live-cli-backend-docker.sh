@@ -391,11 +391,7 @@ fi
 pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 EOF
 
-if [[ "${OPENCLAW_SKIP_DOCKER_BUILD:-}" == "1" ]]; then
-  echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"
-else
-  "$ROOT_DIR/scripts/test-live-build-docker.sh"
-fi
+"$ROOT_DIR/scripts/test-live-build-docker.sh"
 
 echo "==> Run CLI backend live test in Docker"
 echo "==> Model: $CLI_MODEL"

@@ -437,6 +437,31 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("counts failed restart attempts toward cooldown and hourly caps", async () => {
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: managedStoppedAccount("keeps crashing"),
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          throw new Error("startup failed");
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 1_000,
+      cooldownCycles: 1,
+      maxRestartsPerHour: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_001);
+
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    monitor.stop();
+  });
+
   it("runs checks single-flight when restart work is still in progress", async () => {
     let releaseStart: (() => void) | undefined;
     const startGate = new Promise<void>((resolve) => {

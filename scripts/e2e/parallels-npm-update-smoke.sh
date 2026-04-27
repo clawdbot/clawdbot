@@ -13,6 +13,7 @@ API_KEY_ENV=""
 AUTH_CHOICE=""
 AUTH_KEY_FLAG=""
 MODEL_ID=""
+MODEL_ID_EXPLICIT=0
 PYTHON_BIN="${PYTHON_BIN:-}"
 PACKAGE_SPEC=""
 UPDATE_TARGET=""
@@ -120,6 +121,8 @@ Options:
                              Default: all
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
+  --model <provider/model>    Override the model used for agent-turn smoke checks.
+                             Default: openai/gpt-5.5 for the OpenAI lane
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
@@ -147,6 +150,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --provider)
       PROVIDER="$2"
+      shift 2
+      ;;
+    --model)
+      MODEL_ID="$2"
+      MODEL_ID_EXPLICIT=1
       shift 2
       ;;
     --api-key-env|--openai-api-key-env)
@@ -206,19 +214,19 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    MODEL_ID="openai/gpt-5.5"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.5}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
     AUTH_CHOICE="apiKey"
     AUTH_KEY_FLAG="anthropic-api-key"
-    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_ANTHROPIC_MODEL:-anthropic/claude-sonnet-4-6}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
     ;;
   minimax)
     AUTH_CHOICE="minimax-global-api"
     AUTH_KEY_FLAG="minimax-api-key"
-    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_MINIMAX_MODEL:-minimax/MiniMax-M2.7}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
     ;;
   *)
@@ -1104,7 +1112,8 @@ cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
 }
 STATE_EOF
 rm -f "\$workspace/BOOTSTRAP.md"
-/opt/homebrew/bin/openclaw models set "$MODEL_ID"
+  /opt/homebrew/bin/openclaw models set "$MODEL_ID"
+  /opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
 /opt/homebrew/bin/openclaw agent --agent main --session-id "parallels-npm-update-macos-transport-recovery-$expected_needle" --message "Reply with exact ASCII text OK only." --json
 EOF
   macos_desktop_user_exec /bin/bash "$script_path"
@@ -1235,7 +1244,8 @@ if (-not \$gatewayReady) {
 \$providerBytes = [Convert]::FromBase64String('$provider_key_b64')
 \$providerValue = [Text.Encoding]::UTF8.GetString(\$providerBytes)
 Set-Item -Path ('Env:' + '$API_KEY_ENV') -Value \$providerValue
-& \$openclaw models set '$MODEL_ID'
+  & \$openclaw models set '$MODEL_ID'
+  & \$openclaw config set agents.defaults.skipBootstrap true --strict-json
 \$workspace = \$env:OPENCLAW_WORKSPACE_DIR
 if (-not \$workspace) {
   \$workspace = Join-Path \$env:USERPROFILE '.openclaw\\workspace'
@@ -1692,7 +1702,8 @@ if [ -n "$expected_needle" ]; then
   esac
 fi
 /opt/homebrew/bin/openclaw update status --json
-/opt/homebrew/bin/openclaw models set "$MODEL_ID"
+  /opt/homebrew/bin/openclaw models set "$MODEL_ID"
+  /opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
 # Same-guest npm upgrades can leave launchd holding the old gateway process or
 # module graph briefly; wait for a fresh RPC-ready restart before the agent turn.
 # Fresh npm installs may not have a launchd service yet, so fall back to the
@@ -1826,6 +1837,7 @@ if [ -n "$expected_needle" ]; then
 fi
 openclaw update status --json
 openclaw models set "$MODEL_ID"
+openclaw config set agents.defaults.skipBootstrap true --strict-json
 workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
 mkdir -p "\$workspace/.openclaw"
 cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
@@ -1911,6 +1923,7 @@ if platform_enabled macos; then
   bash "$ROOT_DIR/scripts/e2e/parallels-macos-smoke.sh" \
     --mode fresh \
     --provider "$PROVIDER" \
+    --model "$MODEL_ID" \
     --api-key-env "$API_KEY_ENV" \
     --target-package-spec "$PACKAGE_SPEC" \
     --json >"$RUN_DIR/macos-fresh.log" 2>&1 &
@@ -1922,6 +1935,7 @@ if platform_enabled windows; then
   bash "$ROOT_DIR/scripts/e2e/parallels-windows-smoke.sh" \
     --mode fresh \
     --provider "$PROVIDER" \
+    --model "$MODEL_ID" \
     --api-key-env "$API_KEY_ENV" \
     --target-package-spec "$PACKAGE_SPEC" \
     --json >"$RUN_DIR/windows-fresh.log" 2>&1 &
@@ -1930,9 +1944,10 @@ if platform_enabled windows; then
 fi
 
 if platform_enabled linux; then
-  bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
+  OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR=1 bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
     --mode fresh \
     --provider "$PROVIDER" \
+    --model "$MODEL_ID" \
     --api-key-env "$API_KEY_ENV" \
     --target-package-spec "$PACKAGE_SPEC" \
     --json >"$RUN_DIR/linux-fresh.log" 2>&1 &

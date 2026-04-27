@@ -19,6 +19,7 @@ export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-prof
 export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreForLocalUpdate,
+  updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
 export {
   listProfilesForProvider,

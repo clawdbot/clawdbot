@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
 import {
   findPreviousSessionFile,
@@ -71,6 +72,7 @@ async function runNewWithPreviousSessionEntry(params: {
   action?: "new" | "reset";
   sessionKey?: string;
   workspaceDirOverride?: string;
+  timestamp?: Date;
 }): Promise<{ files: string[]; memoryContent: string }> {
   const event = createHookEvent(
     "command",
@@ -86,6 +88,9 @@ async function runNewWithPreviousSessionEntry(params: {
       ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
     },
   );
+  if (params.timestamp) {
+    event.timestamp = params.timestamp;
+  }
 
   await handler(event);
 
@@ -245,6 +250,24 @@ describe("session-memory hook", () => {
     expect(files.length).toBe(1);
     expect(memoryContent).toContain("user: Please reset and keep notes");
     expect(memoryContent).toContain("assistant: Captured before reset");
+  });
+
+  it("uses local timezone date and fallback time in memory filenames and headers", async () => {
+    await withEnvAsync({ TZ: "America/New_York" }, async () => {
+      const tempDir = await createCaseWorkspace("workspace");
+
+      const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+        tempDir,
+        timestamp: new Date("2026-01-01T04:30:15.000Z"),
+        previousSessionEntry: {
+          sessionId: "local-time-session",
+        },
+      });
+
+      expect(files).toEqual(["2025-12-31-2330.md"]);
+      expect(memoryContent).toMatch(/^# Session: 2025-12-31 23:30:15(?: EST| GMT-5)?/);
+      expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
+    });
   });
 
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {

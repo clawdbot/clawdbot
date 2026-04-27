@@ -14,6 +14,10 @@ type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type ResolvePluginProvidersRuntime =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
+type ResolvePluginSetupProvider =
+  typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
+type ResolveManifestProviderAuthChoice =
+  typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoice;
 
@@ -23,6 +27,12 @@ const applyAuthChoice = vi.hoisted(() =>
   vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
 );
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
+const resolveManifestProviderAuthChoice = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoice>(() => undefined),
+);
+const resolvePluginSetupProvider = vi.hoisted(() =>
+  vi.fn<ResolvePluginSetupProvider>(() => undefined),
+);
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<ResolveProviderPluginChoice>(() => null),
 );
@@ -118,13 +128,18 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     legacyIssues: [] as Array<{ path: string; message: string }>,
   })),
 );
+const createConfigIO = vi.hoisted(() =>
+  vi.fn(() => ({
+    readConfigFileSnapshot,
+  })),
+);
 const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}));
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
 const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const runTui = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
-const buildPluginCompatibilityNotices = vi.hoisted(() =>
+const buildPluginCompatibilitySnapshotNotices = vi.hoisted(() =>
   vi.fn((): PluginCompatibilityNotice[] => []),
 );
 const formatPluginCompatibilityNotice = vi.hoisted(() =>
@@ -161,6 +176,14 @@ vi.mock("../commands/auth-choice.js", () => ({
   warnIfModelConfigLooksOff,
 }));
 
+vi.mock("../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoice,
+}));
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider,
+}));
+
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolveProviderPluginChoice,
   resolvePluginProviders: resolvePluginProvidersRuntime,
@@ -185,8 +208,8 @@ vi.mock("../commands/onboard-hooks.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   DEFAULT_GATEWAY_PORT: 18789,
+  createConfigIO,
   resolveGatewayPort,
-  readConfigFileSnapshot,
   writeConfigFile,
 }));
 
@@ -228,7 +251,7 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
 }));
 
@@ -405,6 +428,7 @@ describe("runSetupWizard", () => {
     const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
     const prompter = buildWizardPrompter({ select, multiselect });
     const runtime = createRuntime({ throwsOnExit: true });
+    createConfigIO.mockClear();
     ensureAuthProfileStore.mockClear();
 
     await runSetupWizard(
@@ -423,6 +447,7 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
+    expect(createConfigIO).toHaveBeenCalledWith({ pluginValidation: "skip" });
     expect(select).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).not.toHaveBeenCalled();
     expect(setupChannels).not.toHaveBeenCalled();
@@ -623,6 +648,7 @@ describe("runSetupWizard", () => {
 
   it("prompts for a model during explicit interactive Ollama setup", async () => {
     promptDefaultModel.mockClear();
+    warnIfModelConfigLooksOff.mockClear();
     resolveProviderPluginChoice.mockReturnValue({
       provider: {
         id: "ollama",
@@ -671,7 +697,13 @@ describe("runSetupWizard", () => {
     expect(promptDefaultModel).toHaveBeenCalledWith(
       expect.objectContaining({
         allowKeep: false,
+        browseCatalogOnDemand: true,
       }),
+    );
+    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ validateCatalog: false }),
     );
   });
 
@@ -744,7 +776,7 @@ describe("runSetupWizard", () => {
   });
 
   it("shows plugin compatibility notices for an existing valid config", async () => {
-    buildPluginCompatibilityNotices.mockReturnValue([
+    buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       {
         pluginId: "legacy-plugin",
         code: "legacy-before-agent-start",
@@ -944,5 +976,60 @@ describe("runSetupWizard", () => {
           call[0].includes("Gateway port: 18791"),
       ),
     ).toBe(true);
+  });
+
+  it("uses manifest setup metadata for post-auth model policy without loading provider runtime", async () => {
+    promptDefaultModel.mockClear();
+    resolvePluginProvidersRuntime.mockClear();
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "openai",
+      providerId: "openai-codex",
+      methodId: "oauth",
+      choiceId: "openai-codex",
+      choiceLabel: "OpenAI Codex Browser Login",
+    });
+    resolvePluginSetupProvider.mockReturnValue({
+      id: "openai-codex",
+      label: "OpenAI Codex",
+      auth: [
+        {
+          id: "oauth",
+          label: "OpenAI Codex Browser Login",
+          kind: "oauth",
+          wizard: {
+            modelSelection: {
+              allowKeepCurrent: false,
+            },
+          },
+          run: vi.fn(async () => ({ profiles: [] })),
+        },
+      ],
+    });
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-codex");
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        installDaemon: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(resolvePluginSetupProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        pluginIds: ["openai"],
+      }),
+    );
+    expect(resolvePluginProvidersRuntime).not.toHaveBeenCalled();
+    expect(promptDefaultModel).toHaveBeenCalledWith(expect.objectContaining({ allowKeep: false }));
   });
 });

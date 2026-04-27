@@ -370,17 +370,22 @@ describe("runDaemonRestart health checks", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
-  it("prefers unmanaged restart over launchd repair when a gateway listener is present", async () => {
+  it("prefers launchd repair over unmanaged restart when an installed LaunchAgent is unloaded", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    recoverInstalledLaunchAgent.mockResolvedValue({
+      result: "restarted",
+      loaded: true,
+      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+    });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });
 
     await runDaemonRestart({ json: true });
 
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGUSR1");
-    expect(recoverInstalledLaunchAgent).not.toHaveBeenCalled();
-    expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
-    expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+    expect(recoverInstalledLaunchAgent).toHaveBeenCalledWith({ result: "restarted" });
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
   });
 
   it("re-bootstraps an installed LaunchAgent on restart when no unmanaged listener exists", async () => {

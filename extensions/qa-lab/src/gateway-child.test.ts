@@ -328,6 +328,32 @@ describe("buildQaRuntimeEnv", () => {
     expect(__testing.isRetryableGatewayCallError("permission denied")).toBe(false);
   });
 
+  it("waits for a fresh in-process restart boundary after the current log offset", async () => {
+    let logs = "old restart mode: in-process restart\n";
+    const offset = logs.length;
+    const wait = __testing.waitForQaGatewayRestartBoundary({
+      logs: () => logs,
+      offset,
+      pollMs: 1,
+      timeoutMs: 100,
+    });
+
+    logs += "signal SIGUSR1 received\nrestart mode: in-process restart\n";
+
+    await expect(wait).resolves.toBeUndefined();
+  });
+
+  it("times out when a SIGUSR1 restart never reaches the boundary", async () => {
+    await expect(
+      __testing.waitForQaGatewayRestartBoundary({
+        logs: () => "signal SIGUSR1 received\n",
+        offset: 0,
+        pollMs: 1,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("qa gateway child did not reach restart boundary");
+  });
+
   it("stages a live Anthropic setup-token profile for isolated QA workers", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-setup-token-state-"));
     cleanups.push(async () => {

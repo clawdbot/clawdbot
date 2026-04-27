@@ -145,6 +145,20 @@ The important design boundary:
 
 That split lets OpenClaw validate config, explain missing/disabled plugins, and build UI/schema hints before the full runtime is active.
 
+### Plugin lookup table
+
+Gateway startup builds a `PluginLookUpTable` from the installed plugin index and manifest registry for the current config snapshot. The table is metadata-only: it stores plugin ids, manifest records, diagnostics, owner maps, a plugin id normalizer, and the startup plugin plan. It does not hold loaded plugin modules, provider SDKs, package contents, or runtime exports.
+
+The lookup table keeps repeated startup decisions on the fast path:
+
+- channel ownership
+- deferred channel startup
+- startup plugin ids
+- provider and CLI backend ownership
+- setup provider, command alias, model catalog provider, and manifest contract ownership
+
+The safety boundary is snapshot replacement, not mutation. Rebuild the table when config, plugin inventory, install records, or persisted index policy changes. Do not treat it as a broad mutable global registry, and do not keep unbounded historical tables. Runtime plugin loading remains separate from lookup-table metadata so stale runtime state cannot be hidden behind a metadata cache.
+
 ### Activation planning
 
 Activation planning is part of the control plane. Callers can ask which plugins are relevant to a concrete command, provider, channel, route, agent harness, or capability before loading broader runtime registries.

@@ -1,9 +1,10 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
+import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadModelRegistry } from "./list.registry.js";
-import { discoverAuthStorage, discoverModels, resolveOpenClawAgentDir } from "./list.runtime.js";
 import type { ConfiguredEntry } from "./list.types.js";
 import { modelKey } from "./shared.js";
 

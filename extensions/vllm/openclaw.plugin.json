@@ -2,6 +2,13 @@
   "id": "vllm",
   "enabledByDefault": true,
   "providers": ["vllm"],
+  "modelPricing": {
+    "providers": {
+      "vllm": {
+        "external": false
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "vllm": ["VLLM_API_KEY"]
   },

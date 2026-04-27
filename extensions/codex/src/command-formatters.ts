@@ -1,3 +1,4 @@
+import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import type { SafeValue } from "./command-rpc.js";
@@ -89,6 +90,28 @@ export function formatAccount(
   ].join("\n");
 }
 
+export function formatComputerUseStatus(status: CodexComputerUseStatus): string {
+  const lines = [
+    `Computer Use: ${status.ready ? "ready" : status.enabled ? "not ready" : "disabled"}`,
+  ];
+  lines.push(
+    `Plugin: ${status.pluginName}${status.installed ? " (installed)" : " (not installed)"}`,
+  );
+  lines.push(
+    `MCP server: ${status.mcpServerName}${
+      status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
+    }`,
+  );
+  if (status.marketplaceName) {
+    lines.push(`Marketplace: ${status.marketplaceName}`);
+  }
+  if (status.tools.length > 0) {
+    lines.push(`Tools: ${status.tools.slice(0, 8).join(", ")}`);
+  }
+  lines.push(status.message);
+  return lines.join("\n");
+}
+
 export function formatList(response: JsonValue | undefined, label: string): string {
   const entries = extractArray(response);
   if (entries.length === 0) {
@@ -120,6 +143,7 @@ export function buildHelp(): string {
     "- /codex detach",
     "- /codex compact",
     "- /codex review",
+    "- /codex computer-use [status|install]",
     "- /codex account",
     "- /codex mcp",
     "- /codex skills",

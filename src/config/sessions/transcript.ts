@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
@@ -16,6 +16,14 @@ import { parseSessionThreadInfo } from "./thread-info.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import type { SessionEntry } from "./types.js";
 
+let piCodingAgentModulePromise: Promise<typeof import("@mariozechner/pi-coding-agent")> | null =
+  null;
+
+async function loadPiCodingAgentModule(): Promise<typeof import("@mariozechner/pi-coding-agent")> {
+  piCodingAgentModulePromise ??= import("@mariozechner/pi-coding-agent");
+  return await piCodingAgentModulePromise;
+}
+
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
@@ -23,6 +31,7 @@ async function ensureSessionHeader(params: {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
+  const { CURRENT_SESSION_VERSION } = await loadPiCodingAgentModule();
   await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
   const header = {
     type: "session",
@@ -266,6 +275,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
+  const { SessionManager } = await loadPiCodingAgentModule();
   const sessionManager = SessionManager.open(sessionFile);
   const messageId = sessionManager.appendMessage(message);
 

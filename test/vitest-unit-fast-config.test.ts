@@ -6,6 +6,7 @@ import {
   collectBroadUnitFastTestCandidates,
   collectUnitFastTestCandidates,
   collectUnitFastTestFileAnalysis,
+  forcedUnitFastTestFiles,
   getUnitFastTestFiles,
   isUnitFastTestFile,
   resolveUnitFastTestIncludePattern,
@@ -57,6 +58,19 @@ describe("unit-fast vitest lane", () => {
     expect(resolveUnitFastTestIncludePattern("src/commands/status-overview-values.ts")).toBe(
       "src/commands/status-overview-values.test.ts",
     );
+  });
+
+  it("routes audited stateful-looking tests through the fast lane", () => {
+    const analysis = collectUnitFastTestFileAnalysis();
+    const forcedAnalysis = analysis.filter((entry) => forcedUnitFastTestFiles.includes(entry.file));
+    const unitFastTestFiles = getUnitFastTestFiles();
+
+    expect(forcedAnalysis).toHaveLength(forcedUnitFastTestFiles.length);
+    for (const file of forcedUnitFastTestFiles) {
+      expect(unitFastTestFiles).toContain(file);
+      expect(isUnitFastTestFile(file)).toBe(true);
+    }
+    expect(forcedAnalysis.every((entry) => entry.forced && entry.unitFast)).toBe(true);
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {

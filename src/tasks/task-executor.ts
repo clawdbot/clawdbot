@@ -211,6 +211,7 @@ export function setDetachedTaskDeliveryStatusByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 }) {
   return setTaskRunDeliveryStatusByRunId(params);
 }

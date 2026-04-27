@@ -1,16 +1,19 @@
+// Pi bundle MCP tools Docker harness.
+// Imports packaged dist modules so tool materialization is verified against the
+// npm tarball installed in the functional image.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { materializeBundleMcpToolsForRun } from "../../src/agents/pi-bundle-mcp-materialize.ts";
+import { materializeBundleMcpToolsForRun } from "../../dist/agents/pi-bundle-mcp-materialize.js";
 import {
   disposeAllSessionMcpRuntimes,
   getOrCreateSessionMcpRuntime,
-} from "../../src/agents/pi-bundle-mcp-runtime.ts";
-import { applyFinalEffectiveToolPolicy } from "../../src/agents/pi-embedded-runner/effective-tool-policy.ts";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
-import { getPluginToolMeta } from "../../src/plugins/tools.ts";
+} from "../../dist/agents/pi-bundle-mcp-runtime.js";
+import { applyFinalEffectiveToolPolicy } from "../../dist/agents/pi-embedded-runner/effective-tool-policy.js";
+import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
+import { getPluginToolMeta } from "../../dist/plugins/tools.js";
 
 const require = createRequire(import.meta.url);
 

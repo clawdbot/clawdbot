@@ -397,7 +397,7 @@ cannot roll back unrelated user settings.
     {
       cron: {
         enabled: true,
-        maxConcurrentRuns: 2,
+        maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
         sessionRetention: "24h",
         runLog: {
           maxBytes: "2mb",

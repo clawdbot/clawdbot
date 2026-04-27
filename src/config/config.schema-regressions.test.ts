@@ -151,6 +151,7 @@ describe("config schema regressions", () => {
         defaults: {
           compaction: {
             truncateAfterCompaction: true,
+            maxActiveTranscriptBytes: "20mb",
           },
         },
       },

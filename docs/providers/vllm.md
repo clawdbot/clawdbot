@@ -93,6 +93,7 @@ Use explicit config when:
         apiKey: "${VLLM_API_KEY}",
         api: "openai-completions",
         request: { allowPrivateNetwork: true },
+        timeoutSeconds: 300, // Optional: extend connect/header/body/request timeout for slow local models
         models: [
           {
             id: "your-model-id",
@@ -179,6 +180,7 @@ Use explicit config when:
             apiKey: "${VLLM_API_KEY}",
             api: "openai-completions",
             request: { allowPrivateNetwork: true },
+            timeoutSeconds: 300,
             models: [
               {
                 id: "my-custom-model",
@@ -201,6 +203,34 @@ Use explicit config when:
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="Slow first response or remote server timeout">
+    For large local models, remote LAN hosts, or tailnet links, set a
+    provider-scoped request timeout:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://192.168.1.50:8000/v1",
+            apiKey: "${VLLM_API_KEY}",
+            api: "openai-completions",
+            request: { allowPrivateNetwork: true },
+            timeoutSeconds: 300,
+            models: [{ id: "your-model-id", name: "Local vLLM Model" }],
+          },
+        },
+      },
+    }
+    ```
+
+    `timeoutSeconds` applies to vLLM model HTTP requests only, including
+    connection setup, response headers, body streaming, and the total
+    guarded-fetch abort. Prefer this before increasing
+    `agents.defaults.timeoutSeconds`, which controls the whole agent run.
+
+  </Accordion>
+
   <Accordion title="Server not reachable">
     Check that the vLLM server is running and accessible:
 

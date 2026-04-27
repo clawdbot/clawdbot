@@ -8,6 +8,57 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 
 export { normalizeToolParameterSchema };
 
+function isObjectSchemaWithNoRequiredParams(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return false;
+  }
+  const record = schema as Record<string, unknown>;
+  const type = record.type;
+  const hasObjectType =
+    type === "object" || (Array.isArray(type) && type.some((entry) => entry === "object"));
+  if (!hasObjectType) {
+    return false;
+  }
+  return !schemaHasRequiredParams(record);
+}
+
+function schemaHasRequiredParams(schema: Record<string, unknown>): boolean {
+  if (Array.isArray(schema.required) && schema.required.length > 0) {
+    return true;
+  }
+  for (const key of ["allOf", "anyOf", "oneOf"]) {
+    const variants = schema[key];
+    if (!Array.isArray(variants)) {
+      continue;
+    }
+    if (
+      variants.some(
+        (variant) =>
+          variant !== null &&
+          typeof variant === "object" &&
+          !Array.isArray(variant) &&
+          schemaHasRequiredParams(variant as Record<string, unknown>),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function addEmptyObjectArgumentPreparation(tool: AnyAgentTool, parameters: unknown): AnyAgentTool {
+  if (!isObjectSchemaWithNoRequiredParams(parameters)) {
+    return tool;
+  }
+  return {
+    ...tool,
+    prepareArguments: (args: unknown) => {
+      const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args;
+      return prepared === null || prepared === undefined ? {} : prepared;
+    },
+  };
+}
+
 export function normalizeToolParameters(
   tool: AnyAgentTool,
   options?: ToolParameterSchemaOptions,
@@ -24,9 +75,11 @@ export function normalizeToolParameters(
   if (!schema) {
     return tool;
   }
+  const parameters = normalizeToolParameterSchema(schema, options);
   return preserveToolMeta({
     ...tool,
-    parameters: normalizeToolParameterSchema(schema, options),
+    ...addEmptyObjectArgumentPreparation(tool, parameters),
+    parameters,
   });
 }
 

@@ -195,6 +195,23 @@ describe("action client helpers", () => {
     expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
   });
 
+  it("can discard read-only shared action clients without persisting crypto state", async () => {
+    const sharedClient = createMockMatrixClient();
+    acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
+
+    const result = await withResolvedActionClient(
+      { cfg: TEST_CFG, accountId: "default" },
+      async (client) => {
+        expect(client).toBe(sharedClient);
+        return "ok";
+      },
+      "discard",
+    );
+
+    expect(result).toBe("ok");
+    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "discard");
+  });
+
   it("stops shared action clients when the wrapped call throws", async () => {
     const sharedClient = createMockMatrixClient();
     acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);

@@ -79,12 +79,6 @@ export async function resolveRuntimePluginDiscoveryProviders(
     .filter((provider) => resolveProviderCatalogOrderHook(provider));
 }
 
-export async function resolvePluginDiscoveryProviders(
-  params: ResolveRuntimePluginDiscoveryProvidersParams,
-): Promise<ProviderPlugin[]> {
-  return resolveRuntimePluginDiscoveryProviders(params);
-}
-
 export function groupPluginDiscoveryProvidersByOrder(
   providers: ProviderPlugin[],
 ): Record<ProviderDiscoveryOrder, ProviderPlugin[]> {

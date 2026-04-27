@@ -128,6 +128,10 @@ function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   )?.providerId;
 }
 
+function isKeyOptionalMemoryProvider(providerId: string): boolean {
+  return providerId === "local" || providerId === "ollama" || providerId === "lmstudio";
+}
+
 async function resolveRuntimeMemoryAuditContext(
   cfg: OpenClawConfig,
 ): Promise<RuntimeMemoryAuditContext | null> {
@@ -402,7 +406,7 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
-    if (resolved.provider === "lmstudio") {
+    if (isKeyOptionalMemoryProvider(resolved.provider)) {
       if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
         return;
       }
@@ -410,8 +414,8 @@ export async function noteMemorySearchHealth(
       note(
         [
           gatewayProbeWarning
-            ? 'Memory search provider "lmstudio" is configured, but the gateway reports embeddings are not ready.'
-            : 'Memory search provider "lmstudio" is configured, but the gateway could not confirm embeddings are ready.',
+            ? `Memory search provider "${resolved.provider}" is configured, but the gateway reports embeddings are not ready.`
+            : `Memory search provider "${resolved.provider}" is configured, but the gateway could not confirm embeddings are ready.`,
           gatewayProbeWarning,
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
         ]

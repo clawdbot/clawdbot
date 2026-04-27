@@ -1,0 +1,149 @@
+name: Docker E2E plan and hydrate
+description: >
+  Create a Docker E2E lane plan, expose GitHub outputs, and optionally hydrate
+  the prebuilt package artifact plus shared Docker images needed by the plan.
+inputs:
+  mode:
+    description: prepare, chunk, or targeted.
+    required: true
+  chunk:
+    description: Release-path chunk for mode=chunk.
+    required: false
+    default: ""
+  lanes:
+    description: Comma/space separated lane names for targeted or prepare mode.
+    required: false
+    default: ""
+  include-openwebui:
+    description: Whether Open WebUI is included when planning release/prepare coverage.
+    required: false
+    default: "true"
+  include-release-path-suites:
+    description: Whether prepare mode should plan all release-path suites.
+    required: false
+    default: "false"
+  hydrate-artifacts:
+    description: Whether to download/pull artifacts required by the plan.
+    required: false
+    default: "true"
+  package-artifact-name:
+    description: Workflow artifact name containing openclaw-current.tgz.
+    required: false
+    default: docker-e2e-package
+outputs:
+  credentials:
+    description: Comma-separated credential groups required by selected lanes.
+    value: ${{ steps.plan.outputs.credentials }}
+  needs_bare_image:
+    description: "1 when selected lanes require the bare Docker E2E image."
+    value: ${{ steps.plan.outputs.needs_bare_image }}
+  needs_e2e_image:
+    description: "1 when selected lanes require any Docker E2E image."
+    value: ${{ steps.plan.outputs.needs_e2e_image }}
+  needs_functional_image:
+    description: "1 when selected lanes require the functional Docker E2E image."
+    value: ${{ steps.plan.outputs.needs_functional_image }}
+  needs_live_image:
+    description: "1 when selected lanes require building the live Docker image."
+    value: ${{ steps.plan.outputs.needs_live_image }}
+  needs_package:
+    description: "1 when selected lanes require the OpenClaw package tarball."
+    value: ${{ steps.plan.outputs.needs_package }}
+  plan_json:
+    description: Path to the generated plan JSON.
+    value: ${{ steps.plan.outputs.plan_json }}
+runs:
+  using: composite
+  steps:
+    - name: Plan Docker E2E lanes
+      id: plan
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        CHUNK: ${{ inputs.chunk }}
+        LANES: ${{ inputs.lanes }}
+        INCLUDE_OPENWEBUI: ${{ inputs.include-openwebui }}
+        INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include-release-path-suites }}
+      run: |
+        set -euo pipefail
+        mkdir -p .artifacts/docker-tests
+
+        case "$MODE" in
+          prepare)
+            plan_path=".artifacts/docker-tests/plan.json"
+            if [[ "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
+              export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+              export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
+            elif [[ -n "$LANES" ]]; then
+              export OPENCLAW_DOCKER_ALL_LANES="$LANES"
+            elif [[ "$INCLUDE_OPENWEBUI" == "true" ]]; then
+              export OPENCLAW_DOCKER_ALL_LANES=openwebui
+            fi
+            ;;
+          chunk)
+            if [[ -z "$CHUNK" ]]; then
+              echo "chunk input is required for Docker E2E chunk planning." >&2
+              exit 1
+            fi
+            export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+            export OPENCLAW_DOCKER_ALL_CHUNK="$CHUNK"
+            plan_path=".artifacts/docker-tests/release-${CHUNK}-plan.json"
+            ;;
+          targeted)
+            if [[ -z "$LANES" ]]; then
+              echo "lanes input is required for Docker E2E targeted planning." >&2
+              exit 1
+            fi
+            export OPENCLAW_DOCKER_ALL_LANES="$LANES"
+            plan_path=".artifacts/docker-tests/targeted-plan.json"
+            ;;
+          *)
+            echo "mode must be prepare, chunk, or targeted. Got: $MODE" >&2
+            exit 1
+            ;;
+        esac
+
+        export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="$INCLUDE_OPENWEBUI"
+        node scripts/test-docker-all.mjs --plan-json > "$plan_path"
+        node scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
+        echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
+
+    - name: Download OpenClaw Docker E2E package
+      if: inputs.hydrate-artifacts == 'true' && steps.plan.outputs.needs_package == '1'
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.package-artifact-name }}
+        path: .artifacts/docker-e2e-package
+
+    - name: Pull shared bare Docker E2E image
+      if: inputs.hydrate-artifacts == 'true' && steps.plan.outputs.needs_bare_image == '1'
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker pull "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
+
+    - name: Pull shared functional Docker E2E image
+      if: inputs.hydrate-artifacts == 'true' && steps.plan.outputs.needs_functional_image == '1'
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker pull "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
+
+    - name: Validate Docker E2E credentials
+      if: inputs.hydrate-artifacts == 'true'
+      shell: bash
+      env:
+        CREDENTIALS: ${{ steps.plan.outputs.credentials }}
+      run: |
+        set -euo pipefail
+        credentials=",$CREDENTIALS,"
+        if [[ "$credentials" == *",openai,"* ]]; then
+          [[ -n "${OPENAI_API_KEY:-}" ]] || {
+            echo "OPENAI_API_KEY is required for selected Docker E2E lanes." >&2
+            exit 1
+          }
+        fi
+        if [[ "$credentials" == *",anthropic,"* && -z "${ANTHROPIC_API_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
+          echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for selected Docker E2E lanes." >&2
+          exit 1
+        fi

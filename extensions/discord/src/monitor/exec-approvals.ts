@@ -53,8 +53,29 @@ export function parseExecApprovalData(
 
 export type ExecApprovalButtonContext = {
   getApprovers: () => string[];
-  resolveApproval: (approvalId: string, decision: ExecApprovalDecision) => Promise<boolean>;
+  resolveApproval: (
+    approvalId: string,
+    decision: ExecApprovalDecision,
+  ) => Promise<ExecApprovalResolveResult>;
 };
+
+type ExecApprovalResolveResult = { ok: true } | { ok: false; reason: "error" | "not-found" };
+
+function isStructuredApprovalNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const record = err as {
+    gatewayCode?: unknown;
+    details?: { reason?: unknown } | null;
+  };
+  if (record.gatewayCode === "APPROVAL_NOT_FOUND") {
+    return true;
+  }
+  return (
+    record.gatewayCode === "INVALID_REQUEST" && record.details?.reason === "APPROVAL_NOT_FOUND"
+  );
+}
 
 export class ExecApprovalButton extends Button {
   label = "execapproval";
@@ -100,8 +121,8 @@ export class ExecApprovalButton extends Button {
       await interaction.acknowledge();
     } catch {}
 
-    const ok = await this.ctx.resolveApproval(parsed.approvalId, parsed.action);
-    if (!ok) {
+    const result = await this.ctx.resolveApproval(parsed.approvalId, parsed.action);
+    if (!result.ok && result.reason !== "not-found") {
       try {
         await interaction.followUp({
           content: `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
@@ -138,9 +159,12 @@ export function createDiscordExecApprovalButtonContext(params: {
           gatewayUrl: params.gatewayUrl,
           clientDisplayName: `Discord approval (${params.accountId})`,
         });
-        return true;
-      } catch {
-        return false;
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: isStructuredApprovalNotFoundError(err) ? "not-found" : "error",
+        };
       }
     },
   };

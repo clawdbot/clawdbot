@@ -11,11 +11,23 @@ Interactive onboarding for local or remote Gateway setup.
 
 ## Related guides
 
-- CLI onboarding hub: [Onboarding (CLI)](/start/wizard)
-- Onboarding overview: [Onboarding Overview](/start/onboarding-overview)
-- CLI onboarding reference: [CLI Setup Reference](/start/wizard-cli-reference)
-- CLI automation: [CLI Automation](/start/wizard-cli-automation)
-- macOS onboarding: [Onboarding (macOS App)](/start/onboarding)
+<CardGroup cols={2}>
+  <Card title="CLI onboarding hub" href="/start/wizard" icon="rocket">
+    Walkthrough of the interactive CLI flow.
+  </Card>
+  <Card title="Onboarding overview" href="/start/onboarding-overview" icon="map">
+    How OpenClaw onboarding fits together.
+  </Card>
+  <Card title="CLI setup reference" href="/start/wizard-cli-reference" icon="book">
+    Outputs, internals, and per-step behavior.
+  </Card>
+  <Card title="CLI automation" href="/start/wizard-cli-automation" icon="terminal">
+    Non-interactive flags and scripted setups.
+  </Card>
+  <Card title="macOS app onboarding" href="/start/onboarding" icon="apple">
+    Onboarding flow for the macOS menu bar app.
+  </Card>
+</CardGroup>
 
 ## Examples
 
@@ -24,9 +36,13 @@ openclaw onboard
 openclaw onboard --modern
 openclaw onboard --flow quickstart
 openclaw onboard --flow manual
+openclaw onboard --flow import
+openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
+
+`--flow import` uses plugin-owned migration providers such as Hermes. It only runs against a fresh OpenClaw setup; if existing config, credentials, sessions, or workspace memory/identity files are present, reset or choose a fresh setup before importing.
 
 `--modern` starts the Crestodian conversational onboarding preview. Without
 `--modern`, `openclaw onboard` keeps the classic onboarding flow.
@@ -132,10 +148,11 @@ Interactive onboarding behavior with reference mode:
 - Onboarding performs a fast preflight validation before saving the ref.
   - If validation fails, onboarding shows the error and lets you retry.
 
-Non-interactive Z.AI endpoint choices:
+### Non-interactive Z.AI endpoint choices
 
-Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5.1`).
-If you specifically want the GLM Coding Plan endpoints, pick `zai-coding-global` or `zai-coding-cn`.
+<Note>
+`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5.1`). If you specifically want the GLM Coding Plan endpoints, pick `zai-coding-global` or `zai-coding-cn`.
+</Note>
 
 ```bash
 # Promptless endpoint selection
@@ -157,26 +174,34 @@ openclaw onboard --non-interactive \
   --mistral-api-key "$MISTRAL_API_KEY"
 ```
 
-Flow notes:
+## Flow notes
 
-- `quickstart`: minimal prompts, auto-generates a gateway token.
-- `manual`: full prompts for port/bind/auth (alias of `advanced`).
-- When an auth choice implies a preferred provider, onboarding prefilters the
-  default-model and allowlist pickers to that provider. For Volcengine and
-  BytePlus, this also matches the coding-plan variants
-  (`volcengine-plan/*`, `byteplus-plan/*`).
-- If the preferred-provider filter yields no loaded models yet, onboarding
-  falls back to the unfiltered catalog instead of leaving the picker empty.
-- In the web-search step, some providers can trigger provider-specific
-  follow-up prompts:
-  - **Grok** can offer optional `x_search` setup with the same `XAI_API_KEY`
-    and an `x_search` model choice.
-  - **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs
-    `api.moonshot.cn`) and the default Kimi web-search model.
-- Local onboarding DM scope behavior: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals).
-- Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
-- Custom Provider: connect any OpenAI or Anthropic compatible endpoint,
-  including hosted providers not listed. Use Unknown to auto-detect.
+<AccordionGroup>
+  <Accordion title="Flow types">
+    - `quickstart`: minimal prompts, auto-generates a gateway token.
+    - `manual`: full prompts for port, bind, and auth (alias of `advanced`).
+    - `import`: runs a detected migration provider, previews the plan, then applies after confirmation.
+  </Accordion>
+  <Accordion title="Provider prefiltering">
+    When an auth choice implies a preferred provider, onboarding prefilters the default-model and allowlist pickers to that provider. For Volcengine and BytePlus, this also matches the coding-plan variants (`volcengine-plan/*`, `byteplus-plan/*`).
+
+    If the preferred-provider filter yields no loaded models yet, onboarding falls back to the unfiltered catalog instead of leaving the picker empty.
+
+  </Accordion>
+  <Accordion title="Web-search follow-ups">
+    Some web-search providers trigger provider-specific follow-up prompts:
+
+    - **Grok** can offer optional `x_search` setup with the same `XAI_API_KEY` and an `x_search` model choice.
+    - **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs `api.moonshot.cn`) and the default Kimi web-search model.
+
+  </Accordion>
+  <Accordion title="Other behaviors">
+    - Local onboarding DM scope behavior: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals).
+    - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
+    - Custom provider: connect any OpenAI or Anthropic compatible endpoint, including hosted providers not listed. Use Unknown to auto-detect.
+    - If Hermes state is detected, onboarding offers a migration flow. Use [Migrate](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
+  </Accordion>
+</AccordionGroup>
 
 ## Common follow-up commands
 

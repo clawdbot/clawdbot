@@ -96,6 +96,7 @@ describe("trajectory metadata", () => {
       musicGenerationProviderIds: [],
       webFetchProviderIds: [],
       webSearchProviderIds: [],
+      migrationProviderIds: [],
       memoryEmbeddingProviderIds: [],
       agentHarnessIds: ["pi"],
       gatewayMethods: [],

@@ -1,0 +1,198 @@
+name: Blacksmith Build Artifacts Testbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      testbox_id:
+        type: string
+        description: "Testbox session ID"
+        required: true
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-artifacts:
+    permissions:
+      contents: read
+    name: "build-artifacts"
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 35
+    steps:
+      - name: Begin Testbox
+        uses: useblacksmith/begin-testbox@v2
+        with:
+          testbox_id: ${{ inputs.testbox_id }}
+
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/5 succeeded"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/5 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 5 attempts" >&2
+          exit 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Resolve release dist cache seeds
+        id: dist-cache-seeds
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cache_prefix="${RUNNER_OS}-dist-build-"
+          declare -A seen=()
+
+          resolve_tag_sha() {
+            local tag="$1"
+            local direct=""
+            local peeled=""
+
+            while read -r sha ref; do
+              if [[ "$ref" == "refs/tags/${tag}^{}" ]]; then
+                peeled="$sha"
+              elif [[ "$ref" == "refs/tags/${tag}" ]]; then
+                direct="$sha"
+              fi
+            done < <(git ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}")
+
+            printf '%s\n' "${peeled:-$direct}"
+          }
+
+          {
+            echo "restore-keys<<EOF"
+            for dist_tag in beta latest; do
+              version="$(npm view "openclaw@${dist_tag}" version 2>/dev/null || true)"
+              if [[ -z "$version" ]]; then
+                echo "Could not resolve npm dist-tag ${dist_tag}; skipping cache seed." >&2
+                continue
+              fi
+
+              sha="$(resolve_tag_sha "v${version}")"
+              if [[ -z "$sha" ]]; then
+                echo "Could not resolve git tag v${version}; skipping cache seed." >&2
+                continue
+              fi
+
+              key="${cache_prefix}${sha}"
+              if [[ -z "${seen[$key]+x}" ]]; then
+                echo "$key"
+                seen[$key]=1
+              fi
+            done
+            echo "${cache_prefix}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore dist build cache
+        id: dist-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .artifacts/build-all-cache/
+            dist/
+            dist-runtime/
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+          restore-keys: ${{ steps.dist-cache-seeds.outputs.restore-keys }}
+
+      - name: Build dist on cache miss
+        if: steps.dist-cache.outputs.cache-hit != 'true'
+        run: pnpm build:ci-artifacts
+
+      - name: Build Control UI on cache miss
+        if: steps.dist-cache.outputs.cache-hit != 'true'
+        run: pnpm ui:build
+
+      - name: Verify build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d dist
+          test -d dist-runtime
+          if [[ ! -f dist/index.js && ! -f dist/index.mjs ]]; then
+            echo "Missing dist/index.js or dist/index.mjs" >&2
+            exit 1
+          fi
+          test -f dist/build-info.json
+          test -f dist/control-ui/index.html
+
+      - name: Save dist build cache
+        if: steps.dist-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .artifacts/build-all-cache/
+            dist/
+            dist-runtime/
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+
+      - name: Prepare Testbox shell
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          pnpm_bin="$(command -v pnpm)"
+          sudo ln -sf "$node_bin/node" /usr/local/bin/node
+          sudo ln -sf "$node_bin/npm" /usr/local/bin/npm
+          sudo ln -sf "$node_bin/npx" /usr/local/bin/npx
+          sudo ln -sf "$node_bin/corepack" /usr/local/bin/corepack
+          sudo ln -sf "$pnpm_bin" /usr/local/bin/pnpm
+
+      - name: Run Testbox
+        uses: useblacksmith/run-testbox@v2
+        if: always()
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

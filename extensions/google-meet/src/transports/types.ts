@@ -31,8 +31,13 @@ export type GoogleMeetChromeHealth = {
   audioOutputActive?: boolean;
   lastInputAt?: string;
   lastOutputAt?: string;
+  lastClearAt?: string;
   lastInputBytes?: number;
   lastOutputBytes?: number;
+  consecutiveInputErrors?: number;
+  lastInputError?: string;
+  clearCount?: number;
+  queuedInputChunks?: number;
   browserUrl?: string;
   browserTitle?: string;
   bridgeClosed?: boolean;

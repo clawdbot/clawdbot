@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
     clackText: vi.fn(),
     clackConfirm: vi.fn(),
     resolveSearchProviderOptions: vi.fn(),
+    resolvePluginContributionOwners: vi.fn(),
     setupSearch: vi.fn(),
     readConfigFileSnapshot: vi.fn(),
     writeConfigFile,
@@ -113,6 +114,10 @@ vi.mock("./onboard-search.js", () => ({
   setupSearch: mocks.setupSearch,
 }));
 
+vi.mock("../plugins/plugin-registry.js", () => ({
+  resolvePluginContributionOwners: mocks.resolvePluginContributionOwners,
+}));
+
 vi.mock("../agents/codex-native-web-search.js", () => ({
   isCodexNativeWebSearchRelevant: mocks.isCodexNativeWebSearchRelevant,
 }));
@@ -210,6 +215,7 @@ describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
+    mocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
     mocks.resolveSearchProviderOptions.mockReturnValue([
       {
         id: "firecrawl",
@@ -358,6 +364,25 @@ describe("runConfigureWizard", () => {
         }),
       }),
     );
+  });
+
+  it("does not load managed search provider options when web search is disabled", async () => {
+    setupBaseWizardState();
+    queueWizardPrompts({
+      select: ["local"],
+      confirm: [false, true],
+    });
+
+    await runWebConfigureWizard();
+
+    expect(mocks.resolvePluginContributionOwners).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contribution: "contracts",
+        matches: "webSearchProviders",
+      }),
+    );
+    expect(mocks.resolveSearchProviderOptions).not.toHaveBeenCalled();
+    expect(mocks.setupSearch).not.toHaveBeenCalled();
   });
 
   it("defers channel status checks until a channel is selected", async () => {

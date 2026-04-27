@@ -16,7 +16,7 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
     - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
     - `agents.defaults.models` acts as an allowlist when set.
     - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
-    - `models.providers.*.models[].contextWindow` is native model metadata; `contextTokens` is the effective runtime cap.
+    - `models.providers.*.contextWindow` / `contextTokens` / `maxTokens` set provider-level defaults; `models.providers.*.models[].contextWindow` / `contextTokens` / `maxTokens` override them per model.
     - Fallback rules, cooldown probes, and session-override persistence: [Model failover](/concepts/model-failover).
   </Accordion>
   <Accordion title="OpenAI provider/runtime split">
@@ -367,7 +367,7 @@ Kimi K2 model IDs:
 }
 ```
 
-### Kimi Coding
+### Kimi coding
 
 Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
@@ -625,6 +625,7 @@ Example (OpenAI‑compatible):
         baseUrl: "http://localhost:1234/v1",
         apiKey: "${LM_API_TOKEN}",
         api: "openai-completions",
+        timeoutSeconds: 300,
         models: [
           {
             id: "my-local-model",
@@ -660,6 +661,7 @@ Example (OpenAI‑compatible):
     - Proxy-style OpenAI-compatible routes also skip native OpenAI-only request shaping: no `service_tier`, no Responses `store`, no Completions `store`, no prompt-cache hints, no OpenAI reasoning-compat payload shaping, and no hidden OpenClaw attribution headers.
     - For OpenAI-compatible Completions proxies that need vendor-specific fields, set `agents.defaults.models["provider/model"].params.extra_body` (or `extraBody`) to merge extra JSON into the outbound request body.
     - For vLLM chat-template controls, set `agents.defaults.models["provider/model"].params.chat_template_kwargs`. OpenClaw automatically sends `enable_thinking: false` and `force_nonempty_content: true` for `vllm/nemotron-3-*` when the session thinking level is off.
+    - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout.
     - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
     - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
   </Accordion>

@@ -1014,8 +1014,8 @@ describe("runPreparedReply media-only handling", () => {
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call?.commandBody).toContain(heartbeatPrompt);
     expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
-    expect(call?.transcriptCommandBody).toBe("");
-    expect(call?.followupRun.transcriptPrompt).toBe("");
+    expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
+    expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
   });
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(

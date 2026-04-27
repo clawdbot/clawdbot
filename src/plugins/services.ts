@@ -24,14 +24,18 @@ function createServiceContext(params: {
   workspaceDir?: string;
   service?: PluginServiceRegistration;
 }): OpenClawPluginServiceContext {
+  const grantsInternalDiagnostics =
+    params.service?.origin === "bundled" &&
+    params.service.pluginId === params.service.service.id &&
+    (params.service.service.id === "diagnostics-otel" ||
+      params.service.service.id === "diagnostics-prometheus");
+
   return {
     config: params.config,
     workspaceDir: params.workspaceDir,
     stateDir: STATE_DIR,
     logger: createPluginLogger(),
-    ...(params.service?.origin === "bundled" &&
-    params.service.pluginId === "diagnostics-otel" &&
-    params.service.service.id === "diagnostics-otel"
+    ...(grantsInternalDiagnostics
       ? {
           internalDiagnostics: {
             emit: emitTrustedDiagnosticEvent,

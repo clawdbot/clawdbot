@@ -15,7 +15,11 @@ vi.mock("./tools/gateway.js", () => ({
 
 vi.mock("./tools/nodes-utils.js", () => ({
   listNodes: vi.fn(async () => [
-    { nodeId: "node-1", commands: ["system.run"], platform: "darwin" },
+    {
+      nodeId: "node-1",
+      commands: ["system.run", "system.run.prepare"],
+      platform: "darwin",
+    },
   ]),
   resolveNodeIdFromList: vi.fn((nodes: Array<{ nodeId: string }>) => nodes[0]?.nodeId),
 }));
@@ -522,16 +526,16 @@ describe("exec approvals", () => {
 
   it("preserves explicit workdir for node exec", async () => {
     const remoteWorkdir = "/Users/vv";
-    let prepareCwd: string | undefined;
+    let runCwd: string | undefined;
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "node.invoke") {
         const invoke = params as { command?: string; params?: { cwd?: string } };
         if (invoke.command === "system.run.prepare") {
-          prepareCwd = invoke.params?.cwd;
           return buildPreparedSystemRunPayload(params);
         }
         if (invoke.command === "system.run") {
+          runCwd = invoke.params?.cwd;
           return { payload: { success: true, stdout: "ok" } };
         }
       }
@@ -551,23 +555,23 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("completed");
-    expect(prepareCwd).toBe(remoteWorkdir);
+    expect(runCwd).toBe(remoteWorkdir);
   });
 
   it("does not forward the gateway default cwd to node exec when workdir is omitted", async () => {
     const gatewayWorkspace = "/gateway/workspace";
-    let prepareHasCwd = false;
-    let prepareCwd: string | undefined;
+    let runHasCwd = false;
+    let runCwd: string | undefined;
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "node.invoke") {
         const invoke = params as { command?: string; params?: { cwd?: string } };
         if (invoke.command === "system.run.prepare") {
-          prepareHasCwd = Object.hasOwn(invoke.params ?? {}, "cwd");
-          prepareCwd = invoke.params?.cwd;
           return buildPreparedSystemRunPayload(params);
         }
         if (invoke.command === "system.run") {
+          runHasCwd = Object.hasOwn(invoke.params ?? {}, "cwd");
+          runCwd = invoke.params?.cwd;
           return { payload: { success: true, stdout: "ok" } };
         }
       }
@@ -587,8 +591,8 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("completed");
-    expect(prepareHasCwd).toBe(false);
-    expect(prepareCwd).toBeUndefined();
+    expect(runHasCwd).toBe(false);
+    expect(runCwd).toBeUndefined();
   });
 
   it("routes explicit host=node to node invoke when elevated default is on under auto host", async () => {

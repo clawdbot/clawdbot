@@ -813,17 +813,27 @@ async function agentCommandInternal(
         catalog: catalogForThinking.length > 0 ? catalogForThinking : undefined,
       });
     }
-    if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
+    const catalogForThinking = modelCatalog ?? allowedModelCatalog;
+    const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
+    if (
+      !isThinkingLevelSupported({
+        provider,
+        model,
+        level: resolvedThinkLevel,
+        catalog: thinkingCatalog,
+      })
+    ) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
       if (explicitThink) {
         throw new Error(
-          `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+          `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
         );
       }
       const fallbackThinkLevel = resolveSupportedThinkingLevel({
         provider,
         model,
         level: resolvedThinkLevel,
+        catalog: thinkingCatalog,
       });
       if (fallbackThinkLevel !== resolvedThinkLevel) {
         const previousThinkLevel = resolvedThinkLevel;

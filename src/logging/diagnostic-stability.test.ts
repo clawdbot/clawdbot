@@ -152,7 +152,18 @@ describe("diagnostic stability recorder", () => {
       provider: "openai",
       model: "gpt-5.4",
       durationMs: 1,
+      requestPayloadBytes: 1234,
+      responseStreamBytes: 567,
+      timeToFirstByteMs: 89,
       errorCategory: "TypeError",
+      failureKind: "terminated",
+      memory: {
+        rssBytes: 100,
+        heapTotalBytes: 80,
+        heapUsedBytes: 40,
+        externalBytes: 20,
+        arrayBuffersBytes: 10,
+      },
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -167,8 +178,21 @@ describe("diagnostic stability recorder", () => {
       type: "model.call.error",
       provider: "openai",
       model: "gpt-5.4",
+      durationMs: 1,
+      requestBytes: 1234,
+      responseBytes: 567,
+      timeToFirstByteMs: 89,
       reason: "TypeError",
+      failureKind: "terminated",
+      memory: {
+        rssBytes: 100,
+        heapTotalBytes: 80,
+        heapUsedBytes: 40,
+        externalBytes: 20,
+        arrayBuffersBytes: 10,
+      },
     });
+    expect(JSON.stringify(snapshot.events[1])).not.toContain("call-1");
   });
 
   it("summarizes memory and large payload events", () => {

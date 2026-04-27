@@ -1,11 +1,23 @@
+import { runAgentLoop, type AgentEvent, type StreamFn } from "@mariozechner/pi-agent-core";
+import { createAssistantMessageEventStream, validateToolArguments } from "@mariozechner/pi-ai";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import {
   cleanToolSchemaForGemini,
   normalizeToolParameterSchema,
   normalizeToolParameters,
 } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+
+const TEST_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
 
 describe("normalizeToolParameterSchema", () => {
   it("normalizes truly empty schemas to type:object with properties:{}", () => {
@@ -195,6 +207,184 @@ describe("normalizeToolParameters", () => {
     expect(parameters.type).toBe("object");
     expect(parameters.properties).toEqual({});
     expect(parameters.additionalProperties).toBe(true);
+  });
+
+  it("prepares null arguments as empty objects for object schemas without required params", () => {
+    const tool: AnyAgentTool = {
+      name: "wiki_lint",
+      label: "wiki_lint",
+      description: "Lint wiki vault",
+      parameters: { type: "object", properties: {}, required: [] },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+    const prepared = normalized.prepareArguments?.(null) as Record<string, never>;
+
+    expect(prepared).toEqual({});
+    expect(
+      validateToolArguments(normalized, {
+        type: "toolCall",
+        id: "call-1",
+        name: "wiki_lint",
+        arguments: prepared,
+      }),
+    ).toEqual({});
+  });
+
+  it("leaves null arguments invalid when the object schema has required params", () => {
+    const tool: AnyAgentTool = {
+      name: "query",
+      label: "query",
+      description: "Run query",
+      parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    expect(normalized.prepareArguments).toBeUndefined();
+    expect(() =>
+      validateToolArguments(normalized, {
+        type: "toolCall",
+        id: "call-1",
+        name: "query",
+        arguments: null as never,
+      }),
+    ).toThrow('Validation failed for tool "query"');
+  });
+
+  it("leaves null arguments invalid when required params are nested in composite schemas", () => {
+    const tool: AnyAgentTool = {
+      name: "query",
+      label: "query",
+      description: "Run query",
+      parameters: {
+        type: "object",
+        allOf: [
+          {
+            type: "object",
+            properties: { q: { type: "string" } },
+            required: ["q"],
+          },
+        ],
+      },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    expect(normalized.prepareArguments).toBeUndefined();
+    expect(() =>
+      validateToolArguments(normalized, {
+        type: "toolCall",
+        id: "call-1",
+        name: "query",
+        arguments: null as never,
+      }),
+    ).toThrow('Validation failed for tool "query"');
+  });
+
+  it("runs null arguments for parameterless tools through the agent loop without validation failure", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "wiki ok" }],
+      details: { ok: true },
+    });
+    const normalized = normalizeToolParameters({
+      name: "wiki_lint",
+      label: "wiki_lint",
+      description: "Lint wiki vault",
+      parameters: { type: "object", properties: {}, required: [] },
+      execute,
+    });
+    const tool = wrapToolWithBeforeToolCallHook(normalized, {
+      agentId: "main",
+      sessionKey: "e2e-null-args",
+      loopDetection: { enabled: true },
+    });
+    const events: AgentEvent[] = [];
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const message =
+          streamCalls === 1
+            ? {
+                role: "assistant" as const,
+                content: [
+                  {
+                    type: "toolCall" as const,
+                    id: "call-null-args",
+                    name: "wiki_lint",
+                    arguments: null as never,
+                  },
+                ],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "toolUse" as const,
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "done" }],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              };
+        stream.push({ type: "done", reason: message.stopReason, message });
+      });
+      return stream;
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "lint the wiki", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [tool] },
+      {
+        model: {
+          id: "faux-1",
+          name: "Faux",
+          provider: "faux",
+          api: "faux",
+          baseUrl: "http://localhost:0",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+          maxTokens: 1024,
+        },
+        convertToLlm: (agentMessages) => agentMessages as never,
+      },
+      (event) => {
+        events.push(event);
+      },
+      undefined,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(2);
+    expect(execute).toHaveBeenCalledWith("call-null-args", {}, undefined, expect.any(Function));
+    const toolResult = messages.find((message) => message.role === "toolResult");
+    expect(toolResult).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-null-args",
+      toolName: "wiki_lint",
+      isError: false,
+      content: [{ type: "text", text: "wiki ok" }],
+    });
+    const endedToolCall = events.find((event) => event.type === "tool_execution_end");
+    expect(endedToolCall).toMatchObject({
+      type: "tool_execution_end",
+      toolCallId: "call-null-args",
+      toolName: "wiki_lint",
+      isError: false,
+    });
+    expect(JSON.stringify(messages)).not.toContain("Validation failed for tool");
   });
 
   it("strips compat-declared unsupported schema keywords without provider-specific branching", () => {

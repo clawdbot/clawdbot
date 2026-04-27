@@ -123,10 +123,12 @@ function createRichPluginFixture(params: { packageVersion?: string } = {}) {
     providerAuthEnvVars: {
       demo: ["DEMO_API_KEY"],
     },
+    syntheticAuthRefs: ["demo", "demo-cli"],
     channelEnvVars: {
       "demo-chat": ["DEMO_CHAT_TOKEN"],
     },
     activation: {
+      onAgentHarnesses: ["codex"],
       onProviders: ["demo"],
       onChannels: ["demo-chat"],
     },
@@ -181,6 +183,7 @@ describe("installed plugin index", () => {
           rootDir: fixture.rootDir,
           source: path.join(fixture.rootDir, "index.ts"),
           enabled: true,
+          syntheticAuthRefs: ["demo", "demo-cli"],
           packageInstall: {
             defaultChoice: "npm",
             npm: {
@@ -205,6 +208,7 @@ describe("installed plugin index", () => {
             },
           },
           compat: [
+            "activation-agent-harness-hint",
             "activation-channel-hint",
             "activation-provider-hint",
             "channel-env-vars",
@@ -220,6 +224,43 @@ describe("installed plugin index", () => {
     });
     expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
+  });
+
+  it("does not classify migration-provider-only plugins as gateway startup sidecars", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePackageJson(rootDir, {
+      name: "@vendor/migration-plugin",
+      version: "1.0.0",
+    });
+    writePluginManifest(rootDir, {
+      id: "migration-plugin",
+      name: "Migration Plugin",
+      enabledByDefault: true,
+      configSchema: { type: "object" },
+      contracts: {
+        migrationProviders: ["legacy-import"],
+      },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          packageName: "@vendor/migration-plugin",
+          packageVersion: "1.0.0",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "migration-plugin",
+      enabledByDefault: true,
+      startup: {
+        sidecar: false,
+      },
+    });
   });
 
   it("keeps bundle format metadata needed for manifest reconstruction", () => {

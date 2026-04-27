@@ -103,6 +103,8 @@ export function resolvePluginConfigContractsById(params: {
   env?: NodeJS.ProcessEnv;
   cache?: boolean;
   fallbackToBundledMetadata?: boolean;
+  fallbackToBundledMetadataForResolvedBundled?: boolean;
+  fallbackBundledPluginIds?: readonly string[];
   pluginIds: readonly string[];
 }): ReadonlyMap<string, PluginConfigContractMetadata> {
   const matches = new Map<string, PluginConfigContractMetadata>();
@@ -112,8 +114,11 @@ export function resolvePluginConfigContractsById(params: {
   if (pluginIds.length === 0) {
     return matches;
   }
+  const fallbackBundledPluginIds = new Set(
+    (params.fallbackBundledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+  );
 
-  const resolvedPluginIds = new Set<string>();
+  const resolvedPluginOrigins = new Map<string, PluginOrigin>();
   const registry = loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -125,7 +130,7 @@ export function resolvePluginConfigContractsById(params: {
     if (!pluginIds.includes(plugin.id)) {
       continue;
     }
-    resolvedPluginIds.add(plugin.id);
+    resolvedPluginOrigins.set(plugin.id, plugin.origin);
     if (!plugin.configContracts) {
       continue;
     }
@@ -137,7 +142,35 @@ export function resolvePluginConfigContractsById(params: {
 
   if (params.fallbackToBundledMetadata ?? true) {
     for (const pluginId of pluginIds) {
-      if (matches.has(pluginId) || resolvedPluginIds.has(pluginId)) {
+      const existing = matches.get(pluginId);
+      const shouldHydrateBundledMatch =
+        existing &&
+        !existing.configContracts.secretInputs &&
+        ((params.fallbackToBundledMetadataForResolvedBundled && existing.origin === "bundled") ||
+          fallbackBundledPluginIds.has(pluginId));
+      if (shouldHydrateBundledMatch) {
+        const bundled = findBundledPluginMetadataById(pluginId);
+        if (bundled?.manifest.configContracts?.secretInputs) {
+          matches.set(pluginId, {
+            origin: fallbackBundledPluginIds.has(pluginId) ? "bundled" : existing.origin,
+            configContracts: {
+              ...bundled.manifest.configContracts,
+              ...existing.configContracts,
+              secretInputs: bundled.manifest.configContracts.secretInputs,
+            },
+          });
+        }
+        continue;
+      }
+      if (matches.has(pluginId)) {
+        continue;
+      }
+      const resolvedOrigin = resolvedPluginOrigins.get(pluginId);
+      if (
+        resolvedOrigin &&
+        !(params.fallbackToBundledMetadataForResolvedBundled && resolvedOrigin === "bundled") &&
+        !fallbackBundledPluginIds.has(pluginId)
+      ) {
         continue;
       }
       const bundled = findBundledPluginMetadataById(pluginId);

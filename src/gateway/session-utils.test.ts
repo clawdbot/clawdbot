@@ -9,6 +9,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
+  buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
@@ -137,6 +138,88 @@ describe("gateway session utils", () => {
     expect(defaults.thinkingOptions).toEqual(
       expect.arrayContaining(["adaptive", "xhigh", "maximum"]),
     );
+  });
+
+  test("session defaults use configured thinking default", () => {
+    const defaults = getSessionDefaults({
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          thinkingDefault: "high",
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(defaults).toMatchObject({
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      thinkingDefault: "high",
+    });
+  });
+
+  test("session rows use per-agent thinking default from config", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          thinkingDefault: "low",
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { thinking: "max" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "alpha",
+            default: true,
+            thinkingDefault: "high",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:alpha:main",
+    });
+
+    expect(row).toMatchObject({
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      thinkingDefault: "high",
+    });
+  });
+
+  test("session rows prefer per-model thinking over global default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          thinkingDefault: "low",
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { thinking: "max" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+    });
+
+    expect(row).toMatchObject({
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      thinkingDefault: "max",
+    });
   });
 
   test("classifySessionKey respects chat type + prefixes", () => {

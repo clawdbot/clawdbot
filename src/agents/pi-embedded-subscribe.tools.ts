@@ -75,10 +75,7 @@ function extractErrorField(value: unknown): string | undefined {
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  const direct =
-    readErrorCandidate(record.error) ??
-    readErrorCandidate(record.message) ??
-    readErrorCandidate(record.reason);
+  const direct = extractDirectErrorField(record);
   if (direct) {
     return direct;
   }
@@ -87,6 +84,34 @@ function extractErrorField(value: unknown): string | undefined {
     return undefined;
   }
   return normalizeToolErrorText(status);
+}
+
+function extractDirectErrorField(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    readErrorCandidate(record.error) ??
+    readErrorCandidate(record.message) ??
+    readErrorCandidate(record.reason)
+  );
+}
+
+function extractAggregatedErrorField(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return readErrorCandidate(record.aggregated);
+}
+
+function isHostDenialToolText(text: string): boolean {
+  const normalized = text.trim();
+  if (normalized.includes("SYSTEM_RUN_DENIED") || normalized.includes("INVALID_REQUEST")) {
+    return true;
+  }
+  return normalized.toLowerCase().includes("approval cannot safely bind");
 }
 
 export function sanitizeToolResult(result: unknown): unknown {
@@ -388,28 +413,42 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
     return undefined;
   }
   const record = result as Record<string, unknown>;
-  const fromDetails = extractErrorField(record.details);
+  const fromDetails = extractDirectErrorField(record.details);
   if (fromDetails) {
     return fromDetails;
   }
-  const fromRoot = extractErrorField(record);
+  const fromDetailsAggregated = extractAggregatedErrorField(record.details);
+  if (fromDetailsAggregated) {
+    return fromDetailsAggregated;
+  }
+  const fromRoot = extractDirectErrorField(record);
   if (fromRoot) {
     return fromRoot;
   }
   const text = extractToolResultText(result);
-  if (!text) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    const fromJson = extractErrorField(parsed);
-    if (fromJson) {
-      return fromJson;
+  if (text) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      const fromJson = extractErrorField(parsed);
+      if (fromJson) {
+        return fromJson;
+      }
+    } catch {
+      // Fall through to status/text fallback.
     }
-  } catch {
-    // Fall through to first-line text fallback.
+    if (isHostDenialToolText(text)) {
+      return normalizeToolErrorText(text);
+    }
   }
-  return normalizeToolErrorText(text);
+  const fromDetailsStatus = extractErrorField(record.details);
+  if (fromDetailsStatus) {
+    return fromDetailsStatus;
+  }
+  const fromRootStatus = extractErrorField(record);
+  if (fromRootStatus) {
+    return fromRootStatus;
+  }
+  return text ? normalizeToolErrorText(text) : undefined;
 }
 
 function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {

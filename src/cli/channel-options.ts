@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { CHAT_CHANNEL_ORDER } from "../channels/ids.js";
+import { readCliStartupMetadata } from "./startup-metadata.js";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -23,14 +21,8 @@ function loadPrecomputedChannelOptions(): string[] | null {
     return precomputedChannelOptions;
   }
   try {
-    const metadataPath = path.resolve(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "cli-startup-metadata.json",
-    );
-    const raw = fs.readFileSync(metadataPath, "utf8");
-    const parsed = JSON.parse(raw) as { channelOptions?: unknown };
-    if (Array.isArray(parsed.channelOptions)) {
+    const parsed = readCliStartupMetadata(import.meta.url) as { channelOptions?: unknown } | null;
+    if (parsed && Array.isArray(parsed.channelOptions)) {
       precomputedChannelOptions = dedupe(
         parsed.channelOptions.filter((value): value is string => typeof value === "string"),
       );

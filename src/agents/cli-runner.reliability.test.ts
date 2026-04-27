@@ -24,15 +24,13 @@ import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import { MAX_CLI_SESSION_HISTORY_MESSAGES } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
-vi.mock("../plugins/hook-runner-global.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
-    "../plugins/hook-runner-global.js",
-  );
-  return {
-    ...actual,
-    getGlobalHookRunner: vi.fn(() => null),
-  };
-});
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: vi.fn(() => null),
+}));
+
+vi.mock("../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: vi.fn(() => undefined),
+}));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 

@@ -8,6 +8,7 @@ import {
   installLaunchAgent,
   isLaunchAgentListed,
   parseLaunchctlPrint,
+  readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
@@ -349,6 +350,30 @@ describe("launchd runtime parsing", () => {
   });
 });
 
+describe("launchd runtime state", () => {
+  it("marks installed plist split-brain when launchd no longer has the job", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
+    state.serviceLoaded = false;
+
+    await expect(readLaunchAgentRuntime(env)).resolves.toMatchObject({
+      status: "unknown",
+      missingSupervision: true,
+      detail: "Could not find service",
+    });
+  });
+
+  it("marks a missing unit when launchd has no job and no plist exists", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.serviceLoaded = false;
+
+    await expect(readLaunchAgentRuntime(env)).resolves.toMatchObject({
+      status: "unknown",
+      missingUnit: true,
+    });
+  });
+});
+
 describe("launchctl list detection", () => {
   it("detects the resolved label in launchctl list", async () => {
     state.listOutput = "123 0 ai.openclaw.gateway\n";
@@ -451,7 +476,7 @@ describe("launchd install", () => {
 
   it("writes TMPDIR to LaunchAgent environment when provided", async () => {
     const env = createDefaultLaunchdEnv();
-    const tmpDir = "/var/folders/xy/abc123/T/";
+    const tmpDir = "/Users/test/.openclaw/tmp";
     await installLaunchAgent({
       env,
       stdout: new PassThrough(),
@@ -464,6 +489,20 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>EnvironmentVariables</key>");
     expect(plist).toContain("<key>TMPDIR</key>");
     expect(plist).toContain(`<string>${tmpDir}</string>`);
+  });
+
+  it("creates the LaunchAgent TMPDIR before bootstrap", async () => {
+    const env = createDefaultLaunchdEnv();
+    const tmpDir = "/Users/test/.openclaw/tmp";
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { TMPDIR: tmpDir },
+    });
+
+    expect(state.dirs.has(tmpDir)).toBe(true);
+    expect(state.dirModes.get(tmpDir)).toBe(0o700);
   });
 
   it("writes KeepAlive=true policy with restrictive umask", async () => {

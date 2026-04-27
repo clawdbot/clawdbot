@@ -3,6 +3,13 @@
   "enabledByDefault": true,
   "providers": ["ollama"],
   "providerDiscoveryEntry": "./provider-discovery.ts",
+  "modelPricing": {
+    "providers": {
+      "ollama": {
+        "external": false
+      }
+    }
+  },
   "syntheticAuthRefs": ["ollama"],
   "nonSecretAuthMarkers": ["ollama-local"],
   "providerAuthEnvVars": {

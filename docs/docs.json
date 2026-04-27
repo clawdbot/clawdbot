@@ -1012,6 +1012,7 @@
                 "pages": [
                   "install/updating",
                   "install/migrating",
+                  "install/migrating-hermes",
                   "install/migrating-matrix",
                   "install/uninstall",
                   "install/development-channels"
@@ -1442,6 +1443,7 @@
                       "gateway/doctor",
                       "logging",
                       "gateway/opentelemetry",
+                      "gateway/prometheus",
                       "gateway/logging",
                       "gateway/diagnostics",
                       "gateway/troubleshooting"
@@ -1544,6 +1546,7 @@
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",
+                      "cli/migrate",
                       "cli/onboard",
                       "cli/reset",
                       "cli/secrets",

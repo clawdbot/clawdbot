@@ -477,6 +477,38 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts voice-call SecretRef credentials declared by the plugin schema", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              provider: "twilio",
+              twilio: {
+                accountSid: "twilio-account-sid-placeholder",
+                authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
+              },
+              tts: {
+                providers: {
+                  openai: {
+                    apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                  },
+                  elevenlabs: {
+                    apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects out-of-range voice-call OpenAI TTS speed values", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },

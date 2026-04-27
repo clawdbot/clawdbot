@@ -59,6 +59,11 @@ export function buildLegacyBundledPath(localPath: string): string | null {
   return bundledLeaf ? path.join(packaged.packageRoot, "extensions", bundledLeaf) : null;
 }
 
+export function buildLegacyBundledRootPath(localPath: string): string | null {
+  const packaged = findPackagedBundledRoot(localPath);
+  return packaged ? path.join(packaged.packageRoot, "extensions") : null;
+}
+
 export function buildBundledPluginLoadPathAliases(localPath: string): BundledPluginLoadPathAlias[] {
   const legacyPath = buildLegacyBundledPath(localPath);
   if (!legacyPath) {

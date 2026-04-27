@@ -615,6 +615,74 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("does not spend isolated execution timeout while waiting for the runner lane (#41783)", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "timeout-after-lane-start",
+        name: "timeout after lane start",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await writeCronJobs(store.storePath, [cronJob]);
+
+      let now = scheduledAt;
+      const runnerEntered = createDeferred<void>();
+      const laneAcquired = createDeferred<void>();
+      let observedAbortSignal: AbortSignal | undefined;
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeatNow: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async ({ abortSignal, onExecutionStarted }) => {
+          observedAbortSignal = abortSignal;
+          runnerEntered.resolve();
+          await laneAcquired.promise;
+          onExecutionStarted?.();
+          await new Promise<void>((resolve) => {
+            if (!abortSignal) {
+              resolve();
+              return;
+            }
+            if (abortSignal.aborted) {
+              resolve();
+              return;
+            }
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          now += 5;
+          return { status: "ok" as const, summary: "late" };
+        }),
+      });
+
+      const timerPromise = onTimer(state);
+      await runnerEntered.promise;
+      await vi.advanceTimersByTimeAsync(Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 10);
+      expect(observedAbortSignal?.aborted).toBe(false);
+
+      laneAcquired.resolve();
+      await Promise.resolve();
+      expect(observedAbortSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 10);
+      await timerPromise;
+
+      expect(observedAbortSignal?.aborted).toBe(true);
+      const job = state.store?.jobs.find((entry) => entry.id === "timeout-after-lane-start");
+      expect(job?.state.lastStatus).toBe("error");
+      expect(job?.state.lastError).toContain("timed out");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("suppresses isolated follow-up side effects after timeout", async () => {
     vi.useFakeTimers();
     try {
@@ -981,30 +1049,39 @@ describe("cron service timer regressions", () => {
         nowMs: () => now,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeatNow: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
-          started.resolve();
-          await new Promise<void>((resolve) => {
-            if (!abortSignal) {
-              resolve();
-              return;
-            }
-            if (abortSignal.aborted) {
-              abortWallMs = Date.now();
-              resolve();
-              return;
-            }
-            abortSignal.addEventListener(
-              "abort",
-              () => {
+        runIsolatedAgentJob: vi.fn(
+          async ({
+            abortSignal,
+            onExecutionStarted,
+          }: {
+            abortSignal?: AbortSignal;
+            onExecutionStarted?: () => void;
+          }) => {
+            onExecutionStarted?.();
+            started.resolve();
+            await new Promise<void>((resolve) => {
+              if (!abortSignal) {
+                resolve();
+                return;
+              }
+              if (abortSignal.aborted) {
                 abortWallMs = Date.now();
                 resolve();
-              },
-              { once: true },
-            );
-          });
-          now += 5;
-          return { status: "ok" as const, summary: "done" };
-        }),
+                return;
+              }
+              abortSignal.addEventListener(
+                "abort",
+                () => {
+                  abortWallMs = Date.now();
+                  resolve();
+                },
+                { once: true },
+              );
+            });
+            now += 5;
+            return { status: "ok" as const, summary: "done" };
+          },
+        ),
       });
 
       const timerPromise = onTimer(state);

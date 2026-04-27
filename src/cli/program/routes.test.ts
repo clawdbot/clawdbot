@@ -23,6 +23,12 @@ vi.mock("../../commands/models/list.js", () => ({
   modelsListCommand: modelsListCommandMock,
   modelsStatusCommand: modelsStatusCommandMock,
 }));
+vi.mock("../../commands/models/list.list-command.js", () => ({
+  modelsListCommand: modelsListCommandMock,
+}));
+vi.mock("../../commands/models/list.status-command.js", () => ({
+  modelsStatusCommand: modelsStatusCommandMock,
+}));
 
 vi.mock("../daemon-cli/status.js", () => ({
   runDaemonStatus: runDaemonStatusMock,

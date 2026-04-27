@@ -69,6 +69,7 @@ type ManifestContractKey =
   | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders"
+  | "migrationProviders"
   | "tools";
 
 type ManifestRegistryContractKey = "webFetchProviders" | "webSearchProviders";
@@ -102,6 +103,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       webContentExtractorIds: [...entry.webContentExtractorIds],
       webFetchProviderIds: [...entry.webFetchProviderIds],
       webSearchProviderIds: [...entry.webSearchProviderIds],
+      migrationProviderIds: [...entry.migrationProviderIds],
       toolNames: [...entry.toolNames],
     }));
   }
@@ -122,6 +124,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
           (plugin.contracts?.webContentExtractors?.length ?? 0) > 0 ||
           (plugin.contracts?.webFetchProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 ||
+          (plugin.contracts?.migrationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.tools?.length ?? 0) > 0),
     )
     .map((plugin) => ({
@@ -144,6 +147,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       webContentExtractorIds: uniqueStrings(plugin.contracts?.webContentExtractors ?? []),
       webFetchProviderIds: uniqueStrings(plugin.contracts?.webFetchProviders ?? []),
       webSearchProviderIds: uniqueStrings(plugin.contracts?.webSearchProviders ?? []),
+      migrationProviderIds: uniqueStrings(plugin.contracts?.migrationProviders ?? []),
       toolNames: uniqueStrings(plugin.contracts?.tools ?? []),
     }));
 }
@@ -204,6 +208,8 @@ function resolveBundledManifestPluginIdsForContract(contract: ManifestContractKe
             return entry.webFetchProviderIds.length > 0;
           case "webSearchProviders":
             return entry.webSearchProviderIds.length > 0;
+          case "migrationProviders":
+            return entry.migrationProviderIds.length > 0;
           case "tools":
             return entry.toolNames.length > 0;
         }

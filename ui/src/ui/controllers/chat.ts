@@ -456,8 +456,9 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
             return null;
           }
           return {
-            type: "image",
+            type: parsed.mimeType.startsWith("image/") ? "image" : "file",
             mimeType: parsed.mimeType,
+            fileName: att.fileName,
             content: parsed.content,
           };
         })
@@ -544,16 +545,38 @@ export async function sendChatMessage(
   const now = Date.now();
 
   // Build user message content blocks
-  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+  const contentBlocks: Array<{
+    type: string;
+    text?: string;
+    source?: unknown;
+    attachment?: {
+      url: string;
+      kind: "audio" | "document";
+      label: string;
+      mimeType?: string;
+    };
+  }> = [];
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
   // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      if (att.mimeType.startsWith("image/")) {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        });
+        continue;
+      }
       contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        type: "attachment",
+        attachment: {
+          url: att.dataUrl,
+          kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
+          label: att.fileName?.trim() || "Attached file",
+          mimeType: att.mimeType,
+        },
       });
     }
   }

@@ -4,12 +4,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const spawnMock = vi.hoisted(() => vi.fn());
-const execFileMock = vi.hoisted(() =>
-  Object.assign(vi.fn(), {
-    __promisify__: vi.fn(),
-  }),
-);
+const { spawnMock, spawnSyncMock, execFileMock, execFilePromisifyMock } = vi.hoisted(() => {
+  const execFilePromisifyMock = vi.fn();
+  const execFileMock = Object.assign(vi.fn(), {
+    [Symbol.for("nodejs.util.promisify.custom")]: execFilePromisifyMock,
+    __promisify__: execFilePromisifyMock,
+  });
+  return {
+    spawnMock: vi.fn(),
+    spawnSyncMock: vi.fn(),
+    execFileMock,
+    execFilePromisifyMock,
+  };
+});
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
@@ -17,6 +24,7 @@ vi.mock("node:child_process", async () => {
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
       spawn: spawnMock,
+      spawnSync: spawnSyncMock,
       execFile: execFileMock as unknown as typeof execFileType,
     },
   );
@@ -43,6 +51,7 @@ function createMockChild(params?: {
   exitCodeAfterClose?: number | null;
   exitCodeAfterCloseDelayMs?: number;
   signal?: NodeJS.Signals | null;
+  autoClose?: boolean;
 }): MockChild {
   const child = new EventEmitter() as MockChild;
   child.stdout = new EventEmitter();
@@ -56,14 +65,16 @@ function createMockChild(params?: {
   child.kill = vi.fn(() => true);
   child.pid = 1234;
   child.killed = false;
-  queueMicrotask(() => {
-    child.emit("close", params?.closeCode ?? 0, params?.closeSignal ?? params?.signal ?? null);
-    if (params?.exitCodeAfterClose !== undefined) {
-      setTimeout(() => {
-        child.exitCode = params.exitCodeAfterClose ?? null;
-      }, params.exitCodeAfterCloseDelayMs ?? 0);
-    }
-  });
+  if (params?.autoClose !== false) {
+    queueMicrotask(() => {
+      child.emit("close", params?.closeCode ?? 0, params?.closeSignal ?? params?.signal ?? null);
+      if (params?.exitCodeAfterClose !== undefined) {
+        setTimeout(() => {
+          child.exitCode = params.exitCodeAfterClose ?? null;
+        }, params.exitCodeAfterCloseDelayMs ?? 0);
+      }
+    });
+  }
   return child;
 }
 
@@ -117,7 +128,27 @@ describe("windows command wrapper behavior", () => {
 
   beforeEach(() => {
     spawnMock.mockReset();
+    spawnSyncMock.mockReset();
+    spawnSyncMock.mockReturnValue({ stdout: "Active code page: 936", stderr: "" });
     execFileMock.mockReset();
+    execFilePromisifyMock.mockReset();
+    execFilePromisifyMock.mockImplementation(
+      (command: string, args: string[], options: Record<string, unknown>) =>
+        new Promise((resolve, reject) => {
+          execFileMock(
+            command,
+            args,
+            options,
+            (err: Error | null, stdout: string | Buffer, stderr: string | Buffer) => {
+              if (err) {
+                reject(err);
+                return;
+              }
+              resolve({ stdout, stderr });
+            },
+          );
+        }),
+    );
   });
 
   afterEach(() => {
@@ -334,6 +365,80 @@ describe("windows command wrapper behavior", () => {
       expect(captured[1]).toEqual(["--version"]);
       expect(captured[2].windowsHide).toBe(true);
       expect(captured[2].windowsVerbatimArguments).toBeUndefined();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("decodes GBK stdout and stderr from runExec on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const stdout = Buffer.from([0xb2, 0xe2, 0xca, 0xd4]);
+    const stderr = Buffer.from([0xa3, 0xbb]);
+
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, stdout: Buffer, stderr: Buffer) => void,
+      ) => {
+        cb(null, stdout, stderr);
+      },
+    );
+
+    try {
+      const result = await runExec("node", ["gbk-output.js"], 1000);
+      expect(result.stdout).toBe("测试");
+      expect(result.stderr).toBe("；");
+      const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
+      expect(captured?.[2].encoding).toBe("buffer");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("prefers valid UTF-8 stdout from runExec on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, stdout: Buffer, stderr: Buffer) => void,
+      ) => {
+        cb(null, Buffer.from("测试", "utf8"), Buffer.alloc(0));
+      },
+    );
+
+    try {
+      await expect(runExec("node", ["utf8-output.js"], 1000)).resolves.toMatchObject({
+        stdout: "测试",
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("decodes spawn stdout once so GBK characters split across chunks survive", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({ autoClose: false });
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.stdout.emit("data", Buffer.from([0xb2]));
+        child.stdout.emit("data", Buffer.from([0xe2, 0xca]));
+        child.stdout.emit("data", Buffer.from([0xd4]));
+        child.emit("close", 0, null);
+      });
+      return child;
+    });
+
+    try {
+      await expect(
+        runCommandWithTimeout(["node", "gbk-output.js"], { timeoutMs: 1000 }),
+      ).resolves.toMatchObject({
+        stdout: "测试",
+      });
     } finally {
       platformSpy.mockRestore();
     }

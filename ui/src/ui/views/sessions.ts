@@ -87,6 +87,7 @@ function normalizeThinkingOptionValue(raw: string): string {
 function resolveThinkLevelOptions(
   row: GatewaySessionRow,
 ): readonly { value: string; label: string }[] {
+  const defaultLabel = row.thinkingDefault ? `Default (${row.thinkingDefault})` : "inherit";
   const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
     ? row.thinkingLevels
     : (row.thinkingOptions?.length ? row.thinkingOptions : DEFAULT_THINK_LEVELS).map((label) => ({
@@ -94,7 +95,7 @@ function resolveThinkLevelOptions(
         label,
       }));
   return [
-    { value: "", label: "inherit" },
+    { value: "", label: defaultLabel },
     ...options.map((option) => ({
       value: normalizeThinkingOptionValue(option.id),
       label: option.label,

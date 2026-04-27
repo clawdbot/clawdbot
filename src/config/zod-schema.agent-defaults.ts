@@ -20,6 +20,11 @@ import {
 
 export const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
 
+const NonNegativeByteSizeSchema = z.union([
+  z.number().int().nonnegative(),
+  z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+]);
+
 export const SilentReplyPolicyConfigSchema = z
   .object({
     direct: SilentReplyPolicySchema.optional(),
@@ -199,20 +204,14 @@ export const AgentDefaultsSchema = z
           .object({
             enabled: z.boolean().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
-            forceFlushTranscriptBytes: z
-              .union([
-                z.number().int().nonnegative(),
-                z
-                  .string()
-                  .refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
-              ])
-              .optional(),
+            forceFlushTranscriptBytes: NonNegativeByteSizeSchema.optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),
         truncateAfterCompaction: z.boolean().optional(),
+        maxActiveTranscriptBytes: NonNegativeByteSizeSchema.optional(),
         notifyUser: z.boolean().optional(),
       })
       .strict()

@@ -103,6 +103,18 @@ openclaw channels logs --channel whatsapp
 Each line in the log file is a JSON object. The CLI and Control UI parse these
 entries to render structured output (time, level, subsystem, message).
 
+File-log JSONL records also include machine-filterable top-level fields when
+available:
+
+- `hostname`: gateway host name.
+- `message`: flattened log message text for full-text search.
+- `agent_id`: active agent id when the log call carries agent context.
+- `session_id`: active session id/key when the log call carries session context.
+- `channel`: active channel when the log call carries channel context.
+
+OpenClaw preserves the original structured log arguments alongside these fields
+so existing parsers that read numbered tslog argument keys keep working.
+
 ### Console output
 
 Console logs are **TTY-aware** and formatted for readability:
@@ -157,6 +169,33 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Trace correlation
+
+File logs are JSONL. When a log call carries a valid diagnostic trace context,
+OpenClaw writes the trace fields as top-level JSON keys (`traceId`, `spanId`,
+`parentSpanId`, `traceFlags`) so external log processors can correlate the line
+with OTEL spans and provider `traceparent` propagation.
+
+Gateway HTTP requests and Gateway WebSocket frames establish an internal request
+trace scope. Logs and diagnostic events emitted inside that async scope inherit
+the request trace when they do not pass an explicit trace context. Agent run and
+model-call traces become children of the active request trace, so local logs,
+diagnostic snapshots, OTEL spans, and trusted provider `traceparent` headers can
+be joined by `traceId` without logging raw request or model content.
+
+### Model call size and timing
+
+Model-call diagnostics record bounded request/response measurements without
+capturing raw prompt or response content:
+
+- `requestPayloadBytes`: UTF-8 byte size of the final model request payload
+- `responseStreamBytes`: UTF-8 byte size of streamed model response events
+- `timeToFirstByteMs`: elapsed time before the first streamed response event
+- `durationMs`: total model-call duration
+
+These fields are available to diagnostic snapshots, model-call plugin hooks, and
+OTEL model-call spans/metrics when diagnostics export is enabled.
+
 ### Console styles
 
 `logging.consoleStyle`:
@@ -167,14 +206,16 @@ file log levels.
 
 ### Redaction
 
-Tool summaries can redact sensitive tokens before they hit the console:
+OpenClaw can redact sensitive tokens before they hit console output, file logs,
+OTLP log records, or persisted session transcript text:
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: list of regex strings to override the default set
 
-Redaction applies at the logging sinks for **console output**, **stderr-routed
-console diagnostics**, and **file logs**. File logs stay JSONL, but matching
-secret values are masked before the line is written to disk.
+File logs and session transcripts stay JSONL, but matching secret values are
+masked before the line or message is written to disk. Redaction is best-effort:
+it applies to text-bearing message content and log strings, not every
+identifier or binary payload field.
 
 ## Diagnostics and OpenTelemetry
 

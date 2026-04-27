@@ -8,7 +8,9 @@ title: "Zalo personal"
 
 Status: experimental. This integration automates a **personal Zalo account** via native `zca-js` inside OpenClaw.
 
-> **Warning:** This is an unofficial integration and may result in account suspension/ban. Use at your own risk.
+<Warning>
+This is an unofficial integration and may result in account suspension or ban. Use at your own risk.
+</Warning>
 
 ## Bundled plugin
 

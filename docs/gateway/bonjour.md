@@ -179,11 +179,10 @@ openclaw plugins disable bonjour
 
 ## Docker gotchas
 
-Bundled Docker Compose sets `OPENCLAW_DISABLE_BONJOUR=1` for the Gateway service
-by default. Docker bridge networks usually do not forward mDNS multicast
-(`224.0.0.251:5353`) between the container and the LAN, so leaving Bonjour on can
-produce repeated ciao `probing` or `announcing` failures without making discovery
-work.
+The bundled Bonjour plugin auto-disables LAN multicast advertising in detected
+containers when `OPENCLAW_DISABLE_BONJOUR` is unset. Docker bridge networks
+usually do not forward mDNS multicast (`224.0.0.251:5353`) between the container
+and the LAN, so advertising from the container rarely makes discovery work.
 
 Important gotchas:
 
@@ -193,16 +192,16 @@ Important gotchas:
   `OPENCLAW_GATEWAY_BIND=lan` so the published host port can work.
 - Disabling Bonjour does not disable wide-area DNS-SD. Use wide-area discovery
   or Tailnet when the Gateway and node are not on the same LAN.
-- Reusing the same `OPENCLAW_CONFIG_DIR` outside Docker does not inherit the
-  Compose default unless the environment still sets `OPENCLAW_DISABLE_BONJOUR`.
+- Reusing the same `OPENCLAW_CONFIG_DIR` outside Docker does not persist the
+  container auto-disable policy.
 - Set `OPENCLAW_DISABLE_BONJOUR=0` only for host networking, macvlan, or another
-  network where mDNS multicast is known to pass.
+  network where mDNS multicast is known to pass; set it to `1` to force-disable.
 
 ## Troubleshooting disabled Bonjour
 
 If a node no longer auto-discovers the Gateway after Docker setup:
 
-1. Confirm whether the Gateway is intentionally suppressing LAN advertising:
+1. Confirm whether the Gateway is running in auto, forced-on, or forced-off mode:
 
    ```bash
    docker compose config | grep OPENCLAW_DISABLE_BONJOUR
@@ -239,9 +238,9 @@ If a node no longer auto-discovers the Gateway after Docker setup:
   container bridges, WSL, or interface churn can leave the ciao advertiser in a
   non-announced state. OpenClaw retries a few times and then disables Bonjour
   for the current Gateway process instead of restarting the advertiser forever.
-- **Docker bridge networking**: bundled Docker Compose disables Bonjour by
-  default with `OPENCLAW_DISABLE_BONJOUR=1`. Set it to `0` only for host,
-  macvlan, or another mDNS-capable network.
+- **Docker bridge networking**: Bonjour auto-disables in detected containers.
+  Set `OPENCLAW_DISABLE_BONJOUR=0` only for host, macvlan, or another
+  mDNS-capable network.
 - **Sleep / interface churn**: macOS may temporarily drop mDNS results; retry.
 - **Browse works but resolve fails**: keep machine names simple (avoid emojis or
   punctuation), then restart the Gateway. The service instance name derives from
@@ -260,7 +259,8 @@ sequences (e.g. spaces become `\032`).
 - `openclaw plugins disable bonjour` disables LAN multicast advertising by disabling the bundled plugin.
 - `openclaw plugins enable bonjour` restores the default LAN discovery plugin.
 - `OPENCLAW_DISABLE_BONJOUR=1` disables LAN multicast advertising without changing plugin config; accepted truthy values are `1`, `true`, `yes`, and `on` (legacy: `OPENCLAW_DISABLE_BONJOUR`).
-- Docker Compose sets `OPENCLAW_DISABLE_BONJOUR=1` by default for bridge networking; override with `OPENCLAW_DISABLE_BONJOUR=0` only when mDNS multicast is available.
+- `OPENCLAW_DISABLE_BONJOUR=0` forces LAN multicast advertising on, including inside detected containers; accepted falsy values are `0`, `false`, `no`, and `off`.
+- When `OPENCLAW_DISABLE_BONJOUR` is unset, Bonjour advertises on normal hosts and auto-disables inside detected containers.
 - `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
 - `OPENCLAW_SSH_PORT` overrides the SSH port when `sshPort` is advertised (legacy: `OPENCLAW_SSH_PORT`).
 - `OPENCLAW_TAILNET_DNS` publishes a MagicDNS hint in TXT when mDNS full mode is enabled (legacy: `OPENCLAW_TAILNET_DNS`).

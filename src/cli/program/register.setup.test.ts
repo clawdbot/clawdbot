@@ -79,6 +79,27 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
+  it("runs setup wizard command for migration import flags", async () => {
+    await runCli([
+      "setup",
+      "--import-from",
+      "hermes",
+      "--import-source",
+      "/tmp/hermes",
+      "--import-secrets",
+    ]);
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        importFrom: "hermes",
+        importSource: "/tmp/hermes",
+        importSecrets: true,
+      }),
+      runtime,
+    );
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
   it("reports setup errors through runtime", async () => {
     setupCommandMock.mockRejectedValueOnce(new Error("setup failed"));
 

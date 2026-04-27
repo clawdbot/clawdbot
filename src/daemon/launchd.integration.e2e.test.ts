@@ -187,6 +187,19 @@ describeLaunchdIntegration("launchd integration", () => {
     await expectRuntimePidReplaced({ env: launchEnv, previousPid: before.pid });
   }, 60_000);
 
+  it("keeps LaunchAgent supervision after a raw SIGTERM", async () => {
+    const launchEnv = launchEnvOrThrow(env);
+    try {
+      await initializeLaunchdRuntime(launchEnv, stdout);
+    } catch {
+      return;
+    }
+
+    const before = await waitForRunningRuntime({ env: launchEnv });
+    process.kill(before.pid, "SIGTERM");
+    await expectRuntimePidReplaced({ env: launchEnv, previousPid: before.pid });
+  }, 60_000);
+
   it("stops persistently without reinstall and starts later", async () => {
     const launchEnv = launchEnvOrThrow(env);
     try {

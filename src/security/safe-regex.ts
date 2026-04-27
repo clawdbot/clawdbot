@@ -140,16 +140,20 @@ function tokenizePattern(source: string): PatternToken[] {
   for (let i = 0; i < source.length; i += 1) {
     const ch = source[i];
 
-    if (ch === "\\") {
-      i += 1;
-      tokens.push({ kind: "simple-token" });
-      continue;
-    }
-
     if (inCharClass) {
+      if (ch === "\\") {
+        i += 1;
+        continue;
+      }
       if (ch === "]") {
         inCharClass = false;
       }
+      continue;
+    }
+
+    if (ch === "\\") {
+      i += 1;
+      tokens.push({ kind: "simple-token" });
       continue;
     }
 

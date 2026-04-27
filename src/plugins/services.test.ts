@@ -180,7 +180,7 @@ describe("startPluginServices", () => {
     expect(stopThrows).toHaveBeenCalledOnce();
   });
 
-  it("grants internal diagnostics only to the bundled diagnostics OTEL service", async () => {
+  it("grants internal diagnostics only to bundled diagnostics exporter services", async () => {
     const contexts: OpenClawPluginServiceContext[] = [];
     const diagnosticsService = createTrackingService("diagnostics-otel", { contexts });
     await startPluginServices({
@@ -190,6 +190,18 @@ describe("startPluginServices", () => {
 
     expect(contexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(contexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+
+    const prometheusContexts: OpenClawPluginServiceContext[] = [];
+    const prometheusService = createTrackingService("diagnostics-prometheus", {
+      contexts: prometheusContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([prometheusService], "diagnostics-prometheus", "bundled"),
+      config: createServiceConfig(),
+    });
+
+    expect(prometheusContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(prometheusContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
 
     const untrustedContexts: OpenClawPluginServiceContext[] = [];
     const untrustedService = createTrackingService("diagnostics-otel", {

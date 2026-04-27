@@ -624,6 +624,53 @@ describe("loadChatHistory", () => {
 });
 
 describe("sendChatMessage", () => {
+  it("serializes non-image chat attachments as files", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "summarize", [
+      {
+        id: "att-1",
+        dataUrl: `data:application/pdf;base64,${Buffer.from("%PDF-1.4\n").toString("base64")}`,
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+      },
+    ]);
+
+    expect(result).toEqual(expect.any(String));
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "summarize",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "brief.pdf",
+            content: Buffer.from("%PDF-1.4\n").toString("base64"),
+          },
+        ],
+      }),
+    );
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "summarize" },
+        {
+          type: "attachment",
+          attachment: {
+            kind: "document",
+            label: "brief.pdf",
+            mimeType: "application/pdf",
+          },
+        },
+      ],
+    });
+  });
+
   it("formats structured non-auth connect failures for chat send", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({

@@ -23,13 +23,6 @@ export type CachedModelPricing = {
 let cachedPricing = new Map<string, CachedModelPricing>();
 let cachedAt = 0;
 
-const WRAPPER_PROVIDERS = new Set([
-  "cloudflare-ai-gateway",
-  "kilocode",
-  "openrouter",
-  "vercel-ai-gateway",
-]);
-
 function modelPricingCacheKey(provider: string, model: string): string {
   const providerId = normalizeProviderId(provider);
   const modelId = model.trim();
@@ -41,16 +34,6 @@ function modelPricingCacheKey(provider: string, model: string): string {
   )
     ? modelId
     : `${providerId}/${modelId}`;
-}
-
-function shouldNormalizeCachedPricingLookup(provider: string): boolean {
-  const normalized = normalizeProviderId(provider);
-  return (
-    normalized === "anthropic" ||
-    normalized === "openrouter" ||
-    normalized === "xai" ||
-    WRAPPER_PROVIDERS.has(normalized)
-  );
 }
 
 export function replaceGatewayModelPricingCache(
@@ -80,11 +63,11 @@ export function getCachedGatewayModelPricing(params: {
   if (direct) {
     return direct;
   }
-  if (!shouldNormalizeCachedPricingLookup(provider)) {
-    return undefined;
-  }
   const normalized = normalizeModelRef(provider, model);
   const normalizedKey = modelPricingCacheKey(normalized.provider, normalized.model);
+  if (normalizedKey === key) {
+    return undefined;
+  }
   return normalizedKey ? cachedPricing.get(normalizedKey) : undefined;
 }
 

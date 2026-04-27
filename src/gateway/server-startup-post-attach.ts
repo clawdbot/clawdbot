@@ -538,6 +538,7 @@ export async function startGatewayPostAttachRuntime(
         params.onPluginServices?.(result.pluginServices);
         params.onSidecarsReady?.();
         params.startupTrace?.mark("sidecars.ready");
+        params.log.info("gateway ready");
         return result;
       });
 

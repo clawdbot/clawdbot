@@ -132,6 +132,16 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("token=abcdef…ghij");
   });
 
+  it("honors escaped character classes in custom patterns", () => {
+    const input = "contact peter@dc.io";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
+    });
+    expect(output).toBe("contact peter@d***.io");
+    expect(output).not.toContain("peter@dc.io");
+  });
+
   it("ignores unsafe nested-repetition custom patterns", () => {
     const input = `${"a".repeat(28)}!`;
     const output = redactSensitiveText(input, {

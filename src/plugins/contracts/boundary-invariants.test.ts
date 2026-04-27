@@ -41,7 +41,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
     "subagent_spawning",
   ],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
-  "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build"],
+  "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/skill-workshop/index.ts": ["agent_end", "before_prompt_build"],
   "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
 } as const satisfies Record<

@@ -8,10 +8,17 @@ import {
   agentOutputHasExpectedOkMarker,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
+  buildInstalledBrowserOverrideImportProbeScript,
   buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
+  CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
+  CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
+  CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
+  CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
+  CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   isImmutableReleaseRef,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
@@ -29,6 +36,7 @@ import {
   resolveRunnerMatrix,
   resolveStaticFileContentType,
   shouldExerciseManagedGatewayLifecycleAfterInstall,
+  shouldRunWindowsInstalledBrowserOverrideImportSmoke,
   shouldSkipInstallerDaemonHealthCheck,
   shouldStopManagedGatewayBeforeManualFallback,
   shouldRunMainChannelDevUpdate,
@@ -39,6 +47,20 @@ import {
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
 describe("scripts/openclaw-cross-os-release-checks", () => {
+  it("keeps dashboard smoke patient enough for cold packaged gateway startup", () => {
+    expect(CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
+    expect(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it("keeps gateway RPC status probes patient enough for live release startup", () => {
+    expect(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
+    expect(CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS).toBeGreaterThan(
+      CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
+    );
+    expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
+    expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
+  });
+
   it("accepts OK agent output from the captured log when stdout is empty", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-output-"));
     try {
@@ -155,6 +177,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         lane: "fresh",
       }),
     );
+    expect(matrix.include).toContainEqual(
+      expect.objectContaining({
+        os_id: "macos",
+        runner: "blacksmith-6vcpu-macos-latest",
+        suite: "packaged-fresh",
+      }),
+    );
   });
 
   it("can rebuild the Windows PATH with or without current-process entries", () => {
@@ -260,6 +289,26 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldSkipInstallerDaemonHealthCheck("win32")).toBe(true);
     expect(shouldSkipInstallerDaemonHealthCheck("darwin")).toBe(false);
     expect(shouldSkipInstallerDaemonHealthCheck("linux")).toBe(false);
+  });
+
+  it("runs the installed browser override import smoke only on native Windows", () => {
+    expect(shouldRunWindowsInstalledBrowserOverrideImportSmoke("win32")).toBe(true);
+    expect(shouldRunWindowsInstalledBrowserOverrideImportSmoke("darwin")).toBe(false);
+    expect(shouldRunWindowsInstalledBrowserOverrideImportSmoke("linux")).toBe(false);
+
+    const script = buildInstalledBrowserOverrideImportProbeScript();
+    expect(script).toContain('from "openclaw/plugin-sdk/browser-node-runtime"');
+    expect(script).toContain('overrideEnvVar: "OPENCLAW_BROWSER_CONTROL_MODULE"');
+    expect(script).toContain("startBrowserControlService");
+    expect(script).toContain("stopBrowserControlService");
+    expect(script).toContain("Browser control override start sentinel was not written.");
+
+    const installedScript = buildInstalledBrowserOverrideImportProbeScript(
+      "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/browser-node-runtime.js",
+    );
+    expect(installedScript).toContain(
+      'from "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/browser-node-runtime.js"',
+    );
   });
 
   it("normalizes Windows installed CLI paths to the cmd shim", () => {

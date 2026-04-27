@@ -21,7 +21,6 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
-        "dist/extensions/qa-channel/runtime-api.js",
       ]);
       await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([]);
 
@@ -65,6 +64,18 @@ describe("package dist inventory", () => {
         "index.js",
       );
       const omittedQaLabPluginSdk = path.join(packageRoot, "dist", "plugin-sdk", "qa-lab.js");
+      const omittedQaChannelPluginSdk = path.join(
+        packageRoot,
+        "dist",
+        "plugin-sdk",
+        "qa-channel.js",
+      );
+      const omittedQaChannelProtocolPluginSdk = path.join(
+        packageRoot,
+        "dist",
+        "plugin-sdk",
+        "qa-channel-protocol.js",
+      );
       const omittedQaLabTypes = path.join(
         packageRoot,
         "dist",
@@ -135,6 +146,8 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedQaLabChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaMatrixChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaLabPluginSdk, "export {};\n", "utf8");
+      await fs.writeFile(omittedQaChannelPluginSdk, "export {};\n", "utf8");
+      await fs.writeFile(omittedQaChannelProtocolPluginSdk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaLabTypes, "export {};\n", "utf8");
       await fs.writeFile(omittedQaRuntimeChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedRuntimeDepsStamp, "{}\n", "utf8");
@@ -150,9 +163,7 @@ describe("package dist inventory", () => {
       );
       await fs.writeFile(omittedMap, "{}", "utf8");
 
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-        "dist/extensions/qa-channel/runtime-api.js",
-      ]);
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([]);
     });
   });
 

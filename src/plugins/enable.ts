@@ -8,7 +8,11 @@ export type PluginEnableResult = {
   reason?: string;
 };
 
-export function enablePluginInConfig(cfg: OpenClawConfig, pluginId: string): PluginEnableResult {
+export function enablePluginInConfig(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  options: { updateChannelConfig?: boolean } = {},
+): PluginEnableResult {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   const resolvedId = builtInChannelId ?? pluginId;
   if (cfg.plugins?.enabled === false) {
@@ -26,5 +30,8 @@ export function enablePluginInConfig(cfg: OpenClawConfig, pluginId: string): Plu
   ) {
     return { config: cfg, enabled: false, reason: "blocked by allowlist" };
   }
-  return { config: setPluginEnabledInConfig(cfg, resolvedId, true), enabled: true };
+  return {
+    config: setPluginEnabledInConfig(cfg, resolvedId, true, options),
+    enabled: true,
+  };
 }

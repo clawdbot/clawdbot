@@ -60,6 +60,7 @@ function createTelegramPluginRegistry() {
     videoGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    migrationProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
     cliRegistrars: [],

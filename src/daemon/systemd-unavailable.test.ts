@@ -22,6 +22,11 @@ describe("classifySystemdUnavailableDetail", () => {
         "systemctl --user unavailable: Failed to connect to bus: No medium found",
       ),
     ).toBe("user_bus_unavailable");
+    expect(
+      classifySystemdUnavailableDetail(
+        "systemctl --user unavailable: Failed to connect to bus: Permission denied",
+      ),
+    ).toBe("user_bus_unavailable");
   });
 
   it("classifies generic systemd-unavailable details", () => {

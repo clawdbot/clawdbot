@@ -70,11 +70,15 @@ The delegate operates **autonomously** on a schedule, executing standing orders 
 
 This tier combines Tier 2 permissions with [Cron Jobs](/automation/cron-jobs) and [Standing Orders](/automation/standing-orders).
 
-> **Security warning**: Tier 3 requires careful configuration of hard blocks — actions the agent must never take regardless of instruction. Complete the prerequisites below before granting any identity provider permissions.
+<Warning>
+Tier 3 requires careful configuration of hard blocks: actions the agent must never take regardless of instruction. Complete the prerequisites below before granting any identity provider permissions.
+</Warning>
 
 ## Prerequisites: isolation and hardening
 
-> **Do this first.** Before you grant any credentials or identity provider access, lock down the delegate's boundaries. The steps in this section define what the agent **cannot** do — establish these constraints before giving it the ability to do anything.
+<Note>
+**Do this first.** Before you grant any credentials or identity provider access, lock down the delegate's boundaries. The steps in this section define what the agent **cannot** do. Establish these constraints before giving it the ability to do anything.
+</Note>
 
 ### Hard blocks (non-negotiable)
 
@@ -180,7 +184,9 @@ New-ApplicationAccessPolicy `
   -AccessRight RestrictAccess
 ```
 
-> **Security warning**: without an application access policy, `Mail.Read` application permission grants access to **every mailbox in the tenant**. Always create the access policy before the application reads any mail. Test by confirming the app returns `403` for mailboxes outside the security group.
+<Warning>
+Without an application access policy, `Mail.Read` application permission grants access to **every mailbox in the tenant**. Always create the access policy before the application reads any mail. Test by confirming the app returns `403` for mailboxes outside the security group.
+</Warning>
 
 #### Google Workspace
 
@@ -196,7 +202,9 @@ https://www.googleapis.com/auth/calendar           # Tier 2
 
 The service account impersonates the delegate user (not the principal), preserving the "on behalf of" model.
 
-> **Security warning**: domain-wide delegation allows the service account to impersonate **any user in the entire domain**. Restrict the scopes to the minimum required, and limit the service account's client ID to only the scopes listed above in the Admin Console (Security > API controls > Domain-wide delegation). A leaked service account key with broad scopes grants full access to every mailbox and calendar in the organization. Rotate keys on a schedule and monitor the Admin Console audit log for unexpected impersonation events.
+<Warning>
+Domain-wide delegation allows the service account to impersonate **any user in the entire domain**. Restrict the scopes to the minimum required, and limit the service account's client ID to only the scopes listed above in the Admin Console (Security > API controls > Domain-wide delegation). A leaked service account key with broad scopes grants full access to every mailbox and calendar in the organization. Rotate keys on a schedule and monitor the Admin Console audit log for unexpected impersonation events.
+</Warning>
 
 ### 3. Bind the delegate to channels
 

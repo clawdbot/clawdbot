@@ -8,7 +8,7 @@ title: "Multiple gateways"
 
 Most setups should use one Gateway because a single Gateway can handle multiple messaging connections and agents. If you need stronger isolation or redundancy (e.g., a rescue bot), run separate Gateways with isolated profiles/ports.
 
-## Best Recommended Setup
+## Best recommended setup
 
 For most users, the simplest rescue-bot setup is:
 
@@ -44,7 +44,7 @@ During `openclaw --profile rescue onboard`:
 If onboarding already installed the rescue service for you, the final
 `gateway install` is not needed.
 
-## Why This Works
+## Why this works
 
 The rescue bot stays independent because it has its own:
 
@@ -75,7 +75,7 @@ In practice, that means the rescue bot gets its own:
 
 The prompts are otherwise the same as normal onboarding.
 
-## General Multi-Gateway Setup
+## General multi-gateway setup
 
 The rescue-bot layout above is the easiest default, but the same isolation
 pattern works for any pair or group of Gateways on one host.
@@ -114,7 +114,7 @@ Use the rescue-bot quickstart when you want a fallback operator lane. Use the
 general profile pattern when you want multiple long-lived Gateways for
 different channels, tenants, workspaces, or operational roles.
 
-## Isolation Checklist
+## Isolation checklist
 
 Keep these unique per Gateway instance:
 

@@ -20,8 +20,12 @@ export type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
+  contextWindow?: ModelProviderConfig["contextWindow"];
+  contextTokens?: ModelProviderConfig["contextTokens"];
+  maxTokens?: ModelProviderConfig["maxTokens"];
   headers?: unknown;
   authHeader?: boolean;
+  timeoutSeconds?: ModelProviderConfig["timeoutSeconds"];
   request?: ModelProviderConfig["request"];
 };
 
@@ -153,6 +157,9 @@ export function buildInlineProviderModels(
       return attachModelProviderRequestTransport(
         {
           ...model,
+          contextWindow: model.contextWindow ?? entry?.contextWindow,
+          contextTokens: model.contextTokens ?? entry?.contextTokens,
+          maxTokens: model.maxTokens ?? entry?.maxTokens,
           input: resolveProviderModelInput({
             provider: trimmed,
             modelId: model.id,

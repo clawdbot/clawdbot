@@ -417,13 +417,13 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
     delete nextEntries[fromId];
   }
 
-  const nextSlots =
-    slots?.memory === fromId
-      ? {
-          ...slots,
-          memory: toId,
-        }
-      : slots;
+  const nextSlots = slots
+    ? {
+        ...slots,
+        ...(slots.memory === fromId ? { memory: toId } : {}),
+        ...(slots.contextEngine === fromId ? { contextEngine: toId } : {}),
+      }
+    : undefined;
 
   return {
     ...cfg,
@@ -469,6 +469,7 @@ export async function updateNpmInstalledPlugins(params: {
   logger?: PluginUpdateLogger;
   pluginIds?: string[];
   skipIds?: Set<string>;
+  timeoutMs?: number;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   specOverrides?: Record<string, string>;
@@ -567,7 +568,10 @@ export async function updateNpmInstalledPlugins(params: {
     });
 
     if (!params.dryRun && record.source === "npm" && currentVersion) {
-      const metadataResult = await resolveNpmSpecMetadata({ spec: effectiveSpec! });
+      const metadataResult = await resolveNpmSpecMetadata({
+        spec: effectiveSpec!,
+        timeoutMs: params.timeoutMs,
+      });
       if (metadataResult.ok) {
         if (
           shouldSkipUnchangedNpmInstall({
@@ -604,6 +608,7 @@ export async function updateNpmInstalledPlugins(params: {
                 spec: effectiveSpec!,
                 mode: "update",
                 extensionsDir,
+                timeoutMs: params.timeoutMs,
                 dryRun: true,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
@@ -622,6 +627,7 @@ export async function updateNpmInstalledPlugins(params: {
                   baseUrl: record.clawhubUrl,
                   mode: "update",
                   extensionsDir,
+                  timeoutMs: params.timeoutMs,
                   dryRun: true,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   expectedPluginId: pluginId,
@@ -632,6 +638,7 @@ export async function updateNpmInstalledPlugins(params: {
                   plugin: record.marketplacePlugin!,
                   mode: "update",
                   extensionsDir,
+                  timeoutMs: params.timeoutMs,
                   dryRun: true,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   expectedPluginId: pluginId,
@@ -708,6 +715,7 @@ export async function updateNpmInstalledPlugins(params: {
               spec: effectiveSpec!,
               mode: "update",
               extensionsDir,
+              timeoutMs: params.timeoutMs,
               dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
               expectedPluginId: pluginId,
               expectedIntegrity,
@@ -725,6 +733,7 @@ export async function updateNpmInstalledPlugins(params: {
                 baseUrl: record.clawhubUrl,
                 mode: "update",
                 extensionsDir,
+                timeoutMs: params.timeoutMs,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
                 logger,
@@ -734,6 +743,7 @@ export async function updateNpmInstalledPlugins(params: {
                 plugin: record.marketplacePlugin!,
                 mode: "update",
                 extensionsDir,
+                timeoutMs: params.timeoutMs,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
                 logger,

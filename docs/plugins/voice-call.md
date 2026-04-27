@@ -91,6 +91,10 @@ Gateway startup logs a setup-incomplete warning with the missing keys and
 skips starting the runtime. Commands, RPC calls, and agent tools still
 return the exact missing provider configuration when used.
 
+<Note>
+Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken` and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
+</Note>
+
 ```json5
 {
   plugins: {

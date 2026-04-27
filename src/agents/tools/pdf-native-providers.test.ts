@@ -78,6 +78,8 @@ describe("native PDF provider API calls", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, opts] = fetchMock.mock.calls[0];
     expect(url).toContain("/v1/messages");
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+    expect(opts.signal.aborted).toBe(false);
     const body = JSON.parse(opts.body);
     expect(body.model).toBe("claude-opus-4-6");
     expect(body.messages[0].content).toHaveLength(2);
@@ -132,6 +134,8 @@ describe("native PDF provider API calls", () => {
     const [url, opts] = fetchMock.mock.calls[0];
     expect(url).toContain("generateContent");
     expect(url).toContain("gemini-2.5-pro");
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+    expect(opts.signal.aborted).toBe(false);
     const body = JSON.parse(opts.body);
     expect(body.contents[0].parts).toHaveLength(2);
     expect(body.contents[0].parts[0].inline_data.mime_type).toBe("application/pdf");

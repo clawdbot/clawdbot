@@ -227,6 +227,33 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await runtime.stop();
   });
 
+  it("does not log duplicate webhook and public URLs when they match", async () => {
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const runtime = await createVoiceCallRuntime({
+      config: createExternalProviderConfig({
+        provider: "twilio",
+        publicUrl: "https://voice.example.com/voice/webhook",
+      }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: {} as never,
+      logger,
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      "[voice-call] Webhook URL: https://voice.example.com/voice/webhook",
+    );
+    expect(logger.info).not.toHaveBeenCalledWith(
+      "[voice-call] Public URL: https://voice.example.com/voice/webhook",
+    );
+
+    await runtime.stop();
+  });
+
   it("wires the shared realtime agent consult tool and handler", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";

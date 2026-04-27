@@ -367,7 +367,14 @@ function assertAgainstBaseline(params: {
 
   if (params.result.best) {
     const usage = params.result.best.usage;
-    if ((usage.cacheRead ?? 0) < (floor.minCacheRead ?? 0)) {
+    if (floor.minCacheReadOrWrite !== undefined) {
+      const cacheReadOrWrite = Math.max(usage.cacheRead ?? 0, usage.cacheWrite ?? 0);
+      if (cacheReadOrWrite < floor.minCacheReadOrWrite) {
+        params.regressions.push(
+          `${params.provider}:${params.lane} cacheReadOrWrite=${cacheReadOrWrite} < min=${floor.minCacheReadOrWrite}`,
+        );
+      }
+    } else if ((usage.cacheRead ?? 0) < (floor.minCacheRead ?? 0)) {
       params.regressions.push(
         `${params.provider}:${params.lane} cacheRead=${usage.cacheRead ?? 0} < min=${floor.minCacheRead}`,
       );

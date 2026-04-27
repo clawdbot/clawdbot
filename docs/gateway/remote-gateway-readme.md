@@ -33,7 +33,7 @@ flowchart TB
     T --> C
 ```
 
-## Quick Setup
+## Quick setup
 
 ### Step 1: Add SSH Config
 
@@ -152,7 +152,7 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 
 ---
 
-## How It Works
+## How it works
 
 | Component                            | What It Does                                                 |
 | ------------------------------------ | ------------------------------------------------------------ |

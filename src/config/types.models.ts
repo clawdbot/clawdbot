@@ -107,6 +107,8 @@ export type ModelDefinitionConfig = {
    */
   contextTokens?: number;
   maxTokens: number;
+  /** Provider-specific request/runtime parameters passed through to provider plugins. */
+  params?: Record<string, unknown>;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
   metadataSource?: "models-add";
@@ -117,6 +119,10 @@ export type ModelProviderConfig = {
   apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
+  contextWindow?: number;
+  contextTokens?: number;
+  maxTokens?: number;
+  timeoutSeconds?: number;
   injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;

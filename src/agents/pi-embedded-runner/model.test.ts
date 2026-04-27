@@ -369,6 +369,180 @@ describe("resolveModel", () => {
     expect(result.model?.maxTokens).toBe(32768);
   });
 
+  it("merges configured model params with agent defaults for resolved models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3:32b",
+      templateModel: {
+        ...makeModel("qwen3:32b"),
+        provider: "ollama",
+        params: { num_ctx: 4096, keep_alive: "1m" },
+      },
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "OLLAMA/qwen3:32B": {
+              params: { num_ctx: 8192, thinking: "low" },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            models: [
+              {
+                ...makeModel("qwen3:32b"),
+                params: { num_ctx: 16384 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
+      num_ctx: 16384,
+      keep_alive: "1m",
+      thinking: "low",
+    });
+  });
+
+  it("resolves provider request timeout metadata for configured provider models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3:32b",
+      templateModel: {
+        ...makeModel("qwen3:32b"),
+        provider: "ollama",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            timeoutSeconds: 300,
+            models: [makeModel("qwen3:32b")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
+      300_000,
+    );
+  });
+
+  it("uses provider-level context defaults over discovered metadata", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      templateModel: {
+        ...makeModel("qwen3.5:9b"),
+        provider: "ollama",
+        contextWindow: 216_000,
+        contextTokens: 216_000,
+        maxTokens: 65_536,
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            contextWindow: 8_192,
+            contextTokens: 8_000,
+            models: [{ id: "qwen3.5:9b", name: "qwen3.5:9b" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.contextWindow).toBe(8_192);
+    expect((result.model as { contextTokens?: number } | undefined)?.contextTokens).toBe(8_000);
+    expect(result.model?.maxTokens).toBe(8_192);
+  });
+
+  it("keeps per-model context values above provider-level defaults", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      templateModel: {
+        ...makeModel("qwen3.5:9b"),
+        provider: "ollama",
+        contextWindow: 216_000,
+        maxTokens: 65_536,
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            contextWindow: 8_192,
+            maxTokens: 4_096,
+            models: [
+              {
+                id: "qwen3.5:9b",
+                name: "qwen3.5:9b",
+                contextWindow: 16_384,
+                maxTokens: 12_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.contextWindow).toBe(16_384);
+    expect(result.model?.maxTokens).toBe(12_000);
+  });
+
+  it("applies agent default model params without explicit provider config", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "llama3.2",
+      templateModel: {
+        ...makeModel("llama3.2"),
+        provider: "ollama",
+      },
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/llama3.2": {
+              params: { num_ctx: 32768 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "llama3.2", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
+      num_ctx: 32768,
+    });
+  });
+
   it("propagates reasoning from matching configured fallback model", () => {
     const cfg = {
       models: {

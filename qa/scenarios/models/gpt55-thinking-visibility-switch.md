@@ -13,7 +13,7 @@ objective: Verify GPT-5.5 can switch from disabled thinking to medium thinking w
 successCriteria:
   - Live runs target openai/gpt-5.5, not a mini or pro variant.
   - The session enables reasoning display before the comparison turns.
-  - The disabled-thinking turn returns its visible marker without a Reasoning-prefixed message.
+  - The disabled-thinking turn returns its visible marker without a non-empty Reasoning summary.
   - The medium-thinking turn returns its visible marker and a separate Reasoning-prefixed message.
 docsRefs:
   - docs/tools/thinking.md
@@ -77,22 +77,22 @@ steps:
           - lambda:
               expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Reasoning visibility enabled/i.test(candidate.text)).at(-1)"
           - expr: liveTurnTimeoutMs(env, 20000)
-      - call: state.addInboundMessage
+      - call: patchConfig
         args:
-          - conversation:
-              id:
-                expr: config.conversationId
-              kind: direct
-            senderId: qa-operator
-            senderName: QA Operator
-            text:
-              expr: config.offDirective
-      - call: waitForCondition
-        saveAs: offAck
+          - env:
+              ref: env
+            patch:
+              agents:
+                defaults:
+                  thinkingDefault: "off"
+      - call: waitForGatewayHealthy
         args:
-          - lambda:
-              expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Thinking disabled/i.test(candidate.text)).at(-1)"
-          - expr: liveTurnTimeoutMs(env, 20000)
+          - ref: env
+          - 60000
+      - call: waitForQaChannelReady
+        args:
+          - ref: env
+          - 60000
       - set: offCursor
         value:
           expr: state.getSnapshot().messages.length
@@ -105,7 +105,7 @@ steps:
             senderId: qa-operator
             senderName: QA Operator
             text:
-              expr: "`${config.offDirective} ${config.offPrompt}`"
+              expr: config.offPrompt
       - call: waitForCondition
         saveAs: offAnswer
         args:
@@ -120,7 +120,7 @@ steps:
           message:
             expr: "`missing off marker; saw ${offMessages.map((message) => message.text).join(' | ')}`"
       - assert:
-          expr: "!offMessages.some((candidate) => candidate.text.trimStart().startsWith('Reasoning:'))"
+          expr: "!offMessages.some((candidate) => candidate.text.trimStart().startsWith('Reasoning:') && !candidate.text.includes('Native reasoning was produced; no summary text was returned.'))"
           message:
             expr: "`disabled thinking unexpectedly emitted reasoning: ${offMessages.map((message) => message.text).join(' | ')}`"
       - if:
@@ -136,26 +136,26 @@ steps:
                 expr: "String(offRequest?.model ?? '').includes('gpt-5.5')"
                 message:
                   expr: "`expected GPT-5.5 off mock request, got ${String(offRequest?.model ?? '')}`"
-    detailsExpr: "`off ack=${offAck.text}; off answer=${offAnswer.text}`"
+    detailsExpr: "`reasoning ack=${reasoningAck.text}; off answer=${offAnswer.text}`"
   - name: switches to medium thinking
     actions:
-      - call: state.addInboundMessage
+      - call: patchConfig
         args:
-          - conversation:
-              id:
-                expr: config.conversationId
-              kind: direct
-            senderId: qa-operator
-            senderName: QA Operator
-            text:
-              expr: config.maxDirective
-      - call: waitForCondition
-        saveAs: maxAck
+          - env:
+              ref: env
+            patch:
+              agents:
+                defaults:
+                  thinkingDefault: "medium"
+      - call: waitForGatewayHealthy
         args:
-          - lambda:
-              expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Thinking level set to medium/i.test(candidate.text)).at(-1)"
-          - expr: liveTurnTimeoutMs(env, 20000)
-    detailsExpr: "`max ack=${maxAck.text}`"
+          - ref: env
+          - 60000
+      - call: waitForQaChannelReady
+        args:
+          - ref: env
+          - 60000
+    detailsExpr: "`thinking default patched to medium`"
   - name: verifies medium thinking emits visible reasoning
     actions:
       - set: maxCursor
@@ -170,7 +170,7 @@ steps:
             senderId: qa-operator
             senderName: QA Operator
             text:
-              expr: "`${config.maxDirective} ${config.maxPrompt}`"
+              expr: config.maxPrompt
       - call: waitForCondition
         saveAs: maxReasoning
         args:

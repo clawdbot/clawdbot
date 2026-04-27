@@ -18,6 +18,19 @@ on:
         description: Optional comma-separated Discord scenario ids
         required: false
         type: string
+      matrix_profile:
+        description: Matrix QA profile for the live Matrix lane
+        required: false
+        default: all
+        type: choice
+        options:
+          - fast
+          - all
+          - transport
+          - media
+          - e2ee-smoke
+          - e2ee-deep
+          - e2ee-cli
 
 permissions:
   contents: read
@@ -199,6 +212,7 @@ jobs:
   run_live_matrix:
     name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all') }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -236,7 +250,9 @@ jobs:
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          INPUT_MATRIX_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile || 'fast' }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS: "3000"
         run: |
           set -euo pipefail
 
@@ -249,13 +265,92 @@ jobs:
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --fast
+            --profile "${INPUT_MATRIX_PROFILE}" \
+            --fast \
+            --fail-fast
 
       - name: Upload Matrix QA artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: qa-live-matrix-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn
+
+  run_live_matrix_sharded:
+    name: Run Matrix live QA lane (${{ matrix.profile }})
+    needs: [authorize_actor, validate_selected_ref]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' }}
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 60
+    environment: qa-live-shared
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - transport
+          - media
+          - e2ee-smoke
+          - e2ee-deep
+          - e2ee-cli
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing required OPENAI_API_KEY." >&2
+            exit 1
+          fi
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run Matrix live lane shard
+        id: run_lane
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS: "3000"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/matrix-live-${{ matrix.profile }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa matrix \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode live-frontier \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --profile "${{ matrix.profile }}" \
+            --fast \
+            --fail-fast
+
+      - name: Upload Matrix QA shard artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-live-matrix-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: warn

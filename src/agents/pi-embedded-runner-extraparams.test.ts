@@ -700,6 +700,36 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("keeps OpenAI Responses web_search compatible when thinking is minimal", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "http://127.0.0.1:19191/v1",
+        reasoning: true,
+      } as Model<"openai-responses">,
+      payload: {
+        model: "gpt-5",
+        input: [],
+        tools: [
+          {
+            type: "function",
+            name: "web_search",
+            description: "Search the web",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+        reasoning: { effort: "low", summary: "auto" },
+      },
+      thinkingLevel: "minimal",
+    });
+
+    expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
+
   it("strips disabled reasoning payloads for proxied OpenAI responses routes", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {

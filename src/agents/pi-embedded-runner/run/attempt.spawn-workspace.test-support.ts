@@ -185,10 +185,7 @@ export function getHoisted(): AttemptSpawnWorkspaceHoisted {
   return hoisted;
 }
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
+vi.mock("@mariozechner/pi-coding-agent", () => {
   function AuthStorage() {}
   class DefaultResourceLoader {
     async reload() {}
@@ -198,7 +195,6 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
     Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
 
   return {
-    ...actual,
     AuthStorage,
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
     DefaultResourceLoader,
@@ -234,6 +230,13 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
   initializeGlobalHookRunner: hoisted.initializeGlobalHookRunnerMock,
 }));
 
+vi.mock("../../../plugins/provider-runtime.js", () => ({
+  resolveProviderReasoningOutputModeWithPlugin: () => undefined,
+  resolveProviderSystemPromptContribution: () => undefined,
+  resolveProviderTextTransforms: () => undefined,
+  transformProviderSystemPrompt: ({ systemPrompt }: { systemPrompt: string }) => systemPrompt,
+}));
+
 vi.mock("../../../infra/machine-name.js", () => ({
   getMachineDisplayName: async () => "test-host",
 }));
@@ -244,6 +247,10 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
     hoisted.ensureGlobalUndiciEnvProxyDispatcherMock(...args),
   ensureGlobalUndiciStreamTimeouts: (...args: unknown[]) =>
     hoisted.ensureGlobalUndiciStreamTimeoutsMock(...args),
+}));
+
+vi.mock("../../../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: () => undefined,
 }));
 
 vi.mock("../../bootstrap-files.js", async () => {
@@ -605,6 +612,7 @@ vi.mock("../sandbox-info.js", () => ({
 }));
 
 vi.mock("../thinking.js", () => ({
+  dropReasoningFromHistory: <T>(messages: T) => messages,
   dropThinkingBlocks: <T>(messages: T) => messages,
 }));
 

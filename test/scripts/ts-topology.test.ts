@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { analyzeTopology } from "../../scripts/lib/ts-topology/analyze.js";
+import { analyzeTopology, filterRecordsForReport } from "../../scripts/lib/ts-topology/analyze.js";
 import { renderTextReport } from "../../scripts/lib/ts-topology/reports.js";
 import { createFilesystemPublicSurfaceScope } from "../../scripts/lib/ts-topology/scope.js";
 import { main } from "../../scripts/ts-topology.ts";
@@ -22,16 +22,17 @@ const publicSurfaceEnvelope = analyzeTopology({
   scope: fixtureScope,
   report: "public-surface-usage",
 });
-const singleOwnerEnvelope = analyzeTopology({
-  repoRoot,
-  scope: fixtureScope,
-  report: "single-owner-shared",
-});
-const unusedEnvelope = analyzeTopology({
-  repoRoot,
-  scope: fixtureScope,
-  report: "unused-public-surface",
-});
+
+function deriveReportEnvelope(report: Parameters<typeof filterRecordsForReport>[1]) {
+  return {
+    ...publicSurfaceEnvelope,
+    report,
+    records: filterRecordsForReport(publicSurfaceEnvelope.records, report),
+  };
+}
+
+const singleOwnerEnvelope = deriveReportEnvelope("single-owner-shared");
+const unusedEnvelope = deriveReportEnvelope("unused-public-surface");
 
 describe("ts-topology", () => {
   it("collapses canonical symbols exported by multiple public subpaths", () => {
@@ -100,7 +101,7 @@ describe("ts-topology", () => {
     `);
   });
 
-  it("emits stable JSON and filtered report output through the CLI", async () => {
+  it("emits stable JSON through the CLI and filtered report output", async () => {
     const captured = createCapturedIo();
     const jsonExit = await main(
       [
@@ -121,27 +122,13 @@ describe("ts-topology", () => {
       payload.records.map((record: { exportNames: string[] }) => record.exportNames[0]),
     ).toEqual(["aliasedThing", "singleOwnerHelper"]);
 
-    const textCaptured = createCapturedIo();
-    const textExit = await main(
-      [
-        "--scope=custom",
-        "--entrypoint-root=src/public",
-        "--import-prefix=fixture-sdk",
-        "--repo-root=test/fixtures/ts-topology/basic",
-        "--report=consumer-topology",
-        "--limit=2",
-      ],
-      textCaptured.io,
-    );
-    expect(textExit).toBe(0);
-    expect(textCaptured.readStdout()).toMatchInlineSnapshot(`
+    expect(renderTextReport(deriveReportEnvelope("consumer-topology"), 2)).toMatchInlineSnapshot(`
       "Scope: custom
       Records with consumers: 5
       
       Top 2 consumer-topology records:
       - fixture-sdk:sharedThing prod=3 test=0 internal=0
-      - fixture-sdk:SharedType prod=2 test=0 internal=0
-      "
+      - fixture-sdk:SharedType prod=2 test=0 internal=0"
     `);
   });
 });

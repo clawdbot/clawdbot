@@ -140,21 +140,21 @@ describe("projects vitest config", () => {
     ]);
   });
 
-  it("keeps the root ui lane aligned with the isolated jsdom setup", () => {
+  it("keeps the root ui lane aligned with the shared jsdom setup", () => {
     const config = createUiVitestConfig();
     expect(config.test.environment).toBe("jsdom");
-    expect(config.test.isolate).toBe(true);
-    expect(config.test.runner).toBeUndefined();
+    expect(config.test.isolate).toBe(false);
+    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
     const setupFiles = normalizeConfigPaths(config.test.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
     expect(config.test.deps?.optimizer?.web?.enabled).toBe(true);
   });
 
-  it("keeps the unit-ui shard aligned with the isolated jsdom setup", () => {
+  it("keeps the unit-ui shard aligned with the shared jsdom setup", () => {
     expect(unitUiConfig.test?.environment).toBe("jsdom");
-    expect(unitUiConfig.test?.isolate).toBe(true);
-    expect(unitUiConfig.test?.runner).toBeUndefined();
+    expect(unitUiConfig.test?.isolate).toBe(false);
+    expect(normalizeConfigPath(unitUiConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
     const setupFiles = normalizeConfigPaths(unitUiConfig.test?.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");

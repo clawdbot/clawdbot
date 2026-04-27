@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Starts Gateway plus seeded cron/subagent MCP work in Docker, then verifies MCP
+# child-process cleanup through a mounted test harness.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -16,8 +18,10 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" cron-mcp-cleanup
+docker_e2e_harness_mount_args
 
 echo "Running in-container cron/subagent MCP cleanup smoke..."
+# Harness files are mounted read-only; the app under test comes from /app/dist.
 set +e
 docker run --rm \
   --name "$CONTAINER_NAME" \
@@ -26,12 +30,14 @@ docker run --rm \
   -e "OPENCLAW_SKIP_CHANNELS=1" \
   -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
-  -e "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=1" \
+  -e "OPENCLAW_SKIP_ACPX_RUNTIME=1" \
+  -e "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1" \
   -e "OPENCLAW_STATE_DIR=/tmp/openclaw-state" \
   -e "OPENCLAW_CONFIG_PATH=/tmp/openclaw-state/openclaw.json" \
   -e "GW_URL=ws://127.0.0.1:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
     entry=dist/index.mjs
@@ -42,14 +48,25 @@ docker run --rm \
     export OPENCLAW_DOCKER_OPENAI_BASE_URL=\"http://127.0.0.1:\$MOCK_PORT/v1\"
     node scripts/e2e/mock-openai-server.mjs >/tmp/cron-mcp-cleanup-mock-openai.log 2>&1 &
     mock_pid=\$!
-    node --import tsx scripts/e2e/cron-mcp-cleanup-seed.ts >/tmp/cron-mcp-cleanup-seed.log
+    tsx scripts/e2e/cron-mcp-cleanup-seed.ts >/tmp/cron-mcp-cleanup-seed.log
     node \"\$entry\" gateway --port $PORT --bind loopback --allow-unconfigured >/tmp/cron-mcp-cleanup-gateway.log 2>&1 &
     gateway_pid=\$!
+    stop_process() {
+      pid=\"\$1\"
+      kill \"\$pid\" >/dev/null 2>&1 || true
+      for _ in \$(seq 1 40); do
+        if ! kill -0 \"\$pid\" >/dev/null 2>&1; then
+          wait \"\$pid\" >/dev/null 2>&1 || true
+          return
+        fi
+        sleep 0.25
+      done
+      kill -9 \"\$pid\" >/dev/null 2>&1 || true
+      wait \"\$pid\" >/dev/null 2>&1 || true
+    }
     cleanup_inner() {
-      kill \"\$mock_pid\" >/dev/null 2>&1 || true
-      kill \"\$gateway_pid\" >/dev/null 2>&1 || true
-      wait \"\$mock_pid\" >/dev/null 2>&1 || true
-      wait \"\$gateway_pid\" >/dev/null 2>&1 || true
+      stop_process \"\$mock_pid\"
+      stop_process \"\$gateway_pid\"
     }
     dump_gateway_log_on_error() {
       status=\$?
@@ -84,20 +101,7 @@ docker run --rm \
       tail -n 120 /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null || true
       exit 1
     fi
-    acpx_ready=0
-    for _ in \$(seq 1 2400); do
-      if grep -q '\[plugins\] embedded acpx runtime backend ready' /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null; then
-        acpx_ready=1
-        break
-      fi
-      sleep 0.25
-    done
-    if [ \"\$acpx_ready\" -ne 1 ]; then
-      echo \"Embedded ACPX runtime did not become ready\"
-      tail -n 120 /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null || true
-      exit 1
-    fi
-    node --import tsx scripts/e2e/cron-mcp-cleanup-docker-client.ts
+    tsx scripts/e2e/cron-mcp-cleanup-docker-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}
 set -e

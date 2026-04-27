@@ -1,6 +1,13 @@
 name: CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Optional branch, tag, or full commit SHA to validate instead of the workflow ref
+        required: false
+        default: ""
+        type: string
   push:
     branches: [main]
     paths-ignore:
@@ -13,8 +20,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)) }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -29,6 +36,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
+      checkout_sha: ${{ steps.checkout_ref.outputs.sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
@@ -37,8 +45,6 @@ jobs:
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
       run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
-      has_changed_extensions: ${{ steps.manifest.outputs.has_changed_extensions }}
-      changed_extensions_matrix: ${{ steps.manifest.outputs.changed_extensions_matrix }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
@@ -51,8 +57,6 @@ jobs:
       checks_node_core_nondist_matrix: ${{ steps.manifest.outputs.checks_node_core_nondist_matrix }}
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
       checks_node_core_dist_matrix: ${{ steps.manifest.outputs.checks_node_core_dist_matrix }}
-      run_extension_fast: ${{ steps.manifest.outputs.run_extension_fast }}
-      extension_fast_matrix: ${{ steps.manifest.outputs.extension_fast_matrix }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
       run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
@@ -69,12 +73,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
           submodules: false
 
+      - name: Resolve checkout SHA
+        id: checkout_ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Ensure preflight base commit
+        if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
@@ -82,11 +92,12 @@ jobs:
 
       - name: Detect docs-only changes
         id: docs_scope
+        if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/detect-docs-changes
 
       - name: Detect changed scopes
         id: changed_scope
-        if: steps.docs_scope.outputs.docs_only != 'true'
+        if: github.event_name != 'workflow_dispatch' && steps.docs_scope.outputs.docs_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -99,45 +110,20 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
-      - name: Detect changed extensions
-        id: changed_extensions
-        if: steps.docs_scope.outputs.docs_only != 'true' && steps.changed_scope.outputs.run_node == 'true'
-        env:
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          BASE_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-        run: |
-          node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-          import { listChangedExtensionIds } from "./scripts/lib/changed-extensions.mjs";
-
-          const extensionIds = listChangedExtensionIds({
-            base: process.env.BASE_SHA,
-            head: "HEAD",
-            fallbackBaseRef: process.env.BASE_REF,
-            unavailableBaseBehavior: "all",
-          });
-          const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
-
-          appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
-          appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
-          EOF
-
       - name: Build CI manifest
         id: manifest
         env:
-          OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
-          OPENCLAW_CI_DOCS_CHANGED: ${{ steps.docs_scope.outputs.docs_changed }}
-          OPENCLAW_CI_RUN_NODE: ${{ steps.changed_scope.outputs.run_node || 'false' }}
-          OPENCLAW_CI_RUN_MACOS: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
-          OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
-          OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ steps.changed_scope.outputs.run_node_fast_only || 'false' }}
-          OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}
-          OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: ${{ steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}
-          OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
-          OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
-          OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
-          OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
+          OPENCLAW_CI_DOCS_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}
+          OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}
+          OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
+          OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
+          OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
+          OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}
+          OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}
+          OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}
+          OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
         run: |
           node --input-type=module <<'EOF'
@@ -161,18 +147,8 @@ jobs:
             return fallback;
           };
 
-          const parseJson = (value, fallback) => {
-            try {
-              return value ? JSON.parse(value) : fallback;
-            } catch {
-              return fallback;
-            }
-          };
-
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
-          const eventName = process.env.GITHUB_EVENT_NAME ?? "pull_request";
-          const isPush = eventName === "push";
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
@@ -197,11 +173,6 @@ jobs:
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
-          const hasChangedExtensions =
-            parseBoolean(process.env.OPENCLAW_CI_HAS_CHANGED_EXTENSIONS) && !docsOnly;
-          const changedExtensionsMatrix = hasChangedExtensions
-            ? parseJson(process.env.OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX, { include: [] })
-            : { include: [] };
           const extensionTestShardCount = isCanonicalRepository
             ? DEFAULT_EXTENSION_TEST_SHARD_COUNT
             : Math.max(DEFAULT_EXTENSION_TEST_SHARD_COUNT, 36);
@@ -271,8 +242,6 @@ jobs:
             run_android: runAndroid,
             run_skills_python: runSkillsPython,
             run_windows: runWindows,
-            has_changed_extensions: hasChangedExtensions,
-            changed_extensions_matrix: changedExtensionsMatrix,
             run_build_artifacts: runNodeFull,
             run_checks_fast_core: runChecksFastCore,
             run_checks_fast: runNodeFull,
@@ -293,15 +262,6 @@ jobs:
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
             run_checks_node_core_dist: nodeTestDistShards.length > 0,
             checks_node_core_dist_matrix: createMatrix(nodeTestDistShards),
-            run_extension_fast: hasChangedExtensions && !isPush,
-            extension_fast_matrix: createMatrix(
-              hasChangedExtensions && !isPush
-                ? (changedExtensionsMatrix.include ?? []).map((entry) => ({
-                    check_name: `extension-fast-${entry.extension}`,
-                    extension: entry.extension,
-                  }))
-                : [],
-            ),
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
             run_build_smoke: runNodeFull,
@@ -354,12 +314,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
           submodules: false
 
       - name: Ensure security base commit
+        if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
@@ -443,6 +405,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -505,7 +468,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -577,7 +540,7 @@ jobs:
           path: |
             dist/
             dist-runtime/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+          key: ${{ runner.os }}-dist-build-${{ needs.preflight.outputs.checkout_sha }}
 
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
@@ -706,7 +669,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -801,7 +764,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -904,7 +867,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -972,7 +935,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1084,7 +1047,7 @@ jobs:
       contents: read
     name: checks-node-compat-node22
     needs: [preflight]
-    if: needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'push'
+    if: needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
@@ -1092,7 +1055,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1172,7 +1135,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1323,84 +1286,6 @@ jobs:
             exit 1
           fi
 
-  extension-fast:
-    permissions:
-      contents: read
-    name: "extension-fast"
-    needs: [preflight]
-    if: needs.preflight.outputs.run_extension_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.extension_fast_matrix) }}
-    steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM 30s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Run changed extension tests
-        env:
-          OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
-        run: |
-          set -euo pipefail
-          if [ "$OPENCLAW_CHANGED_EXTENSION" = "telegram" ]; then
-            export OPENCLAW_VITEST_MAX_WORKERS=1
-            export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=6144"
-            pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION" -- --pool=forks
-            exit 0
-          fi
-          pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
-
   # Types, lint, and format check shards.
   check-shard:
     permissions:
@@ -1437,7 +1322,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1569,7 +1454,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1767,7 +1652,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1830,6 +1715,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_sha }}
           persist-credentials: false
           submodules: false
 
@@ -1872,6 +1758,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_sha }}
           persist-credentials: false
           submodules: false
 
@@ -1976,6 +1863,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_sha }}
           persist-credentials: false
           submodules: false
 
@@ -2016,6 +1904,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_sha }}
           persist-credentials: false
           submodules: false
 
@@ -2116,7 +2005,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail

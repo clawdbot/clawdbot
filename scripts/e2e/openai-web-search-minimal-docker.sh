@@ -383,15 +383,16 @@ const gatewayArgs = [
   "--token",
   token,
   "--timeout",
-  "120000",
+  "240000",
+  "--expect-final",
   "--json",
 ];
 
-function gatewayCall(method, params) {
+function gatewayAgent(params) {
   try {
     return {
       ok: true,
-      value: JSON.parse(execFileSync("node", [...gatewayArgs, method, "--params", JSON.stringify(params)], {
+      value: JSON.parse(execFileSync("node", [...gatewayArgs, "agent", "--params", JSON.stringify(params)], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       })),
@@ -404,7 +405,7 @@ function gatewayCall(method, params) {
   }
 }
 
-const sendRes = gatewayCall("agent", {
+const result = gatewayAgent({
   sessionKey,
   message,
   thinking: "minimal",
@@ -413,20 +414,13 @@ const sendRes = gatewayCall("agent", {
   idempotencyKey: id,
 });
 
-if (!sendRes.ok) throw sendRes.error;
-const runId =
-  sendRes.value && typeof sendRes.value === "object" && typeof sendRes.value.runId === "string"
-    ? sendRes.value.runId
-    : id;
-
-const wait = gatewayCall("agent.wait", { runId, timeoutMs: 180000 });
-if (!wait.ok) throw wait.error;
 if (mode === "reject") {
-  console.error(JSON.stringify(wait.value));
+  console.error(result.ok ? JSON.stringify(result.value) : String(result.error));
   process.exit(0);
 }
-if (wait.value?.status !== "ok") {
-  throw new Error(`agent run did not complete successfully: ${JSON.stringify(wait.value)}`);
+if (!result.ok) throw result.error;
+if (result.value?.status !== "ok") {
+  throw new Error(`agent run did not complete successfully: ${JSON.stringify(result.value)}`);
 }
 NODE
 

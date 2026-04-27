@@ -32,7 +32,7 @@ When you run `/new` or `/reset` to start a fresh session:
 Memory files are created with the following format:
 
 ```markdown
-# Session: 2026-01-16 14:30:00 UTC
+# Session: 2026-01-16 14:30:00 EST
 
 - **Session Key**: agent:main:main
 - **Session ID**: abc123def456
@@ -46,7 +46,7 @@ The LLM generates descriptive slugs based on your conversation:
 - `2026-01-16-vendor-pitch.md` - Discussion about vendor evaluation
 - `2026-01-16-api-design.md` - API architecture planning
 - `2026-01-16-bug-fix.md` - Debugging session
-- `2026-01-16-1430.md` - Fallback timestamp if slug generation fails
+- `2026-01-16-1430.md` - Fallback local timestamp if slug generation fails
 
 ## Requirements
 

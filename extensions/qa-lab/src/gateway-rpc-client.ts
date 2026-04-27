@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { callGatewayFromCli } from "openclaw/plugin-sdk/browser-node-runtime";
 import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
-import { callGatewayFromCli } from "./runtime-api.js";
 
 type QaGatewayRpcRequestOptions = {
   expectFinal?: boolean;

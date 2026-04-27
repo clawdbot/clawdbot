@@ -22,6 +22,8 @@ type MockCompactionResult =
         firstKeptEntryId?: string;
         tokensBefore?: number;
         tokensAfter?: number;
+        sessionId?: string;
+        sessionFile?: string;
       };
       reason?: string;
     }

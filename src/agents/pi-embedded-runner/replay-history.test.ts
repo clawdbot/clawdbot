@@ -62,6 +62,35 @@ describe("normalizeAssistantReplayContent", () => {
     expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
   });
 
+  it("drops blank user text messages from replay", () => {
+    const messages = [
+      userMessage("before"),
+      {
+        role: "user",
+        content: [{ type: "text", text: "" }],
+        timestamp: 0,
+      } as unknown as AgentMessage,
+      userMessage("after"),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    expect(out).toEqual([messages[0], messages[2]]);
+  });
+
+  it("removes blank user text blocks while preserving non-text content", () => {
+    const imageBlock = { type: "image", data: "AA==", mimeType: "image/png" };
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "   " }, imageBlock],
+        timestamp: 0,
+      } as unknown as AgentMessage,
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    expect((out[0] as { content: unknown[] }).content).toEqual([imageBlock]);
+  });
+
   it("preserves nonzero-usage silent-reply turns (stopReason=stop, content=[]) untouched", () => {
     // run.empty-error-retry.test.ts treats `stopReason:"stop"` + `content:[]`
     // as a legitimate NO_REPLY / silent-reply, NOT a crash. Substituting the

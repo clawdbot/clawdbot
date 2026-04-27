@@ -2,8 +2,18 @@
   "id": "anthropic",
   "enabledByDefault": true,
   "providers": ["anthropic"],
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "modelSupport": {
     "modelPrefixes": ["claude-"]
+  },
+  "modelPricing": {
+    "providers": {
+      "anthropic": {
+        "openRouter": {
+          "modelIdTransforms": ["version-dots"]
+        }
+      }
+    }
   },
   "cliBackends": ["claude-cli"],
   "syntheticAuthRefs": ["claude-cli"],

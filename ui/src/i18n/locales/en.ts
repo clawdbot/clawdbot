@@ -271,6 +271,8 @@ export const en: TranslationMap = {
       tailscaleDocsLink: "Docs: Tailscale Serve",
       insecureHttpDocsTitle: "Insecure HTTP docs (opens in new tab)",
       insecureHttpDocsLink: "Docs: Insecure HTTP",
+      copyCommand: "Copy command",
+      copyCommandAria: "Copy command: {command}",
     },
     cards: {
       cost: "Cost",
@@ -306,6 +308,30 @@ export const en: TranslationMap = {
     palette: {
       placeholder: "Type a command…",
       noResults: "No results",
+      categories: {
+        search: "Search",
+        navigation: "Navigation",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Overview",
+        sessions: "Sessions",
+        scheduled: "Scheduled",
+        skills: "Skills",
+        settings: "Settings",
+        agents: "Agents",
+        shellCommand: "Shell Command",
+        debugMode: "Debug Mode",
+      },
+      descriptions: {
+        shellCommand: "Run shell",
+        debugMode: "Toggle debug",
+      },
+      footer: {
+        navigate: "navigate",
+        select: "select",
+        close: "close",
+      },
     },
   },
   dreaming: {
@@ -319,6 +345,15 @@ export const en: TranslationMap = {
       refreshing: "Refreshing…",
       on: "Dreaming On",
       off: "Dreaming Off",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming Active",

@@ -49,7 +49,7 @@ describe("gateway startup log", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("logs a compact ready line with loaded plugin ids and duration", () => {
+  it("logs a compact listening line with loaded plugin ids and duration", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-03T10:00:16.000Z"));
 
@@ -67,9 +67,11 @@ describe("gateway startup log", () => {
       isNixMode: false,
     });
 
-    const readyMessages = info.mock.calls
+    const listeningMessages = info.mock.calls
       .map((call) => call[0])
-      .filter((message) => message.startsWith("ready ("));
-    expect(readyMessages).toEqual(["ready (3 plugins: alpha, beta, delta; 16.0s)"]);
+      .filter((message) => message.startsWith("http server listening ("));
+    expect(listeningMessages).toEqual([
+      "http server listening (3 plugins: alpha, beta, delta; 16.0s)",
+    ]);
   });
 });

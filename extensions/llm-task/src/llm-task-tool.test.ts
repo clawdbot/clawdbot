@@ -155,6 +155,17 @@ describe("llm-task tool (json-only)", () => {
     expect(call.model).toBe("claude-4-sonnet");
   });
 
+  it("accepts model overrides that already include the selected provider prefix", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({
+      prompt: "x",
+      provider: "anthropic",
+      model: "anthropic/claude-4-sonnet",
+    });
+    expect(call.provider).toBe("anthropic");
+    expect(call.model).toBe("claude-4-sonnet");
+  });
+
   it("passes thinking override to embedded runner", async () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({ prompt: "x", thinking: "high" });

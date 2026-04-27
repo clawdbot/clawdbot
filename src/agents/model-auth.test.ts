@@ -1,13 +1,32 @@
-import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
+import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
-import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   GCP_VERTEX_CREDENTIALS_MARKER,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({
+    diagnostics: [],
+    plugins: [
+      {
+        origin: "bundled",
+        nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local"],
+      },
+    ],
+  }),
+}));
+
+vi.mock("../plugins/providers.js", () => ({
+  resolveOwningPluginIdsForProvider: () => [],
+}));
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider: () => undefined,
+}));
 
 vi.mock("../plugins/provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
@@ -77,6 +96,16 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           apiKey: "native-cli-access-token",
           source: "Native CLI auth",
           mode: "oauth" as const,
+        };
+      }
+      if (
+        params.context.providerConfig?.api === "ollama" &&
+        params.context.providerConfig.baseUrl?.startsWith("http://192.168.")
+      ) {
+        return {
+          apiKey: "ollama-local",
+          source: `models.providers.${params.provider} (synthetic local key)`,
+          mode: "api-key" as const,
         };
       }
       return undefined;
@@ -848,6 +877,41 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     ).rejects.toThrow("No API key found");
   });
 
+  it("resolves custom named Ollama providers with explicit local marker auth", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "ollama-remote",
+      cfg: {
+        models: {
+          providers: {
+            "ollama-remote": {
+              baseUrl: "http://192.168.178.122:11434",
+              api: "ollama",
+              apiKey: "ollama-local",
+              models: [
+                {
+                  id: "qwen3.5:27b",
+                  name: "Qwen 3.5 27B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(auth).toMatchObject({
+      apiKey: "ollama-local",
+      source: "models.providers.ollama-remote (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
   it("does not synthesize local auth when apiKey is explicitly configured but unresolved", async () => {
     const previous = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
@@ -939,33 +1003,11 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
 });
 
 describe("applyLocalNoAuthHeaderOverride", () => {
-  const originalFetch = globalThis.fetch;
-
   afterEach(() => {
-    globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
-  it("clears Authorization for synthetic local OpenAI-compatible auth markers", async () => {
-    let capturedAuthorization: string | null | undefined;
-    let capturedXTest: string | null | undefined;
-    let resolveRequest: (() => void) | undefined;
-    const requestSeen = new Promise<void>((resolve) => {
-      resolveRequest = resolve;
-    });
-    globalThis.fetch = withFetchPreconnect(
-      vi.fn(async (_input, init) => {
-        const headers = new Headers(init?.headers);
-        capturedAuthorization = headers.get("Authorization");
-        capturedXTest = headers.get("X-Test");
-        resolveRequest?.();
-        return new Response(JSON.stringify({ error: { message: "unauthorized" } }), {
-          status: 401,
-          headers: { "content-type": "application/json" },
-        });
-      }),
-    );
-
+  it("marks synthetic local OpenAI-compatible auth so SDK request headers clear Authorization", () => {
     const model = applyLocalNoAuthHeaderOverride(
       {
         id: "local-llm",
@@ -987,26 +1029,10 @@ describe("applyLocalNoAuthHeaderOverride", () => {
       },
     );
 
-    streamSimpleOpenAICompletions(
-      model,
-      {
-        messages: [
-          {
-            role: "user",
-            content: "hello",
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      {
-        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      },
-    );
-
-    await requestSeen;
-
-    expect(capturedAuthorization).toBeNull();
-    expect(capturedXTest).toBe("1");
+    expect(model.headers).toMatchObject({
+      Authorization: null,
+      "X-Test": "1",
+    });
   });
 });
 

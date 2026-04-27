@@ -219,6 +219,8 @@ export async function incrementCompactionCount(params: {
   tokensAfter?: number;
   /** Session id after compaction, when the runtime rotated transcripts. */
   newSessionId?: string;
+  /** Session file after compaction, when the runtime rotated transcripts. */
+  newSessionFile?: string;
 }): Promise<number | undefined> {
   const {
     sessionEntry,
@@ -230,6 +232,7 @@ export async function incrementCompactionCount(params: {
     amount = 1,
     tokensAfter,
     newSessionId,
+    newSessionFile,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -245,14 +248,23 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
   };
-  if (newSessionId && newSessionId !== entry.sessionId) {
+  const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
+  const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
+  const sessionFileChanged = Boolean(
+    explicitNewSessionFile && explicitNewSessionFile !== entry.sessionFile,
+  );
+  if (sessionIdChanged && newSessionId) {
     updates.sessionId = newSessionId;
-    updates.sessionFile = resolveCompactionSessionFile({
-      entry,
-      sessionKey,
-      storePath,
-      newSessionId,
-    });
+    updates.sessionFile =
+      explicitNewSessionFile ??
+      resolveCompactionSessionFile({
+        entry,
+        sessionKey,
+        storePath,
+        newSessionId,
+      });
+  } else if (sessionFileChanged && explicitNewSessionFile) {
+    updates.sessionFile = explicitNewSessionFile;
   }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
   if (tokensAfter != null && tokensAfter > 0) {
@@ -276,7 +288,7 @@ export async function incrementCompactionCount(params: {
       };
     });
   }
-  if (newSessionId && newSessionId !== entry.sessionId && cfg) {
+  if ((sessionIdChanged || sessionFileChanged) && cfg) {
     emitCompactionSessionLifecycleHooks({
       cfg,
       sessionKey,

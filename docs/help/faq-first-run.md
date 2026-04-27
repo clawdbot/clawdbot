@@ -766,30 +766,32 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="Can I switch between npm and git installs later?">
-    Yes. Install the other flavor, then run Doctor so the gateway service points at the new entrypoint.
-    This **does not delete your data** - it only changes the OpenClaw code install. Your state
-    (`~/.openclaw`) and workspace (`~/.openclaw/workspace`) stay untouched.
+    Yes. Use `openclaw update --channel ...` when OpenClaw is already installed.
+    This **does not delete your data** - it only changes the OpenClaw code install.
+    Your state (`~/.openclaw`) and workspace (`~/.openclaw/workspace`) stay untouched.
 
     From npm to git:
 
     ```bash
-    git clone https://github.com/openclaw/openclaw.git
-    cd openclaw
-    pnpm install
-    pnpm build
-    openclaw doctor
-    openclaw gateway restart
+    openclaw update --channel dev
     ```
 
     From git to npm:
 
     ```bash
-    npm install -g openclaw@latest
-    openclaw doctor
-    openclaw gateway restart
+    openclaw update --channel stable
     ```
 
-    Doctor detects a gateway service entrypoint mismatch and offers to rewrite the service config to match the current install (use `--repair` in automation).
+    Add `--dry-run` to preview the planned mode switch first. The updater runs
+    Doctor follow-ups, refreshes plugin sources for the target channel, and
+    restarts the gateway unless you pass `--no-restart`.
+
+    The installer can force either mode too:
+
+    ```bash
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm
+    ```
 
     Backup tips: see [Backup strategy](#where-things-live-on-disk).
 

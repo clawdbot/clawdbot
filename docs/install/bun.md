@@ -35,7 +35,7 @@ Bun is an optional local runtime for running TypeScript directly (`bun run ...`,
   </Step>
 </Steps>
 
-## Lifecycle Scripts
+## Lifecycle scripts
 
 Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:
 

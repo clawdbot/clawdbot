@@ -181,6 +181,28 @@ describe("registerOnboardCommand", () => {
     );
   });
 
+  it("forwards onboarding migration flags", async () => {
+    await runCli([
+      "onboard",
+      "--flow",
+      "import",
+      "--import-from",
+      "hermes",
+      "--import-source",
+      "/tmp/hermes",
+      "--import-secrets",
+    ]);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flow: "import",
+        importFrom: "hermes",
+        importSource: "/tmp/hermes",
+        importSecrets: true,
+      }),
+      runtime,
+    );
+  });
+
   it("reports errors via runtime on setup wizard command failures", async () => {
     setupWizardCommandMock.mockRejectedValueOnce(new Error("setup failed"));
 

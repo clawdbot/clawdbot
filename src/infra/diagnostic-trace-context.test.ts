@@ -1,13 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
+  createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
   formatDiagnosticTraceparent,
+  getActiveDiagnosticTraceContext,
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
   parseDiagnosticTraceparent,
+  resetDiagnosticTraceContextForTest,
+  runWithDiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
@@ -15,6 +19,10 @@ const SPAN_ID = "00f067aa0ba902b7";
 const CHILD_SPAN_ID = "7ad6b9a982deb2c9";
 
 describe("diagnostic-trace-context", () => {
+  afterEach(() => {
+    resetDiagnosticTraceContextForTest();
+  });
+
   it("validates W3C trace ids, span ids, and trace flags", () => {
     expect(isValidDiagnosticTraceId(TRACE_ID)).toBe(true);
     expect(isValidDiagnosticSpanId(SPAN_ID)).toBe(true);
@@ -126,5 +134,56 @@ describe("diagnostic-trace-context", () => {
     expect(frozen).toEqual(context);
     expect(frozen).not.toBe(context);
     expect(Object.isFrozen(frozen)).toBe(true);
+  });
+
+  it("carries active trace context across async work and restores outer scopes", async () => {
+    const outer = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+    });
+    const inner = createChildDiagnosticTraceContext(outer, {
+      spanId: CHILD_SPAN_ID,
+    });
+
+    await runWithDiagnosticTraceContext(outer, async () => {
+      expect(getActiveDiagnosticTraceContext()).toEqual(outer);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(getActiveDiagnosticTraceContext()).toEqual(outer);
+
+      runWithDiagnosticTraceContext(inner, () => {
+        expect(getActiveDiagnosticTraceContext()).toEqual(inner);
+      });
+
+      expect(getActiveDiagnosticTraceContext()).toEqual(outer);
+    });
+
+    expect(getActiveDiagnosticTraceContext()).toBeUndefined();
+  });
+
+  it("creates child trace contexts from the active request scope", () => {
+    const requestTrace = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+      traceFlags: "00",
+    });
+
+    runWithDiagnosticTraceContext(requestTrace, () => {
+      const scoped = createDiagnosticTraceContextFromActiveScope({
+        spanId: CHILD_SPAN_ID,
+      });
+
+      expect(scoped).toEqual({
+        traceId: TRACE_ID,
+        spanId: CHILD_SPAN_ID,
+        parentSpanId: SPAN_ID,
+        traceFlags: "00",
+      });
+    });
+
+    expect(createDiagnosticTraceContextFromActiveScope({ spanId: CHILD_SPAN_ID })).toEqual({
+      traceId: expect.stringMatching(/^[0-9a-f]{32}$/),
+      spanId: CHILD_SPAN_ID,
+      traceFlags: "01",
+    });
   });
 });

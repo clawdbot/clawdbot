@@ -107,6 +107,20 @@ function writeStandalonePlugin(filePath: string, source = "export default functi
   fs.writeFileSync(filePath, source, "utf-8");
 }
 
+function mockLinuxMountInfo(mountPoints: readonly string[]) {
+  const originalReadFileSync = fs.readFileSync;
+  return vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
+    if (filePath === "/proc/self/mountinfo") {
+      return mountPoints
+        .map(
+          (mountPoint, index) => `${100 + index} 99 0:${index} / ${mountPoint} rw - tmpfs tmpfs rw`,
+        )
+        .join("\n");
+    }
+    return originalReadFileSync(filePath, options as never) as never;
+  });
+}
+
 function createPackagePlugin(params: {
   packageDir: string;
   packageName: string;
@@ -453,6 +467,95 @@ describe("discoverOpenClawPlugins", () => {
     ]);
   });
 
+  it("discovers bind-mounted bundled source overlays before packaged dist bundles", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const bundledPluginDir = path.join(bundledRoot, "synology-chat");
+    const sourcePluginDir = path.join(packageRoot, "extensions", "synology-chat");
+    createPackagePluginWithEntry({
+      packageDir: bundledPluginDir,
+      packageName: "@openclaw/synology-chat",
+      pluginId: "synology-chat",
+      entryPath: "index.js",
+    });
+    createPackagePluginWithEntry({
+      packageDir: sourcePluginDir,
+      packageName: "@openclaw/synology-chat",
+      pluginId: "synology-chat",
+    });
+    mockLinuxMountInfo([sourcePluginDir]);
+    const sourceEntryPath = path.join(sourcePluginDir, "src", "index.ts");
+    const bundledEntryPath = path.join(bundledPluginDir, "index.js");
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      },
+    });
+
+    const synologyCandidates = candidates.filter(
+      (candidate) => candidate.idHint === "synology-chat",
+    );
+    expect(synologyCandidates).toEqual([
+      expect.objectContaining({
+        origin: "bundled",
+        rootDir: fs.realpathSync(sourcePluginDir),
+        source: fs.realpathSync(sourceEntryPath),
+      }),
+      expect.objectContaining({
+        origin: "bundled",
+        rootDir: fs.realpathSync(bundledPluginDir),
+        source: fs.realpathSync(bundledEntryPath),
+      }),
+    ]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        source: sourcePluginDir,
+        message: expect.stringContaining("bind-mounted bundled plugin source overlay"),
+      }),
+    ]);
+  });
+
+  it("keeps copied source plugin dirs inert when they are not mounted overlays", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const bundledPluginDir = path.join(bundledRoot, "synology-chat");
+    const sourcePluginDir = path.join(packageRoot, "extensions", "synology-chat");
+    createPackagePluginWithEntry({
+      packageDir: bundledPluginDir,
+      packageName: "@openclaw/synology-chat",
+      pluginId: "synology-chat",
+      entryPath: "index.js",
+    });
+    createPackagePluginWithEntry({
+      packageDir: sourcePluginDir,
+      packageName: "@openclaw/synology-chat",
+      pluginId: "synology-chat",
+    });
+    mockLinuxMountInfo([]);
+    const bundledEntryPath = path.join(bundledPluginDir, "index.js");
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      },
+    });
+
+    expect(candidates.filter((candidate) => candidate.idHint === "synology-chat")).toEqual([
+      expect.objectContaining({
+        origin: "bundled",
+        rootDir: fs.realpathSync(bundledPluginDir),
+        source: fs.realpathSync(bundledEntryPath),
+      }),
+    ]);
+    expect(diagnostics).toEqual([]);
+  });
+
   it("loads package extension packs", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "pack");
@@ -497,6 +600,35 @@ describe("discoverOpenClawPlugins", () => {
     expect(fs.realpathSync(candidate?.setupSource ?? "")).toBe(
       fs.realpathSync(path.join(pluginDir, "dist", "setup-entry.js")),
     );
+  });
+
+  it("rejects package runtimeExtensions that do not match extension entries", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "runtime-mismatch-pack");
+    mkdirSafe(path.join(pluginDir, "src"));
+    mkdirSafe(path.join(pluginDir, "dist"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/runtime-mismatch-pack",
+      extensions: ["./src/one.ts", "./src/two.ts"],
+      runtimeExtensions: ["./dist/one.js"],
+    });
+    writePluginEntry(path.join(pluginDir, "src", "one.ts"));
+    writePluginEntry(path.join(pluginDir, "src", "two.ts"));
+    writePluginEntry(path.join(pluginDir, "dist", "one.js"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidatePresence(result, { absent: ["runtime-mismatch-pack"] });
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.message.includes("runtimeExtensions length (1)") &&
+          entry.message.includes("extensions length (2)"),
+      ),
+    ).toBe(true);
   });
 
   it("infers built dist entries for installed TypeScript package plugins", async () => {

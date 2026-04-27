@@ -201,12 +201,18 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     opts,
     checkTokenDrift: true,
     onNotLoaded: async () => {
+      if (process.platform === "darwin") {
+        const recovered = await recoverInstalledLaunchAgent({ result: "restarted" });
+        if (recovered) {
+          return recovered;
+        }
+      }
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {
         restartedWithoutServiceManager = true;
         return handled;
       }
-      return await recoverInstalledLaunchAgent({ result: "restarted" });
+      return null;
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {

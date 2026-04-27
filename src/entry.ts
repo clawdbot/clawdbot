@@ -126,19 +126,19 @@ if (
     }
 
     if (!tryHandleRootVersionFastPath(process.argv)) {
-      runMainOrRootHelp(process.argv);
+      await runMainOrRootHelp(process.argv);
     }
   }
 }
 
-export function tryHandleRootHelpFastPath(
+export async function tryHandleRootHelpFastPath(
   argv: string[],
   deps: {
     outputRootHelp?: () => void | Promise<void>;
     onError?: (error: unknown) => void;
     env?: NodeJS.ProcessEnv;
   } = {},
-): boolean {
+): Promise<boolean> {
   if (resolveCliContainerTarget(argv, deps.env)) {
     return false;
   }
@@ -154,35 +154,35 @@ export function tryHandleRootHelpFastPath(
       );
       process.exitCode = 1;
     });
-  if (deps.outputRootHelp) {
-    Promise.resolve()
-      .then(() => deps.outputRootHelp?.())
-      .catch(handleError);
-    return true;
-  }
-  import("./cli/root-help-metadata.js")
-    .then(async ({ outputPrecomputedRootHelpText }) => {
-      if (outputPrecomputedRootHelpText()) {
-        return;
-      }
+  try {
+    if (deps.outputRootHelp) {
+      await deps.outputRootHelp();
+      return true;
+    }
+    const { outputPrecomputedRootHelpText } = await import("./cli/root-help-metadata.js");
+    if (!outputPrecomputedRootHelpText()) {
       const { outputRootHelp } = await import("./cli/program/root-help.js");
       await outputRootHelp();
-    })
-    .catch(handleError);
-  return true;
+    }
+    return true;
+  } catch (error) {
+    handleError(error);
+    return true;
+  }
 }
 
-function runMainOrRootHelp(argv: string[]): void {
-  if (tryHandleRootHelpFastPath(argv)) {
+async function runMainOrRootHelp(argv: string[]): Promise<void> {
+  if (await tryHandleRootHelpFastPath(argv)) {
     return;
   }
-  import("./cli/run-main.js")
-    .then(({ runCli }) => runCli(argv))
-    .catch((error) => {
-      console.error(
-        "[openclaw] Failed to start CLI:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
-      );
-      process.exitCode = 1;
-    });
+  try {
+    const { runCli } = await import("./cli/run-main.js");
+    await runCli(argv);
+  } catch (error) {
+    console.error(
+      "[openclaw] Failed to start CLI:",
+      error instanceof Error ? (error.stack ?? error.message) : error,
+    );
+    process.exitCode = 1;
+  }
 }

@@ -7,7 +7,6 @@ import {
 } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import {
-  isLaunchAgentListed,
   isLaunchAgentLoaded,
   launchAgentPlistExists,
   repairLaunchAgentBootstrap,
@@ -49,8 +48,8 @@ async function maybeRepairLaunchAgentBootstrap(params: {
     return false;
   }
 
-  const listed = await isLaunchAgentListed({ env: params.env });
-  if (!listed) {
+  const plistExists = await launchAgentPlistExists(params.env);
+  if (!plistExists) {
     return false;
   }
 
@@ -59,12 +58,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
     return false;
   }
 
-  const plistExists = await launchAgentPlistExists(params.env);
-  if (!plistExists) {
-    return false;
-  }
-
-  note("LaunchAgent is listed but not loaded in launchd.", `${params.title} LaunchAgent`);
+  note("LaunchAgent is installed but not loaded in launchd.", `${params.title} LaunchAgent`);
   if (params.serviceRepairExternal) {
     note(EXTERNAL_SERVICE_REPAIR_NOTE, `${params.title} LaunchAgent`);
     return false;

@@ -42,6 +42,7 @@ import type { QaTransportAdapter } from "./qa-transport.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
+const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
@@ -267,6 +268,24 @@ async function fetchLocalGatewayHealth(params: {
   }
 }
 
+async function waitForQaGatewayRestartBoundary(params: {
+  logs: () => string;
+  offset: number;
+  pollMs?: number;
+  timeoutMs?: number;
+}) {
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const pollMs = params.pollMs ?? 100;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (params.logs().slice(params.offset).includes("restart mode:")) {
+      return;
+    }
+    await sleep(pollMs);
+  }
+  throw new Error(`qa gateway child did not reach restart boundary within ${timeoutMs}ms`);
+}
+
 export const __testing = {
   assertQaArtifactDirWithinRepo,
   buildQaRuntimeEnv,
@@ -282,6 +301,7 @@ export const __testing = {
   stageQaLiveAnthropicSetupToken,
   stageQaMockAuthProfiles,
   resolveQaLiveCliAuthEnv,
+  waitForQaGatewayRestartBoundary,
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaBundledPluginSourceDir,
   resolveQaRuntimeHostVersion,
@@ -684,7 +704,7 @@ export async function startQaGatewayChild(params: {
                 baseUrl,
                 logs,
                 child: attemptChild,
-                timeoutMs: 15_000,
+                timeoutMs: QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS,
               });
             }
           }
@@ -815,7 +835,20 @@ export async function startQaGatewayChild(params: {
         if (!activeChild.pid) {
           throw new Error("qa gateway child has no pid");
         }
+        const restartLogOffset = logs().length;
         process.kill(activeChild.pid, signal);
+        if (signal === "SIGUSR1") {
+          await waitForQaGatewayRestartBoundary({
+            logs,
+            offset: restartLogOffset,
+          });
+          await waitForGatewayReady({
+            baseUrl,
+            logs,
+            child: activeChild,
+            timeoutMs: 120_000,
+          });
+        }
       },
       async restartAfterStateMutation(
         mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,

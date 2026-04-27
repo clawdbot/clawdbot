@@ -1,25 +1,21 @@
-import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "../pi-embedded-runner/run/types.js";
-import type { EmbeddedAgentRuntime } from "../pi-embedded-runner/runtime.js";
-import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
-
 export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
-  requestedRuntime: EmbeddedAgentRuntime;
+  requestedRuntime: import("../pi-embedded-runner/runtime.js").EmbeddedAgentRuntime;
 };
 
 export type AgentHarnessSupport =
   | { supported: true; priority?: number; reason?: string }
   | { supported: false; reason?: string };
 
-export type AgentHarnessAttemptParams = EmbeddedRunAttemptParams;
-export type AgentHarnessAttemptResult = EmbeddedRunAttemptResult;
-export type AgentHarnessCompactParams = CompactEmbeddedPiSessionParams;
-export type AgentHarnessCompactResult = EmbeddedPiCompactResult;
+export type AgentHarnessAttemptParams =
+  import("../pi-embedded-runner/run/types.js").EmbeddedRunAttemptParams;
+export type AgentHarnessAttemptResult =
+  import("../pi-embedded-runner/run/types.js").EmbeddedRunAttemptResult;
+export type AgentHarnessCompactParams =
+  import("../pi-embedded-runner/compact.types.js").CompactEmbeddedPiSessionParams;
+export type AgentHarnessCompactResult =
+  import("../pi-embedded-runner/types.js").EmbeddedPiCompactResult;
 export type AgentHarnessResetParams = {
   sessionId?: string;
   sessionKey?: string;
@@ -29,7 +25,7 @@ export type AgentHarnessResetParams = {
 
 export type AgentHarnessResultClassification =
   | "ok"
-  | NonNullable<EmbeddedRunAttemptResult["agentHarnessResultClassification"]>;
+  | NonNullable<AgentHarnessAttemptResult["agentHarnessResultClassification"]>;
 
 export type AgentHarness = {
   id: string;

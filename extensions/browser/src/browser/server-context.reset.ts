@@ -35,6 +35,8 @@ export function createProfileResetOps({
 
     const userDataDir = resolveOpenClawUserDataDir(profile.name);
     const profileState = getProfileState();
+    profileState.managedLaunchFailure = undefined;
+    profileState.ensureBrowserAvailable = null;
     const httpReachable = await isHttpReachable(300);
     if (httpReachable && !profileState.running) {
       // Port in use but not by us - kill it.

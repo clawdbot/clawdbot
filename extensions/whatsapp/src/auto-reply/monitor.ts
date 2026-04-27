@@ -280,6 +280,7 @@ export async function monitorWebChannel(
               reconnectAttempts: snapshot.reconnectAttempts,
               messagesHandled: snapshot.handledMessages,
               lastInboundAt: snapshot.lastInboundAt,
+              lastTransportActivityAt: snapshot.lastTransportActivityAt,
               authAgeMs,
               uptimeMs: snapshot.uptimeMs,
               ...(minutesSinceLastMessage !== null && minutesSinceLastMessage > 30
@@ -297,20 +298,28 @@ export async function monitorWebChannel(
             }
           },
           onWatchdogTimeout: (snapshot) => {
-            const watchdogBaselineAt = snapshot.lastInboundAt ?? snapshot.startedAt;
-            const minutesSinceLastMessage = Math.floor((Date.now() - watchdogBaselineAt) / 60000);
+            const now = Date.now();
+            const transportSilentMs = now - snapshot.lastTransportActivityAt;
+            const appBaselineAt = snapshot.lastInboundAt ?? snapshot.startedAt;
+            const minutesSinceTransportActivity = Math.floor(transportSilentMs / 60000);
+            const minutesSinceAppActivity = Math.floor((now - appBaselineAt) / 60000);
+            const watchdogReason =
+              transportSilentMs > messageTimeoutMs ? "transport-inactive" : "app-silent";
             statusController.noteWatchdogStale();
             heartbeatLogger.warn(
               {
                 connectionId: snapshot.connectionId,
-                minutesSinceLastMessage,
+                watchdogReason,
+                minutesSinceTransportActivity,
+                minutesSinceAppActivity,
                 lastInboundAt: snapshot.lastInboundAt ? new Date(snapshot.lastInboundAt) : null,
+                lastTransportActivityAt: new Date(snapshot.lastTransportActivityAt),
                 messagesHandled: snapshot.handledMessages,
               },
-              "Message timeout detected - forcing reconnect",
+              "WhatsApp watchdog timeout detected - forcing reconnect",
             );
             whatsappHeartbeatLog.warn(
-              `No messages received in ${minutesSinceLastMessage}m - restarting connection`,
+              `WhatsApp watchdog timeout (${watchdogReason}) - restarting connection`,
             );
           },
         });

@@ -6,26 +6,26 @@ read_when:
 title: "Migration guide"
 ---
 
-# Migrating OpenClaw to a New Machine
+# Migrating OpenClaw to a new machine
 
-This guide moves an OpenClaw gateway to a new machine without redoing onboarding.
+Move an OpenClaw gateway to a new machine without redoing onboarding.
 
-## What Gets Migrated
+## What gets migrated
 
 When you copy the **state directory** (`~/.openclaw/` by default) and your **workspace**, you preserve:
 
-- **Config** -- `openclaw.json` and all gateway settings
-- **Auth** -- per-agent `auth-profiles.json` (API keys + OAuth), plus any channel/provider state under `credentials/`
-- **Sessions** -- conversation history and agent state
-- **Channel state** -- WhatsApp login, Telegram session, etc.
-- **Workspace files** -- `MEMORY.md`, `USER.md`, skills, and prompts
+- **Config** — `openclaw.json` and all gateway settings.
+- **Auth** — per-agent `auth-profiles.json` (API keys plus OAuth), plus any channel or provider state under `credentials/`.
+- **Sessions** — conversation history and agent state.
+- **Channel state** — WhatsApp login, Telegram session, and similar.
+- **Workspace files** — `MEMORY.md`, `USER.md`, skills, and prompts.
 
 <Tip>
 Run `openclaw status` on the old machine to confirm your state directory path.
 Custom profiles use `~/.openclaw-<profile>/` or a path set via `OPENCLAW_STATE_DIR`.
 </Tip>
 
-## Migration Steps
+## Migration steps
 
 <Steps>
   <Step title="Stop the gateway and back up">
@@ -70,7 +70,7 @@ Custom profiles use `~/.openclaw-<profile>/` or a path set via `OPENCLAW_STATE_D
   </Step>
 </Steps>
 
-## Common Pitfalls
+## Common pitfalls
 
 <AccordionGroup>
   <Accordion title="Profile or state-dir mismatch">
@@ -102,7 +102,7 @@ Custom profiles use `~/.openclaw-<profile>/` or a path set via `OPENCLAW_STATE_D
   </Accordion>
 </AccordionGroup>
 
-## Verification Checklist
+## Verification checklist
 
 On the new machine, confirm:
 

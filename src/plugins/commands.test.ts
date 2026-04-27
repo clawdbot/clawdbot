@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -325,6 +326,45 @@ describe("registerPluginCommand", () => {
     expect(listProviderPluginCommandSpecs("slack")).toEqual([
       {
         name: "talkvoice",
+        description: "Demo command",
+        acceptsArgs: false,
+      },
+    ]);
+  });
+
+  it("requires config before using read-only manifest command defaults", () => {
+    setActivePluginRegistry(createTestRegistry([]));
+    registerVoiceCommandForTest({
+      nativeNames: {
+        discord: "discordvoice",
+      },
+      description: "Demo command",
+    });
+    const env = {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+      OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+    };
+
+    expect(getPluginCommandSpecs("discord", { env })).toEqual([]);
+    expect(
+      getPluginCommandSpecs("discord", {
+        env,
+        config: {
+          plugins: {
+            entries: {
+              discord: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        name: "discordvoice",
         description: "Demo command",
         acceptsArgs: false,
       },

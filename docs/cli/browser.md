@@ -85,8 +85,8 @@ Notes:
 If `openclaw browser` is an unknown command, check `plugins.allow` in
 `~/.openclaw/openclaw.json`.
 
-When `plugins.allow` is present, the bundled browser plugin must be listed
-explicitly:
+When `plugins.allow` is present, list the bundled browser plugin explicitly
+unless the config already has a root `browser` block:
 
 ```json5
 {
@@ -96,8 +96,9 @@ explicitly:
 }
 ```
 
-`browser.enabled=true` does not restore the CLI subcommand when the plugin
-allowlist excludes `browser`.
+An explicit root `browser` block, for example `browser.enabled=true` or
+`browser.profiles.<name>`, also activates the bundled browser plugin under a
+restrictive plugin allowlist.
 
 Related: [Browser tool](/tools/browser#missing-browser-command-or-tool)
 

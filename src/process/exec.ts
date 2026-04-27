@@ -5,6 +5,10 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import {
+  decodeWindowsOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../infra/windows-encoding.js";
 import { logDebug, logError } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
@@ -135,30 +139,49 @@ export async function runExec(
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "utf8" as const }
+      ? { timeout: opts, encoding: "buffer" as const }
       : {
           timeout: opts.timeoutMs,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
-          encoding: "utf8" as const,
+          encoding: "buffer" as const,
         };
   try {
     const invocation = resolveChildProcessInvocation({ argv: [command, ...args] });
-    const { stdout, stderr } = await execFileAsync(invocation.command, invocation.args, {
+    const { stdout, stderr } = (await execFileAsync(invocation.command, invocation.args, {
       ...options,
       windowsHide: invocation.windowsHide,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    });
+    })) as { stdout: Buffer; stderr: Buffer };
+    const windowsEncoding = resolveWindowsConsoleEncoding();
+    const decodedStdout = decodeWindowsOutputBuffer({ buffer: stdout, windowsEncoding });
+    const decodedStderr = decodeWindowsOutputBuffer({ buffer: stderr, windowsEncoding });
     if (shouldLogVerbose()) {
-      if (stdout.trim()) {
-        logDebug(stdout.trim());
+      if (decodedStdout.trim()) {
+        logDebug(decodedStdout.trim());
       }
-      if (stderr.trim()) {
-        logError(stderr.trim());
+      if (decodedStderr.trim()) {
+        logError(decodedStderr.trim());
       }
     }
-    return { stdout, stderr };
+    return { stdout: decodedStdout, stderr: decodedStderr };
   } catch (err) {
+    const windowsEncoding = resolveWindowsConsoleEncoding();
+    if (err && typeof err === "object") {
+      const errorWithOutput = err as { stdout?: unknown; stderr?: unknown };
+      if (Buffer.isBuffer(errorWithOutput.stdout)) {
+        errorWithOutput.stdout = decodeWindowsOutputBuffer({
+          buffer: errorWithOutput.stdout,
+          windowsEncoding,
+        });
+      }
+      if (Buffer.isBuffer(errorWithOutput.stderr)) {
+        errorWithOutput.stderr = decodeWindowsOutputBuffer({
+          buffer: errorWithOutput.stderr,
+          windowsEncoding,
+        });
+      }
+    }
     if (shouldLogVerbose()) {
       logError(danger(`Command failed: ${command} ${args.join(" ")}`));
     }
@@ -274,8 +297,9 @@ export async function runCommandWithTimeout(
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    const windowsEncoding = resolveWindowsConsoleEncoding();
     let settled = false;
     let timedOut = false;
     let noOutputTimedOut = false;
@@ -338,11 +362,11 @@ export async function runCommandWithTimeout(
     }
 
     child.stdout?.on("data", (d) => {
-      stdout += d.toString();
+      stdoutChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d));
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
-      stderr += d.toString();
+      stderrChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d));
       armNoOutputTimer();
     });
     child.on("error", (err) => {
@@ -401,8 +425,14 @@ export async function runCommandWithTimeout(
           : resolvedCode;
       resolve({
         pid: child.pid ?? undefined,
-        stdout,
-        stderr,
+        stdout: decodeWindowsOutputBuffer({
+          buffer: Buffer.concat(stdoutChunks),
+          windowsEncoding,
+        }),
+        stderr: decodeWindowsOutputBuffer({
+          buffer: Buffer.concat(stderrChunks),
+          windowsEncoding,
+        }),
         code: normalizedCode,
         signal: resolvedSignal,
         killed: child.killed,

@@ -1,3 +1,4 @@
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
@@ -61,6 +62,30 @@ function listBundledWebProviderSecretTargetRegistryEntries(): SecretTargetRegist
       ) {
         entries.push(createPluginOpenClawConfigSecretTargetEntry(record.id, config.configPath));
       }
+    }
+  }
+  return entries.toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+function listBundledPluginConfigSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
+  const entries: SecretTargetRegistryEntry[] = [];
+  const seen = new Set<string>();
+  for (const record of listBundledPluginMetadata({
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  })) {
+    const secretInputs = record.manifest.configContracts?.secretInputs?.paths ?? [];
+    for (const secretInput of secretInputs) {
+      const entry = createPluginOpenClawConfigSecretTargetEntry(
+        record.manifest.id,
+        secretInput.path,
+      );
+      const key = `${entry.configFile}:${entry.pathPattern}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      entries.push(entry);
     }
   }
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
@@ -436,6 +461,7 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   cachedSecretTargetRegistry = [
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listBundledWebProviderSecretTargetRegistryEntries(),
+    ...listBundledPluginConfigSecretTargetRegistryEntries(),
     ...listChannelSecretTargetRegistryEntries(),
   ];
   return cachedSecretTargetRegistry;

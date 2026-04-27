@@ -57,7 +57,16 @@ async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   const logPath = join(rootDir, "docker-stub.log");
 
   await mkdir(join(rootDir, "scripts", "docker"), { recursive: true });
+  await mkdir(join(rootDir, "scripts", "lib"), { recursive: true });
   await copyFile(join(repoRoot, "scripts", "docker", "setup.sh"), scriptPath);
+  await copyFile(
+    join(repoRoot, "scripts", "lib", "docker-build.sh"),
+    join(rootDir, "scripts", "lib", "docker-build.sh"),
+  );
+  await copyFile(
+    join(repoRoot, "scripts", "lib", "docker-e2e-logs.sh"),
+    join(rootDir, "scripts", "lib", "docker-e2e-logs.sh"),
+  );
   await chmod(scriptPath, 0o755);
   await writeFile(dockerfilePath, "FROM scratch\n");
   await writeFile(
@@ -222,7 +231,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
     expect(envFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
     expect(envFile).toContain("OPENCLAW_HOME_VOLUME=openclaw-home"); // pragma: allowlist secret
-    expect(envFile).toContain("OPENCLAW_DISABLE_BONJOUR=1");
+    expect(envFile).toContain("OPENCLAW_DISABLE_BONJOUR=");
     const extraCompose = await readFile(
       join(activeSandbox.rootDir, "docker-compose.extra.yml"),
       "utf8",
@@ -547,10 +556,10 @@ describe("scripts/docker/setup.sh", () => {
     expect(compose).toContain('"gateway"');
   });
 
-  it("keeps docker-compose gateway Bonjour advertising disabled by default", async () => {
+  it("keeps docker-compose gateway Bonjour advertising in auto mode by default", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(
-      compose.match(/OPENCLAW_DISABLE_BONJOUR: \$\{OPENCLAW_DISABLE_BONJOUR:-1\}/g),
+      compose.match(/OPENCLAW_DISABLE_BONJOUR: \$\{OPENCLAW_DISABLE_BONJOUR:-\}/g),
     ).toHaveLength(1);
   });
 

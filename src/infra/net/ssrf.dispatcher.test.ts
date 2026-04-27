@@ -126,6 +126,7 @@ describe("createPinnedDispatcher", () => {
     expect(agentCtor).toHaveBeenCalledWith({
       connect: {
         lookup,
+        timeout: 123_456,
       },
       allowH2: false,
       bodyTimeout: 123_456,
@@ -264,6 +265,9 @@ describe("createPinnedDispatcher", () => {
       requestTls: {
         autoSelectFamily: false,
         lookup,
+      },
+      connect: {
+        timeout: 654_321,
       },
       allowH2: false,
       bodyTimeout: 654_321,

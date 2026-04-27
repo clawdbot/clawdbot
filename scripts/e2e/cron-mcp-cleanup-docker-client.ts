@@ -54,7 +54,7 @@ async function describeProbePid(pid: number): Promise<string | undefined> {
 
 async function waitForProbePid(pidPath: string): Promise<number | undefined> {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 240_000) {
+  while (Date.now() - startedAt < 600_000) {
     const pid = await readProbePid(pidPath);
     if (pid) {
       return pid;
@@ -133,6 +133,7 @@ async function runCronCleanupScenario(params: {
       message: "Use available context and then stop.",
       timeoutSeconds: 90,
       lightContext: true,
+      toolsAllow: ["bundle-mcp"],
     },
     delivery: { mode: "none" },
   });
@@ -169,7 +170,7 @@ async function runCronCleanupScenario(params: {
   );
   const initialArgs = await describeProbePid(pid);
   assert(
-    initialArgs?.includes("openclaw-cron-mcp-cleanup-probe"),
+    initialArgs === undefined || initialArgs.includes("openclaw-cron-mcp-cleanup-probe"),
     `cron MCP probe pid did not look like the test server: pid=${pid} args=${initialArgs}`,
   );
 

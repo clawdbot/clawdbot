@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
 IMAGE_NAME="${OPENCLAW_INSTALL_E2E_IMAGE:-openclaw-install-e2e:local}"
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
 
@@ -11,7 +12,7 @@ ANTHROPIC_API_TOKEN="${ANTHROPIC_API_TOKEN:-}"
 OPENCLAW_E2E_MODELS="${OPENCLAW_E2E_MODELS:-}"
 
 echo "==> Build image: $IMAGE_NAME"
-docker build \
+docker_build_run install-e2e-build \
   -t "$IMAGE_NAME" \
   -f "$ROOT_DIR/scripts/docker/install-sh-e2e/Dockerfile" \
   "$ROOT_DIR/scripts/docker"

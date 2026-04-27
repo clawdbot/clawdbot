@@ -22,21 +22,14 @@ function compareExtractors(
   return left.id.localeCompare(right.id) || left.pluginId.localeCompare(right.pluginId);
 }
 
-function resolveBundledDocumentExtractorCompatPluginIds(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
+function listDocumentExtractorPluginIds(params: {
+  plugins: readonly PluginManifestRecord[];
   onlyPluginIds?: readonly string[];
 }): string[] {
   const onlyPluginIdSet =
     params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistryForPluginRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  })
-    .plugins.filter(
+  return params.plugins
+    .filter(
       (plugin) =>
         plugin.origin === "bundled" &&
         (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
@@ -44,6 +37,19 @@ function resolveBundledDocumentExtractorCompatPluginIds(params: {
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+function loadDocumentExtractorManifestRecords(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): readonly PluginManifestRecord[] {
+  return loadPluginManifestRegistryForPluginRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    includeDisabled: true,
+  }).plugins;
 }
 
 function resolveEnabledBundledDocumentExtractorPlugins(params: {
@@ -55,6 +61,15 @@ function resolveEnabledBundledDocumentExtractorPlugins(params: {
   if (params.config?.plugins?.enabled === false) {
     return [];
   }
+  let manifestRecords: readonly PluginManifestRecord[] | undefined;
+  const loadManifestRecords = (config?: OpenClawConfig) => {
+    manifestRecords ??= loadDocumentExtractorManifestRecords({
+      config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
+    return manifestRecords;
+  };
 
   const activation = resolveBundledPluginCompatibleLoadValues({
     rawConfig: params.config,
@@ -67,7 +82,11 @@ function resolveEnabledBundledDocumentExtractorPlugins(params: {
       enablement: "allowlist",
       vitest: true,
     },
-    resolveCompatPluginIds: resolveBundledDocumentExtractorCompatPluginIds,
+    resolveCompatPluginIds: (compatParams) =>
+      listDocumentExtractorPluginIds({
+        plugins: loadManifestRecords(compatParams.config),
+        onlyPluginIds: compatParams.onlyPluginIds,
+      }),
   });
   const normalizedPlugins = normalizePluginsConfig(activation.config?.plugins);
   const activationSource = createPluginActivationSource({
@@ -75,12 +94,7 @@ function resolveEnabledBundledDocumentExtractorPlugins(params: {
   });
   const onlyPluginIdSet =
     params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistryForPluginRegistry({
-    config: activation.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  }).plugins.filter((plugin) => {
+  return loadManifestRecords(activation.config).filter((plugin) => {
     if (
       plugin.origin !== "bundled" ||
       (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) ||

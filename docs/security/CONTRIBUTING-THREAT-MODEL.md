@@ -39,7 +39,7 @@ Attack chains show how multiple threats combine into a realistic attack scenario
 
 Typos, clarifications, outdated info, better examples - PRs welcome, no issue needed.
 
-## What We Use
+## What we use
 
 ### MITRE ATLAS
 
@@ -62,7 +62,7 @@ Each threat gets an ID like `T-EXEC-003`. The categories are:
 
 IDs are assigned by maintainers during review. You don't need to pick one.
 
-### Risk Levels
+### Risk levels
 
 | Level        | Meaning                                                           |
 | ------------ | ----------------------------------------------------------------- |
@@ -73,7 +73,7 @@ IDs are assigned by maintainers during review. You don't need to pick one.
 
 If you're unsure about the risk level, just describe the impact and we'll assess it.
 
-## Review Process
+## Review process
 
 1. **Triage** - We review new submissions within 48 hours
 2. **Assessment** - We verify feasibility, assign ATLAS mapping and threat ID, validate risk level

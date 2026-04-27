@@ -129,7 +129,7 @@ Discovery is not audited. Only applied operations and writes are logged.
 `openclaw onboard --modern` starts Crestodian as the modern onboarding preview.
 Plain `openclaw onboard` still runs classic onboarding.
 
-## Setup Bootstrap
+## Setup bootstrap
 
 `setup` is the chat-first onboarding bootstrap. It writes only through typed
 config operations and asks for approval first.

@@ -190,9 +190,9 @@ Or per-agent:
 
 Avoid using `tools.allow: ["lobster"]` unless you intend to run in restrictive allowlist mode.
 
-Note: allowlists are opt-in for optional plugins. If your allowlist only names
-plugin tools (like `lobster`), OpenClaw keeps core tools enabled. To restrict core
-tools, include the core tools or groups you want in the allowlist too.
+<Note>
+Allowlists are opt-in for optional plugins. If your allowlist only names plugin tools (like `lobster`), OpenClaw keeps core tools enabled. To restrict core tools, include the core tools or groups you want in the allowlist too.
+</Note>
 
 ## Example: Email triage
 

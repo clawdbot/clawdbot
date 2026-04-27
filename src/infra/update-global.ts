@@ -6,10 +6,6 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
 import {
-  NPM_UPDATE_COMPAT_SIDECAR_PATHS,
-  NPM_UPDATE_OMITTED_BUNDLED_PLUGIN_ROOTS,
-} from "./npm-update-compat-sidecars.js";
-import {
   collectPackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   readPackageDistInventoryIfPresent,
@@ -46,6 +42,11 @@ const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
 const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
+const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
+  "dist/extensions/qa-channel",
+  "dist/extensions/qa-lab",
+  "dist/extensions/qa-matrix",
+]);
 
 function normalizePackageTarget(value: string): string {
   return value.trim();
@@ -187,25 +188,18 @@ async function collectInstalledPackageDistErrors(params: {
 }
 
 async function collectLegacyInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
-  const expectedFiles = new Set(NPM_UPDATE_COMPAT_SIDECAR_PATHS);
-  for (const relativePath of await collectCriticalInstalledPackageDistPaths(packageRoot)) {
-    expectedFiles.add(relativePath);
-  }
-  return [...expectedFiles].toSorted((left, right) => left.localeCompare(right));
+  return await collectCriticalInstalledPackageDistPaths(packageRoot);
 }
 
 async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
   const expectedFiles = new Set<string>();
   await Promise.all(
     BUNDLED_RUNTIME_SIDECAR_PATHS.map(async (relativePath) => {
-      if (NPM_UPDATE_COMPAT_SIDECAR_PATHS.has(relativePath)) {
-        return;
-      }
       const pluginRoot = resolveBundledPluginRoot(relativePath);
       if (pluginRoot === null) {
         return;
       }
-      if (NPM_UPDATE_OMITTED_BUNDLED_PLUGIN_ROOTS.has(pluginRoot)) {
+      if (OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS.has(pluginRoot)) {
         return;
       }
       if (
@@ -239,18 +233,12 @@ async function collectInstalledPathErrors(params: {
         ? actualSet.has(relativePath)
         : await pathExists(path.join(params.packageRoot, relativePath));
     if (!exists) {
-      if (NPM_UPDATE_COMPAT_SIDECAR_PATHS.has(relativePath)) {
-        continue;
-      }
       errors.push(params.missingMessage(relativePath));
     }
   }
   if (actualSet !== null && params.unexpectedMessage) {
     const expectedSet = new Set(params.expectedFiles);
     for (const relativePath of params.actualFiles ?? []) {
-      if (NPM_UPDATE_COMPAT_SIDECAR_PATHS.has(relativePath)) {
-        continue;
-      }
       if (!expectedSet.has(relativePath)) {
         errors.push(params.unexpectedMessage(relativePath));
       }

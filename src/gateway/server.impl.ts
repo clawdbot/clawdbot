@@ -1,4 +1,5 @@
-import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
+import { monitorEventLoopDelay } from "node:perf_hooks";
+import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
@@ -30,8 +31,9 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { getActiveBundledRuntimeDepsInstallCount } from "../plugins/bundled-runtime-deps-activity.js";
 import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -42,10 +44,8 @@ import {
   getInspectableTaskRegistrySummary,
   stopTaskRegistryMaintenance,
 } from "../tasks/task-registry.maintenance.js";
-import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
-import { closeMcpLoopbackServer } from "./mcp-http.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
 import { createGatewayCloseHandler, runGatewayClosePrelude } from "./server-close.js";
@@ -54,7 +54,6 @@ import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
-import { coreGatewayHandlers } from "./server-methods.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { bootstrapGatewayNetworkRuntime } from "./server-network-runtime.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
@@ -91,7 +90,7 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
-import { resolveHookClientIpConfig } from "./server/hooks.js";
+import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -118,11 +117,18 @@ const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 
-let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | null = null;
+let cachedChannelRuntimePromise: Promise<PluginRuntime["channel"]> | null = null;
 
 function getChannelRuntime() {
-  cachedChannelRuntime ??= createPluginRuntime().channel;
-  return cachedChannelRuntime;
+  cachedChannelRuntimePromise ??= import("../plugins/runtime/runtime-channel.js").then(
+    ({ createRuntimeChannel }) => createRuntimeChannel(),
+  );
+  return cachedChannelRuntimePromise;
+}
+
+async function closeMcpLoopbackServerOnDemand(): Promise<void> {
+  const { closeMcpLoopbackServer } = await import("./mcp-http.js");
+  await closeMcpLoopbackServer();
 }
 
 const logHealth = log.child("health");
@@ -137,11 +143,34 @@ const canvasRuntime = runtimeForLogger(logCanvas);
 
 function createGatewayStartupTrace() {
   const enabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
+  const eventLoopDelay = enabled ? monitorEventLoopDelay({ resolution: 10 }) : undefined;
+  eventLoopDelay?.enable();
   const started = performance.now();
   let last = started;
-  const emit = (name: string, durationMs: number, totalMs: number) => {
+  const formatMetric = (key: string, value: number | string) =>
+    `${key}=${typeof value === "number" ? value.toFixed(1) : value}`;
+  const readEventLoopMaxMs = () => {
+    if (!eventLoopDelay) {
+      return 0;
+    }
+    const maxMs = eventLoopDelay.max / 1_000_000;
+    eventLoopDelay.reset();
+    return maxMs;
+  };
+  const emit = (
+    name: string,
+    durationMs: number,
+    totalMs: number,
+    extras: ReadonlyArray<readonly [string, number | string]> = [],
+  ) => {
     if (enabled) {
-      log.info(`startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`);
+      const metrics = [
+        `eventLoopMax=${readEventLoopMaxMs().toFixed(1)}ms`,
+        ...extras.map(([key, value]) => formatMetric(key, value)),
+      ].join(" ");
+      log.info(
+        `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics}`,
+      );
     }
   };
   return {
@@ -149,6 +178,17 @@ function createGatewayStartupTrace() {
       const now = performance.now();
       emit(name, now - last, now - started);
       last = now;
+      if (name === "ready") {
+        eventLoopDelay?.disable();
+      }
+    },
+    detail(name: string, metrics: ReadonlyArray<readonly [string, number | string]>) {
+      if (!enabled) {
+        return;
+      }
+      log.info(
+        `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
+      );
     },
     async measure<T>(name: string, run: () => Promise<T> | T): Promise<T> {
       const before = performance.now();
@@ -242,6 +282,13 @@ export type GatewayServerOptions = {
   startupStartedAt?: number;
 };
 
+type SetupWizardRunner = NonNullable<GatewayServerOptions["wizardRunner"]>;
+
+const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
+  const { runSetupWizard } = await import("../wizard/setup.js");
+  return runSetupWizard(...args);
+};
+
 export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
@@ -296,6 +343,7 @@ export async function startGatewayServer(
       authOverride: opts.auth,
       tailscaleOverride: opts.tailscale,
       activateRuntimeSecrets,
+      persistStartupAuth: startupConfigLoad.degradedProviderApi !== true,
     }),
   );
   cfgAtStart = authBootstrap.cfg;
@@ -321,6 +369,7 @@ export async function startGatewayServer(
       getTotalQueueSize() +
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
+      getActiveBundledRuntimeDepsInstallCount() +
       getInspectableTaskRegistrySummary().active,
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
@@ -364,8 +413,23 @@ export async function startGatewayServer(
     defaultWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
+    pluginLookUpTable,
     baseMethods,
   } = pluginBootstrap;
+  if (pluginLookUpTable) {
+    const metrics = pluginLookUpTable.metrics;
+    startupTrace.detail("plugins.lookup-table", [
+      ["registrySnapshotMs", metrics.registrySnapshotMs],
+      ["manifestRegistryMs", metrics.manifestRegistryMs],
+      ["startupPlanMs", metrics.startupPlanMs],
+      ["ownerMapsMs", metrics.ownerMapsMs],
+      ["totalMs", metrics.totalMs],
+      ["indexPlugins", String(metrics.indexPluginCount)],
+      ["manifestPlugins", String(metrics.manifestPluginCount)],
+      ["startupPlugins", String(metrics.startupPluginCount)],
+      ["deferredChannelPlugins", String(metrics.deferredChannelPluginCount)],
+    ]);
+  }
   let { pluginRegistry, baseGatewayMethods } = pluginBootstrap;
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
@@ -457,7 +521,7 @@ export async function startGatewayServer(
     }),
   );
 
-  const wizardRunner = opts.wizardRunner ?? runSetupWizard;
+  const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
@@ -584,7 +648,7 @@ export async function startGatewayServer(
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
       stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
       clearSecretsRuntimeSnapshot,
-      closeMcpServer: async () => await closeMcpLoopbackServer(),
+      closeMcpServer: closeMcpLoopbackServerOnDemand,
     });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
@@ -787,9 +851,10 @@ export async function startGatewayServer(
           cfg: gatewayPluginConfigAtStart,
           workspaceDir: defaultWorkspaceDir,
           log,
-          coreGatewayHandlers,
+          coreGatewayMethodNames: baseMethods,
           baseMethods,
           pluginIds: startupPluginIds,
+          pluginLookUpTable,
           logDiagnostics: false,
         }));
         runtimeState.gatewayMethods = listActiveGatewayMethods(baseGatewayMethods);

@@ -10,7 +10,7 @@
     "express": "5.2.1",
     "jsonwebtoken": "9.0.3",
     "jwks-rsa": "4.0.1",
-    "typebox": "1.1.32"
+    "typebox": "1.1.33"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

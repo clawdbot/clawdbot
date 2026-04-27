@@ -35,6 +35,11 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: migrate-hermes":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/migrate-hermes/**"
+          - "docs/cli/migrate.md"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:
@@ -101,6 +106,11 @@
       - any-glob-to-any-file:
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+"channel: synology-chat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/synology-chat/**"
+          - "docs/channels/synology-chat.md"
 "channel: telegram":
   - changed-files:
       - any-glob-to-any-file:
@@ -233,6 +243,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
+"extensions: diagnostics-prometheus":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diagnostics-prometheus/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:

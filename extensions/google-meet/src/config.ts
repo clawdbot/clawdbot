@@ -57,6 +57,7 @@ export type GoogleMeetConfig = {
     model?: string;
     instructions?: string;
     introMessage?: string;
+    agentId?: string;
     toolPolicy: GoogleMeetToolPolicy;
     providers: Record<string, Record<string, unknown>>;
   };
@@ -361,6 +362,7 @@ export function resolveGoogleMeetConfigWithEnv(
       introMessage:
         normalizeOptionalString(realtime.introMessage) ??
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.introMessage,
+      agentId: normalizeOptionalString(realtime.agentId),
       toolPolicy: resolveRealtimeVoiceAgentConsultToolPolicy(
         realtime.toolPolicy,
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.toolPolicy,

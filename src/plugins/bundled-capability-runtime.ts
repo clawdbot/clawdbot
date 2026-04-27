@@ -158,6 +158,7 @@ function createCapabilityPluginRecord(params: {
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
     gatewayMethods: [],
@@ -335,6 +336,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       );
       record.webFetchProviderIds.push(...captured.webFetchProviders.map((entry) => entry.id));
       record.webSearchProviderIds.push(...captured.webSearchProviders.map((entry) => entry.id));
+      record.migrationProviderIds.push(...captured.migrationProviders.map((entry) => entry.id));
       record.memoryEmbeddingProviderIds.push(
         ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
       );
@@ -442,6 +444,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       );
       registry.webSearchProviders.push(
         ...captured.webSearchProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.migrationProviders.push(
+        ...captured.migrationProviders.map((provider) => ({
           pluginId: record.id,
           pluginName: record.name,
           provider,

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import { discoverLmstudioModels, ensureLmstudioModelLoaded } from "./models.fetch.js";
 import {
+  normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
   resolveLmstudioReasoningCapability,
   resolveLmstudioServerBase,
@@ -87,6 +88,37 @@ describe("lmstudio-models", () => {
     );
     expect(resolveLmstudioServerBase("localhost:1234/api/v1")).toBe("http://localhost:1234");
     expect(resolveLmstudioInferenceBase("localhost:1234/api/v1")).toBe("http://localhost:1234/v1");
+  });
+
+  it("marks configured LM Studio endpoints as trusted private-network model targets", () => {
+    expect(
+      normalizeLmstudioProviderConfig({
+        baseUrl: "http://192.168.1.10:1234",
+        models: [],
+      }),
+    ).toEqual({
+      baseUrl: "http://192.168.1.10:1234/v1",
+      request: { allowPrivateNetwork: true },
+      models: [],
+    });
+
+    expect(
+      normalizeLmstudioProviderConfig({
+        baseUrl: "http://gpu-box.local:1234/v1",
+        request: {
+          allowPrivateNetwork: false,
+          headers: { "X-Proxy-Auth": "token" },
+        },
+        models: [],
+      }),
+    ).toEqual({
+      baseUrl: "http://gpu-box.local:1234/v1",
+      request: {
+        allowPrivateNetwork: false,
+        headers: { "X-Proxy-Auth": "token" },
+      },
+      models: [],
+    });
   });
 
   it("resolves reasoning capability for supported and unsupported options", () => {

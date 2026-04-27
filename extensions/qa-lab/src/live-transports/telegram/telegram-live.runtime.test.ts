@@ -162,6 +162,7 @@ describe("telegram live qa runtime", () => {
       sutAccountId: "sut",
     });
 
+    expect(next.agents?.defaults?.skipBootstrap).toBe(true);
     expect(next.plugins?.allow).toContain("telegram");
     expect(next.plugins?.entries?.telegram).toEqual({ enabled: true });
     expect(next.channels?.telegram).toEqual({
@@ -375,6 +376,27 @@ describe("telegram live qa runtime", () => {
         matchText: "TELEGRAM_QA_NOMENTION_TOKEN",
       }),
     ).toBe(false);
+    expect(
+      __testing.matchesTelegramScenarioReply({
+        allowAnySutReply: true,
+        groupId: "-100123",
+        sentMessageId: 55,
+        sutBotId: 88,
+        message: {
+          updateId: 3,
+          messageId: 12,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "Protocol note: acknowledged.",
+          replyToMessageId: undefined,
+          timestamp: 1_700_000_003_000,
+          inlineButtons: [],
+          mediaKinds: [],
+        },
+      }),
+    ).toBe(true);
   });
 
   it("validates expected Telegram reply markers", () => {

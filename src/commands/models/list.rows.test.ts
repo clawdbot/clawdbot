@@ -23,9 +23,15 @@ vi.mock("../../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModel: mocks.shouldSuppressBuiltInModel,
 }));
 
-vi.mock("./list.runtime.js", () => ({
+vi.mock("./list.provider-catalog.js", () => ({
   loadProviderCatalogModelsForList: mocks.loadProviderCatalogModelsForList,
+}));
+
+vi.mock("../../agents/auth-profiles/profile-list.js", () => ({
   listProfilesForProvider: mocks.listProfilesForProvider,
+}));
+
+vi.mock("../../agents/model-auth.js", () => ({
   resolveAwsSdkEnvVarName: vi.fn().mockReturnValue(undefined),
   resolveEnvApiKey: vi.fn().mockReturnValue(null),
   hasUsableCustomProviderApiKey: vi.fn().mockReturnValue(false),

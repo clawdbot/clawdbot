@@ -168,6 +168,95 @@ describe("getMessageFeishu", () => {
     );
   });
 
+  it("falls through empty interactive card element arrays and locale variants", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_i18n_card",
+            chat_id: "oc_i18n_card",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                elements: [],
+                body: { elements: [] },
+                i18n_elements: {
+                  zh_cn: [],
+                  en_us: [
+                    {
+                      tag: "markdown",
+                      content: "hello ${count} {{label}} {{metadata}}",
+                    },
+                  ],
+                },
+                template_variable: {
+                  count: 2,
+                  label: "tasks",
+                  metadata: { ignored: true },
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_i18n_card",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_i18n_card",
+        chatId: "oc_i18n_card",
+        contentType: "interactive",
+        content: "hello 2 tasks {{metadata}}",
+      }),
+    );
+  });
+
+  it("falls back to post-format content when interactive card elements are empty", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_post_card",
+            chat_id: "oc_post_card",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                elements: [],
+                post: {
+                  zh_cn: {
+                    title: "Card summary",
+                    content: [[{ tag: "md", text: "**fallback** body" }]],
+                  },
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_post_card",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_post_card",
+        chatId: "oc_post_card",
+        contentType: "interactive",
+        content: "Card summary\n\n**fallback** body",
+      }),
+    );
+  });
+
   it("extracts text content from post messages", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,

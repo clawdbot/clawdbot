@@ -556,6 +556,31 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(1);
   });
 
+  it("updates sessionFile when rotation keeps the same sessionId", async () => {
+    const entry = {
+      sessionId: "same-id",
+      sessionFile: "same-id.jsonl",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const rotatedSessionFile = path.join(path.dirname(storePath), "rotated-same-id.jsonl");
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "same-id",
+      newSessionFile: rotatedSessionFile,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].sessionId).toBe("same-id");
+    expect(stored[sessionKey].sessionFile).toBe(rotatedSessionFile);
+    expect(stored[sessionKey].compactionCount).toBe(1);
+  });
+
   it("does not update totalTokens when tokensAfter is not provided", async () => {
     const entry = {
       sessionId: "s1",

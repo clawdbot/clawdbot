@@ -624,6 +624,7 @@ describe("applyAuthChoice", () => {
     providerAuthChoiceTesting.setDepsForTest({
       loadPluginProviderRuntime: async () => ({
         resolvePluginProviders,
+        resolvePluginSetupProvider: () => undefined,
         resolveProviderPluginChoice,
         runProviderModelSelectedHook,
       }),

@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getVerboseFlag, hasHelpOrVersion } from "../argv.js";
+import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
 import { resolveCliName } from "../cli-name.js";
 import {
   applyCliExecutionStartupPresentation,
@@ -65,7 +65,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    if (hasHelpOrVersion(argv)) {
+    if (isHelpOrVersionInvocation(argv)) {
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);

@@ -1,3 +1,6 @@
+// Session runtime-context Docker harness.
+// Imports packaged dist modules so transcript behavior is verified against the
+// npm tarball installed in the functional image.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -6,7 +9,7 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
-} from "../../src/agents/pi-embedded-runner/run/runtime-context-prompt.js";
+} from "../../dist/agents/pi-embedded-runner/run/runtime-context-prompt.js";
 
 type TranscriptEntry = {
   type?: string;

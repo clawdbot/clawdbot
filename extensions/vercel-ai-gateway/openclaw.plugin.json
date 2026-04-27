@@ -2,6 +2,18 @@
   "id": "vercel-ai-gateway",
   "enabledByDefault": true,
   "providers": ["vercel-ai-gateway"],
+  "modelPricing": {
+    "providers": {
+      "vercel-ai-gateway": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": {
+          "passthroughProviderModel": true
+        }
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"]
   },

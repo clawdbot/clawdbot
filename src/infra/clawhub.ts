@@ -299,10 +299,23 @@ function upperBoundForCaret(version: string): string | null {
   return `0.0.${parsed.patch + 1}`;
 }
 
+function matchWildcardComparator(token: string): "any" | "none" | null {
+  const match = /^(>=|<=|>|<|=|\^|~)?\s*([*xX])$/.exec(token);
+  if (!match) {
+    return null;
+  }
+  const operator = match[1];
+  return operator === ">" || operator === "<" ? "none" : "any";
+}
+
 function satisfiesComparator(version: string, token: string): boolean {
   const trimmed = token.trim();
   if (!trimmed) {
     return true;
+  }
+  const wildcard = matchWildcardComparator(trimmed);
+  if (wildcard) {
+    return wildcard === "any" && parseComparableSemver(version) != null;
   }
   if (trimmed.startsWith("^")) {
     const base = trimmed.slice(1).trim();

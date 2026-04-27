@@ -7,7 +7,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=openclaw-sandbox-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
   apt-get update \
-  && apt-get upgrade -y --no-install-recommends \
   && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \

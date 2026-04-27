@@ -29,6 +29,8 @@ export function makeIsolatedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proce
   const rootDir = makeTempDir();
   return {
     OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+    VITEST: "true",
     ...overrides,
   };
 }

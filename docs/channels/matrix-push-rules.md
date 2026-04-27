@@ -132,6 +132,8 @@ New user-defined `override` rules are inserted ahead of default suppress rules, 
 
     If you run Synapse behind a reverse proxy or workers, make sure `/_matrix/client/.../pushrules/` reaches Synapse correctly. Push delivery is handled by the main process or `synapse.app.pusher` / configured pusher workers — ensure those are healthy.
 
+    The rule uses the `event_property_is` push-rule condition (MSC3758, push rule v1.10), which was added to Synapse in 2023. Older Synapse releases accept the `PUT pushrules/...` call but silently never match the condition — upgrade Synapse if no notification arrives on a finalized preview edit.
+
   </Accordion>
 
   <Accordion title="Tuwunel">

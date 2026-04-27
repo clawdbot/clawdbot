@@ -7,6 +7,7 @@ import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/bou
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   normalizeModelCatalog,
+  normalizeModelCatalogProviderId,
   type ModelCatalog,
   type ModelCatalogAlias,
   type ModelCatalogCost,
@@ -72,6 +73,24 @@ export type PluginManifestModelCatalogAlias = ModelCatalogAlias;
 export type PluginManifestModelCatalogSuppression = ModelCatalogSuppression;
 export type PluginManifestModelCatalog = ModelCatalog;
 
+export type PluginManifestModelPricingModelIdTransform = "version-dots";
+
+export type PluginManifestModelPricingSource = {
+  provider?: string;
+  passthroughProviderModel?: boolean;
+  modelIdTransforms?: PluginManifestModelPricingModelIdTransform[];
+};
+
+export type PluginManifestModelPricingProvider = {
+  external?: boolean;
+  openRouter?: PluginManifestModelPricingSource | false;
+  liteLLM?: PluginManifestModelPricingSource | false;
+};
+
+export type PluginManifestModelPricing = {
+  providers?: Record<string, PluginManifestModelPricingProvider>;
+};
+
 export type PluginManifestProviderEndpoint = {
   /**
    * Core endpoint class this plugin-owned endpoint should map to. Core must
@@ -100,6 +119,8 @@ export type PluginManifestActivation = {
   onChannels?: string[];
   /** Route kinds that should include this plugin in activation/load plans. */
   onRoutes?: string[];
+  /** Root-relative config paths that should include this plugin in startup/load plans. */
+  onConfigPaths?: string[];
   /** Broad capability hints for activation/load plans. Prefer narrower ownership metadata. */
   onCapabilities?: PluginManifestActivationCapability[];
 };
@@ -211,6 +232,8 @@ export type PluginManifest = {
    * onboarding, and model picker surfaces before provider runtime loads.
    */
   modelCatalog?: PluginManifestModelCatalog;
+  /** Manifest-owned external pricing lookup policy for provider refs. */
+  modelPricing?: PluginManifestModelPricing;
   /** Cheap provider endpoint metadata used before provider runtime loads. */
   providerEndpoints?: PluginManifestProviderEndpoint[];
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
@@ -294,6 +317,7 @@ export type PluginManifestContracts = {
   webContentExtractors?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
+  migrationProviders?: string[];
   tools?: string[];
 };
 
@@ -488,6 +512,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webContentExtractors = normalizeTrimmedStringList(value.webContentExtractors);
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
+  const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
   const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
@@ -505,6 +530,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(webContentExtractors.length > 0 ? { webContentExtractors } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
+    ...(migrationProviders.length > 0 ? { migrationProviders } : {}),
     ...(tools.length > 0 ? { tools } : {}),
   } satisfies PluginManifestContracts;
 
@@ -612,6 +638,69 @@ function normalizeManifestModelSupport(value: unknown): PluginManifestModelSuppo
   return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
 }
 
+function normalizeManifestModelPricingSource(
+  value: unknown,
+): PluginManifestModelPricingSource | false | undefined {
+  if (value === false) {
+    return false;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const provider = normalizeModelCatalogProviderId(normalizeOptionalString(value.provider) ?? "");
+  const modelIdTransforms = normalizeTrimmedStringList(value.modelIdTransforms).filter(
+    (entry): entry is PluginManifestModelPricingModelIdTransform => entry === "version-dots",
+  );
+  const source = {
+    ...(provider ? { provider } : {}),
+    ...(value.passthroughProviderModel === true ? { passthroughProviderModel: true } : {}),
+    ...(modelIdTransforms.length > 0 ? { modelIdTransforms } : {}),
+  } satisfies PluginManifestModelPricingSource;
+  return Object.keys(source).length > 0 ? source : undefined;
+}
+
+function normalizeManifestModelPricingProvider(
+  value: unknown,
+): PluginManifestModelPricingProvider | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const openRouter = normalizeManifestModelPricingSource(value.openRouter);
+  const liteLLM = normalizeManifestModelPricingSource(value.liteLLM);
+  const policy = {
+    ...(typeof value.external === "boolean" ? { external: value.external } : {}),
+    ...(openRouter !== undefined ? { openRouter } : {}),
+    ...(liteLLM !== undefined ? { liteLLM } : {}),
+  } satisfies PluginManifestModelPricingProvider;
+  return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
+function normalizeManifestModelPricing(
+  value: unknown,
+  params: { ownedProviders: ReadonlySet<string> },
+): PluginManifestModelPricing | undefined {
+  if (!isRecord(value) || !isRecord(value.providers)) {
+    return undefined;
+  }
+  const ownedProviders = new Set(
+    [...params.ownedProviders]
+      .map((provider) => normalizeModelCatalogProviderId(provider))
+      .filter(Boolean),
+  );
+  const providers: Record<string, PluginManifestModelPricingProvider> = {};
+  for (const [rawProviderId, rawPolicy] of Object.entries(value.providers)) {
+    const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    if (!providerId || !ownedProviders.has(providerId)) {
+      continue;
+    }
+    const policy = normalizeManifestModelPricingProvider(rawPolicy);
+    if (policy) {
+      providers[providerId] = policy;
+    }
+  }
+  return Object.keys(providers).length > 0 ? { providers } : undefined;
+}
+
 function normalizeManifestProviderEndpoints(
   value: unknown,
 ): PluginManifestProviderEndpoint[] | undefined {
@@ -653,6 +742,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   const onCommands = normalizeTrimmedStringList(value.onCommands);
   const onChannels = normalizeTrimmedStringList(value.onChannels);
   const onRoutes = normalizeTrimmedStringList(value.onRoutes);
+  const onConfigPaths = normalizeTrimmedStringList(value.onConfigPaths);
   const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
     (capability): capability is PluginManifestActivationCapability =>
       capability === "provider" ||
@@ -667,6 +757,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
     ...(onCommands.length > 0 ? { onCommands } : {}),
     ...(onChannels.length > 0 ? { onChannels } : {}),
     ...(onRoutes.length > 0 ? { onRoutes } : {}),
+    ...(onConfigPaths.length > 0 ? { onConfigPaths } : {}),
     ...(onCapabilities.length > 0 ? { onCapabilities } : {}),
   } satisfies PluginManifestActivation;
 
@@ -946,6 +1037,9 @@ export function loadPluginManifest(
   const modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
     ownedProviders: new Set(providers),
   });
+  const modelPricing = normalizeManifestModelPricing(raw.modelPricing, {
+    ownedProviders: new Set(providers),
+  });
   const providerEndpoints = normalizeManifestProviderEndpoints(raw.providerEndpoints);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
@@ -987,6 +1081,7 @@ export function loadPluginManifest(
       providerDiscoveryEntry,
       modelSupport,
       modelCatalog,
+      modelPricing,
       providerEndpoints,
       cliBackends,
       syntheticAuthRefs,

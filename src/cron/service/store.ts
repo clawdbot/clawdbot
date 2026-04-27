@@ -1,11 +1,24 @@
 import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
+import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
+
+function invalidateStaleNextRunOnScheduleChange(params: {
+  previousJobsById: ReadonlyMap<string, CronJob>;
+  hydrated: CronJob;
+}) {
+  const previousJob = params.previousJobsById.get(params.hydrated.id);
+  if (!previousJob || cronSchedulingInputsEqual(previousJob, params.hydrated)) {
+    return;
+  }
+  params.hydrated.state ??= {};
+  params.hydrated.state.nextRunAtMs = undefined;
+}
 
 async function getFileMtimeMs(path: string): Promise<number | null> {
   try {
@@ -29,6 +42,10 @@ export async function ensureLoaded(
   // trust the in-memory copy to avoid a stat syscall on every operation.
   if (state.store && !opts?.forceReload) {
     return;
+  }
+  const previousJobsById = new Map<string, CronJob>();
+  for (const job of state.store?.jobs ?? []) {
+    previousJobsById.set(job.id, job);
   }
   // Force reload always re-reads the file to avoid missing cross-service
   // edits on filesystems with coarse mtime resolution.
@@ -67,6 +84,7 @@ export async function ensureLoaded(
     if (typeof hydrated.enabled !== "boolean") {
       hydrated.enabled = true;
     }
+    invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
     // Same shape: persisted jobs missing `sessionTarget` crash downstream
     // on any code path that dereferences `.startsWith` (e.g.
     // `runIsolatedAgentJob` in `src/gateway/server-cron.ts`). Mirror the

@@ -594,6 +594,7 @@ async function resolveCompatiblePackageVersion(params: {
   requestedVersion?: string;
   baseUrl?: string;
   token?: string;
+  timeoutMs?: number;
 }): Promise<
   | {
       ok: true;
@@ -617,6 +618,7 @@ async function resolveCompatiblePackageVersion(params: {
       version: requestedVersion,
       baseUrl: params.baseUrl,
       token: params.token,
+      timeoutMs: params.timeoutMs,
     });
   } catch (error) {
     return mapClawHubRequestError(error, {
@@ -747,6 +749,7 @@ export async function installPluginFromClawHub(
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     extensionsDir?: string;
+    timeoutMs?: number;
     dryRun?: boolean;
     expectedPluginId?: string;
   },
@@ -775,6 +778,7 @@ export async function installPluginFromClawHub(
       name: parsed.name,
       baseUrl: params.baseUrl,
       token: params.token,
+      timeoutMs: params.timeoutMs,
     });
   } catch (error) {
     return mapClawHubRequestError(error, {
@@ -787,6 +791,7 @@ export async function installPluginFromClawHub(
     requestedVersion: parsed.version,
     baseUrl: params.baseUrl,
     token: params.token,
+    timeoutMs: params.timeoutMs,
   });
   if (!versionState.ok) {
     return versionState;
@@ -821,6 +826,7 @@ export async function installPluginFromClawHub(
       version: versionState.version,
       baseUrl: params.baseUrl,
       token: params.token,
+      timeoutMs: params.timeoutMs,
     });
   } catch (error) {
     return buildClawHubInstallFailure(formatErrorMessage(error));
@@ -864,6 +870,7 @@ export async function installPluginFromClawHub(
       logger: params.logger,
       mode: params.mode,
       extensionsDir: params.extensionsDir,
+      timeoutMs: params.timeoutMs,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
     });

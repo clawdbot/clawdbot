@@ -12,6 +12,10 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import {
+  clearSlackThreadParticipationCache,
+  recordSlackThreadParticipation,
+} from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resetSlackThreadStarterCacheForTest } from "../thread.js";
@@ -32,6 +36,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   beforeEach(() => {
     resetSlackThreadStarterCacheForTest();
+    clearSlackThreadParticipationCache();
   });
 
   afterAll(() => {
@@ -882,6 +887,466 @@ describe("slack prepareSlackMessage inbound contract", () => {
       expect(touch).toHaveBeenCalledWith("test-binding", undefined);
     } finally {
       unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+    }
+  });
+
+  it("keeps a root app mention and URL-only Slack thread follow-up on one parent session", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const rootTs = "1777244692.409919";
+    const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
+    const replies = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          text: "<@B1> send a subagent to review GitHub issue #50621",
+          user: "U_BEK",
+          ts: rootTs,
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const root = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "all" }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "<@B1> send a subagent to review GitHub issue #50621",
+        ts: rootTs,
+      } as SlackMessageEvent,
+      opts: { source: "app_mention", wasMentioned: true },
+    });
+    recordSlackThreadParticipation("default", "C0AHZFCAS1K", rootTs);
+
+    const followUp = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "all" }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "https://github.com/openclaw/openclaw/issues/50621",
+        ts: "1777244714.000100",
+        thread_ts: rootTs,
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(root).toBeTruthy();
+    expect(followUp).toBeTruthy();
+    expect(root!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(followUp!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(followUp!.ctxPayload.WasMentioned).toBe(true);
+    expect(new Set([root!.ctxPayload.SessionKey, followUp!.ctxPayload.SessionKey]).size).toBe(1);
+  });
+
+  it("keeps a message-first root mention and URL-only Slack thread follow-up on one parent session", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const rootTs = "1777244692.409919";
+    const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
+    const replies = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          text: "<@B1> send a subagent to review GitHub issue #50621",
+          user: "U_BEK",
+          ts: rootTs,
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const root = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "all" }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "<@B1> send a subagent to review GitHub issue #50621",
+        ts: rootTs,
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+    recordSlackThreadParticipation("default", "C0AHZFCAS1K", rootTs);
+
+    const followUp = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "all" }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "https://github.com/openclaw/openclaw/issues/50621",
+        ts: "1777244714.000100",
+        thread_ts: rootTs,
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(root).toBeTruthy();
+    expect(followUp).toBeTruthy();
+    expect(root!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(followUp!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(root!.ctxPayload.WasMentioned).toBe(true);
+    expect(followUp!.ctxPayload.WasMentioned).toBe(true);
+    expect(new Set([root!.ctxPayload.SessionKey, followUp!.ctxPayload.SessionKey]).size).toBe(1);
+  });
+
+  it("keeps a regex-mentioned Slack thread root and URL-only follow-up on one parent session", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const rootTs = "1777244692.409919";
+    const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
+    const replies = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          text: "Bill send a subagent to review GitHub issue #50621",
+          user: "U_BEK",
+          ts: rootTs,
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const root = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "all" }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "Bill send a subagent to review GitHub issue #50621",
+        ts: rootTs,
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+    recordSlackThreadParticipation("default", "C0AHZFCAS1K", rootTs);
+
+    const followUp = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "all" }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "https://github.com/openclaw/openclaw/issues/50621",
+        ts: "1777244714.000100",
+        thread_ts: rootTs,
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(root).toBeTruthy();
+    expect(followUp).toBeTruthy();
+    expect(root!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(followUp!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(root!.ctxPayload.WasMentioned).toBe(true);
+    expect(followUp!.ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("keeps runtime-bound regex mentions on the bound parent session", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const rootTs = "1777244692.409919";
+    const expectedSessionKey = "agent:review:slack:channel:c0ahzfcas1k";
+    const binding: SessionBindingRecord = {
+      bindingId: "slack-review-binding",
+      targetSessionKey: "agent:review:slack:channel:c0ahzfcas1k",
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "C0AHZFCAS1K",
+      },
+      status: "active",
+      boundAt: 1,
+    };
+    const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>((ref) =>
+      ref.conversationId === "C0AHZFCAS1K" ? binding : null,
+    );
+    const adapter: SessionBindingAdapter = {
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation,
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          session: { store: storePath },
+          agents: {
+            list: [
+              { id: "main", default: true },
+              { id: "review", groupChat: { mentionPatterns: ["\\breviewbot\\b"] } },
+            ],
+          },
+          channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+        } as OpenClawConfig,
+        defaultRequireMention: true,
+        replyToMode: "all",
+      });
+      slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+      slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+      const prepared = await prepareSlackMessage({
+        ctx: slackCtx,
+        account: createSlackAccount({ replyToMode: "all" }),
+        message: {
+          type: "message",
+          channel: "C0AHZFCAS1K",
+          channel_type: "channel",
+          user: "U_BEK",
+          text: "reviewbot please review GitHub issue #50621",
+          ts: rootTs,
+        } as SlackMessageEvent,
+        opts: { source: "message" },
+      });
+      recordSlackThreadParticipation("default", "C0AHZFCAS1K", rootTs);
+
+      const followUp = await prepareSlackMessage({
+        ctx: slackCtx,
+        account: createSlackAccount({ replyToMode: "all" }),
+        message: {
+          type: "message",
+          channel: "C0AHZFCAS1K",
+          channel_type: "channel",
+          user: "U_BEK",
+          text: "https://github.com/openclaw/openclaw/issues/50621",
+          ts: "1777244714.000100",
+          thread_ts: rootTs,
+        } as SlackMessageEvent,
+        opts: { source: "message" },
+      });
+
+      expect(prepared).toBeTruthy();
+      expect(followUp).toBeTruthy();
+      expect(prepared!.route.agentId).toBe("review");
+      expect(prepared!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+      expect(followUp!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+      expect(prepared!.ctxPayload.WasMentioned).toBe(true);
+      expect(followUp!.ctxPayload.WasMentioned).toBe(true);
+      expect(new Set([prepared!.ctxPayload.SessionKey, followUp!.ctxPayload.SessionKey]).size).toBe(
+        1,
+      );
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+    }
+  });
+
+  it("still seeds regex mentions when plugin-owned bindings do not rewrite the route", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const rootTs = "1777244692.409919";
+    const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
+    const binding: SessionBindingRecord = {
+      bindingId: "plugin-owned-slack-binding",
+      targetSessionKey: "agent:plugin:slack:channel:c0ahzfcas1k",
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "C0AHZFCAS1K",
+      },
+      status: "active",
+      boundAt: 1,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "demo-plugin",
+        pluginRoot: "/tmp/demo-plugin",
+      },
+    };
+    const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>((ref) =>
+      ref.conversationId === "C0AHZFCAS1K" ? binding : null,
+    );
+    const adapter: SessionBindingAdapter = {
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation,
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          session: { store: storePath },
+          messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
+          channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+        } as OpenClawConfig,
+        defaultRequireMention: true,
+        replyToMode: "all",
+      });
+      slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+      slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+      const root = await prepareSlackMessage({
+        ctx: slackCtx,
+        account: createSlackAccount({ replyToMode: "all" }),
+        message: {
+          type: "message",
+          channel: "C0AHZFCAS1K",
+          channel_type: "channel",
+          user: "U_BEK",
+          text: "Bill send a subagent to review GitHub issue #50621",
+          ts: rootTs,
+        } as SlackMessageEvent,
+        opts: { source: "message" },
+      });
+      recordSlackThreadParticipation("default", "C0AHZFCAS1K", rootTs);
+
+      const followUp = await prepareSlackMessage({
+        ctx: slackCtx,
+        account: createSlackAccount({ replyToMode: "all" }),
+        message: {
+          type: "message",
+          channel: "C0AHZFCAS1K",
+          channel_type: "channel",
+          user: "U_BEK",
+          text: "https://github.com/openclaw/openclaw/issues/50621",
+          ts: "1777244714.000100",
+          thread_ts: rootTs,
+        } as SlackMessageEvent,
+        opts: { source: "message" },
+      });
+
+      expect(root).toBeTruthy();
+      expect(followUp).toBeTruthy();
+      expect(root!.route.agentId).toBe("main");
+      expect(root!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+      expect(followUp!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+      expect(new Set([root!.ctxPayload.SessionKey, followUp!.ctxPayload.SessionKey]).size).toBe(1);
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+    }
+  });
+
+  it("prepares bare-ping Slack thread replies with the parent thread timestamp", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const rootTs = "1777244748.777299";
+    const childTs = "1777245202.803289";
+    const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244748.777299";
+    const childTsSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777245202.803289";
+    const replies = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          text: "Original Slack thread root",
+          user: "U_ROOT",
+          ts: rootTs,
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "all" }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "<@B1> ?",
+        ts: childTs,
+        thread_ts: rootTs,
+        parent_user_id: "U_ROOT",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(prepared!.ctxPayload.SessionKey).not.toBe(childTsSessionKey);
+    expect(prepared!.ctxPayload.MessageThreadId).toBe(rootTs);
+    expect(prepared!.ctxPayload.ReplyToId).toBe(rootTs);
+    expect(prepared!.ctxPayload.MessageSid).toBe(childTs);
+    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("preserves single-use reply mode metadata on seeded top-level roots", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const rootTs = "1777244692.409919";
+
+    for (const replyToMode of ["first", "batched"] as const) {
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          session: { store: storePath },
+          channels: { slack: { enabled: true, replyToMode, groupPolicy: "open" } },
+        } as OpenClawConfig,
+        defaultRequireMention: true,
+        replyToMode,
+      });
+      slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+      slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+      const prepared = await prepareSlackMessage({
+        ctx: slackCtx,
+        account: createSlackAccount({ replyToMode }),
+        message: {
+          type: "message",
+          channel: "C0AHZFCAS1K",
+          channel_type: "channel",
+          user: "U_BEK",
+          text: "<@B1> send a subagent to review GitHub issue #50621",
+          ts: rootTs,
+        } as SlackMessageEvent,
+        opts: { source: "app_mention", wasMentioned: true },
+      });
+
+      expect(prepared).toBeTruthy();
+      expect(prepared!.ctxPayload.SessionKey).toBe(
+        "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919",
+      );
+      expect(prepared!.ctxPayload.MessageThreadId).toBeUndefined();
+      expect(prepared!.ctxPayload.ReplyToId).toBe(rootTs);
     }
   });
 });

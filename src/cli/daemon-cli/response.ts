@@ -1,5 +1,11 @@
 import { Writable } from "node:stream";
 import type { GatewayService } from "../../daemon/service.js";
+import {
+  isSystemdUnavailableDetail,
+  renderSystemdUnavailableHints,
+} from "../../daemon/systemd-hints.js";
+import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
+import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 
 export type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
@@ -132,6 +138,17 @@ export function createDaemonActionContext(params: { action: DaemonAction; json: 
   return { stdout, warnings, emit, fail };
 }
 
+async function buildInstallFailureHints(error: unknown): Promise<string[] | undefined> {
+  const detail = String(error);
+  if (process.platform !== "linux" || !isSystemdUnavailableDetail(detail)) {
+    return undefined;
+  }
+  return renderSystemdUnavailableHints({
+    wsl: await isWSL(),
+    kind: classifySystemdUnavailableDetail(detail),
+  });
+}
+
 export async function installDaemonServiceAndEmit(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -143,7 +160,10 @@ export async function installDaemonServiceAndEmit(params: {
   try {
     await params.install();
   } catch (err) {
-    params.fail(`${params.serviceNoun} install failed: ${String(err)}`);
+    params.fail(
+      `${params.serviceNoun} install failed: ${String(err)}`,
+      await buildInstallFailureHints(err),
+    );
     return;
   }
 

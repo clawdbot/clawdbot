@@ -2,6 +2,16 @@
   "id": "openrouter",
   "enabledByDefault": true,
   "providers": ["openrouter"],
+  "modelPricing": {
+    "providers": {
+      "openrouter": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": false
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "openrouter": ["OPENROUTER_API_KEY"]
   },

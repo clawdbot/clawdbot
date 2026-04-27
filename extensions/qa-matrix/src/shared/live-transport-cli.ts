@@ -9,6 +9,8 @@ export type LiveTransportQaCommandOptions = {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  failFast?: boolean;
+  profile?: string;
   scenarioIds?: string[];
   sutAccountId?: string;
   credentialSource?: string;
@@ -23,6 +25,8 @@ type LiveTransportQaCommanderOptions = {
   altModel?: string;
   scenario?: string[];
   fast?: boolean;
+  failFast?: boolean;
+  profile?: string;
   sutAccount?: string;
   credentialSource?: string;
   credentialRole?: string;
@@ -56,6 +60,8 @@ export function mapLiveTransportQaCommanderOptions(
     primaryModel: opts.model,
     alternateModel: opts.altModel,
     fastMode: opts.fast,
+    failFast: opts.failFast,
+    profile: opts.profile,
     scenarioIds: opts.scenario,
     sutAccountId: opts.sutAccount,
     credentialSource: opts.credentialSource,
@@ -69,6 +75,8 @@ export function registerLiveTransportQaCli(params: {
   credentialOptions?: LiveTransportQaCredentialCliOptions;
   description: string;
   outputDirHelp: string;
+  profileHelp?: string;
+  failFastHelp?: string;
   scenarioHelp: string;
   sutAccountHelp: string;
   run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
@@ -88,6 +96,14 @@ export function registerLiveTransportQaCli(params: {
     .option("--scenario <id>", params.scenarioHelp, collectString, [])
     .option("--fast", "Enable provider fast mode where supported", false)
     .option("--sut-account <id>", params.sutAccountHelp, "sut");
+
+  if (params.profileHelp) {
+    command.option("--profile <profile>", params.profileHelp);
+  }
+
+  if (params.failFastHelp) {
+    command.option("--fail-fast", params.failFastHelp, false);
+  }
 
   if (params.credentialOptions) {
     command.option(
@@ -110,6 +126,8 @@ export function createLiveTransportQaCliRegistration(params: {
   credentialOptions?: LiveTransportQaCredentialCliOptions;
   description: string;
   outputDirHelp: string;
+  profileHelp?: string;
+  failFastHelp?: string;
   scenarioHelp: string;
   sutAccountHelp: string;
   run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
@@ -123,6 +141,8 @@ export function createLiveTransportQaCliRegistration(params: {
         credentialOptions: params.credentialOptions,
         description: params.description,
         outputDirHelp: params.outputDirHelp,
+        profileHelp: params.profileHelp,
+        failFastHelp: params.failFastHelp,
         scenarioHelp: params.scenarioHelp,
         sutAccountHelp: params.sutAccountHelp,
         run: params.run,

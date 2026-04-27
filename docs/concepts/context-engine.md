@@ -194,6 +194,10 @@ Required members:
   Prepended to the system prompt.
 </ParamField>
 
+`compact` returns a `CompactResult`. When compaction rotates the active
+transcript, `result.sessionId` and `result.sessionFile` identify the successor
+session that the next retry or turn must use.
+
 Optional members:
 
 | Member                         | Kind   | Purpose                                                                                                         |
@@ -251,6 +255,10 @@ A no-op `compact()` is unsafe for an active non-owning engine because it disable
 
 <Note>
 The slot is exclusive at run time — only one registered context engine is resolved for a given run or compaction operation. Other enabled `kind: "context-engine"` plugins can still load and run their registration code; `plugins.slots.contextEngine` only selects which registered engine id OpenClaw resolves when it needs a context engine.
+</Note>
+
+<Note>
+**Plugin uninstall:** when you uninstall the plugin currently selected as `plugins.slots.contextEngine`, OpenClaw resets the slot back to the default (`legacy`). The same reset behavior applies to `plugins.slots.memory`. No manual config edit is required.
 </Note>
 
 ## Relationship to compaction and memory

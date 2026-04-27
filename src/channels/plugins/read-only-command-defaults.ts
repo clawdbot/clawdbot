@@ -1,6 +1,9 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
+import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "../../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
+import { loadPluginRegistrySnapshot } from "../../plugins/plugin-registry.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
@@ -36,12 +39,17 @@ export function normalizeChannelCommandDefaults(
       : undefined;
   const nativeSkillsAutoEnabled =
     typeof value.nativeSkillsAutoEnabled === "boolean" ? value.nativeSkillsAutoEnabled : undefined;
-  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
-    ? {
-        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
-        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
-      }
-    : undefined;
+  if (nativeCommandsAutoEnabled === undefined && nativeSkillsAutoEnabled === undefined) {
+    return undefined;
+  }
+  const defaults: ChannelCommandDefaults = {};
+  if (nativeCommandsAutoEnabled !== undefined) {
+    defaults.nativeCommandsAutoEnabled = nativeCommandsAutoEnabled;
+  }
+  if (nativeSkillsAutoEnabled !== undefined) {
+    defaults.nativeSkillsAutoEnabled = nativeSkillsAutoEnabled;
+  }
+  return defaults;
 }
 
 export function resolveReadOnlyChannelCommandDefaults(
@@ -50,20 +58,37 @@ export function resolveReadOnlyChannelCommandDefaults(
     env?: NodeJS.ProcessEnv;
     stateDir?: string;
     workspaceDir?: string;
-  } = {},
+    config: OpenClawConfig;
+  },
 ): ChannelCommandDefaults | undefined {
   const normalizedChannelId = normalizeOptionalString(channelId) ?? "";
   if (!normalizedChannelId || !isSafeManifestChannelId(normalizedChannelId)) {
     return undefined;
   }
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const index = loadPluginRegistrySnapshot({
+    config: options.config,
     stateDir: options.stateDir,
+    workspaceDir: options.workspaceDir,
+    env: options.env ?? process.env,
+  });
+  const registry = loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: options.config,
     workspaceDir: options.workspaceDir,
     env: options.env ?? process.env,
     includeDisabled: true,
   });
   for (const record of registry.plugins) {
     if (!record.channels.includes(normalizedChannelId)) {
+      continue;
+    }
+    if (
+      record.id !== normalizedChannelId &&
+      record.channelCatalogMeta?.id !== normalizedChannelId
+    ) {
+      continue;
+    }
+    if (!isInstalledPluginEnabled(index, record.id, options.config)) {
       continue;
     }
     const channelConfigValue = record.channelConfigs

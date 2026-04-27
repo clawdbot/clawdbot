@@ -110,4 +110,43 @@ describe("install.ps1 failure handling", () => {
     expect(result.stdout).toContain("caught=OpenClaw installation failed with exit code 1.");
     expect(result.stdout).toContain("alive-after-install");
   });
+
+  runIfPowerShell("keeps npm chatter out of Main's success return value", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(
+      /\r?\n\$installSucceeded = Main\r?\nComplete-Install -Succeeded:\$installSucceeded\s*$/m,
+      "",
+    );
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "function Write-Banner { }",
+        "function Ensure-ExecutionPolicy { return $true }",
+        "function Ensure-Node { return $true }",
+        "function Add-ToPath { param([string]$Path) }",
+        "function Invoke-NativeCommandCapture {",
+        "  param([string]$FilePath, [string[]]$Arguments)",
+        "  return @{ ExitCode = 0; Stdout = 'npm stdout'; Stderr = 'npm stderr' }",
+        "}",
+        "$NoOnboard = $true",
+        "$result = Main",
+        "if ($result -is [array]) { throw 'Main returned an array' }",
+        'if ($result -ne $true) { throw "Main returned $result" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = spawnSync(
+      powershell!,
+      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
 });

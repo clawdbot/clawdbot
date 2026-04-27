@@ -168,3 +168,48 @@ export function setupGoogleMeetPlugin(
     nodeHostCommands,
   };
 }
+
+export async function invokeGoogleMeetGatewayMethodForTest(
+  methods: Map<string, unknown>,
+  method: string,
+  params?: unknown,
+): Promise<unknown> {
+  const handler = methods.get(method) as
+    | ((opts: {
+        params: Record<string, unknown>;
+        respond: (
+          ok: boolean,
+          payload?: unknown,
+          error?: { message?: string; details?: unknown },
+        ) => void;
+      }) => Promise<void> | void)
+    | undefined;
+  if (!handler) {
+    throw new Error(`gateway method not registered: ${method}`);
+  }
+  return await new Promise((resolve, reject) => {
+    const respond = (
+      ok: boolean,
+      payload?: unknown,
+      error?: { message?: string; details?: unknown },
+    ) => {
+      if (ok) {
+        resolve(payload);
+        return;
+      }
+      const err = new Error(error?.message ?? "gateway request failed") as Error & {
+        details?: unknown;
+      };
+      err.details = error?.details ?? payload;
+      reject(err);
+    };
+    void Promise.resolve(
+      handler({
+        params: (params && typeof params === "object" && !Array.isArray(params)
+          ? params
+          : {}) as Record<string, unknown>,
+        respond,
+      }),
+    ).catch(reject);
+  });
+}

@@ -390,9 +390,10 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
     return cfg;
   }
 
+  const rawProviders: Record<string, unknown> = rawModels.providers;
   let providersChanged = false;
-  const nextProviders = { ...rawModels.providers };
-  for (const [providerId, rawProvider] of Object.entries(rawModels.providers)) {
+  const nextProviders: Record<string, unknown> = { ...rawProviders };
+  for (const [providerId, rawProvider] of Object.entries(rawProviders)) {
     if (normalizeProviderId(providerId) !== "openai-codex" || !isRecord(rawProvider)) {
       continue;
     }
@@ -413,7 +414,7 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
       ) {
         providerChanged = true;
         const safeProviderId = sanitizeForLog(providerId);
-        const safeModelId = sanitizeForLog(model.id);
+        const safeModelId = sanitizeForLog(normalizeOptionalString(model.id) ?? "unknown");
         changes.push(
           `Marked models.providers.${safeProviderId}.models.${safeModelId} as /models add metadata so official OpenAI Codex metadata can override it.`,
         );
@@ -430,6 +431,77 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
       ...rawProvider,
       models: nextModels,
     } as (typeof nextProviders)[string];
+    providersChanged = true;
+  }
+
+  if (!providersChanged) {
+    return cfg;
+  }
+
+  return {
+    ...cfg,
+    models: {
+      ...rawModels,
+      providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
+    },
+  };
+}
+
+export function normalizeLegacyOpenAIModelProviderApi(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawModels = cfg.models;
+  if (!isRecord(rawModels) || !isRecord(rawModels.providers)) {
+    return cfg;
+  }
+
+  const rawProviders: Record<string, unknown> = rawModels.providers;
+  let providersChanged = false;
+  const nextProviders: Record<string, unknown> = { ...rawProviders };
+  for (const [providerId, rawProvider] of Object.entries(rawProviders)) {
+    if (!isRecord(rawProvider)) {
+      continue;
+    }
+
+    let providerChanged = false;
+    const nextProvider: Record<string, unknown> = { ...rawProvider };
+    if (nextProvider.api === "openai") {
+      nextProvider.api = "openai-completions";
+      providerChanged = true;
+      changes.push(
+        `Moved models.providers.${sanitizeForLog(providerId)}.api "openai" → "openai-completions".`,
+      );
+    }
+
+    const rawProviderModels = rawProvider.models;
+    if (Array.isArray(rawProviderModels)) {
+      let modelsChanged = false;
+      const nextModels: unknown[] = [];
+      rawProviderModels.forEach((model, index) => {
+        if (!isRecord(model) || model.api !== "openai") {
+          nextModels.push(model);
+          return;
+        }
+        modelsChanged = true;
+        changes.push(
+          `Moved models.providers.${sanitizeForLog(providerId)}.models[${index}].api "openai" → "openai-completions".`,
+        );
+        nextModels.push({
+          ...model,
+          api: "openai-completions",
+        });
+      });
+      if (modelsChanged) {
+        nextProvider.models = nextModels;
+        providerChanged = true;
+      }
+    }
+
+    if (!providerChanged) {
+      continue;
+    }
+    nextProviders[providerId] = nextProvider;
     providersChanged = true;
   }
 

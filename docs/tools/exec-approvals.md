@@ -99,6 +99,8 @@ Example schema:
         {
           "id": "B0C8C0B3-2C2D-4F8A-9A3C-5A4B3C2D1E0F",
           "pattern": "~/Projects/**/bin/rg",
+          "source": "allow-always",
+          "commandText": "rg -n TODO",
           "lastUsedAt": 1737150000000,
           "lastUsedCommand": "rg -n TODO",
           "lastResolvedPath": "/Users/user/Projects/.../bin/rg"

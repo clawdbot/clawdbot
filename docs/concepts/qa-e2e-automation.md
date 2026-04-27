@@ -65,10 +65,15 @@ model calls must not export `StreamAbandoned` on successful turns; raw diagnosti
 `openclaw.content.*` attributes must stay out of the trace. It writes
 `otel-smoke-summary.json` next to the QA suite artifacts.
 
+Observability QA stays source-checkout only. The npm tarball intentionally omits
+QA Lab, so package Docker release lanes do not run `qa` commands. Use
+`pnpm qa:otel:smoke` from a built source checkout when changing diagnostics
+instrumentation.
+
 For a transport-real Matrix smoke lane, run:
 
 ```bash
-pnpm openclaw qa matrix
+pnpm openclaw qa matrix --profile fast --fail-fast
 ```
 
 That lane provisions a disposable Tuwunel homeserver in Docker, registers
@@ -79,9 +84,15 @@ the child config scoped to the transport under test, so Matrix runs without
 a combined stdout/stderr log into the selected Matrix QA output directory. To
 capture the outer `scripts/run-node.mjs` build/launcher output too, set
 `OPENCLAW_RUN_NODE_OUTPUT_LOG=<path>` to a repo-local log file.
-Matrix progress is printed by default. `OPENCLAW_QA_MATRIX_TIMEOUT_MS` bounds
-the full run, and `OPENCLAW_QA_MATRIX_CLEANUP_TIMEOUT_MS` bounds cleanup so a
-stuck Docker teardown reports the exact recovery command instead of hanging.
+Matrix progress is printed by default. The CLI default profile is `all`, so
+plain `pnpm openclaw qa matrix` still runs the full catalog. Use `--profile
+fast` for the release-critical transport contract, or shard full coverage with
+`transport`, `media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli`. `--fail-fast`
+stops after the first failed scenario when you want a release gate instead of a
+full inventory. `OPENCLAW_QA_MATRIX_TIMEOUT_MS` bounds the full run,
+`OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS` can shorten no-reply quiet windows for
+CI, and `OPENCLAW_QA_MATRIX_CLEANUP_TIMEOUT_MS` bounds cleanup so a stuck
+Docker teardown reports the exact recovery command instead of hanging.
 
 For a transport-real Telegram smoke lane, run:
 

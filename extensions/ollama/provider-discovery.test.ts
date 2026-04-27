@@ -119,7 +119,7 @@ describe("Ollama provider", () => {
       const provider = await runOllamaCatalog({});
 
       expect(provider).toBeDefined();
-      expect(provider?.apiKey).toBe("OLLAMA_API_KEY");
+      expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
       expect(provider?.api).toBe("ollama");
       expect(provider?.baseUrl).toBe("http://127.0.0.1:11434");
       expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 0 });
@@ -210,7 +210,7 @@ describe("Ollama provider", () => {
       vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
       const provider = await runOllamaCatalog({
-        env: { VITEST: "", NODE_ENV: "development" },
+        env: { OLLAMA_API_KEY: OLLAMA_LOCAL_AUTH_MARKER, VITEST: "", NODE_ENV: "development" },
       });
 
       expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
@@ -424,6 +424,43 @@ describe("Ollama provider", () => {
       expect(provider?.baseUrl).toBe("http://remote-ollama:11434");
       expect(provider?.api).toBe("ollama");
       expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+      expect(provider?.models).toHaveLength(1);
+    });
+  });
+
+  it("should not use synthetic local auth for configured cloud providers without apiKey", async () => {
+    await withoutAmbientOllamaEnv(async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+
+      const provider = await runOllamaCatalog({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.com/v1",
+                models: [
+                  {
+                    id: "gpt-oss:20b",
+                    name: "GPT-OSS 20B",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 81920,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        env: { VITEST: "", NODE_ENV: "development" },
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(provider?.baseUrl).toBe("https://ollama.com");
+      expect(provider?.api).toBe("ollama");
+      expect(provider?.apiKey).toBeUndefined();
       expect(provider?.models).toHaveLength(1);
     });
   });

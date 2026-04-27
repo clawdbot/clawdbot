@@ -26,6 +26,7 @@ import {
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 export {
@@ -974,15 +975,11 @@ export async function spawnSubagentDirect(
     ? "lightweight"
     : undefined;
 
-  const childTaskMessage = [
-    `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
-    spawnMode === "session"
-      ? "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages."
-      : undefined,
-    `[Subagent Task]: ${task}`,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n\n");
+  const childTaskMessage = buildSubagentInitialUserMessage({
+    childDepth,
+    maxSpawnDepth,
+    persistentSession: spawnMode === "session",
+  });
 
   const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
     agentGroupId: ctx.agentGroupId,

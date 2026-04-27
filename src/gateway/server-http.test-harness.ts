@@ -4,7 +4,8 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
-import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
+import { createGatewayHttpServer } from "./server-http.js";
+import { createHooksRequestHandler } from "./server/hooks-request-handler.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 export type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;

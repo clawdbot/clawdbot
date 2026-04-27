@@ -157,15 +157,16 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
+          record.lastRestartAt = now;
+          record.restartsThisHour.push({ at: now });
+          restartRecords.set(key, record);
+
           try {
             if (status.running) {
               await channelManager.stopChannel(channelId as ChannelId, accountId);
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
-            record.lastRestartAt = now;
-            record.restartsThisHour.push({ at: now });
-            restartRecords.set(key, record);
           } catch (err) {
             log.error?.(
               `[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`,

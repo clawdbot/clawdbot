@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
 import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";
@@ -44,8 +45,10 @@ vi.mock("./probe.js", () => ({
   getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
 }));
 
-const freshActionsModulePath = "./actions.js?actions-test";
-const { bluebubblesMessageActions } = await import(freshActionsModulePath);
+const { bluebubblesMessageActions } = await importFreshModule<typeof import("./actions.js")>(
+  import.meta.url,
+  "./actions.js?actions-test",
+);
 
 describe("bluebubblesMessageActions", () => {
   const describeMessageTool = bluebubblesMessageActions.describeMessageTool!;

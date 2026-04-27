@@ -97,6 +97,21 @@ describe("command-path-policy", () => {
       hideBanner: true,
       ensureCliPath: true,
     });
+    for (const commandPath of [
+      ["plugins", "install"],
+      ["plugins", "list"],
+      ["plugins", "inspect"],
+      ["plugins", "registry"],
+      ["plugins", "doctor"],
+    ]) {
+      expect(resolveCliCommandPathPolicy(commandPath)).toEqual({
+        bypassConfigGuard: false,
+        routeConfigGuard: "never",
+        loadPlugins: "never",
+        hideBanner: false,
+        ensureCliPath: true,
+      });
+    }
     expect(resolveCliCommandPathPolicy(["cron", "list"])).toEqual({
       bypassConfigGuard: true,
       routeConfigGuard: "never",

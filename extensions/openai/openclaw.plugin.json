@@ -5,6 +5,18 @@
   "modelSupport": {
     "modelPrefixes": ["gpt-", "o1", "o3", "o4"]
   },
+  "modelPricing": {
+    "providers": {
+      "openai-codex": {
+        "openRouter": {
+          "provider": "openai"
+        },
+        "liteLLM": {
+          "provider": "openai"
+        }
+      }
+    }
+  },
   "cliBackends": ["codex-cli"],
   "providerAuthEnvVars": {
     "openai": ["OPENAI_API_KEY"]

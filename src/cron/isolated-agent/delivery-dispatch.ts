@@ -104,6 +104,7 @@ type DispatchCronDeliveryParams = {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
+  runSessionKey: string;
   sessionId: string;
   runStartedAt: number;
   runEndedAt: number;
@@ -684,8 +685,9 @@ export async function dispatchCronDelivery(
     const initialSynthesizedText = synthesizedText.trim();
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
     const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
+    const subagentFollowupSessionKey = params.runSessionKey;
     let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-      params.agentSessionKey,
+      subagentFollowupSessionKey,
     );
     const shouldCheckCompletedDescendants =
       activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
@@ -701,24 +703,24 @@ export async function dispatchCronDelivery(
     // descendant's output instead of the interim cron text.
     const completedDescendantReply = shouldCheckCompletedDescendants
       ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: params.agentSessionKey,
+          sessionKey: subagentFollowupSessionKey,
           runStartedAt: params.runStartedAt,
         })
       : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
       let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
-        sessionKey: params.agentSessionKey,
+        sessionKey: subagentFollowupSessionKey,
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
         observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
       });
       activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-        params.agentSessionKey,
+        subagentFollowupSessionKey,
       );
       if (!finalReply && activeSubagentRuns === 0) {
         finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: params.agentSessionKey,
+          sessionKey: subagentFollowupSessionKey,
           runStartedAt: params.runStartedAt,
         });
       }

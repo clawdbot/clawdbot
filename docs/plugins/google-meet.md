@@ -897,6 +897,8 @@ Defaults:
   `openclaw_agent_consult` for deeper answers
 - `realtime.introMessage`: short spoken readiness check when the realtime bridge
   connects; set it to `""` to join silently
+- `realtime.agentId`: optional OpenClaw agent id for
+  `openclaw_agent_consult`; defaults to `main`
 
 Optional overrides:
 
@@ -915,6 +917,7 @@ Optional overrides:
   },
   realtime: {
     provider: "google",
+    agentId: "jay",
     toolPolicy: "owner",
     introMessage: "Say exactly: I'm here.",
     providers: {
@@ -1000,6 +1003,10 @@ The consult tool runs the regular OpenClaw agent behind the scenes with recent
 meeting transcript context and returns a concise spoken answer to the realtime
 voice session. The voice model can then speak that answer back into the meeting.
 It uses the same shared realtime consult tool as Voice Call.
+
+By default, consults run against the `main` agent. Set `realtime.agentId` when a
+Meet lane should consult a dedicated OpenClaw agent workspace, model defaults,
+tool policy, memory, and session history.
 
 `realtime.toolPolicy` controls the consult run:
 
@@ -1238,10 +1245,12 @@ openclaw googlemeet recover-tab https://meet.google.com/abc-defg-hij
 ```
 
 The equivalent tool action is `recover_current_tab`. It focuses and inspects an
-existing Meet tab on the configured Chrome node. It does not open a new tab or
-create a new session; it reports the current blocker, such as login, admission,
-permissions, or audio-choice state. The CLI command talks to the configured
-Gateway, so the Gateway must be running and the Chrome node must be connected.
+existing Meet tab for the selected transport. With `chrome`, it uses local
+browser control through the Gateway; with `chrome-node`, it uses the configured
+Chrome node. It does not open a new tab or create a new session; it reports the
+current blocker, such as login, admission, permissions, or audio-choice state.
+The CLI command talks to the configured Gateway, so the Gateway must be running;
+`chrome-node` also requires the Chrome node to be connected.
 
 ### Twilio setup checks fail
 

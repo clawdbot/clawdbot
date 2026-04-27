@@ -7,6 +7,7 @@ import {
 } from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
+import { resolvePluginSetupProvider } from "./setup-registry.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
@@ -293,12 +294,19 @@ export async function runProviderModelSelectedHook(params: {
     return;
   }
 
-  const providers = resolveProviderWizardProviders({
+  const setupProvider = resolvePluginSetupProvider({
+    provider: selectedProviderId,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  const provider = providers.find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
+  const provider =
+    setupProvider ??
+    resolveProviderWizardProviders({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }).find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
   if (!provider?.onModelSelected) {
     return;
   }

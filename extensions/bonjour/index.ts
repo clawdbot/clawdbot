@@ -1,5 +1,8 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime";
+import {
+  registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler,
+} from "openclaw/plugin-sdk/runtime";
 import { startGatewayBonjourAdvertiser } from "./src/advertiser.js";
 
 function formatBonjourInstanceName(displayName: string) {
@@ -33,7 +36,11 @@ export default definePluginEntry({
             cliPath: ctx.cliPath,
             minimal: ctx.minimal,
           },
-          { logger: api.logger, registerUnhandledRejectionHandler },
+          {
+            logger: api.logger,
+            registerUncaughtExceptionHandler,
+            registerUnhandledRejectionHandler,
+          },
         );
         return { stop: advertiser.stop };
       },

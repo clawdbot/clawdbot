@@ -370,7 +370,9 @@ describe("subagent registry persistence", () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
 
-    vi.mocked(callGateway).mockImplementationOnce(async () => await new Promise(() => {}));
+    vi.mocked(callGateway).mockResolvedValueOnce({
+      status: "pending",
+    });
 
     registerSubagentRun({
       runId: " run-live ",
@@ -631,34 +633,27 @@ describe("subagent registry persistence", () => {
   });
 
   it("removes attachments when pruning orphaned restored runs", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const attachmentsRootDir = path.join(tempStateDir, "attachments");
+    const attachmentsDir = path.join(attachmentsRootDir, "ghost");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
+
     const persisted = createPersistedEndedRun({
       runId: "run-orphan-attachments",
       childSessionKey: "agent:main:subagent:ghost-attachments",
       task: "orphan attachments",
       cleanup: "delete",
     });
-    const registryPath = await writePersistedRegistry(persisted, {
-      seedChildSessions: false,
-    });
-    if (!tempStateDir) {
-      throw new Error("tempStateDir not initialized");
-    }
-    const attachmentsRootDir = path.join(tempStateDir, "attachments");
-    const attachmentsDir = path.join(attachmentsRootDir, "ghost");
-    await fs.mkdir(attachmentsDir, { recursive: true });
-    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
-    const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      runs?: Record<string, Record<string, unknown>>;
-    };
-    if (!parsed.runs?.["run-orphan-attachments"]) {
-      throw new Error("expected orphaned run in persisted registry");
-    }
-    parsed.runs["run-orphan-attachments"] = {
-      ...parsed.runs["run-orphan-attachments"],
+    Object.assign(persisted.runs["run-orphan-attachments"] as Record<string, unknown>, {
       attachmentsRootDir,
       attachmentsDir,
-    };
-    await fs.writeFile(registryPath, `${JSON.stringify(parsed)}\n`, "utf8");
+    });
+
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
 
     restartRegistry();
     await waitForRegistryWork(async () => {

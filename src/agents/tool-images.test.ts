@@ -14,8 +14,8 @@ describe("tool image sanitizing", () => {
   };
 
   const createWidePng = async () => {
-    const width = 2600;
-    const height = 400;
+    const width = 420;
+    const height = 120;
     const raw = Buffer.alloc(width * height * 3, 0x7f);
     return sharp(raw, {
       raw: { width, height, channels: 3 },
@@ -25,9 +25,9 @@ describe("tool image sanitizing", () => {
   };
 
   it("shrinks oversized images to the configured byte limit", async () => {
-    const maxBytes = 128 * 1024;
-    const width = 900;
-    const height = 900;
+    const maxBytes = 16 * 1024;
+    const width = 300;
+    const height = 300;
     const raw = Buffer.alloc(width * height * 3, 0xff);
     const bigPng = await sharp(raw, {
       raw: { width, height, channels: 3 },
@@ -57,12 +57,14 @@ describe("tool image sanitizing", () => {
     const images = [
       { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
     ];
-    const { images: out, dropped } = await sanitizeImageBlocks(images, "test");
+    const { images: out, dropped } = await sanitizeImageBlocks(images, "test", {
+      maxDimensionPx: 120,
+    });
     expect(dropped).toBe(0);
     expect(out.length).toBe(1);
     const meta = await sharp(Buffer.from(out[0].data, "base64")).metadata();
-    expect(meta.width).toBeLessThanOrEqual(1200);
-    expect(meta.height).toBeLessThanOrEqual(1200);
+    expect(meta.width).toBeLessThanOrEqual(120);
+    expect(meta.height).toBeLessThanOrEqual(120);
   }, 20_000);
 
   it("shrinks images that exceed max dimension even if size is small", async () => {
@@ -76,11 +78,11 @@ describe("tool image sanitizing", () => {
       },
     ];
 
-    const out = await sanitizeContentBlocksImages(blocks, "test");
+    const out = await sanitizeContentBlocksImages(blocks, "test", { maxDimensionPx: 120 });
     const image = getImageBlock(out);
     const meta = await sharp(Buffer.from(image.data, "base64")).metadata();
-    expect(meta.width).toBeLessThanOrEqual(1200);
-    expect(meta.height).toBeLessThanOrEqual(1200);
+    expect(meta.width).toBeLessThanOrEqual(120);
+    expect(meta.height).toBeLessThanOrEqual(120);
     expect(image.mimeType).toBe("image/jpeg");
   }, 20_000);
 

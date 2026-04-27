@@ -1,10 +1,14 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "./index.js";
+import plugin, { __testing as googleMeetPluginTesting } from "./index.js";
 import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig } from "./src/config.js";
 import type { GoogleMeetRuntime } from "./src/runtime.js";
-import { captureStdout, setupGoogleMeetPlugin } from "./src/test-support/plugin-harness.js";
+import {
+  captureStdout,
+  invokeGoogleMeetGatewayMethodForTest,
+  setupGoogleMeetPlugin,
+} from "./src/test-support/plugin-harness.js";
 import { CREATE_MEET_FROM_BROWSER_SCRIPT } from "./src/transports/chrome-create.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
@@ -40,7 +44,15 @@ function setup(
   config?: Parameters<typeof setupGoogleMeetPlugin>[1],
   options?: Parameters<typeof setupGoogleMeetPlugin>[2],
 ) {
-  return setupGoogleMeetPlugin(plugin, config, options);
+  const harness = setupGoogleMeetPlugin(plugin, config, options);
+  googleMeetPluginTesting.setCallGatewayFromCliForTests(
+    async (method, _opts, params) =>
+      (await invokeGoogleMeetGatewayMethodForTest(harness.methods, method, params)) as Record<
+        string,
+        unknown
+      >,
+  );
+  return harness;
 }
 
 async function runCreateMeetBrowserScript(params: { buttonText: string }) {
@@ -83,6 +95,7 @@ describe("google-meet create flow", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    googleMeetPluginTesting.setCallGatewayFromCliForTests();
   });
 
   it("CLI create prints the new meeting URL", async () => {

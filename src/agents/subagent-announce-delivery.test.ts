@@ -115,6 +115,48 @@ async function deliverDiscordDirectMessageCompletion(params: {
   });
 }
 
+async function deliverTelegramDirectMessageCompletion(params: {
+  callGateway: typeof runtimeCallGateway;
+  sendMessage?: typeof runtimeSendMessage;
+  internalEvents?: AgentInternalEvent[];
+  isActive?: boolean;
+  queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
+}) {
+  const origin = {
+    channel: "telegram",
+    to: "123456789",
+    accountId: "bot-1",
+  };
+  __testing.setDepsForTest({
+    callGateway: params.callGateway,
+    getRequesterSessionActivity: () => ({
+      sessionId: "requester-session-telegram",
+      isActive: params.isActive === true,
+    }),
+    loadConfig: () => ({}) as never,
+    ...(params.queueEmbeddedPiMessage
+      ? { queueEmbeddedPiMessage: params.queueEmbeddedPiMessage }
+      : {}),
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
+  });
+
+  return deliverSubagentAnnouncement({
+    requesterSessionKey: "agent:main:telegram:123456789",
+    targetRequesterSessionKey: "agent:main:telegram:123456789",
+    triggerMessage: "child done",
+    steerMessage: "child done",
+    requesterOrigin: origin,
+    requesterSessionOrigin: origin,
+    completionDirectOrigin: origin,
+    directOrigin: origin,
+    requesterIsSubagent: false,
+    expectsCompletionMessage: true,
+    bestEffortDeliver: true,
+    directIdempotencyKey: "announce-telegram-dm-fallback",
+    internalEvents: params.internalEvents,
+  });
+}
+
 async function deliverSlackChannelAnnouncement(params: {
   callGateway: typeof runtimeCallGateway;
   isActive: boolean;
@@ -506,6 +548,92 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
         bestEffort: true,
         idempotencyKey: "announce-thread-fallback-1",
+      }),
+    );
+  });
+
+  it("uses direct fallback for Telegram DMs when announce-agent delivery fails", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("UNAVAILABLE: requester wake failed");
+    }) as unknown as typeof runtimeCallGateway;
+    const sendMessage = createSendMessageMock();
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "telegram completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "123456789",
+        threadId: undefined,
+        content: "child completion output",
+        requesterSessionKey: "agent:main:telegram:123456789",
+        bestEffort: true,
+        idempotencyKey: "announce-telegram-dm-fallback",
+      }),
+    );
+  });
+
+  it("uses direct fallback when an active Telegram requester cannot be woken", async () => {
+    const callGateway = createGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessage = vi.fn(() => false);
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      isActive: true,
+      queueEmbeddedPiMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "telegram wake smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-fallback",
+      }),
+    );
+    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith("requester-session-telegram", "child done");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456789",
+        content: "child completion output",
       }),
     );
   });

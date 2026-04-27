@@ -118,15 +118,30 @@ describe("timeout-triggered compaction", () => {
         summary: "compacted for timeout",
         tokensBefore: 160000,
         tokensAfter: 60000,
+        sessionId: "timeout-rotated-session",
+        sessionFile: "/tmp/timeout-rotated-session.json",
       }),
     );
     // Second attempt succeeds
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        sessionIdUsed: "timeout-rotated-session",
+        sessionFileUsed: "/tmp/timeout-rotated-session.json",
+      }),
+    );
 
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
     // Verify the loop continued (retry happened)
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionId: "timeout-rotated-session",
+        sessionFile: "/tmp/timeout-rotated-session.json",
+      }),
+    );
     expect(mockedRunPostCompactionSideEffects).not.toHaveBeenCalled();
     expect(result.meta.error).toBeUndefined();
   });

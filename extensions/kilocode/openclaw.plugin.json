@@ -2,6 +2,18 @@
   "id": "kilocode",
   "enabledByDefault": true,
   "providers": ["kilocode"],
+  "modelPricing": {
+    "providers": {
+      "kilocode": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": {
+          "passthroughProviderModel": true
+        }
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "kilocode": ["KILOCODE_API_KEY"]
   },

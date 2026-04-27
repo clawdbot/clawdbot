@@ -39,7 +39,7 @@ RUN apt-get update \\
 USER appuser
 EOF
   echo "Building Docker image: $IMAGE_NAME"
-  run_logged browser-cdp-snapshot-build docker build -t "$IMAGE_NAME" -f "$build_dir/Dockerfile" "$build_dir"
+  docker_build_run browser-cdp-snapshot-build -t "$IMAGE_NAME" -f "$build_dir/Dockerfile" "$build_dir"
 fi
 
 echo "Starting browser CDP snapshot container..."

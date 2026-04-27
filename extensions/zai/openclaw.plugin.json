@@ -2,6 +2,18 @@
   "id": "zai",
   "enabledByDefault": true,
   "providers": ["zai"],
+  "modelPricing": {
+    "providers": {
+      "zai": {
+        "openRouter": {
+          "provider": "z-ai"
+        },
+        "liteLLM": {
+          "provider": "zai"
+        }
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "zai": ["ZAI_API_KEY", "Z_AI_API_KEY"]
   },

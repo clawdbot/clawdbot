@@ -188,6 +188,7 @@ function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
 async function appendPluginCommandSpecs(params: {
   commandSpecs: NativeCommandSpec[];
   runtime: RuntimeEnv;
+  cfg: OpenClawConfig;
 }): Promise<NativeCommandSpec[]> {
   const merged = [...params.commandSpecs];
   const existingNames = new Set(
@@ -195,7 +196,7 @@ async function appendPluginCommandSpecs(params: {
   );
   const getPluginCommandSpecs =
     getPluginCommandSpecsForTesting ?? (await loadPluginRuntime()).getPluginCommandSpecs;
-  for (const pluginCommand of getPluginCommandSpecs("discord")) {
+  for (const pluginCommand of getPluginCommandSpecs("discord", { config: params.cfg })) {
     const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
     if (!normalizedName) {
       continue;
@@ -747,7 +748,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       })
     : [];
   if (nativeEnabled) {
-    commandSpecs = await appendPluginCommandSpecs({ commandSpecs, runtime });
+    commandSpecs = await appendPluginCommandSpecs({ commandSpecs, runtime, cfg });
   }
   const initialCommandCount = commandSpecs.length;
   if (nativeEnabled && nativeSkillsEnabled && commandSpecs.length > maxDiscordCommands) {
@@ -756,7 +757,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       cfg,
       { skillCommands: [], provider: "discord" },
     );
-    commandSpecs = await appendPluginCommandSpecs({ commandSpecs, runtime });
+    commandSpecs = await appendPluginCommandSpecs({ commandSpecs, runtime, cfg });
     runtime.log?.(
       warn(
         `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,

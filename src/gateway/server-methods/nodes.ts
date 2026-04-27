@@ -47,6 +47,14 @@ import {
   validateNodePairVerifyParams,
   validateNodeRenameParams,
 } from "../protocol/index.js";
+import {
+  NODE_WAKE_RECONNECT_POLL_MS,
+  NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
+  NODE_WAKE_RECONNECT_WAIT_MS,
+  nodeWakeById,
+  nodeWakeNudgeById,
+  type NodeWakeAttempt,
+} from "./nodes-wake-state.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondInvalidParams,
@@ -56,30 +64,17 @@ import {
 } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-export const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
-export const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
-export const NODE_WAKE_RECONNECT_POLL_MS = 150;
+export {
+  clearNodeWakeState,
+  NODE_WAKE_RECONNECT_POLL_MS,
+  NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
+  NODE_WAKE_RECONNECT_WAIT_MS,
+} from "./nodes-wake-state.js";
+
 const NODE_WAKE_THROTTLE_MS = 15_000;
 const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_TTL_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_MAX_PER_NODE = 64;
-
-type NodeWakeState = {
-  lastWakeAtMs: number;
-  inFlight?: Promise<NodeWakeAttempt>;
-};
-
-const nodeWakeById = new Map<string, NodeWakeState>();
-const nodeWakeNudgeById = new Map<string, number>();
-
-type NodeWakeAttempt = {
-  available: boolean;
-  throttled: boolean;
-  path: "throttled" | "no-registration" | "no-auth" | "sent" | "send-error";
-  durationMs: number;
-  apnsStatus?: number;
-  apnsReason?: string;
-};
 
 type NodeWakeNudgeAttempt = {
   sent: boolean;
@@ -516,15 +511,6 @@ export async function waitForNodeReconnect(params: {
     await delayMs(pollMs);
   }
   return Boolean(params.context.nodeRegistry.get(params.nodeId));
-}
-
-/**
- * Remove cached wake/nudge state for a node that has disconnected.
- * Called from the WS close handler to prevent unbounded growth.
- */
-export function clearNodeWakeState(nodeId: string): void {
-  nodeWakeById.delete(nodeId);
-  nodeWakeNudgeById.delete(nodeId);
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {

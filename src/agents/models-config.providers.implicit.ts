@@ -4,7 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
-  resolvePluginDiscoveryProviders,
+  resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
@@ -359,7 +359,7 @@ export async function resolveImplicitProviders(
     resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, params.config),
     resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, params.config),
   };
-  const discoveryProviders = await resolvePluginDiscoveryProviders({
+  const discoveryProviders = await resolveRuntimePluginDiscoveryProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,

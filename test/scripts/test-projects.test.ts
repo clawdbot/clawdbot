@@ -1,4 +1,5 @@
 import path from "node:path";
+import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
@@ -14,6 +15,87 @@ import {
   resolveParallelFullSuiteConcurrency,
   shouldRetryVitestNoOutputTimeout,
 } from "../../scripts/test-projects.test-support.mjs";
+import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
+
+const normalizeRepoPath = (value: string) => value.replaceAll("\\", "/");
+
+type VitestTestConfig = {
+  dir?: string;
+  exclude?: string[];
+  include?: string[];
+};
+
+type VitestConfig = {
+  test?: VitestTestConfig;
+};
+
+type VitestConfigFactory = (env?: Record<string, string | undefined>) => VitestConfig;
+
+function isVitestConfigFactory(value: unknown): value is VitestConfigFactory {
+  return typeof value === "function";
+}
+
+function findVitestConfigFactory(mod: Record<string, unknown>): VitestConfigFactory | null {
+  for (const [name, value] of Object.entries(mod)) {
+    if (
+      name !== "default" &&
+      /^create.*VitestConfig$/u.test(name) &&
+      isVitestConfigFactory(value)
+    ) {
+      return value;
+    }
+  }
+  return null;
+}
+
+async function loadRawVitestConfig(configPath: string): Promise<VitestConfig> {
+  const previousArgv = process.argv;
+  const previousIncludeFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+  process.argv = [previousArgv[0] ?? "node", previousArgv[1] ?? "vitest"];
+  delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+  try {
+    const mod = (await import(path.resolve(process.cwd(), configPath))) as Record<string, unknown>;
+    return findVitestConfigFactory(mod)?.(process.env) ?? ((mod.default ?? {}) as VitestConfig);
+  } finally {
+    process.argv = previousArgv;
+    if (previousIncludeFile === undefined) {
+      delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+    } else {
+      process.env.OPENCLAW_VITEST_INCLUDE_FILE = previousIncludeFile;
+    }
+  }
+}
+
+async function listMatchedTestFilesForConfig(configPath: string): Promise<string[]> {
+  const testConfig = (await loadRawVitestConfig(configPath)).test ?? {};
+  const dir = testConfig.dir ? path.resolve(process.cwd(), testConfig.dir) : process.cwd();
+  const include = testConfig.include ?? [];
+  const exclude = (testConfig.exclude ?? []).map((pattern) =>
+    path.isAbsolute(pattern)
+      ? normalizeRepoPath(path.relative(dir, pattern))
+      : normalizeRepoPath(pattern),
+  );
+  return fg
+    .sync(include, {
+      absolute: false,
+      cwd: dir,
+      dot: false,
+      ignore: exclude,
+    })
+    .map((file) => normalizeRepoPath(path.relative(process.cwd(), path.resolve(dir, file))))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+async function listFullSuiteTestFileMatches(): Promise<Map<string, string[]>> {
+  const configs = [...new Set(fullSuiteVitestShards.flatMap((shard) => shard.projects))];
+  const matches = new Map<string, string[]>();
+  for (const config of configs) {
+    for (const file of await listMatchedTestFilesForConfig(config)) {
+      matches.set(file, [...(matches.get(file) ?? []), config]);
+    }
+  }
+  return matches;
+}
 
 describe("scripts/test-projects changed-target routing", () => {
   it("maps changed source files into scoped lane targets", () => {
@@ -22,15 +104,26 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/shared/string-normalization.ts",
         "src/utils/provider-utils.ts",
       ]),
-    ).toEqual(["src/shared/string-normalization.ts", "src/utils/provider-utils.ts"]);
+    ).toEqual(["src/shared/string-normalization.test.ts", "src/utils/provider-utils.test.ts"]);
   });
 
-  it("keeps the broad changed run for Vitest wiring edits", () => {
+  it("keeps changed mode focused by default for Vitest wiring edits", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "test/vitest/vitest.shared.config.ts",
         "src/utils/provider-utils.ts",
       ]),
+    ).toEqual(["src/utils/provider-utils.test.ts"]);
+  });
+
+  it("keeps the broad changed run available for Vitest wiring edits", () => {
+    expect(
+      resolveChangedTargetArgs(
+        ["--changed", "origin/main"],
+        process.cwd(),
+        () => ["test/vitest/vitest.shared.config.ts", "src/utils/provider-utils.ts"],
+        { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+      ),
     ).toBeNull();
   });
 
@@ -123,18 +216,55 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.extension-browser.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/browser/src/browser/**/*.test.ts"],
+        includePatterns: ["extensions/browser/src/browser/cdp.helpers.test.ts"],
         watchMode: false,
       },
     ]);
   });
 
-  it("keeps the broad changed run for shared test helpers", () => {
+  it("keeps shared test helpers cheap by default when no precise target exists", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "test/helpers/channels/plugin.ts",
       ]),
+    ).toEqual([]);
+  });
+
+  it("keeps the broad changed run available for shared test helpers", () => {
+    expect(
+      resolveChangedTargetArgs(
+        ["--changed", "origin/main"],
+        process.cwd(),
+        () => ["test/helpers/channels/plugin.ts"],
+        { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+      ),
     ).toBeNull();
+  });
+
+  it("routes channel helper edits through the tests that import them", () => {
+    expect(resolveChangedTestTargetPlan(["test/helpers/channels/directory-ids.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "extensions/discord/src/directory-contract.test.ts",
+        "extensions/slack/src/directory-contract.test.ts",
+        "extensions/telegram/src/directory-contract.test.ts",
+      ],
+    });
+  });
+
+  it("routes channel contract helper edits through contract shards", () => {
+    const plan = resolveChangedTestTargetPlan([
+      "test/helpers/channels/registry-backed-contract-shards.ts",
+    ]);
+
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toContain(
+      "src/channels/plugins/contracts/plugin.registry-backed-shard-a.contract.test.ts",
+    );
+    expect(plan.targets).toContain(
+      "src/channels/plugins/contracts/threading.registry-backed-shard-h.contract.test.ts",
+    );
+    expect(plan.targets).not.toContain("extensions/discord/src/channel-actions.contract.test.ts");
   });
 
   it("routes precise plugin contract helpers without broad-running every shard", () => {
@@ -148,11 +278,22 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps the broad changed run for unknown root surfaces", () => {
+  it("keeps unknown root surfaces cheap by default", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "unknown/file.txt",
       ]),
+    ).toEqual([]);
+  });
+
+  it("keeps the broad changed run available for unknown root surfaces", () => {
+    expect(
+      resolveChangedTargetArgs(
+        ["--changed", "origin/main"],
+        process.cwd(),
+        () => ["unknown/file.txt"],
+        { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+      ),
     ).toBeNull();
   });
 
@@ -178,10 +319,28 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual([]);
   });
 
-  it("adds extension tests for public plugin SDK changes", () => {
+  it("keeps public plugin SDK changes focused by default", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/plugin-sdk/provider-entry.ts",
     ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("adds extension tests for public plugin SDK changes in broad changed mode", () => {
+    const plans = buildVitestRunPlans(
+      ["--changed", "origin/main"],
+      process.cwd(),
+      () => ["src/plugin-sdk/provider-entry.ts"],
+      { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+    );
 
     expect(plans).toEqual([
       {
@@ -208,7 +367,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.extension-providers.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/lmstudio/src/**/*.test.ts"],
+        includePatterns: ["extensions/lmstudio/src/runtime.test.ts"],
         watchMode: false,
       },
     ]);
@@ -392,7 +551,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.utils.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/utils/**/*.test.ts"],
+        includePatterns: ["src/utils/provider-utils.test.ts"],
         watchMode: false,
       },
     ]);
@@ -459,16 +618,34 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps non-allowlisted plugin-sdk source files on the heavy lane plus extension tests", () => {
+  it("routes plugin-sdk source files with sibling tests narrowly by default", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/plugin-sdk/facade-runtime.ts",
     ]);
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.plugin-sdk.config.ts",
+        config: "test/vitest/vitest.bundled.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/**/*.test.ts"],
+        includePatterns: ["src/plugin-sdk/facade-runtime.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes plugin-sdk source files with sibling tests plus extensions in broad changed mode", () => {
+    const plans = buildVitestRunPlans(
+      ["--changed", "origin/main"],
+      process.cwd(),
+      () => ["src/plugin-sdk/facade-runtime.ts"],
+      { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+    );
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.bundled.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugin-sdk/facade-runtime.test.ts"],
         watchMode: false,
       },
       ...listFullExtensionVitestProjectConfigs().map((config) => ({
@@ -480,7 +657,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps non-allowlisted commands source files on the heavy lane", () => {
+  it("routes command source files with sibling tests narrowly on the command lane", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/commands/channels.add.ts",
     ]);
@@ -489,10 +666,34 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.commands.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/commands/**/*.test.ts"],
+        includePatterns: ["src/commands/channels.add.test.ts"],
         watchMode: false,
       },
     ]);
+  });
+
+  it("keeps changed mode to precise targets by default", () => {
+    expect(resolveChangedTestTargetPlan(["package.json", "src/commands/channels.add.ts"])).toEqual({
+      mode: "targets",
+      targets: ["src/commands/channels.add.test.ts"],
+    });
+  });
+
+  it("keeps broad changed fallback available through explicit env", () => {
+    expect(
+      resolveChangedTestTargetPlan(["package.json", "src/commands/channels.add.ts"], {
+        env: { OPENCLAW_TEST_CHANGED_BROAD: "1" },
+      }),
+    ).toEqual({
+      mode: "broad",
+      targets: [],
+    });
+  });
+
+  it("uses import-graph targets in default changed mode", () => {
+    expect(
+      resolveChangedTestTargetPlan(["test/helpers/plugins/plugin-registration.ts"]).targets,
+    ).toContain("extensions/openrouter/index.test.ts");
   });
 
   it.each([
@@ -588,6 +789,39 @@ describe("scripts/test-projects local heavy-check lock", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
+  it("covers each normal full-suite test file exactly once", async () => {
+    const matches = await listFullSuiteTestFileMatches();
+    const e2eNamedIntegrationTests = new Set([
+      "src/gateway/gateway.test.ts",
+      "src/gateway/server.startup-matrix-migration.integration.test.ts",
+      "src/gateway/sessions-history-http.test.ts",
+    ]);
+    const normalTestFiles = fg
+      .sync(["**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"], {
+        cwd: process.cwd(),
+        dot: false,
+        ignore: ["**/.*/**", "**/dist/**", "**/node_modules/**", "**/vendor/**"],
+      })
+      .map(normalizeRepoPath)
+      .filter(
+        (file) =>
+          !file.includes(".live.test.") &&
+          !file.includes(".e2e.test.") &&
+          !file.startsWith("test/fixtures/") &&
+          !e2eNamedIntegrationTests.has(file),
+      )
+      .toSorted((left, right) => left.localeCompare(right));
+
+    const missing = normalTestFiles.filter((file) => !matches.has(file));
+    const duplicated = [...matches.entries()]
+      .filter(([, configs]) => configs.length > 1)
+      .map(([file, configs]) => `${file}: ${configs.join(", ")}`)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(missing).toEqual([]);
+    expect(duplicated).toEqual([]);
+  });
+
   it("uses the large host-aware local profile on roomy local hosts", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
@@ -846,6 +1080,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.extension-browser.config.ts",
       "test/vitest/vitest.extension-qa.config.ts",
       "test/vitest/vitest.extension-media.config.ts",
+      "test/vitest/vitest.extensions.config.ts",
       "test/vitest/vitest.extension-misc.config.ts",
     ]);
     expect(plans).toEqual(

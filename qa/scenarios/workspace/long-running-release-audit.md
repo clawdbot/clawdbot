@@ -214,7 +214,7 @@ steps:
           message:
             expr: "`stale archive finding leaked into audit: report=${reportText}\\nhandoff=${handoffText}`"
       - assert:
-          expr: "JSON.stringify(report).includes('ui/control-panel.ts') && /blocked|missing|not found/i.test(`${reportText}\\n${handoffText}`)"
+          expr: "JSON.stringify(report).includes('ui/control-panel.ts') && /blocked|missing|not found|no current source file|no matching source file/i.test(`${reportText}\\n${handoffText}`)"
           message:
             expr: "`missing UI evidence was not explicitly blocked: report=${reportText}\\nhandoff=${handoffText}`"
       - assert:

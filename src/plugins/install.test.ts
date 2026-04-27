@@ -790,6 +790,182 @@ describe("installPluginFromArchive", () => {
     expect.unreachable("expected install to fail without openclaw.extensions");
   });
 
+  it("rejects package installs when openclaw.extensions entries escape the package", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "escaping-entry-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["../src/index.ts"],
+          runtimeExtensions: ["./dist/index.js"],
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("extension entry escapes plugin directory");
+    }
+  });
+
+  it("rejects package installs when no extension runtime entry exists", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "missing-entry-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+    );
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("extension entry not found");
+    }
+  });
+
+  it("allows missing TypeScript source entries when an inferred built runtime entry exists", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "inferred-runtime-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./src/index.ts"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("inferred-runtime-plugin");
+    }
+  });
+
+  it("rejects package installs when runtimeExtensions length does not match extensions", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-mismatch-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["./src/one.ts", "./src/two.ts"],
+          runtimeExtensions: ["./dist/one.js"],
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "one.js"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("runtimeExtensions length (1)");
+      expect(result.error).toContain("extensions length (2)");
+    }
+  });
+
+  it("rejects package installs when an extension entry is a symlink escape", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    const outsideDir = path.join(path.dirname(pluginDir), "outside-symlink");
+    const outsideEntry = path.join(outsideDir, "escape.js");
+    const linkedDir = path.join(pluginDir, "linked");
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(outsideEntry, "export {};\n");
+    try {
+      fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return;
+    }
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "symlink-entry-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./linked/escape.js"] },
+      }),
+    );
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("extension entry");
+    }
+  });
+
+  it("rejects package installs when an extension entry is a hardlinked alias", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    const outsideDir = path.join(path.dirname(pluginDir), "outside-hardlink");
+    const outsideEntry = path.join(outsideDir, "escape.js");
+    const linkedEntry = path.join(pluginDir, "escape.js");
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(outsideEntry, "export {};\n");
+    try {
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "hardlink-entry-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./escape.js"] },
+      }),
+    );
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("boundary checks");
+    }
+  });
+
   it("blocks package installs when plugin contains dangerous code patterns", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 

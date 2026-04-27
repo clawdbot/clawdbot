@@ -21,7 +21,7 @@ overrides:
   path-to-regexp: 8.4.0
   qs: 6.14.2
   node-domexception: npm:@nolyfill/domexception@1.0.28
-  typebox: 1.1.32
+  typebox: 1.1.33
   tar: 7.5.13
   tough-cookie: 4.1.3
   yauzl: 3.2.1
@@ -127,8 +127,8 @@ importers:
         specifier: ^4.10.2
         version: 4.10.2
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -146,8 +146,8 @@ importers:
         version: 4.3.6
     devDependencies:
       '@copilotkit/aimock':
-        specifier: 1.15.0
-        version: 1.15.0(vitest@4.1.5)
+        specifier: 1.15.1
+        version: 1.15.1(vitest@4.1.5)
       '@grammyjs/types':
         specifier: ^3.26.0
         version: 3.26.0
@@ -173,8 +173,8 @@ importers:
         specifier: ^8.18.1
         version: 8.18.1
       '@typescript/native-preview':
-        specifier: 7.0.0-dev.20260425.1
-        version: 7.0.0-dev.20260425.1
+        specifier: 7.0.0-dev.20260426.1
+        version: 7.0.0-dev.20260426.1
       '@vitest/coverage-v8':
         specifier: ^4.1.5
         version: 4.1.5(@vitest/browser@4.1.5)(vitest@4.1.5)
@@ -201,7 +201,7 @@ importers:
         version: 0.21.1(signal-polyfill@0.2.2)
       tsdown:
         specifier: 0.21.10
-        version: 0.21.10(@typescript/native-preview@7.0.0-dev.20260425.1)(typescript@6.0.3)
+        version: 0.21.10(@typescript/native-preview@7.0.0-dev.20260426.1)(typescript@6.0.3)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -320,8 +320,8 @@ importers:
   extensions/brave:
     dependencies:
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -342,8 +342,8 @@ importers:
         specifier: 1.59.1
         version: 1.59.1
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -463,11 +463,17 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/diagnostics-prometheus:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/diffs:
     dependencies:
       '@pierre/diffs':
-        specifier: 1.1.17
-        version: 1.1.17(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        specifier: 1.1.19
+        version: 1.1.19(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@pierre/theme':
         specifier: 0.0.29
         version: 0.0.29
@@ -475,8 +481,8 @@ importers:
         specifier: 1.59.1
         version: 1.59.1
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -500,8 +506,8 @@ importers:
         specifier: ^0.1.1
         version: 0.1.1
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -563,8 +569,8 @@ importers:
         specifier: ^1.61.1
         version: 1.61.1
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -576,8 +582,8 @@ importers:
   extensions/firecrawl:
     dependencies:
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -625,8 +631,8 @@ importers:
         specifier: ^14.0.3
         version: 14.0.3
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -737,8 +743,8 @@ importers:
         specifier: ^8.18.0
         version: 8.18.0
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -755,9 +761,12 @@ importers:
       '@clawdbot/lobster':
         specifier: 2026.4.6
         version: 2026.4.6
+      ajv:
+        specifier: ^8.18.0
+        version: 8.18.0
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -787,8 +796,8 @@ importers:
         specifier: ^11.12.3
         version: 11.12.3
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -826,8 +835,8 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -845,8 +854,8 @@ importers:
         specifier: ^6.34.0
         version: 6.34.0(ws@8.20.0)(zod@4.3.6)
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -855,8 +864,21 @@ importers:
   extensions/memory-wiki:
     dependencies:
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/migrate-hermes:
+    dependencies:
       yaml:
         specifier: ^2.8.3
         version: 2.8.3
@@ -927,8 +949,8 @@ importers:
         specifier: 4.0.1
         version: 4.0.1
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -981,8 +1003,8 @@ importers:
         specifier: 0.70.2
         version: 0.70.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1044,8 +1066,8 @@ importers:
   extensions/qa-channel:
     dependencies:
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1057,8 +1079,8 @@ importers:
   extensions/qa-lab:
     dependencies:
       '@copilotkit/aimock':
-        specifier: 1.15.0
-        version: 1.15.0(vitest@4.1.5)
+        specifier: 1.15.1
+        version: 1.15.1(vitest@4.1.5)
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.3.6)
@@ -1168,8 +1190,8 @@ importers:
   extensions/skill-workshop:
     dependencies:
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1187,8 +1209,8 @@ importers:
         specifier: ^9.0.0
         version: 9.0.0
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1225,8 +1247,8 @@ importers:
   extensions/tavily:
     dependencies:
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1244,8 +1266,8 @@ importers:
         specifier: ^1.42.0
         version: 1.42.0
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -1350,8 +1372,8 @@ importers:
         specifier: ^14.0.3
         version: 14.0.3
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -1413,8 +1435,8 @@ importers:
         specifier: ^1.6.1
         version: 1.6.1
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -1432,8 +1454,8 @@ importers:
         specifier: 0.70.2
         version: 0.70.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -1470,8 +1492,8 @@ importers:
   extensions/zalouser:
     dependencies:
       typebox:
-        specifier: 1.1.32
-        version: 1.1.32
+        specifier: 1.1.33
+        version: 1.1.33
       zca-js:
         specifier: 2.1.2
         version: 2.1.2
@@ -1908,8 +1930,8 @@ packages:
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
 
-  '@copilotkit/aimock@1.15.0':
-    resolution: {integrity: sha512-zSglkelO6xu3ANsYMAjri+621XMDG4z8s1X6laD4hBbobweMeZQQv+yWTf8oWhQA1+geIEZZDoaHPnR9tthSUw==}
+  '@copilotkit/aimock@1.15.1':
+    resolution: {integrity: sha512-DG9p6fKdYmuTW0zaUe9iDbgB/CM3SWhpdhVBrszQ6+L2UW4+DZB0gvICFQXRWhVXMpqxEkI9Pqhm/MtMb8li9A==}
     engines: {node: '>=24.0.0'}
     hasBin: true
     peerDependencies:
@@ -3394,8 +3416,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@pierre/diffs@1.1.17':
-    resolution: {integrity: sha512-NtrexN6lSNx0K1JvbCwa91uE/Kc7BGGc8kRC4jfr6iKLJoxR0SZpyi5ldOmpItfepTuJRAhUkao4V+jtciz9bA==}
+  '@pierre/diffs@1.1.19':
+    resolution: {integrity: sha512-eYyDW69heXd7i9zdkWogGYosHzoYF2dstV6uDcmnQAf72uRChs3hrpf/7ym/ayTiwD8a+TQ7oZ5vNNb0tstJvA==}
     peerDependencies:
       react: ^18.3.1 || ^19.0.0
       react-dom: ^18.3.1 || ^19.0.0
@@ -4108,50 +4130,50 @@ packages:
   '@types/yauzl@2.10.3':
     resolution: {integrity: sha512-oJoftv0LSuaDZE3Le4DbKX+KS9G36NzOeSap90UIK0yMA/NhKJhqlSGtNDORNRaIbQfzjXDrQa0ytJ6mNRGz/Q==}
 
-  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260425.1':
-    resolution: {integrity: sha512-vM7O+PlxHRUT4Dv0VkxEmU3N2uyWeSFrhu57O7s3SE9TX1ENljwQlCFG0oQdBGLBRo+SZSoedxKL5jOGlD1eiw==}
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260426.1':
+    resolution: {integrity: sha512-HzGvERpIFO7p6pMljPN1fIOHqAv2oMeVIqYLSt27TKILkTRpe7fANW3R2OAM+/A+pLtYNNXGDbKl/wR+DHz9KA==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [darwin]
 
-  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260425.1':
-    resolution: {integrity: sha512-EiikklZSuEvMhZEeN0VRb0vmedhLgtKwz5p4Oz9e8hlJ4lLrslgvX7Z7JWb2YSKlhm14dUlRMvdoe+6t+56rSA==}
+  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260426.1':
+    resolution: {integrity: sha512-aE17wCPNQ09K4jV7TQYYRYF/Q/6nFS9jLpbyTYHtS+i+0yV1Rrs4VsqboisS1R/iSWsq3m1Yhh3uS4x3/9KUkg==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [darwin]
 
-  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260425.1':
-    resolution: {integrity: sha512-5KJ++prl1dscJtxnkE7Cb6rjud4T3nO4mcnKhkCfYcQaFtFrvcZhBtDobwcpSzHbfsW0MeM+QCy1UfWoK4gjUQ==}
+  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260426.1':
+    resolution: {integrity: sha512-6OfhODChD1N6FX+ITzA1lny3WX6uew/Nw9kN7uWhymXlM3/vE0qtaAfsMpgdHdCbTPgcdpGaNFhbcMieju9Vdg==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [linux]
 
-  '@typescript/native-preview-linux-arm@7.0.0-dev.20260425.1':
-    resolution: {integrity: sha512-9eWInaHqhfTu1Mt/1M85p5M+HlSStahAQkqYaW9rJzUWRe+AcVUKsN6I7U7iwxbkCT8gFZsMCRqABcwBUWw3kg==}
+  '@typescript/native-preview-linux-arm@7.0.0-dev.20260426.1':
+    resolution: {integrity: sha512-/XJRC8B6JeOOb2/iek/BrzW4r5Nut+fkucG7ntEOQn63IRTsfP+AfJdJodG1VIwXOleNlFgG4RtYTUsvcbDJhg==}
     engines: {node: '>=16.20.0'}
     cpu: [arm]
     os: [linux]
 
-  '@typescript/native-preview-linux-x64@7.0.0-dev.20260425.1':
-    resolution: {integrity: sha512-a/E/8UL2x6nWmIJwrrbEvLz938RMcrFfm5hLRKaPMjCE32bgwesBZEG5jRn8fzQes+4HICRXKEaL544jtb/Syg==}
+  '@typescript/native-preview-linux-x64@7.0.0-dev.20260426.1':
+    resolution: {integrity: sha512-KPDpjmLo/4xY8ugfMGFm7Ona/1igPzZveLt/C0rb6/jNPYuShumRfKYnItGDRXBlmecJY/04lrqkWqQjhtSSPg==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [linux]
 
-  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260425.1':
-    resolution: {integrity: sha512-BZ7jEnaNZHkHbq9LWuqqIgYMmMb2E2NReMybjOyl3ASFmJHYekDnytXIT3Zbp4dyPLJV55faGzLqMw2MMS81NA==}
+  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260426.1':
+    resolution: {integrity: sha512-I7ThiopxuNKX/iAcwgMwsm6L32GOwmwLOyPwQmXjh5c3VD2acq3FYyZRDJVk0aUUy1w6bTbODlo5ZHoPnlZtvw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [win32]
 
-  '@typescript/native-preview-win32-x64@7.0.0-dev.20260425.1':
-    resolution: {integrity: sha512-/iwK50mO31lKr1KVDRCqW5xGyKArZuq9jQr2b/PJ3e0xEuV6hoJ4Kok11LA1lhx1uctqr3UXKmfwQF3HWqcZTQ==}
+  '@typescript/native-preview-win32-x64@7.0.0-dev.20260426.1':
+    resolution: {integrity: sha512-4624MJq72vN4H1msiWVBqAIyerJRi5Ni/U6eeE1A1Opqg4c4QoalYQQ+5h5RIuaZ6rY+9kvUn+SjsvbZwyLbjQ==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
 
-  '@typescript/native-preview@7.0.0-dev.20260425.1':
-    resolution: {integrity: sha512-qhSVDT9DsoKPBeEm777eUUkiCDjBFlF7wwjfMvcPctZFVHfD6b1O1icpfCdQHPqzjrSXWu2YaNiY0DXbljTmgw==}
+  '@typescript/native-preview@7.0.0-dev.20260426.1':
+    resolution: {integrity: sha512-zE7B6TIG4XDYr4Your5E2Bxm1vD2YiPyD8OFG4nD5Odt/uN6gO0Y+T4TIbtGUBmOftMRqEV2Jw1ZC4ka0my1yw==}
     engines: {node: '>=16.20.0'}
     hasBin: true
 
@@ -7135,8 +7157,8 @@ packages:
     resolution: {integrity: sha512-OZs6gsjF4vMp32qrCbiVSkrFmXtG/AZhY3t0iAMrMBiAZyV9oALtXO8hsrHbMXF9x6L3grlFuwW2oAz7cav+Gw==}
     engines: {node: '>= 0.6'}
 
-  typebox@1.1.32:
-    resolution: {integrity: sha512-cbGoj7BCxGcFDJ/RR7wbyMe9IkO2SeNhwLdZWQ+xRtun9+ze9iM1pBND4SoFAxgonuJYrCIWnEQ7sE4bMVDYHA==}
+  typebox@1.1.33:
+    resolution: {integrity: sha512-+/MWwlQ1q2GSVwoxi/+u5JsHkgLQKcCN2Nsjree9c+K7GJu40qbaHrFETmfV1i9Fs1TcOVfynW+jJvIWcXtvjw==}
 
   typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
@@ -8433,7 +8455,7 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@copilotkit/aimock@1.15.0(vitest@4.1.5)':
+  '@copilotkit/aimock@1.15.1(vitest@4.1.5)':
     optionalDependencies:
       vitest: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@25.6.0)(@vitest/browser-playwright@4.1.5)(@vitest/coverage-v8@4.1.5)(jsdom@29.0.2(@noble/hashes@2.0.1))(vite@8.0.10(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
 
@@ -9241,7 +9263,7 @@ snapshots:
   '@mariozechner/pi-agent-core@0.70.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
     dependencies:
       '@mariozechner/pi-ai': 0.70.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
-      typebox: 1.1.32
+      typebox: 1.1.33
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -9261,7 +9283,7 @@ snapshots:
       openai: 6.26.0(ws@8.20.0)(zod@4.3.6)
       partial-json: 0.1.7
       proxy-agent: 6.5.0
-      typebox: 1.1.32
+      typebox: 1.1.33
       undici: 7.25.0
       zod-to-json-schema: 3.25.2(zod@4.3.6)
     transitivePeerDependencies:
@@ -9292,7 +9314,7 @@ snapshots:
       minimatch: 10.2.4
       proper-lockfile: 4.1.2
       strip-ansi: 7.2.0
-      typebox: 1.1.32
+      typebox: 1.1.33
       undici: 7.25.0
       uuid: 14.0.0
       yaml: 2.8.3
@@ -9908,7 +9930,7 @@ snapshots:
   '@oxlint/binding-win32-x64-msvc@1.61.0':
     optional: true
 
-  '@pierre/diffs@1.1.17(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@pierre/diffs@1.1.19(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@pierre/theme': 0.0.28
       '@shikijs/transformers': 3.23.0
@@ -10757,36 +10779,36 @@ snapshots:
       '@types/node': 25.6.0
     optional: true
 
-  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260425.1':
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260426.1':
     optional: true
 
-  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260425.1':
+  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260426.1':
     optional: true
 
-  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260425.1':
+  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260426.1':
     optional: true
 
-  '@typescript/native-preview-linux-arm@7.0.0-dev.20260425.1':
+  '@typescript/native-preview-linux-arm@7.0.0-dev.20260426.1':
     optional: true
 
-  '@typescript/native-preview-linux-x64@7.0.0-dev.20260425.1':
+  '@typescript/native-preview-linux-x64@7.0.0-dev.20260426.1':
     optional: true
 
-  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260425.1':
+  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260426.1':
     optional: true
 
-  '@typescript/native-preview-win32-x64@7.0.0-dev.20260425.1':
+  '@typescript/native-preview-win32-x64@7.0.0-dev.20260426.1':
     optional: true
 
-  '@typescript/native-preview@7.0.0-dev.20260425.1':
+  '@typescript/native-preview@7.0.0-dev.20260426.1':
     optionalDependencies:
-      '@typescript/native-preview-darwin-arm64': 7.0.0-dev.20260425.1
-      '@typescript/native-preview-darwin-x64': 7.0.0-dev.20260425.1
-      '@typescript/native-preview-linux-arm': 7.0.0-dev.20260425.1
-      '@typescript/native-preview-linux-arm64': 7.0.0-dev.20260425.1
-      '@typescript/native-preview-linux-x64': 7.0.0-dev.20260425.1
-      '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260425.1
-      '@typescript/native-preview-win32-x64': 7.0.0-dev.20260425.1
+      '@typescript/native-preview-darwin-arm64': 7.0.0-dev.20260426.1
+      '@typescript/native-preview-darwin-x64': 7.0.0-dev.20260426.1
+      '@typescript/native-preview-linux-arm': 7.0.0-dev.20260426.1
+      '@typescript/native-preview-linux-arm64': 7.0.0-dev.20260426.1
+      '@typescript/native-preview-linux-x64': 7.0.0-dev.20260426.1
+      '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260426.1
+      '@typescript/native-preview-win32-x64': 7.0.0-dev.20260426.1
 
   '@typespec/ts-http-runtime@0.3.5':
     dependencies:
@@ -13830,7 +13852,7 @@ snapshots:
       glob: 7.2.3
     optional: true
 
-  rolldown-plugin-dts@0.23.2(@typescript/native-preview@7.0.0-dev.20260425.1)(rolldown@1.0.0-rc.17)(typescript@6.0.3):
+  rolldown-plugin-dts@0.23.2(@typescript/native-preview@7.0.0-dev.20260426.1)(rolldown@1.0.0-rc.17)(typescript@6.0.3):
     dependencies:
       '@babel/generator': 8.0.0-rc.3
       '@babel/helper-validator-identifier': 8.0.0-rc.3
@@ -13844,7 +13866,7 @@ snapshots:
       picomatch: 4.0.4
       rolldown: 1.0.0-rc.17
     optionalDependencies:
-      '@typescript/native-preview': 7.0.0-dev.20260425.1
+      '@typescript/native-preview': 7.0.0-dev.20260426.1
       typescript: 6.0.3
     transitivePeerDependencies:
       - oxc-resolver
@@ -14308,7 +14330,7 @@ snapshots:
 
   ts-algebra@2.0.0: {}
 
-  tsdown@0.21.10(@typescript/native-preview@7.0.0-dev.20260425.1)(typescript@6.0.3):
+  tsdown@0.21.10(@typescript/native-preview@7.0.0-dev.20260426.1)(typescript@6.0.3):
     dependencies:
       ansis: 4.2.0
       cac: 7.0.0
@@ -14319,7 +14341,7 @@ snapshots:
       obug: 2.1.1
       picomatch: 4.0.4
       rolldown: 1.0.0-rc.17
-      rolldown-plugin-dts: 0.23.2(@typescript/native-preview@7.0.0-dev.20260425.1)(rolldown@1.0.0-rc.17)(typescript@6.0.3)
+      rolldown-plugin-dts: 0.23.2(@typescript/native-preview@7.0.0-dev.20260426.1)(rolldown@1.0.0-rc.17)(typescript@6.0.3)
       semver: 7.7.4
       tinyexec: 1.1.1
       tinyglobby: 0.2.16
@@ -14354,7 +14376,7 @@ snapshots:
       media-typer: 1.1.0
       mime-types: 3.0.2
 
-  typebox@1.1.32: {}
+  typebox@1.1.33: {}
 
   typescript@6.0.3: {}
 

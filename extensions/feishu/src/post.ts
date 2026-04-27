@@ -166,6 +166,9 @@ function renderElement(
     }
     case "emotion":
       return renderEmotionElement(element);
+    case "md":
+    case "lark_md":
+      return toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
     case "br":
       return "\n";
     case "hr":

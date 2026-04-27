@@ -2,6 +2,26 @@
   "id": "kimi",
   "enabledByDefault": true,
   "providers": ["kimi", "kimi-coding"],
+  "modelPricing": {
+    "providers": {
+      "kimi": {
+        "openRouter": {
+          "provider": "moonshotai"
+        },
+        "liteLLM": {
+          "provider": "moonshot"
+        }
+      },
+      "kimi-coding": {
+        "openRouter": {
+          "provider": "moonshotai"
+        },
+        "liteLLM": {
+          "provider": "moonshot"
+        }
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "kimi": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
     "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"]

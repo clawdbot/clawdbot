@@ -12,6 +12,7 @@ import {
   createMockWebListener,
   createScriptedWebListenerFactory,
   createWebListenerFactoryCapture,
+  getLastWebAutoReplySessionSocket,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   makeSessionStore,
@@ -248,6 +249,92 @@ describe("web auto-reply connection", () => {
 
       controller.abort();
       scripted.resolveClose(1, { status: 499, isLoggedOut: false });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps quiet linked-device sessions open when transport frames keep arriving", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const scripted = createScriptedWebListenerFactory();
+      const { controller, run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory: scripted.listenerFactory,
+        sleep,
+        heartbeatSeconds: 60,
+        messageTimeoutMs: 30,
+        watchdogCheckMs: 5,
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      const socket = getLastWebAutoReplySessionSocket();
+      await vi.advanceTimersByTimeAsync(20);
+      socket.ws.emit("frame");
+      await vi.advanceTimersByTimeAsync(20);
+      socket.ws.emit("frame");
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(scripted.getListenerCount()).toBe(1);
+
+      controller.abort();
+      scripted.resolveClose(0, { status: 499, isLoggedOut: false });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let transport frames mask application silence forever", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const scripted = createScriptedWebListenerFactory();
+      const { controller, run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory: scripted.listenerFactory,
+        sleep,
+        heartbeatSeconds: 60,
+        messageTimeoutMs: 30,
+        watchdogCheckMs: 5,
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      const socket = getLastWebAutoReplySessionSocket();
+      for (let elapsedMs = 0; elapsedMs < 140; elapsedMs += 20) {
+        socket.ws.emit("frame");
+        await vi.advanceTimersByTimeAsync(20);
+      }
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      controller.abort();
+      scripted.resolveClose(scripted.getListenerCount() - 1, {
+        status: 499,
+        isLoggedOut: false,
+        error: "aborted",
+      });
       await Promise.resolve();
       await run;
     } finally {

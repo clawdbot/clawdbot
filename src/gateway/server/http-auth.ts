@@ -8,7 +8,7 @@ import {
   type ResolvedGatewayAuth,
 } from "../auth.js";
 import { CANVAS_CAPABILITY_TTL_MS } from "../canvas-capability.js";
-import { getBearerToken, resolveHttpBrowserOriginPolicy } from "../http-utils.js";
+import { getBearerToken, resolveHttpBrowserOriginPolicy } from "../http-auth-utils.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 export function isCanvasPath(pathname: string): boolean {

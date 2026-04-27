@@ -39,8 +39,12 @@ export function shouldSkipControlUiPairing(
   role: GatewayRole,
   trustedProxyAuthOk = false,
   authMode?: string,
+  authMethod?: string,
 ): boolean {
   if (trustedProxyAuthOk) {
+    return true;
+  }
+  if (policy.isControlUi && role === "operator" && authMethod === "tailscale" && policy.device) {
     return true;
   }
   // When auth is completely disabled (mode=none), there is no shared secret

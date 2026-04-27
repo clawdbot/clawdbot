@@ -12,6 +12,8 @@ let listThinkingLevelOptions: typeof import("./thinking.js").listThinkingLevelOp
 let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
 let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
 let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
+let isThinkingLevelSupported: typeof import("./thinking.js").isThinkingLevelSupported;
+let formatThinkingLevels: typeof import("./thinking.js").formatThinkingLevels;
 let resolveSupportedThinkingLevel: typeof import("./thinking.js").resolveSupportedThinkingLevel;
 let resolveThinkingDefaultForModel: typeof import("./thinking.js").resolveThinkingDefaultForModel;
 
@@ -42,6 +44,8 @@ beforeEach(async () => {
     listThinkingLevels,
     normalizeReasoningLevel,
     normalizeThinkLevel,
+    isThinkingLevelSupported,
+    formatThinkingLevels,
     resolveSupportedThinkingLevel,
     resolveThinkingDefaultForModel,
   } = await loadFreshThinkingModuleForTest());
@@ -168,6 +172,37 @@ describe("listThinkingLevels", () => {
 
     expect(listThinkingLevels("demo", "demo-model")).toEqual(["off", "low"]);
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
+  });
+
+  it("passes catalog reasoning into provider thinking profiles for support checks", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) => ({
+      levels:
+        context.reasoning === true
+          ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+          : [{ id: "off" }],
+      defaultLevel: "off",
+    }));
+    const catalog = [{ provider: "ollama", id: "gpt-oss:20b", name: "gpt-oss", reasoning: true }];
+
+    expect(
+      isThinkingLevelSupported({
+        provider: "ollama",
+        model: "gpt-oss:20b",
+        level: "max",
+        catalog,
+      }),
+    ).toBe(true);
+    expect(formatThinkingLevels("ollama", "gpt-oss:20b", ", ", catalog)).toBe(
+      "off, low, medium, high, max",
+    );
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "ollama",
+        model: "gpt-oss:20b",
+        level: "max",
+        catalog,
+      }),
+    ).toBe("max");
   });
 
   it("maps stale unsupported levels to the largest profile level", () => {

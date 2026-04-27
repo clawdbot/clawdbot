@@ -251,6 +251,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
       defaultRuntime.error(errorText(hint));
     }
+  } else if (service.runtime?.missingSupervision) {
+    defaultRuntime.error(errorText("LaunchAgent plist exists but launchd has no loaded job."));
+    for (const hint of renderRuntimeHints(
+      service.runtime,
+      service.command?.environment ?? process.env,
+      status.logFile,
+    )) {
+      defaultRuntime.error(errorText(hint));
+    }
   } else if (service.loaded && service.runtime?.status === "stopped") {
     defaultRuntime.error(
       errorText("Service is loaded but not running (likely exited immediately)."),

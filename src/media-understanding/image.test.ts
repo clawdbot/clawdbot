@@ -123,6 +123,7 @@ describe("describeImageWithModel", () => {
   });
 
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const authStore = { version: 1, profiles: {} };
     const result = await describeImageWithModel({
       cfg: {},
@@ -163,6 +164,7 @@ describe("describeImageWithModel", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+    expect(timeoutSpy).toHaveBeenCalledWith(1000);
     expect(completeMock).not.toHaveBeenCalled();
   });
 

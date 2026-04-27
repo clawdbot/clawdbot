@@ -9,7 +9,9 @@ import {
   makeTrackedTempDirAsync,
 } from "./test-helpers/fs-fixtures.js";
 import {
+  applyPluginUninstallDirectoryRemoval,
   removePluginFromConfig,
+  planPluginUninstall,
   resolveUninstallChannelConfigKeys,
   resolveUninstallDirectoryTarget,
   uninstallPlugin,
@@ -281,6 +283,17 @@ describe("removePluginFromConfig", () => {
     expect(actions.allowlist).toBe(true);
   });
 
+  it("removes plugin from denylist", () => {
+    const config = createPluginConfig({
+      deny: ["my-plugin", "other-plugin"],
+    });
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+    expect(result.plugins?.deny).toEqual(["other-plugin"]);
+    expect(actions.denylist).toBe(true);
+  });
+
   it.each([
     {
       name: "removes linked path from load.paths",
@@ -363,6 +376,22 @@ describe("removePluginFromConfig", () => {
 
     expect(result.plugins?.slots?.memory).toBe(expectedMemory);
     expect(actions.memorySlot).toBe(expectedChanged);
+  });
+
+  it("clears context engine slot when uninstalling active context engine plugin", () => {
+    const config = createPluginConfig({
+      entries: {
+        "context-plugin": { enabled: true },
+      },
+      slots: {
+        contextEngine: "context-plugin",
+      },
+    });
+
+    const { config: result, actions } = removePluginFromConfig(config, "context-plugin");
+
+    expect(result.plugins?.slots?.contextEngine).toBe("legacy");
+    expect(actions.contextEngineSlot).toBe(true);
   });
 
   it("removes plugins object when uninstall leaves only empty slots", () => {
@@ -682,6 +711,31 @@ describe("uninstallPlugin", () => {
     } finally {
       await fs.rm(pluginDir, { recursive: true, force: true });
     }
+  });
+
+  it("plans directory removal without deleting before commit", async () => {
+    const { pluginId, extensionsDir, pluginDir, config } = await createInstalledNpmPluginFixture({
+      baseDir: tempDir,
+    });
+
+    const plan = planPluginUninstall({
+      config,
+      pluginId,
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) {
+      throw new Error(plan.error);
+    }
+    expect(plan.directoryRemoval).toEqual({ target: pluginDir });
+    expect(plan.actions.directory).toBe(false);
+    await expect(fs.access(pluginDir)).resolves.toBeUndefined();
+
+    const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    await expect(fs.access(pluginDir)).rejects.toThrow();
   });
 
   it.each([

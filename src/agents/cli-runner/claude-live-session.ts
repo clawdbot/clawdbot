@@ -147,8 +147,12 @@ export function buildClaudeLiveArgs(params: {
   return appendArg(
     upsertArgValue(
       upsertArgValue(
-        stripLiveProcessArgs(params.args, params.backend, params.useResume),
-        "--input-format",
+        upsertArgValue(
+          stripLiveProcessArgs(params.args, params.backend, params.useResume),
+          "--input-format",
+          "stream-json",
+        ),
+        "--output-format",
         "stream-json",
       ),
       "--permission-prompt-tool",

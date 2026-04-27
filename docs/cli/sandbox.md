@@ -75,9 +75,11 @@ openclaw sandbox recreate --all --force        # Skip confirmation
 - `--browser`: Only recreate browser containers
 - `--force`: Skip confirmation prompt
 
-**Important:** Runtimes are automatically recreated when the agent is next used.
+<Note>
+Runtimes are automatically recreated when the agent is next used.
+</Note>
 
-## Use Cases
+## Use cases
 
 ### After updating a Docker image
 
@@ -148,18 +150,19 @@ openclaw sandbox recreate --agent family
 openclaw sandbox recreate --agent alfred
 ```
 
-## Why is this needed?
+## Why this is needed
 
-**Problem:** When you update sandbox configuration:
+When you update sandbox configuration:
 
-- Existing runtimes continue running with old settings
-- Runtimes are only pruned after 24h of inactivity
-- Regularly-used agents keep old runtimes alive indefinitely
+- Existing runtimes continue running with old settings.
+- Runtimes are only pruned after 24h of inactivity.
+- Regularly-used agents keep old runtimes alive indefinitely.
 
-**Solution:** Use `openclaw sandbox recreate` to force removal of old runtimes. They'll be recreated automatically with current settings when next needed.
+Use `openclaw sandbox recreate` to force removal of old runtimes. They are recreated automatically with current settings when next needed.
 
-Tip: prefer `openclaw sandbox recreate` over manual backend-specific cleanup.
-It uses the Gateway’s runtime registry and avoids mismatches when scope/session keys change.
+<Tip>
+Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses the Gateway's runtime registry and avoids mismatches when scope or session keys change.
+</Tip>
 
 ## Configuration
 
@@ -193,4 +196,4 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
 - [CLI reference](/cli)
 - [Sandboxing](/gateway/sandboxing)
 - [Agent workspace](/concepts/agent-workspace)
-- [Doctor](/gateway/doctor) — checks sandbox setup
+- [Doctor](/gateway/doctor): checks sandbox setup.

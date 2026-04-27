@@ -8,12 +8,20 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugins-e2e" OPENCLAW_PLUGINS_E
 docker_e2e_build_or_reuse "$IMAGE_NAME" plugins
 
 DOCKER_ENV_ARGS=(-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0)
-if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY:-}" != "undefined" && "${OPENAI_API_KEY:-}" != "null" ]]; then
-  DOCKER_ENV_ARGS+=(-e OPENAI_API_KEY)
-fi
-if [[ -n "${OPENAI_BASE_URL:-}" && "${OPENAI_BASE_URL:-}" != "undefined" && "${OPENAI_BASE_URL:-}" != "null" ]]; then
-  DOCKER_ENV_ARGS+=(-e OPENAI_BASE_URL)
-fi
+for env_name in \
+  OPENCLAW_PLUGINS_E2E_CLAWHUB \
+  OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC \
+  OPENCLAW_PLUGINS_E2E_CLAWHUB_ID \
+  OPENCLAW_CLAWHUB_URL \
+  CLAWHUB_URL \
+  OPENCLAW_CLAWHUB_TOKEN \
+  CLAWHUB_TOKEN \
+  CLAWHUB_AUTH_TOKEN; do
+  env_value="${!env_name:-}"
+  if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then
+    DOCKER_ENV_ARGS+=(-e "$env_name")
+  fi
+done
 
 echo "Running plugins Docker E2E..."
 RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-plugins-run.XXXXXX")"
@@ -30,31 +38,36 @@ else
   exit 1
 fi
 export OPENCLAW_ENTRY
-
-sanitize_env_string() {
-  local value="${1:-}"
-  if [[ "$value" == "undefined" || "$value" == "null" ]]; then
-    printf ''
-    return
-  fi
-  printf '%s' "$value"
+PACKAGE_VERSION="$(node -p 'require("./package.json").version')"
+OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
+  node - "$PACKAGE_VERSION" <<'NODE'
+const version = process.argv[2] || "";
+const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/.exec(version);
+if (!match) {
+  console.log("0");
+  process.exit(0);
 }
-
-export OPENAI_API_KEY="$(sanitize_env_string "${OPENAI_API_KEY:-}")"
-export OPENAI_BASE_URL="$(sanitize_env_string "${OPENAI_BASE_URL:-}")"
-if [[ -z "$OPENAI_API_KEY" ]]; then
-  unset OPENAI_API_KEY || true
-fi
-if [[ -z "$OPENAI_BASE_URL" ]]; then
-  unset OPENAI_BASE_URL || true
-fi
+const value = [Number(match[1]), Number(match[2]), Number(match[3])];
+const max = [2026, 4, 25];
+for (let i = 0; i < value.length; i += 1) {
+  if (value[i] < max[i]) {
+    console.log("1");
+    process.exit(0);
+  }
+  if (value[i] > max[i]) {
+    console.log("0");
+    process.exit(0);
+  }
+}
+console.log("1");
+NODE
+)"
+export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
 home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
 export HOME="$home_dir"
 BUNDLED_PLUGIN_ROOT_DIR="extensions"
 OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
-
-gateway_pid=""
 
 record_fixture_plugin_trust() {
   local plugin_id="$1"
@@ -110,278 +123,6 @@ run_logged() {
     exit 1
   fi
 }
-
-seed_openai_provider_config() {
-  local openai_api_key="$1"
-  local openai_base_url="${2:-}"
-  node - <<'NODE' "$openai_api_key" "$openai_base_url"
-const fs = require("node:fs");
-const path = require("node:path");
-
-const openaiApiKey = process.argv[2];
-const openaiBaseUrl = process.argv[3];
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = fs.existsSync(configPath)
-  ? JSON.parse(fs.readFileSync(configPath, "utf8"))
-  : {};
-const existingOpenAI = config.models?.providers?.openai ?? {};
-config.models = {
-  ...(config.models || {}),
-  providers: {
-    ...(config.models?.providers || {}),
-    openai: {
-      ...existingOpenAI,
-      baseUrl:
-        typeof existingOpenAI.baseUrl === "string" && existingOpenAI.baseUrl.trim()
-          ? existingOpenAI.baseUrl
-          : openaiBaseUrl || "https://api.openai.com/v1",
-      apiKey: openaiApiKey,
-      models: Array.isArray(existingOpenAI.models) ? existingOpenAI.models : [],
-    },
-  },
-};
-fs.mkdirSync(path.dirname(configPath), { recursive: true });
-fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-NODE
-}
-
-stop_gateway() {
-  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
-    kill "$gateway_pid" 2>/dev/null || true
-    wait "$gateway_pid" 2>/dev/null || true
-  fi
-  gateway_pid=""
-}
-
-start_gateway() {
-  local log_file="$1"
-  : > "$log_file"
-  node "$OPENCLAW_ENTRY" gateway --port 18789 --bind loopback --allow-unconfigured \
-    >"$log_file" 2>&1 &
-  gateway_pid=$!
-
-  for _ in $(seq 1 120); do
-    # Gateway startup logs changed; accept both the legacy listener line and the
-    # current structured ready line so this smoke stays stable across formats.
-    if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
-      return 0
-    fi
-    if ! kill -0 "$gateway_pid" 2>/dev/null; then
-      echo "Gateway exited unexpectedly"
-      cat "$log_file"
-      exit 1
-    fi
-    sleep 0.25
-  done
-
-  echo "Timed out waiting for gateway to start"
-  cat "$log_file"
-  exit 1
-}
-
-wait_for_gateway_health() {
-  for _ in $(seq 1 120); do
-    if node "$OPENCLAW_ENTRY" gateway health \
-      --url ws://127.0.0.1:18789 \
-      --token plugin-e2e-token \
-      --json >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.25
-  done
-
-  echo "Timed out waiting for gateway health"
-  return 1
-}
-
-run_gateway_chat_json() {
-  local session_key="$1"
-  local message="$2"
-  local output_file="$3"
-  local timeout_ms="${4:-45000}"
-  node - <<'NODE' "$OPENCLAW_ENTRY" "$session_key" "$message" "$output_file" "$timeout_ms"
-const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
-const { randomUUID } = require("node:crypto");
-
-const [, , entry, sessionKey, message, outputFile, timeoutRaw] = process.argv;
-const timeoutMs = Number(timeoutRaw) > 0 ? Number(timeoutRaw) : 45000;
-// Plugin install/enable can intentionally restart the gateway mid-request.
-// Keep the underlying gateway call budget aligned with the scenario timeout
-// instead of clamping too aggressively, or normal restarts look like failures.
-const gatewayCallTimeoutMs = Math.max(15000, Math.min(timeoutMs, 90000));
-const retryableGatewayErrorPattern =
-  /gateway ws open timeout|gateway connect timeout|gateway closed|ECONNREFUSED|socket hang up|gateway timeout after/i;
-const formatErrorMessage = (error) =>
-  error instanceof Error ? error.message || error.name || "Error" : String(error);
-const gatewayArgs = [
-  entry,
-  "gateway",
-  "call",
-  "--url",
-  "ws://127.0.0.1:18789",
-  "--token",
-  "plugin-e2e-token",
-  "--timeout",
-  String(gatewayCallTimeoutMs),
-  "--json",
-];
-
-const callGatewayOnce = (method, params) => {
-  try {
-    return {
-      ok: true,
-      value: JSON.parse(
-        execFileSync("node", [...gatewayArgs, method, "--params", JSON.stringify(params)], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        }),
-      ),
-    };
-  } catch (error) {
-    const stderr = typeof error?.stderr === "string" ? error.stderr : "";
-    const stdout = typeof error?.stdout === "string" ? error.stdout : "";
-    const message = [String(error), stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
-    return { ok: false, error: new Error(message) };
-  }
-};
-
-const isRetryableGatewayError = (error) =>
-  retryableGatewayErrorPattern.test(formatErrorMessage(error));
-
-const extractText = (messageLike) => {
-  if (!messageLike || typeof messageLike !== "object") {
-    return "";
-  }
-  if (typeof messageLike.text === "string" && messageLike.text.trim()) {
-    return messageLike.text.trim();
-  }
-  const content = Array.isArray(messageLike.content) ? messageLike.content : [];
-  return content
-    .map((part) =>
-      part &&
-      typeof part === "object" &&
-      part.type === "text" &&
-      typeof part.text === "string"
-        ? part.text.trim()
-        : "",
-    )
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-};
-
-const findLatestAssistantText = (history) => {
-  const messages = Array.isArray(history?.messages) ? history.messages : [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const candidate = messages[index];
-    if (!candidate || typeof candidate !== "object" || candidate.role !== "assistant") {
-      continue;
-    }
-    const text = extractText(candidate);
-    if (text) {
-      return { text, message: candidate };
-    }
-  }
-  return null;
-};
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const callGateway = async (method, params, deadline = Date.now() + gatewayCallTimeoutMs) => {
-  let lastFailure = null;
-  while (Date.now() < deadline) {
-    const result = callGatewayOnce(method, params);
-    if (result.ok) {
-      return result;
-    }
-    lastFailure = result;
-    if (!isRetryableGatewayError(result.error)) {
-      return result;
-    }
-    await sleep(250);
-  }
-  return lastFailure ?? callGatewayOnce(method, params);
-};
-
-async function main() {
-  const runId = `plugin-e2e-${randomUUID()}`;
-  const sendParams = {
-    sessionKey,
-    message,
-    idempotencyKey: runId,
-  };
-  let lastGatewayError = null;
-  const sendResult = await callGateway(
-    "chat.send",
-    sendParams,
-    Date.now() + gatewayCallTimeoutMs,
-  );
-  if (!sendResult.ok) {
-    throw sendResult.error;
-  }
-
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const historyResult = await callGateway("chat.history", { sessionKey }, Date.now() + 5000);
-    if (!historyResult.ok) {
-      lastGatewayError = String(historyResult.error);
-      await sleep(150);
-      continue;
-    }
-    lastGatewayError = null;
-    const history = historyResult.value;
-    const latestAssistant = findLatestAssistantText(history);
-    if (latestAssistant) {
-      fs.writeFileSync(
-        outputFile,
-        `${JSON.stringify(
-          {
-            sessionKey,
-            runId,
-            text: latestAssistant.text,
-            message: latestAssistant.message,
-            history,
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-      return;
-    }
-    await sleep(100);
-  }
-
-  const finalHistory = await callGateway("chat.history", { sessionKey }, Date.now() + 3000);
-  fs.writeFileSync(
-    outputFile,
-    `${JSON.stringify(
-      {
-        sessionKey,
-        runId,
-        error: "timeout",
-        history: finalHistory.ok ? finalHistory.value : null,
-        historyError: finalHistory.ok ? null : String(finalHistory.error),
-        lastGatewayError,
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  const retrySummary = lastGatewayError ? `; last gateway error: ${lastGatewayError}` : "";
-  throw new Error(`timed out waiting for assistant reply for ${sessionKey}${retrySummary}`);
-}
-
-main().catch((error) => {
-  console.error(formatErrorMessage(error));
-  process.exit(1);
-});
-NODE
-}
-
-trap 'stop_gateway' EXIT
 
 write_fixture_plugin() {
   local dir="$1"
@@ -637,7 +378,7 @@ if (!Array.isArray(inspect.gatewayMethods) || !inspect.gatewayMethods.includes("
 console.log("ok");
 NODE
 
-echo "Testing /plugin alias with Claude bundle restart semantics..."
+echo "Testing Claude bundle enable and inspect flow..."
 bundle_plugin_id="claude-bundle-e2e"
 bundle_root="$OPENCLAW_PLUGIN_HOME/$bundle_plugin_id"
 mkdir -p "$bundle_root/.claude-plugin" "$bundle_root/commands"
@@ -657,72 +398,35 @@ $ARGUMENTS
 MD
 record_fixture_plugin_trust "$bundle_plugin_id" "$bundle_root" 0
 
+node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-bundle-disabled.json
 node - <<'NODE'
 const fs = require("node:fs");
-const path = require("node:path");
-
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = fs.existsSync(configPath)
-  ? JSON.parse(fs.readFileSync(configPath, "utf8"))
-  : {};
-config.gateway = {
-  ...(config.gateway || {}),
-  port: 18789,
-  auth: { mode: "token", token: "plugin-e2e-token" },
-  controlUi: { enabled: false },
-};
-if (process.env.OPENAI_API_KEY) {
-  config.agents = {
-    ...(config.agents || {}),
-    defaults: {
-      ...(config.agents?.defaults || {}),
-      // Use the same stable OpenAI family as the installer E2E to avoid
-      // long or reasoning-heavy live turns in this bundle-command smoke.
-      model: { primary: "openai/gpt-4.1-mini" },
-    },
-  };
+const data = JSON.parse(fs.readFileSync("/tmp/plugins-bundle-disabled.json", "utf8"));
+const plugin = (data.plugins || []).find((entry) => entry.id === "claude-bundle-e2e");
+if (!plugin) throw new Error("Claude bundle plugin not found");
+if (plugin.status !== "disabled") {
+  throw new Error(`expected disabled bundle before enable, got ${plugin.status}`);
 }
-config.commands = {
-  ...(config.commands || {}),
-  text: true,
-  plugins: true,
-};
-fs.mkdirSync(path.dirname(configPath), { recursive: true });
-fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+console.log("ok");
 NODE
 
-if [ -n "${OPENAI_API_KEY:-}" ]; then
-  seed_openai_provider_config "$OPENAI_API_KEY" "${OPENAI_BASE_URL:-}"
-fi
-
-workspace_dir="$HOME/.openclaw/workspace"
-mkdir -p "$workspace_dir/.openclaw"
-cat > "$workspace_dir/IDENTITY.md" <<'MD'
-# Identity
-
-- Name: Plugin E2E
-- Nature: Test assistant
-- Vibe: Concise
-- Emoji: claw
-MD
-cat > "$workspace_dir/USER.md" <<'MD'
-# User
-
-- Name: OpenClaw test harness
-- Timezone: UTC
-MD
-cat > "$workspace_dir/.openclaw/workspace-state.json" <<'JSON'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+run_logged enable-claude-bundle node "$OPENCLAW_ENTRY" plugins enable claude-bundle-e2e
+node "$OPENCLAW_ENTRY" plugins inspect claude-bundle-e2e --json > /tmp/plugins-bundle-inspect.json
+node - <<'NODE'
+const fs = require("node:fs");
+const inspect = JSON.parse(fs.readFileSync("/tmp/plugins-bundle-inspect.json", "utf8"));
+if (inspect.plugin?.bundleFormat !== "claude") {
+  throw new Error(`expected Claude bundle format, got ${inspect.plugin?.bundleFormat}`);
 }
-JSON
+if (inspect.plugin?.enabled !== true || inspect.plugin?.status !== "loaded") {
+  throw new Error(
+    `expected enabled loaded Claude bundle, got enabled=${inspect.plugin?.enabled} status=${inspect.plugin?.status}`,
+  );
+}
+console.log("ok");
+NODE
 
-gateway_log="/tmp/openclaw-plugin-command-e2e.log"
-start_gateway "$gateway_log"
-wait_for_gateway_health
-
-echo "Testing /plugin install with auto-restart..."
+echo "Testing plugin install visible after explicit restart..."
 slash_install_dir="$(mktemp -d "/tmp/openclaw-plugin-slash-install.XXXXXX")"
 cat > "$slash_install_dir/package.json" <<'JSON'
 {
@@ -750,117 +454,22 @@ cat > "$slash_install_dir/openclaw.plugin.json" <<'JSON'
 }
 JSON
 
-if ! run_gateway_chat_json \
-  "plugin-e2e-install" \
-  "/plugin install $slash_install_dir" \
-  /tmp/plugin-command-install.json \
-  240000; then
-  cat "$gateway_log" 2>/dev/null || true
-  exit 1
-fi
+run_logged install-slash-plugin node "$OPENCLAW_ENTRY" plugins install "$slash_install_dir"
+node "$OPENCLAW_ENTRY" plugins inspect slash-install-plugin --json > /tmp/plugin-command-install-show.json
 node - <<'NODE'
 const fs = require("node:fs");
-const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-install.json", "utf8"));
-const text = payload.text || "";
-if (!text.includes('Installed plugin "slash-install-plugin"')) {
-  throw new Error(`expected install confirmation, got:\n${text}`);
+const inspect = JSON.parse(fs.readFileSync("/tmp/plugin-command-install-show.json", "utf8"));
+if (inspect.plugin?.status !== "loaded") {
+  throw new Error(`expected loaded status after install, got ${inspect.plugin?.status}`);
 }
-if (!text.includes("Restart the gateway to load plugins.")) {
-  throw new Error(`expected restart hint, got:\n${text}`);
+if (inspect.plugin?.enabled !== true) {
+  throw new Error(`expected enabled status after install, got ${inspect.plugin?.enabled}`);
 }
-console.log("ok");
-NODE
-
-wait_for_gateway_health
-run_gateway_chat_json "plugin-e2e-install-show" "/plugin show slash-install-plugin" /tmp/plugin-command-install-show.json
-node - <<'NODE'
-const fs = require("node:fs");
-const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-install-show.json", "utf8"));
-const text = payload.text || "";
-if (!text.includes('"status": "loaded"')) {
-  throw new Error(`expected loaded status after slash install, got:\n${text}`);
-}
-if (!text.includes('"enabled": true')) {
-  throw new Error(`expected enabled status after slash install, got:\n${text}`);
-}
-if (!text.includes('"demo.slash.install"')) {
-  throw new Error(`expected installed gateway method, got:\n${text}`);
+if (!inspect.gatewayMethods.includes("demo.slash.install")) {
+  throw new Error(`expected installed gateway method, got ${inspect.gatewayMethods.join(", ")}`);
 }
 console.log("ok");
 NODE
-
-run_gateway_chat_json "plugin-e2e-list" "/plugin list" /tmp/plugin-command-list.json
-node - <<'NODE'
-const fs = require("node:fs");
-const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-list.json", "utf8"));
-const text = payload.text || "";
-if (!text.includes("claude-bundle-e2e")) {
-  throw new Error(`expected plugin in /plugin list output, got:\n${text}`);
-}
-if (!text.includes("[disabled]")) {
-  throw new Error(`expected disabled status before enable, got:\n${text}`);
-}
-console.log("ok");
-NODE
-
-run_gateway_chat_json \
-  "plugin-e2e-enable" \
-  "/plugin enable claude-bundle-e2e" \
-  /tmp/plugin-command-enable.json \
-  60000
-node - <<'NODE'
-const fs = require("node:fs");
-const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-enable.json", "utf8"));
-const text = payload.text || "";
-if (!text.includes('Plugin "claude-bundle-e2e" enabled')) {
-  throw new Error(`expected enable confirmation, got:\n${text}`);
-}
-if (!text.includes("Restart the gateway to apply.")) {
-  throw new Error(`expected restart hint, got:\n${text}`);
-}
-console.log("ok");
-NODE
-
-wait_for_gateway_health
-run_gateway_chat_json "plugin-e2e-show" "/plugin show claude-bundle-e2e" /tmp/plugin-command-show.json
-node - <<'NODE'
-const fs = require("node:fs");
-const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-show.json", "utf8"));
-const text = payload.text || "";
-if (!text.includes('"bundleFormat": "claude"')) {
-  throw new Error(`expected Claude bundle inspect payload, got:\n${text}`);
-}
-if (!text.includes('"enabled": true')) {
-  throw new Error(`expected enabled inspect payload, got:\n${text}`);
-}
-console.log("ok");
-NODE
-
-if [ -n "${OPENAI_API_KEY:-}" ]; then
-  echo "Testing Claude bundle command invocation..."
-  if ! run_gateway_chat_json \
-    "plugin-e2e-live" \
-    "/office_hours Reply with exactly BUNDLE_OK and nothing else." \
-    /tmp/plugin-command-live.json \
-    120000; then
-    echo "Claude bundle command invocation failed; payload dump:"
-    cat /tmp/plugin-command-live.json 2>/dev/null || true
-    echo "Gateway log tail:"
-    tail -n 200 "$gateway_log" || true
-    exit 1
-  fi
-  node - <<'NODE'
-const fs = require("node:fs");
-const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-live.json", "utf8"));
-const text = payload.text || "";
-if (!text.includes("BUNDLE_OK")) {
-  throw new Error(`expected Claude bundle command reply, got:\n${text}`);
-}
-console.log("ok");
-NODE
-else
-  echo "Skipping live Claude bundle command invocation (OPENAI_API_KEY not set)."
-fi
 
 echo "Testing marketplace install and update flows..."
 marketplace_root="$HOME/.claude/plugins/marketplaces/fixture-marketplace"
@@ -976,9 +585,24 @@ const path = require("node:path");
 
 const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
 const index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+if (!allowLegacyCompat && !index.installRecords) {
+  throw new Error("expected modern installRecords in installed plugin index");
+}
+const installRecords = allowLegacyCompat
+  ? index.installRecords ?? index.records ?? config.plugins?.installs ?? {}
+  : index.installRecords ?? {};
 for (const id of ["marketplace-shortcut", "marketplace-direct"]) {
-  const record = index.installRecords?.[id];
-  if (!record) throw new Error(`missing install record for ${id}`);
+  const record = installRecords[id];
+  if (!record) {
+    if (allowLegacyCompat) {
+      console.log(`legacy package did not persist marketplace install record for ${id}`);
+      continue;
+    }
+    throw new Error(`missing marketplace install record for ${id}`);
+  }
   if (record.source !== "marketplace") {
     throw new Error(`unexpected source for ${id}: ${record.source}`);
   }
@@ -1019,8 +643,329 @@ if (!inspect.gatewayMethods.includes("demo.marketplace.shortcut.v2")) {
 console.log("ok");
 NODE
 
-echo "Running bundle MCP CLI-agent e2e..."
-node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
+if [ "${OPENCLAW_PLUGINS_E2E_CLAWHUB:-1}" = "0" ]; then
+  echo "Skipping ClawHub plugin install and uninstall (OPENCLAW_PLUGINS_E2E_CLAWHUB=0)."
+else
+echo "Testing ClawHub plugin install and uninstall..."
+CLAWHUB_PLUGIN_SPEC="${OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC:-clawhub:openclaw-now4real}"
+CLAWHUB_PLUGIN_ID="${OPENCLAW_PLUGINS_E2E_CLAWHUB_ID:-now4real}"
+export CLAWHUB_PLUGIN_SPEC CLAWHUB_PLUGIN_ID
+
+start_clawhub_fixture_server() {
+  local fixture_dir="$1"
+  local server_log="$fixture_dir/clawhub-fixture.log"
+  local server_port_file="$fixture_dir/clawhub-fixture-port"
+  local server_pid_file="$fixture_dir/clawhub-fixture-pid"
+
+  node - <<'NODE' "$server_port_file" >"$server_log" 2>&1 &
+const crypto = require("node:crypto");
+const http = require("node:http");
+const path = require("node:path");
+const { createRequire } = require("node:module");
+
+const portFile = process.argv[2];
+const requireFromApp = createRequire(path.join(process.cwd(), "package.json"));
+const JSZip = requireFromApp("jszip");
+const packageName = "openclaw-now4real";
+const pluginId = "now4real";
+const version = "0.1.2";
+
+async function main() {
+  const zip = new JSZip();
+  zip.file(
+    "package/package.json",
+    `${JSON.stringify(
+      {
+        name: packageName,
+        version,
+        openclaw: { extensions: ["./index.js"] },
+      },
+      null,
+      2,
+    )}\n`,
+    { date: new Date(0) },
+  );
+  zip.file(
+    "package/index.js",
+    `module.exports = {
+  id: "${pluginId}",
+  name: "Now 4 Real",
+  register(api) {
+    api.registerGatewayMethod("now4real.ping", async () => ({ ok: true }));
+  },
+};
+`,
+    { date: new Date(0) },
+  );
+  zip.file(
+    "package/openclaw.plugin.json",
+    `${JSON.stringify(
+      {
+        id: pluginId,
+        configSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    { date: new Date(0) },
+  );
+
+  const archive = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  const sha256hash = crypto.createHash("sha256").update(archive).digest("hex");
+
+  const json = (response, value) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(`${JSON.stringify(value)}\n`);
+  };
+
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url, "http://127.0.0.1");
+    if (request.method !== "GET") {
+      response.writeHead(405);
+      response.end("method not allowed");
+      return;
+    }
+    if (url.pathname === `/api/v1/packages/${encodeURIComponent(packageName)}`) {
+      json(response, {
+        package: {
+          name: packageName,
+          displayName: "Now 4 Real",
+          family: "code-plugin",
+          channel: "official",
+          isOfficial: true,
+          runtimeId: pluginId,
+          latestVersion: version,
+          createdAt: 0,
+          updatedAt: 0,
+          compatibility: {
+            pluginApiRange: ">=2026.4.11",
+            minGatewayVersion: "2026.4.11",
+          },
+        },
+      });
+      return;
+    }
+    if (
+      url.pathname === `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${version}`
+    ) {
+      json(response, {
+        version: {
+          version,
+          createdAt: 0,
+          changelog: "Fixture package for Docker plugin E2E.",
+          sha256hash,
+          compatibility: {
+            pluginApiRange: ">=2026.4.11",
+            minGatewayVersion: "2026.4.11",
+          },
+        },
+      });
+      return;
+    }
+    if (url.pathname === `/api/v1/packages/${encodeURIComponent(packageName)}/download`) {
+      response.writeHead(200, {
+        "content-type": "application/zip",
+        "content-length": String(archive.length),
+      });
+      response.end(archive);
+      return;
+    }
+    response.writeHead(404, { "content-type": "text/plain" });
+    response.end(`not found: ${url.pathname}`);
+  });
+
+  server.listen(0, "127.0.0.1", () => {
+    require("node:fs").writeFileSync(portFile, String(server.address().port));
+  });
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+NODE
+  local server_pid="$!"
+  echo "$server_pid" > "$server_pid_file"
+
+  for _ in $(seq 1 100); do
+    if [[ -s "$server_port_file" ]]; then
+      export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$server_port_file")"
+      trap 'if [[ -f "'"$server_pid_file"'" ]]; then kill "$(cat "'"$server_pid_file"'")" 2>/dev/null || true; fi' EXIT
+      return 0
+    fi
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+      cat "$server_log"
+      return 1
+    fi
+    sleep 0.1
+  done
+
+  cat "$server_log"
+  echo "Timed out waiting for ClawHub fixture server." >&2
+  return 1
+}
+
+if [[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]; then
+  # Keep the release-path smoke hermetic; live ClawHub can rate-limit CI.
+  clawhub_fixture_dir="$(mktemp -d "/tmp/openclaw-clawhub-fixture.XXXXXX")"
+  start_clawhub_fixture_server "$clawhub_fixture_dir"
+fi
+
+node - <<'NODE'
+const spec = process.env.CLAWHUB_PLUGIN_SPEC;
+if (!spec?.startsWith("clawhub:")) {
+  throw new Error(`expected clawhub: spec, got ${spec}`);
+}
+
+const parsePackageName = (rawSpec) => {
+  const value = rawSpec.slice("clawhub:".length).trim();
+  const slashIndex = value.lastIndexOf("/");
+  const atIndex = value.lastIndexOf("@");
+  return atIndex > 0 && atIndex > slashIndex ? value.slice(0, atIndex) : value;
+};
+
+const packageName = parsePackageName(spec);
+const baseUrl = (process.env.OPENCLAW_CLAWHUB_URL || process.env.CLAWHUB_URL || "https://clawhub.ai")
+  .replace(/\/+$/, "");
+const token =
+  process.env.OPENCLAW_CLAWHUB_TOKEN ||
+  process.env.CLAWHUB_TOKEN ||
+  process.env.CLAWHUB_AUTH_TOKEN ||
+  "";
+const response = await fetch(`${baseUrl}/api/v1/packages/${encodeURIComponent(packageName)}`, {
+  headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+});
+if (!response.ok) {
+  const body = await response.text().catch(() => "");
+  throw new Error(`ClawHub package preflight failed for ${packageName}: ${response.status} ${body}`);
+}
+const detail = await response.json();
+const family = detail.package?.family;
+if (family !== "code-plugin" && family !== "bundle-plugin") {
+  throw new Error(`ClawHub package ${packageName} is not installable as a plugin: ${family}`);
+}
+if (detail.package?.runtimeId && detail.package.runtimeId !== process.env.CLAWHUB_PLUGIN_ID) {
+  throw new Error(
+    `ClawHub package ${packageName} runtimeId ${detail.package.runtimeId} does not match expected ${process.env.CLAWHUB_PLUGIN_ID}`,
+  );
+}
+console.log(`Using ClawHub package ${packageName} (${family}).`);
+NODE
+
+run_logged install-clawhub node "$OPENCLAW_ENTRY" plugins install "$CLAWHUB_PLUGIN_SPEC"
+node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-clawhub-installed.json
+node "$OPENCLAW_ENTRY" plugins inspect "$CLAWHUB_PLUGIN_ID" --json > /tmp/plugins-clawhub-inspect.json
+
+node - <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const pluginId = process.env.CLAWHUB_PLUGIN_ID;
+const spec = process.env.CLAWHUB_PLUGIN_SPEC;
+const parsePackageName = (rawSpec) => {
+  const value = rawSpec.slice("clawhub:".length).trim();
+  const slashIndex = value.lastIndexOf("/");
+  const atIndex = value.lastIndexOf("@");
+  return atIndex > 0 && atIndex > slashIndex ? value.slice(0, atIndex) : value;
+};
+const packageName = parsePackageName(spec);
+const list = JSON.parse(fs.readFileSync("/tmp/plugins-clawhub-installed.json", "utf8"));
+const inspect = JSON.parse(fs.readFileSync("/tmp/plugins-clawhub-inspect.json", "utf8"));
+const plugin = (list.plugins || []).find((entry) => entry.id === pluginId);
+if (!plugin) throw new Error(`ClawHub plugin not found after install: ${pluginId}`);
+if (plugin.status !== "loaded") {
+  throw new Error(`unexpected ClawHub plugin status for ${pluginId}: ${plugin.status}`);
+}
+if (inspect.plugin?.id !== pluginId) {
+  throw new Error(`unexpected ClawHub inspect plugin id: ${inspect.plugin?.id}`);
+}
+
+const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
+const index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+if (!allowLegacyCompat && !index.installRecords) {
+  throw new Error("expected modern installRecords in installed plugin index");
+}
+const installRecords = allowLegacyCompat
+  ? index.installRecords ?? index.records ?? config.plugins?.installs ?? {}
+  : index.installRecords ?? {};
+const record = installRecords[pluginId];
+if (!record) throw new Error(`missing ClawHub install record for ${pluginId}`);
+if (record.source !== "clawhub") {
+  throw new Error(`unexpected ClawHub install source for ${pluginId}: ${record.source}`);
+}
+if (record.clawhubPackage !== packageName) {
+  throw new Error(
+    `unexpected ClawHub package for ${pluginId}: ${record.clawhubPackage}, expected ${packageName}`,
+  );
+}
+if (record.clawhubFamily !== "code-plugin" && record.clawhubFamily !== "bundle-plugin") {
+  throw new Error(`unexpected ClawHub family for ${pluginId}: ${record.clawhubFamily}`);
+}
+if (typeof record.installPath !== "string" || record.installPath.length === 0) {
+  throw new Error(`missing ClawHub install path for ${pluginId}`);
+}
+
+const installPath = record.installPath.replace(/^~(?=$|\/)/, process.env.HOME);
+const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
+if (!installPath.startsWith(`${extensionsRoot}${path.sep}`)) {
+  throw new Error(`ClawHub install path is outside managed extensions root: ${installPath}`);
+}
+if (!fs.existsSync(installPath)) {
+  throw new Error(`ClawHub install path missing on disk: ${installPath}`);
+}
+fs.writeFileSync("/tmp/plugins-clawhub-install-path.txt", installPath, "utf8");
+console.log("ok");
+NODE
+
+run_logged uninstall-clawhub node "$OPENCLAW_ENTRY" plugins uninstall "$CLAWHUB_PLUGIN_SPEC" --force
+node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-clawhub-uninstalled.json
+
+node - <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const pluginId = process.env.CLAWHUB_PLUGIN_ID;
+const installPath = fs.readFileSync("/tmp/plugins-clawhub-install-path.txt", "utf8").trim();
+const list = JSON.parse(fs.readFileSync("/tmp/plugins-clawhub-uninstalled.json", "utf8"));
+if ((list.plugins || []).some((entry) => entry.id === pluginId)) {
+  throw new Error(`ClawHub plugin still listed after uninstall: ${pluginId}`);
+}
+
+const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
+const index = fs.existsSync(indexPath) ? JSON.parse(fs.readFileSync(indexPath, "utf8")) : {};
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+const installRecords = index.installRecords ?? index.records ?? config.plugins?.installs ?? {};
+if (installRecords[pluginId]) {
+  throw new Error(`ClawHub install record still present after uninstall: ${pluginId}`);
+}
+
+const configAfterUninstallPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const configAfterUninstall = fs.existsSync(configAfterUninstallPath)
+  ? JSON.parse(fs.readFileSync(configAfterUninstallPath, "utf8"))
+  : {};
+if (configAfterUninstall.plugins?.entries?.[pluginId]) {
+  throw new Error(`ClawHub config entry still present after uninstall: ${pluginId}`);
+}
+if ((configAfterUninstall.plugins?.allow || []).includes(pluginId)) {
+  throw new Error(`ClawHub allowlist entry still present after uninstall: ${pluginId}`);
+}
+if ((configAfterUninstall.plugins?.deny || []).includes(pluginId)) {
+  throw new Error(`ClawHub denylist entry still present after uninstall: ${pluginId}`);
+}
+if (fs.existsSync(installPath)) {
+  throw new Error(`ClawHub managed install directory still exists after uninstall: ${installPath}`);
+}
+console.log("ok");
+NODE
+fi
+
 EOF
 then
   cat "$RUN_LOG"

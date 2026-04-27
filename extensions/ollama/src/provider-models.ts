@@ -95,6 +95,25 @@ function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
 }
 
+export function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
+  if (typeof parameters !== "string" || !parameters.trim()) {
+    return undefined;
+  }
+
+  let lastValue: number | undefined;
+  for (const rawLine of parameters.split(/\r?\n/)) {
+    const match = rawLine.trim().match(/^num_ctx\s+(-?\d+)\b/);
+    if (!match) {
+      continue;
+    }
+    const parsed = Number.parseInt(match[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      lastValue = parsed;
+    }
+  }
+  return lastValue;
+}
+
 export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
@@ -119,6 +138,7 @@ export async function queryOllamaModelShowInfo(
       const data = (await response.json()) as {
         model_info?: Record<string, unknown>;
         capabilities?: unknown;
+        parameters?: unknown;
       };
 
       let contextWindow: number | undefined;
@@ -136,6 +156,11 @@ export async function queryOllamaModelShowInfo(
             }
           }
         }
+      }
+
+      const paramCtx = parseOllamaNumCtxParameter(data.parameters);
+      if (paramCtx !== undefined && (contextWindow === undefined || paramCtx > contextWindow)) {
+        contextWindow = paramCtx;
       }
 
       const capabilities = Array.isArray(data.capabilities)
@@ -218,14 +243,25 @@ export function buildOllamaModelDefinition(
 ): ModelDefinitionConfig {
   const hasVision = capabilities?.includes("vision") ?? false;
   const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
+  const reasoning =
+    capabilities === undefined
+      ? isReasoningModelHeuristic(modelId)
+      : capabilities.includes("thinking");
+  const compat =
+    capabilities === undefined
+      ? undefined
+      : {
+          supportsTools: capabilities.includes("tools"),
+        };
   return {
     id: modelId,
     name: modelId,
-    reasoning: isReasoningModelHeuristic(modelId),
+    reasoning,
     input,
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+    ...(compat ? { compat } : {}),
   };
 }
 

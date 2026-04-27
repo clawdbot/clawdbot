@@ -5,7 +5,7 @@
   "description": "OpenClaw Firecrawl plugin",
   "type": "module",
   "dependencies": {
-    "typebox": "1.1.32"
+    "typebox": "1.1.33"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

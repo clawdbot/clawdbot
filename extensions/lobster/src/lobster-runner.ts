@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
+import { installLobsterAjvCompileCache } from "./lobster-ajv-cache.js";
 
 export type LobsterEnvelope =
   | {
@@ -296,6 +297,8 @@ async function withTimeout<T>(
 export async function loadEmbeddedToolRuntimeFromPackage(
   options: LoadEmbeddedToolRuntimeFromPackageOptions = {},
 ): Promise<EmbeddedToolRuntime> {
+  installLobsterAjvCompileCache();
+
   const importModule =
     options.importModule ??
     (async (specifier: string) => (await import(specifier)) as Partial<EmbeddedToolRuntime>);

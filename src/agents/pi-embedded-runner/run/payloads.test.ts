@@ -291,4 +291,25 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       mediaUrls: ["/tmp/reply-image.png"],
     });
   });
+
+  it("suppresses native reasoning payloads when thinking is disabled", () => {
+    const payloads = buildPayloads({
+      reasoningLevel: "on",
+      thinkingLevel: "off",
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_live", summary: [] }),
+          },
+          { type: "text", text: "THINKING-OFF-OK" },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "THINKING-OFF-OK");
+  });
 });

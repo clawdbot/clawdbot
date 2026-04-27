@@ -275,6 +275,8 @@ export const id: TranslationMap = {
       tailscaleDocsLink: "Dokumentasi: Tailscale Serve",
       insecureHttpDocsTitle: "Dokumentasi HTTP tidak aman (dibuka di tab baru)",
       insecureHttpDocsLink: "Dokumentasi: HTTP tidak aman",
+      copyCommand: "Salin perintah",
+      copyCommandAria: "Salin perintah: {command}",
     },
     cards: {
       cost: "Biaya",
@@ -310,6 +312,30 @@ export const id: TranslationMap = {
     palette: {
       placeholder: "Ketik perintah…",
       noResults: "Tidak ada hasil",
+      categories: {
+        search: "Cari",
+        navigation: "Navigasi",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Ikhtisar",
+        sessions: "Sesi",
+        scheduled: "Terjadwal",
+        skills: "Skills",
+        settings: "Pengaturan",
+        agents: "Agen",
+        shellCommand: "Perintah shell",
+        debugMode: "Mode debug",
+      },
+      descriptions: {
+        shellCommand: "Jalankan shell",
+        debugMode: "Alihkan debug",
+      },
+      footer: {
+        navigate: "navigasi",
+        select: "pilih",
+        close: "tutup",
+      },
     },
   },
   dreaming: {
@@ -323,6 +349,15 @@ export const id: TranslationMap = {
       refreshing: "Menyegarkan…",
       on: "Dreaming Aktif",
       off: "Dreaming Nonaktif",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming Aktif",

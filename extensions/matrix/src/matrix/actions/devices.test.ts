@@ -96,7 +96,7 @@ describe("matrix device actions", () => {
         },
       ],
     }));
-    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+    withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
       return await run({
         listOwnDevices: vi.fn(async () => [
           {
@@ -150,5 +150,10 @@ describe("matrix device actions", () => {
         current: true,
       }),
     ]);
+    expect(withResolvedActionClientMock).toHaveBeenCalledWith(
+      { accountId: "poe" },
+      expect.any(Function),
+    );
+    expect(withStartedActionClientMock).not.toHaveBeenCalled();
   });
 });

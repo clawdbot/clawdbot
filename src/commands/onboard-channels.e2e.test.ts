@@ -496,6 +496,7 @@ describe("setupChannels", () => {
     ({ setupChannels } = await import("./onboard-channels.js"));
     setMinimalOnboardingRegistryForTests();
     catalogMocks.listChannelPluginCatalogEntries.mockReset();
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
     manifestRegistryMocks.loadPluginManifestRegistry.mockReset();
     manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [],

@@ -515,6 +515,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
   "models.providers.*.auth": "Model Provider Auth Mode",
   "models.providers.*.api": "Model Provider API Adapter",
+  "models.providers.*.contextWindow": "Model Provider Context Window",
+  "models.providers.*.contextTokens": "Model Provider Context Tokens",
+  "models.providers.*.maxTokens": "Model Provider Max Tokens",
+  "models.providers.*.timeoutSeconds": "Model Provider Request Timeout",
   "models.providers.*.injectNumCtxForOpenAICompat": "Model Provider Inject num_ctx (OpenAI Compat)",
   "models.providers.*.headers": "Model Provider Headers",
   "models.providers.*.authHeader": "Model Provider Authorization Header",
@@ -594,7 +598,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
   "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
   "agents.defaults.compaction.model": "Compaction Model Override",
-  "agents.defaults.compaction.truncateAfterCompaction": "Truncate After Compaction",
+  "agents.defaults.compaction.truncateAfterCompaction": "Rotate Transcript After Compaction",
+  "agents.defaults.compaction.maxActiveTranscriptBytes":
+    "Compaction Active Transcript Size Threshold",
   "agents.defaults.compaction.notifyUser": "Compaction Notify User",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",

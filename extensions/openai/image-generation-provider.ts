@@ -7,6 +7,7 @@ import type {
   ImageGenerationSourceImage,
 } from "openclaw/plugin-sdk/image-generation";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   ensureAuthProfileStore,
   isProviderApiKeyConfigured,
@@ -45,6 +46,7 @@ const OPENAI_SUPPORTED_SIZES = [
   "3840x2160",
   "2160x3840",
 ] as const;
+const OPENAI_LEGACY_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"] as const;
 const OPENAI_MAX_INPUT_IMAGES = 5;
 const OPENAI_MAX_IMAGE_RESULTS = 4;
 const MAX_CODEX_IMAGE_SSE_BYTES = 64 * 1024 * 1024;
@@ -215,6 +217,46 @@ function resolveOpenAIImageRequestModel(
     return OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL;
   }
   return model;
+}
+
+function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[] {
+  switch (model) {
+    case "gpt-image-1":
+    case "gpt-image-1-mini":
+      return OPENAI_LEGACY_IMAGE_SIZES;
+    default:
+      return OPENAI_SUPPORTED_SIZES;
+  }
+}
+
+function resolveOpenAIImageRequestSize(params: {
+  model: string;
+  requestedSize?: string;
+  applyNativeLimits: boolean;
+}): {
+  size: string;
+  metadata?: Record<string, string>;
+} {
+  const requestedSize = params.requestedSize ?? DEFAULT_SIZE;
+  if (!params.applyNativeLimits) {
+    return { size: requestedSize };
+  }
+  const supportedSizes = resolveNativeOpenAIImageSizesForModel(params.model);
+  const size =
+    resolveClosestSize({
+      requestedSize,
+      supportedSizes,
+    }) ?? DEFAULT_SIZE;
+  if (size === requestedSize) {
+    return { size };
+  }
+  return {
+    size,
+    metadata: {
+      requestedSize,
+      normalizedSize: size,
+    },
+  };
 }
 
 function shouldAllowPrivateImageEndpoint(req: {
@@ -587,7 +629,12 @@ async function generateOpenAICodexImage(params: {
     allowTransparentDefaultReroute: true,
   });
   const count = resolveOpenAIImageCount(req.count);
-  const size = req.size ?? DEFAULT_SIZE;
+  const sizeResolution = resolveOpenAIImageRequestSize({
+    model,
+    requestedSize: req.size,
+    applyNativeLimits: true,
+  });
+  const size = sizeResolution.size;
   const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
   const openai = req.providerOptions?.openai;
   const background = openai?.background ?? req.background;
@@ -660,6 +707,7 @@ async function generateOpenAICodexImage(params: {
     ),
     model,
     metadata: {
+      ...sizeResolution.metadata,
       responses: results.map((result) => result.metadata).filter(Boolean),
     },
   };
@@ -752,8 +800,13 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         allowTransparentDefaultReroute: publicOpenAIBaseUrl,
       });
       const count = resolveOpenAIImageCount(req.count);
-      const size = req.size ?? DEFAULT_SIZE;
       const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs, { isAzure });
+      const sizeResolution = resolveOpenAIImageRequestSize({
+        model,
+        requestedSize: req.size,
+        applyNativeLimits: publicOpenAIBaseUrl || isAzure,
+      });
+      const size = sizeResolution.size;
       const url = isAzure
         ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
         : `${baseUrl}/images/${isEdit ? "edits" : "generations"}`;
@@ -842,6 +895,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         return {
           images,
           model,
+          ...(sizeResolution.metadata ? { metadata: sizeResolution.metadata } : {}),
         };
       } finally {
         await release();

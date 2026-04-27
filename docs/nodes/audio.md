@@ -175,7 +175,7 @@ Provider-based audio transcription honors standard outbound proxy env vars:
 
 If no proxy env vars are set, direct egress is used. If proxy config is malformed, OpenClaw logs a warning and falls back to direct fetch.
 
-## Mention Detection in Groups
+## Mention detection in groups
 
 When `requireMention: true` is set for a group chat, OpenClaw now transcribes audio **before** checking for mentions. This allows voice notes to be processed even when they contain mentions.
 

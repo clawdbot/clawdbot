@@ -30,17 +30,13 @@ lms server start --port 1234
 
 If you are using the app, make sure you have JIT enabled for a smooth experience. Learn more in the [LM Studio JIT and TTL guide](https://lmstudio.ai/docs/developer/core/ttl-and-auto-evict).
 
-3. OpenClaw requires an LM Studio token value. Set `LM_API_TOKEN`:
+3. If LM Studio authentication is enabled, set `LM_API_TOKEN`:
 
 ```bash
 export LM_API_TOKEN="your-lm-studio-api-token"
 ```
 
-If LM Studio authentication is disabled, use any non-empty token value:
-
-```bash
-export LM_API_TOKEN="placeholder-key"
-```
+If LM Studio authentication is disabled, you can leave the API key blank during interactive OpenClaw setup.
 
 For LM Studio auth setup details, see [LM Studio Authentication](https://lmstudio.ai/docs/developer/core/authentication).
 
@@ -73,7 +69,7 @@ openclaw onboard \
   --auth-choice lmstudio
 ```
 
-Or specify base URL or model with API key:
+Or specify the base URL, model, and optional API key:
 
 ```bash
 openclaw onboard \
@@ -88,15 +84,17 @@ openclaw onboard \
 `--custom-model-id` takes the model key as returned by LM Studio (e.g. `qwen/qwen3.5-9b`), without
 the `lmstudio/` provider prefix.
 
-Non-interactive onboarding requires `--lmstudio-api-key` (or `LM_API_TOKEN` in env).
-For unauthenticated LM Studio servers, any non-empty token value works.
+For authenticated LM Studio servers, pass `--lmstudio-api-key` or set `LM_API_TOKEN`.
+For unauthenticated LM Studio servers, omit the key; OpenClaw stores a local non-secret marker.
 
 `--custom-api-key` remains supported for compatibility, but `--lmstudio-api-key` is preferred for LM Studio.
 
-This writes `models.providers.lmstudio`, sets the default model to
-`lmstudio/<custom-model-id>`, and writes the `lmstudio:default` auth profile.
+This writes `models.providers.lmstudio` and sets the default model to
+`lmstudio/<custom-model-id>`. When you provide an API key, setup also writes the
+`lmstudio:default` auth profile.
 
 Interactive setup can prompt for an optional preferred load context length and applies it across the discovered LM Studio models it saves into config.
+LM Studio plugin config trusts the configured LM Studio endpoint for model requests, including loopback, LAN, and tailnet hosts. You can opt out by setting `models.providers.lmstudio.request.allowPrivateNetwork: false`.
 
 ## Configuration
 
@@ -147,7 +145,7 @@ Same behavior applies to these OpenAI-compatible local backends:
 
 ### LM Studio not detected
 
-Make sure LM Studio is running and that you set `LM_API_TOKEN` (for unauthenticated servers, any non-empty token value works):
+Make sure LM Studio is running. If authentication is enabled, also set `LM_API_TOKEN`:
 
 ```bash
 # Start via desktop app, or headless:
@@ -166,11 +164,32 @@ If setup reports HTTP 401, verify your API key:
 
 - Check that `LM_API_TOKEN` matches the key configured in LM Studio.
 - For LM Studio auth setup details, see [LM Studio Authentication](https://lmstudio.ai/docs/developer/core/authentication).
-- If your server does not require authentication, use any non-empty token value for `LM_API_TOKEN`.
+- If your server does not require authentication, leave the key blank during setup.
 
 ### Just-in-time model loading
 
 LM Studio supports just-in-time (JIT) model loading, where models are loaded on first request. Make sure you have this enabled to avoid 'Model not loaded' errors.
+
+### LAN or tailnet LM Studio host
+
+Use the LM Studio host's reachable address, keep `/v1`, and make sure LM Studio is bound beyond loopback on that machine:
+
+```json5
+{
+  models: {
+    providers: {
+      lmstudio: {
+        baseUrl: "http://gpu-box.local:1234/v1",
+        apiKey: "lmstudio",
+        api: "openai-completions",
+        models: [{ id: "qwen/qwen3.5-9b" }],
+      },
+    },
+  },
+}
+```
+
+Unlike generic OpenAI-compatible providers, `lmstudio` automatically trusts its configured local/private endpoint for guarded model requests. If you use a custom provider id instead of `lmstudio`, set `models.providers.<id>.request.allowPrivateNetwork: true` explicitly.
 
 ## Related
 

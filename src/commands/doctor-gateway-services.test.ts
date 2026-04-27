@@ -365,6 +365,49 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
+  it("keeps wrapper-managed gateway services aligned during entrypoint drift checks", async () => {
+    const wrapperPath = "/usr/local/bin/openclaw-doppler";
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [wrapperPath, "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_WRAPPER: wrapperPath,
+      },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockImplementation(async ({ env }) => ({
+      programArguments: [env.OPENCLAW_WRAPPER, "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_WRAPPER: env.OPENCLAW_WRAPPER,
+      },
+    }));
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_WRAPPER: wrapperPath,
+        }),
+        existingEnvironment: expect.objectContaining({
+          OPENCLAW_WRAPPER: wrapperPath,
+        }),
+      }),
+    );
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+      "Gateway service config",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      "Gateway service invokes OPENCLAW_WRAPPER: /usr/local/bin/openclaw-doppler",
+      "Gateway",
+    );
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
   it("still flags entrypoint mismatch when canonicalized paths differ", async () => {
     setupGatewayEntrypointRepairScenario({
       currentEntrypoint:

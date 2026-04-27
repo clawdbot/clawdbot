@@ -804,6 +804,47 @@ describe("resolvePluginProviders", () => {
     );
   });
 
+  it("activates the owner plugin for custom provider refs that use a native provider api", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "ollama",
+        providerIds: ["ollama"],
+        enabledByDefault: true,
+      }),
+    ]);
+
+    resolvePluginProviders({
+      config: {
+        models: {
+          providers: {
+            "ollama-spark": {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providerRefs: ["ollama-spark"],
+      activate: true,
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["ollama"],
+        activate: true,
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["ollama"],
+            entries: {
+              ollama: { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
   it("uses activation.onProviders to keep explicit provider owners on the runtime path", () => {
     setManifestPlugins([
       createManifestProviderPlugin({

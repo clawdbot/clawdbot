@@ -87,7 +87,7 @@ describe("discord exec approval monitor helpers", () => {
     const interaction = createInteraction();
     const button = new ExecApprovalButton({
       getApprovers: () => ["123"],
-      resolveApproval: async () => true,
+      resolveApproval: async () => ({ ok: true }),
     });
 
     await button.run(interaction, { id: "", action: "" });
@@ -102,7 +102,7 @@ describe("discord exec approval monitor helpers", () => {
     const interaction = createInteraction({ userId: "999" });
     const button = new ExecApprovalButton({
       getApprovers: () => ["123"],
-      resolveApproval: async () => true,
+      resolveApproval: async () => ({ ok: true }),
     });
 
     await button.run(interaction, { id: "abc", action: "allow-once" });
@@ -115,7 +115,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("acknowledges and resolves valid approval clicks", async () => {
     const interaction = createInteraction();
-    const resolveApproval = vi.fn(async () => true);
+    const resolveApproval = vi.fn(async () => ({ ok: true }) as const);
     const button = new ExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval,
@@ -132,7 +132,7 @@ describe("discord exec approval monitor helpers", () => {
     const interaction = createInteraction();
     const button = new ExecApprovalButton({
       getApprovers: () => ["123"],
-      resolveApproval: async () => false,
+      resolveApproval: async () => ({ ok: false, reason: "error" }),
     });
 
     await button.run(interaction, { id: "abc", action: "deny" });
@@ -142,6 +142,19 @@ describe("discord exec approval monitor helpers", () => {
         "Failed to submit approval decision for **Denied**. The request may have expired or already been resolved.",
       ephemeral: true,
     });
+  });
+
+  it("keeps already-resolved approval clicks quiet", async () => {
+    const interaction = createInteraction();
+    const button = new ExecApprovalButton({
+      getApprovers: () => ["123"],
+      resolveApproval: async () => ({ ok: false, reason: "not-found" }),
+    });
+
+    await button.run(interaction, { id: "abc", action: "allow-once" });
+
+    expect(interaction.acknowledge).toHaveBeenCalled();
+    expect(interaction.followUp).not.toHaveBeenCalled();
   });
 
   it("builds button context from config and routes resolution over gateway", async () => {
@@ -155,7 +168,7 @@ describe("discord exec approval monitor helpers", () => {
     });
 
     expect(ctx.getApprovers()).toEqual(["123"]);
-    await expect(ctx.resolveApproval("abc", "allow-once")).resolves.toBe(true);
+    await expect(ctx.resolveApproval("abc", "allow-once")).resolves.toEqual({ ok: true });
     expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
       cfg,
       approvalId: "abc",
@@ -173,6 +186,41 @@ describe("discord exec approval monitor helpers", () => {
       config: { enabled: true, approvers: ["123"] },
     });
 
-    await expect(ctx.resolveApproval("abc", "allow-once")).resolves.toBe(false);
+    await expect(ctx.resolveApproval("abc", "allow-once")).resolves.toEqual({
+      ok: false,
+      reason: "error",
+    });
+  });
+
+  it("classifies structured approval-not-found gateway errors as stale clicks", async () => {
+    const err = Object.assign(new Error("unknown or expired approval id"), {
+      gatewayCode: "INVALID_REQUEST",
+      details: { reason: "APPROVAL_NOT_FOUND" },
+    });
+    resolveApprovalOverGatewayMock.mockRejectedValue(err);
+    const ctx = createDiscordExecApprovalButtonContext({
+      cfg: buildConfig({ enabled: true, approvers: ["123"] }),
+      accountId: "default",
+      config: { enabled: true, approvers: ["123"] },
+    });
+
+    await expect(ctx.resolveApproval("abc", "allow-once")).resolves.toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+  });
+
+  it("keeps message-only approval-not-found errors visible", async () => {
+    resolveApprovalOverGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
+    const ctx = createDiscordExecApprovalButtonContext({
+      cfg: buildConfig({ enabled: true, approvers: ["123"] }),
+      accountId: "default",
+      config: { enabled: true, approvers: ["123"] },
+    });
+
+    await expect(ctx.resolveApproval("abc", "allow-once")).resolves.toEqual({
+      ok: false,
+      reason: "error",
+    });
   });
 });

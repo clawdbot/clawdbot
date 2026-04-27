@@ -67,7 +67,7 @@ export function createEmptyChangedLanes() {
 
 /**
  * @param {string[]} changedPaths
- * @param {{ packageJsonChangeKind?: "liveDockerTooling" | null }} [options]
+ * @param {{ packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null }} [options]
  * @returns {ChangedLaneResult}
  */
 export function detectChangedLanes(changedPaths, options = {}) {
@@ -80,6 +80,8 @@ export function detectChangedLanes(changedPaths, options = {}) {
   let hasNonDocs = false;
   const packageJsonIsLiveDockerTooling =
     paths.includes("package.json") && options.packageJsonChangeKind === "liveDockerTooling";
+  const packageJsonIsTooling =
+    paths.includes("package.json") && options.packageJsonChangeKind === "tooling";
 
   if (paths.length === 0) {
     reasons.push("no changed paths");
@@ -88,6 +90,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
 
   if (
     !packageJsonIsLiveDockerTooling &&
+    !packageJsonIsTooling &&
     paths.some((changedPath) => RELEASE_METADATA_PATHS.has(changedPath)) &&
     paths.every(
       (changedPath) => RELEASE_METADATA_PATHS.has(changedPath) || DOCS_PATH_RE.test(changedPath),
@@ -112,6 +115,12 @@ export function detectChangedLanes(changedPaths, options = {}) {
     if (changedPath === "package.json" && packageJsonIsLiveDockerTooling) {
       lanes.liveDockerTooling = true;
       reasons.push(`${changedPath}: live Docker package scripts`);
+      continue;
+    }
+
+    if (changedPath === "package.json" && packageJsonIsTooling) {
+      lanes.tooling = true;
+      reasons.push(`${changedPath}: package scripts`);
       continue;
     }
 
@@ -195,39 +204,57 @@ export function detectChangedLanes(changedPaths, options = {}) {
 }
 
 /**
- * @param {{ base: string; head?: string; includeWorktree?: boolean }} params
+ * @param {{ paths: string[]; base: string; head?: string; staged?: boolean }} params
+ * @returns {ChangedLaneResult}
+ */
+export function detectChangedLanesForPaths(params) {
+  const packageJsonChangeKind = params.paths.includes("package.json")
+    ? classifyPackageJsonChangeFromGit({
+        base: params.base,
+        head: params.head,
+        staged: params.staged,
+      })
+    : null;
+  return detectChangedLanes(params.paths, { packageJsonChangeKind });
+}
+
+/**
+ * @param {{ base: string; head?: string; includeWorktree?: boolean; cwd?: string }} params
  * @returns {string[]}
  */
 export function listChangedPathsFromGit(params) {
   const base = params.base;
   const head = params.head ?? "HEAD";
+  const cwd = params.cwd ?? process.cwd();
   if (!base) {
     return [];
   }
-  const rangePaths = runGitNameOnlyDiff([`${base}...${head}`]);
+  const rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
   if (params.includeWorktree === false) {
     return rangePaths;
   }
   return [
     ...new Set([
       ...rangePaths,
-      ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMR"]),
-      ...runGitNameOnlyDiff(["--diff-filter=ACMR"]),
-      ...runGitLsFiles(["--others", "--exclude-standard"]),
+      ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMR"], cwd),
+      ...runGitNameOnlyDiff(["--diff-filter=ACMR"], cwd),
+      ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
     ]),
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
-function runGitNameOnlyDiff(extraArgs) {
+function runGitNameOnlyDiff(extraArgs, cwd = process.cwd()) {
   const output = execFileSync("git", ["diff", "--name-only", ...extraArgs], {
+    cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
   });
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
-function runGitLsFiles(extraArgs) {
+function runGitLsFiles(extraArgs, cwd = process.cwd()) {
   const output = execFileSync("git", ["ls-files", ...extraArgs], {
+    cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
   });
@@ -245,7 +272,10 @@ export function listStagedChangedPaths() {
 export function classifyPackageJsonChangeFromGit(params) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
-    return isLiveDockerPackageScriptOnlyChange(before, after) ? "liveDockerTooling" : null;
+    if (isLiveDockerPackageScriptOnlyChange(before, after)) {
+      return "liveDockerTooling";
+    }
+    return isPackageScriptOnlyChange(before, after) ? "tooling" : null;
   } catch {
     return null;
   }
@@ -262,6 +292,20 @@ export function isLiveDockerPackageScriptOnlyChange(before, after) {
   return (
     stableJson(beforeStripped) === stableJson(afterStripped) &&
     stableJson(beforeAllowed) !== stableJson(afterAllowed)
+  );
+}
+
+export function isPackageScriptOnlyChange(before, after) {
+  const beforePackage = JSON.parse(before);
+  const afterPackage = JSON.parse(after);
+  const beforeScripts = extractPackageScripts(beforePackage);
+  const afterScripts = extractPackageScripts(afterPackage);
+  const beforeStripped = stripPackageScripts(beforePackage);
+  const afterStripped = stripPackageScripts(afterPackage);
+
+  return (
+    stableJson(beforeStripped) === stableJson(afterStripped) &&
+    stableJson(beforeScripts) !== stableJson(afterScripts)
   );
 }
 
@@ -314,6 +358,17 @@ function stripLiveDockerPackageScripts(packageJson) {
       delete scripts[name];
     }
   }
+  return clone;
+}
+
+function extractPackageScripts(packageJson) {
+  const scripts = packageJson?.scripts;
+  return scripts && typeof scripts === "object" && !Array.isArray(scripts) ? scripts : {};
+}
+
+function stripPackageScripts(packageJson) {
+  const clone = JSON.parse(JSON.stringify(packageJson));
+  delete clone.scripts;
   return clone;
 }
 
@@ -418,14 +473,12 @@ if (isDirectRun()) {
       : args.staged
         ? listStagedChangedPaths()
         : listChangedPathsFromGit({ base: args.base, head: args.head });
-  const packageJsonChangeKind = paths.includes("package.json")
-    ? classifyPackageJsonChangeFromGit({
-        base: args.base,
-        head: args.head,
-        staged: args.staged,
-      })
-    : null;
-  const result = detectChangedLanes(paths, { packageJsonChangeKind });
+  const result = detectChangedLanesForPaths({
+    paths,
+    base: args.base,
+    head: args.head,
+    staged: args.staged,
+  });
   if (args.githubOutput) {
     writeChangedLaneGitHubOutput(result);
   }

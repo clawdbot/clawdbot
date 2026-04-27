@@ -4,6 +4,7 @@ import {
   normalizeLegacyCrossContextMessageConfig,
   normalizeLegacyMediaProviderOptions,
   normalizeLegacyMistralModelMaxTokens,
+  normalizeLegacyOpenAIModelProviderApi,
   normalizeLegacyRuntimeModelRefs,
   normalizeLegacyNanoBananaSkill,
   normalizeLegacyTalkConfig,
@@ -37,6 +38,7 @@ export function normalizeBaseCompatibilityConfigValues(
 
   next = normalizeLegacyNanoBananaSkill(next, changes);
   next = normalizeLegacyTalkConfig(next, changes);
+  next = normalizeLegacyOpenAIModelProviderApi(next, changes);
   next = normalizeLegacyRuntimeModelRefs(next, changes);
   next = normalizeLegacyCrossContextMessageConfig(next, changes);
   next = normalizeLegacyMediaProviderOptions(next, changes);

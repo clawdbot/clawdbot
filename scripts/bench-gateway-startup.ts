@@ -440,12 +440,39 @@ function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.S
 }
 
 function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
-  const match = /startup trace: ([^ ]+) ([0-9.]+)ms total=([0-9.]+)ms/u.exec(line);
-  if (!match) {
+  const phaseMatch = /startup trace: ([^ ]+) ([0-9.]+)ms total=([0-9.]+)ms(?: (.*))?/u.exec(line);
+  if (phaseMatch) {
+    startupTrace[phaseMatch[1]] = Number(phaseMatch[2]);
+    startupTrace[`${phaseMatch[1]}.total`] = Number(phaseMatch[3]);
+    for (const metric of parseStartupTraceMetrics(phaseMatch[4] ?? "")) {
+      startupTrace[`${phaseMatch[1]}.${metric.key}`] = metric.value;
+    }
     return;
   }
-  startupTrace[match[1]] = Number(match[2]);
-  startupTrace[`${match[1]}.total`] = Number(match[3]);
+  const detailMatch = /startup trace: ([^ ]+) (.*)/u.exec(line);
+  if (!detailMatch) {
+    return;
+  }
+  for (const metric of parseStartupTraceMetrics(detailMatch[2])) {
+    startupTrace[`${detailMatch[1]}.${metric.key}`] = metric.value;
+  }
+}
+
+function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: number }> {
+  const metrics: Array<{ key: string; value: number }> = [];
+  for (const part of raw.trim().split(/\s+/u)) {
+    const metricMatch = /^([A-Za-z][A-Za-z0-9]*)=([0-9.]+)(?:ms)?$/u.exec(part);
+    if (!metricMatch) {
+      continue;
+    }
+    const key = metricMatch[1];
+    const value = Number(metricMatch[2]);
+    if (!Number.isFinite(value) || (key !== "eventLoopMax" && !key.endsWith("Ms"))) {
+      continue;
+    }
+    metrics.push({ key, value });
+  }
+  return metrics;
 }
 
 async function runGatewaySample(options: {

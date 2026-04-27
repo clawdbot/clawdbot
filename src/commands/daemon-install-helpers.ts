@@ -5,7 +5,12 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
-import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import { resolveGatewayStateDir } from "../daemon/paths.js";
+import {
+  OPENCLAW_WRAPPER_ENV_KEY,
+  resolveGatewayProgramArguments,
+  resolveOpenClawWrapperPath,
+} from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -212,6 +217,20 @@ function collectPreservedExistingServiceEnvVars(
   return preserved;
 }
 
+function resolveGatewayInstallWorkingDirectory(params: {
+  env: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
+  workingDirectory: string | undefined;
+}): string | undefined {
+  if (params.workingDirectory) {
+    return params.workingDirectory;
+  }
+  if (params.platform !== "darwin") {
+    return undefined;
+  }
+  return resolveGatewayStateDir(params.env);
+}
+
 async function buildGatewayInstallEnvironment(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
@@ -261,22 +280,32 @@ export async function buildGatewayInstallPlan(params: {
   existingEnvironment?: Record<string, string | undefined>;
   devMode?: boolean;
   nodePath?: string;
+  wrapperPath?: string;
+  platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
   /** Full config to extract env vars from (env vars + inline env keys). */
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): Promise<GatewayInstallPlan> {
+  const platform = params.platform ?? process.platform;
   const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
     devMode: params.devMode,
     nodePath: params.nodePath,
   });
+  const wrapperPath = await resolveOpenClawWrapperPath(
+    params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY],
+  );
+  const serviceInputEnv: Record<string, string | undefined> = wrapperPath
+    ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
+    : params.env;
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
     runtime: params.runtime,
     nodePath,
+    wrapperPath,
   });
   await emitDaemonInstallRuntimeWarning({
     env: params.env,
@@ -286,21 +315,26 @@ export async function buildGatewayInstallPlan(params: {
     title: "Gateway runtime",
   });
   const serviceEnvironment = buildServiceEnvironment({
-    env: params.env,
+    env: serviceInputEnv,
     port: params.port,
     launchdLabel:
-      process.platform === "darwin"
-        ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
+      platform === "darwin"
+        ? resolveGatewayLaunchAgentLabel(serviceInputEnv.OPENCLAW_PROFILE)
         : undefined,
+    platform,
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
   // Lowest to highest: preserved custom vars, durable config, auth env refs, generated service env.
   return {
     programArguments,
-    workingDirectory,
+    workingDirectory: resolveGatewayInstallWorkingDirectory({
+      env: serviceInputEnv,
+      platform,
+      workingDirectory,
+    }),
     environment: await buildGatewayInstallEnvironment({
-      env: params.env,
+      env: serviceInputEnv,
       config: params.config,
       authStore: params.authStore,
       warn: params.warn,

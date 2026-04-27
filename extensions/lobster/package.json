@@ -5,7 +5,8 @@
   "type": "module",
   "dependencies": {
     "@clawdbot/lobster": "2026.4.6",
-    "typebox": "1.1.32"
+    "ajv": "^8.18.0",
+    "typebox": "1.1.33"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

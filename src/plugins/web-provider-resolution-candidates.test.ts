@@ -65,19 +65,42 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
     expect(mocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
-  it("keeps runtime fallback for scoped plugins with no declared web candidates", () => {
+  it("keeps scoped plugins with no declared web candidates scoped-empty", () => {
     expect(
       resolveManifestDeclaredWebProviderCandidatePluginIds({
         contract: "webSearchProviders",
         configKey: "webSearch",
         onlyPluginIds: ["missing-plugin"],
       }),
-    ).toBeUndefined();
+    ).toEqual([]);
     expect(mocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
       expect.objectContaining({
         pluginIds: ["missing-plugin"],
       }),
     );
+  });
+
+  it("keeps origin filters with no declared web candidates scoped-empty", () => {
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-tool",
+          origin: "workspace",
+          configSchema: {
+            properties: {},
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveManifestDeclaredWebProviderCandidatePluginIds({
+        contract: "webSearchProviders",
+        configKey: "webSearch",
+        origin: "bundled",
+      }),
+    ).toEqual([]);
   });
 
   it("derives provider candidates from a single manifest-registry read", () => {

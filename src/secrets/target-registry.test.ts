@@ -72,4 +72,23 @@ describe("secret target registry", () => {
     expect(fetchTarget).not.toBeNull();
     expect(fetchTarget?.entry?.id).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
   });
+
+  it("derives bundled plugin SecretInput contract target paths from plugin manifests", () => {
+    const coreTargetIds = new Set(getCoreSecretTargetRegistry().map((entry) => entry.id));
+    expect(coreTargetIds.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
+
+    const target = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "voice-call",
+      "config",
+      "tts",
+      "providers",
+      "elevenlabs",
+      "apiKey",
+    ]);
+
+    expect(target).not.toBeNull();
+    expect(target?.entry?.id).toBe("plugins.entries.voice-call.config.tts.providers.*.apiKey");
+  });
 });

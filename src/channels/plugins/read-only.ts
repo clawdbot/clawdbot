@@ -11,7 +11,6 @@ import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
 } from "../../plugins/jiti-loader-cache.js";
-import type { loadOpenClawPlugins as loadOpenClawPluginsType } from "../../plugins/loader.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
@@ -33,7 +32,23 @@ const LOADER_MODULE_CANDIDATES = [
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 
 type PluginLoaderModule = {
-  loadOpenClawPlugins: typeof loadOpenClawPluginsType;
+  loadOpenClawPlugins: (params: {
+    config: OpenClawConfig;
+    activationSourceConfig?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    workspaceDir?: string;
+    cache?: boolean;
+    activate?: boolean;
+    includeSetupOnlyChannelPlugins?: boolean;
+    forceSetupOnlyChannelPlugins?: boolean;
+    requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
+    onlyPluginIds?: readonly string[];
+  }) => {
+    channelSetups: Iterable<{
+      pluginId: string;
+      plugin: ChannelPlugin;
+    }>;
+  };
 };
 
 let pluginLoaderModule: PluginLoaderModule | undefined;

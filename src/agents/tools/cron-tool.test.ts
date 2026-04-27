@@ -429,6 +429,62 @@ describe("cron tool", () => {
     });
   });
 
+  it("preserves telegram direct-chat thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-direct-thread",
+        agentSessionKey: "agent:main:telegram:direct:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      threadId: "99",
+    });
+  });
+
+  it("preserves telegram account ids with direct-chat thread inference", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-account-direct-thread",
+        agentSessionKey: "agent:main:telegram:bot-a:direct:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      accountId: "bot-a",
+      threadId: "99",
+    });
+  });
+
+  it("preserves legacy telegram dm thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-dm-thread",
+        agentSessionKey: "agent:main:telegram:dm:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      threadId: "99",
+    });
+  });
+
+  it("drops mismatched telegram direct-chat thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-mismatched-direct-thread",
+        agentSessionKey: "agent:main:telegram:direct:123456789:thread:987654321:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+    });
+  });
+
   it("prefers current delivery context over lowercased session-key targets", async () => {
     expect(
       await executeAddAndReadDelivery({

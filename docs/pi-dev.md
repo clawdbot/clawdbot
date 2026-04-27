@@ -6,15 +6,15 @@ read_when:
   - Running Pi-specific lint, typecheck, and live test flows
 ---
 
-This guide summarizes a sane workflow for working on the pi integration in OpenClaw.
+A sane workflow for working on the Pi integration in OpenClaw.
 
-## Type Checking and Linting
+## Type checking and linting
 
 - Default local gate: `pnpm check`
 - Build gate: `pnpm build` when the change can affect build output, packaging, or lazy-loading/module boundaries
 - Full landing gate for Pi-heavy changes: `pnpm check && pnpm test`
 
-## Running Pi Tests
+## Running Pi tests
 
 Run the Pi-focused test set directly with Vitest:
 
@@ -43,7 +43,7 @@ This covers the main Pi unit suites:
 - `src/agents/pi-tool-definition-adapter.test.ts`
 - `src/agents/pi-hooks/*.test.ts`
 
-## Manual Testing
+## Manual testing
 
 Recommended flow:
 
@@ -56,7 +56,7 @@ Recommended flow:
 
 For tool call behavior, prompt for a `read` or `exec` action so you can see tool streaming and payload handling.
 
-## Clean Slate Reset
+## Clean slate reset
 
 State lives under the OpenClaw state directory. Default is `~/.openclaw`. If `OPENCLAW_STATE_DIR` is set, use that directory instead.
 

@@ -6,6 +6,8 @@ export type BundledPluginSource = {
   pluginId: string;
   localPath: string;
   npmSpec?: string;
+  configSchema?: Record<string, unknown>;
+  requiresConfig?: boolean;
 };
 
 export type BundledPluginLookup =
@@ -64,10 +66,26 @@ export function resolveBundledPluginSources(params: {
       pluginId,
       localPath: candidate.rootDir,
       npmSpec,
+      ...(isRecord(manifest.manifest.configSchema)
+        ? { configSchema: manifest.manifest.configSchema }
+        : {}),
+      requiresConfig: pluginConfigSchemaHasRequiredFields(manifest.manifest.configSchema),
     });
   }
 
   return bundled;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function pluginConfigSchemaHasRequiredFields(schema: unknown): boolean {
+  if (!isRecord(schema)) {
+    return false;
+  }
+  const required = schema.required;
+  return Array.isArray(required) && required.some((entry) => typeof entry === "string");
 }
 
 export function findBundledPluginSource(params: {

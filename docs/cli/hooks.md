@@ -17,7 +17,7 @@ Related:
 - Hooks: [Hooks](/automation/hooks)
 - Plugin hooks: [Plugin hooks](/plugins/hooks)
 
-## List All Hooks
+## List all hooks
 
 ```bash
 openclaw hooks list
@@ -60,7 +60,7 @@ openclaw hooks list --json
 
 Returns structured JSON for programmatic use.
 
-## Get Hook Information
+## Get hook information
 
 ```bash
 openclaw hooks info <name>
@@ -100,7 +100,7 @@ Requirements:
   Config: ✓ workspace.dir
 ```
 
-## Check Hooks Eligibility
+## Check hooks eligibility
 
 ```bash
 openclaw hooks check
@@ -194,7 +194,7 @@ openclaw hooks disable command-logger
 - `openclaw hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
 - Plugin-managed hooks cannot be enabled or disabled here; enable or disable the owning plugin instead.
 
-## Install Hook Packs
+## Install hook packs
 
 ```bash
 openclaw plugins install <package>        # ClawHub first, then npm
@@ -248,7 +248,7 @@ openclaw plugins install -l ./my-hook-pack
 Linked hook packs are treated as managed hooks from an operator-configured
 directory, not as workspace hooks.
 
-## Update Hook Packs
+## Update hook packs
 
 ```bash
 openclaw plugins update <id>
@@ -269,7 +269,7 @@ When a stored integrity hash exists and the fetched artifact hash changes,
 OpenClaw prints a warning and asks for confirmation before proceeding. Use
 global `--yes` to bypass prompts in CI/non-interactive runs.
 
-## Bundled Hooks
+## Bundled hooks
 
 ### session-memory
 

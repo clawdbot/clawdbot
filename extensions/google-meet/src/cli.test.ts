@@ -793,6 +793,7 @@ describe("google-meet CLI", () => {
         config: { defaultTransport: "chrome-node" },
         runtime: {
           recoverCurrentTab: async () => ({
+            transport: "chrome-node",
             nodeId: "node-1",
             found: true,
             targetId: "tab-1",

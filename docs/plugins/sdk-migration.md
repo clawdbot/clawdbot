@@ -420,8 +420,9 @@ The same rule applies to other bundled-helper families such as:
   `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`,
   `plugin-sdk/twitch`,
   `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`,
-  `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`,
-  `plugin-sdk/thread-ownership`, and `plugin-sdk/voice-call`
+  `plugin-sdk/diagnostics-otel`, `plugin-sdk/diagnostics-prometheus`,
+  `plugin-sdk/diffs`, `plugin-sdk/llm-task`, `plugin-sdk/thread-ownership`,
+  and `plugin-sdk/voice-call`
 
 `plugin-sdk/github-copilot-token` currently exposes the narrow token-helper
 surface `DEFAULT_COPILOT_API_BASE_URL`,

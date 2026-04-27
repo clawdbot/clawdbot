@@ -200,6 +200,34 @@ function normalizeMessagingToolTarget(
   };
 }
 
+function buildResolvedCronTraceTarget(
+  resolvedDelivery: ResolvedCronDeliveryTarget,
+): CronDeliveryTrace["resolved"] {
+  if (resolvedDelivery.ok) {
+    return {
+      ok: true,
+      ...normalizeCronTraceTarget({
+        channel: resolvedDelivery.channel,
+        to: resolvedDelivery.to,
+        accountId: resolvedDelivery.accountId,
+        threadId: resolvedDelivery.threadId,
+        source: resolvedDelivery.mode === "implicit" ? "last" : "explicit",
+      }),
+    };
+  }
+  return {
+    ok: false,
+    ...normalizeCronTraceTarget({
+      channel: resolvedDelivery.channel,
+      to: resolvedDelivery.to ?? null,
+      accountId: resolvedDelivery.accountId,
+      threadId: resolvedDelivery.threadId,
+      source: resolvedDelivery.mode === "implicit" ? "last" : "explicit",
+    }),
+    error: resolvedDelivery.error.message,
+  };
+}
+
 function buildCronDeliveryTrace(params: {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
@@ -216,28 +244,11 @@ function buildCronDeliveryTrace(params: {
     source:
       params.deliveryPlan.channel === "last" || !params.deliveryPlan.channel ? "last" : "explicit",
   });
-  const resolved = params.resolvedDelivery.ok
-    ? {
-        ok: true,
-        ...normalizeCronTraceTarget({
-          channel: params.resolvedDelivery.channel,
-          to: params.resolvedDelivery.to,
-          accountId: params.resolvedDelivery.accountId,
-          threadId: params.resolvedDelivery.threadId,
-          source: params.resolvedDelivery.mode === "implicit" ? "last" : "explicit",
-        }),
-      }
-    : {
-        ok: false,
-        ...normalizeCronTraceTarget({
-          channel: params.resolvedDelivery.channel,
-          to: params.resolvedDelivery.to ?? null,
-          accountId: params.resolvedDelivery.accountId,
-          threadId: params.resolvedDelivery.threadId,
-          source: params.resolvedDelivery.mode === "implicit" ? "last" : "explicit",
-        }),
-        error: params.resolvedDelivery.error.message,
-      };
+  const includeResolved =
+    params.deliveryPlan.mode !== "none" || hasExplicitCronDeliveryTarget(params.deliveryPlan);
+  const resolved = includeResolved
+    ? buildResolvedCronTraceTarget(params.resolvedDelivery)
+    : undefined;
   const messageToolSentTo = params.messagingToolSentTargets
     .map((target) =>
       normalizeMessagingToolTarget(
@@ -249,7 +260,7 @@ function buildCronDeliveryTrace(params: {
     .filter((target): target is CronDeliveryTraceMessageTarget => Boolean(target));
   return {
     ...(intended ? { intended } : {}),
-    resolved,
+    ...(resolved ? { resolved } : {}),
     ...(messageToolSentTo.length > 0 ? { messageToolSentTo } : {}),
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
@@ -405,6 +416,7 @@ type RunCronAgentTurnParams = {
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
+  onExecutionStarted?: () => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -521,7 +533,6 @@ async function prepareCronRunContext(params: {
     isFastTestEnv: params.isFastTestEnv,
     cronSession,
     agentSessionKey,
-    runSessionKey,
     updateSessionStore: async (storePath, update) => {
       const { updateSessionStore } = await loadSessionStoreRuntime();
       await updateSessionStore(storePath, update);
@@ -840,6 +851,7 @@ async function finalizeCronRun(params: {
   } = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
+    failureSignal: finalRunResult.meta?.failureSignal,
     finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
     preferFinalAssistantVisibleText: (
       await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
@@ -865,7 +877,8 @@ async function finalizeCronRun(params: {
 
   const skipHeartbeatDelivery =
     prepared.deliveryRequested &&
-    isHeartbeatOnlyResponse(payloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
+    !hasFatalErrorPayload &&
+    isHeartbeatOnlyResponse(deliveryPayloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
   const {
     dispatchCronDelivery,
     matchesMessagingToolDeliveryTarget,
@@ -894,6 +907,7 @@ async function finalizeCronRun(params: {
     job: prepared.input.job,
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
+    runSessionKey: prepared.runSessionKey,
     sessionId: prepared.runSessionId,
     runStartedAt: execution.runStartedAt,
     runEndedAt: execution.runEndedAt,
@@ -955,6 +969,7 @@ export async function runCronIsolatedAgentTurn(params: {
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
+  onExecutionStarted?: () => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -982,6 +997,7 @@ export async function runCronIsolatedAgentTurn(params: {
       agentId: prepared.context.agentId,
       agentDir: prepared.context.agentDir,
       agentSessionKey: prepared.context.agentSessionKey,
+      runSessionKey: prepared.context.runSessionKey,
       workspaceDir: prepared.context.workspaceDir,
       lane: params.lane,
       resolvedDelivery: {
@@ -999,6 +1015,7 @@ export async function runCronIsolatedAgentTurn(params: {
       commandBody: prepared.context.commandBody,
       persistSessionEntry: prepared.context.persistSessionEntry,
       abortSignal,
+      onExecutionStarted: params.onExecutionStarted,
       abortReason,
       isAborted,
       thinkLevel: prepared.context.thinkLevel,

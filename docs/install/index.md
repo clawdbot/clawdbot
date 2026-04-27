@@ -61,6 +61,10 @@ curl -fsSL https://openclaw.ai/install-cli.sh | bash
 It supports npm installs by default, plus git-checkout installs under the same
 prefix flow. Full reference: [Installer internals](/install/installer#install-clish).
 
+Already installed? Switch between package and git installs with
+`openclaw update --channel dev` and `openclaw update --channel stable`. See
+[Updating](/install/updating#switch-between-npm-and-git-installs).
+
 ### npm, pnpm, or bun
 
 If you already manage Node yourself:

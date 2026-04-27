@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { isValueToken } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -13,6 +14,11 @@ import { takeCliRootOptionValue } from "./root-option-value.js";
 export type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
+
+function isCommandLocalProfileOption(out: string[]): boolean {
+  const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
+  return primary === "qa" && secondary === "matrix";
+}
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   let profile: string | null = null;
@@ -33,6 +39,14 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     }
 
     if (arg === "--profile" || arg.startsWith("--profile=")) {
+      if (isCommandLocalProfileOption(out)) {
+        out.push(arg);
+        if (arg === "--profile" && isValueToken(args[index + 1])) {
+          out.push(args[index + 1]);
+          return { kind: "handled", consumedNext: true };
+        }
+        return { kind: "handled" };
+      }
       if (sawDev) {
         return { kind: "error", error: "Cannot combine --dev with --profile" };
       }

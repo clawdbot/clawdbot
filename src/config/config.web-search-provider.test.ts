@@ -14,10 +14,6 @@ vi.mock("../plugin-sdk/telegram-command-config.js", () => ({
   resolveTelegramCustomCommands: () => ({ commands: [], issues: [] }),
 }));
 
-vi.mock("../plugins/manifest-command-aliases.runtime.js", () => ({
-  resolveManifestCommandAliasOwner: () => undefined,
-}));
-
 const getScopedWebSearchCredential = (key: string) => (search?: Record<string, unknown>) =>
   (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
 const getConfiguredPluginWebSearchConfig =

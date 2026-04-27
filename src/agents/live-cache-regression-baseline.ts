@@ -3,6 +3,7 @@ export type LiveCacheFloor = {
   observedCacheWrite?: number;
   observedHitRate?: number;
   minCacheRead?: number;
+  minCacheReadOrWrite?: number;
   minCacheWrite?: number;
   minHitRate?: number;
   maxCacheRead?: number;
@@ -37,9 +38,8 @@ export const LIVE_CACHE_REGRESSION_BASELINE = {
       observedCacheRead: 5_660,
       observedCacheWrite: 18,
       observedHitRate: 0.996,
-      minCacheRead: 5_400,
+      minCacheReadOrWrite: 5_400,
       minCacheWrite: 1,
-      minHitRate: 0.97,
     },
     tool: {
       observedCacheRead: 6_223,

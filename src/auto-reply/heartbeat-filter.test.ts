@@ -4,7 +4,7 @@ import {
   isHeartbeatOkResponse,
   isHeartbeatUserMessage,
 } from "./heartbeat-filter.js";
-import { HEARTBEAT_PROMPT } from "./heartbeat.js";
+import { HEARTBEAT_PROMPT, HEARTBEAT_TRANSCRIPT_PROMPT } from "./heartbeat.js";
 
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
@@ -23,6 +23,13 @@ describe("isHeartbeatUserMessage", () => {
         role: "user",
         content:
           "Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply HEARTBEAT_OK.",
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatUserMessage({
+        role: "user",
+        content: HEARTBEAT_TRANSCRIPT_PROMPT,
       }),
     ).toBe(true);
   });
@@ -96,6 +103,8 @@ describe("filterHeartbeatPairs", () => {
       { role: "user", content: "Hello" },
       { role: "assistant", content: "Hi there!" },
       { role: "user", content: HEARTBEAT_PROMPT },
+      { role: "assistant", content: "HEARTBEAT_OK" },
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
       { role: "assistant", content: "HEARTBEAT_OK" },
       { role: "user", content: "What time is it?" },
       { role: "assistant", content: "It is 3pm." },

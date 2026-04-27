@@ -11,7 +11,7 @@ const LIVE = isLiveTestEnabled(["ZAI_LIVE_TEST"]);
 
 const describeLive = LIVE && ZAI_KEY ? describe : describe.skip;
 
-async function expectModelReturnsAssistantText(modelId: "glm-5" | "glm-4.7") {
+async function expectModelReturnsAssistantText(modelId: "glm-5" | "glm-5.1") {
   const model = getModel("zai", modelId);
   const res = await completeSimple(
     model,
@@ -29,7 +29,7 @@ describeLive("zai live", () => {
     await expectModelReturnsAssistantText("glm-5");
   }, 20000);
 
-  it("glm-4.7 returns assistant text", async () => {
-    await expectModelReturnsAssistantText("glm-4.7");
+  it("glm-5.1 returns assistant text", async () => {
+    await expectModelReturnsAssistantText("glm-5.1");
   }, 20000);
 });

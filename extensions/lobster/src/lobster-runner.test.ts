@@ -1,12 +1,46 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createEmbeddedLobsterRunner,
   loadEmbeddedToolRuntimeFromPackage,
   resolveLobsterCwd,
 } from "./lobster-runner.js";
+
+const requireForTest = createRequire(import.meta.url);
+
+type AjvCacheOwner = {
+  _cache?: { size: number };
+};
+
+function readAjvInternalCacheSize(ajv: unknown): number {
+  return (ajv as AjvCacheOwner)._cache?.size ?? 0;
+}
+
+function createRepeatedResponseSchema() {
+  return {
+    type: "object",
+    properties: {
+      answer: { type: "string" },
+    },
+    required: ["answer"],
+    additionalProperties: false,
+  };
+}
+
+function createUniqueResponseSchema(index: number) {
+  return {
+    type: "object",
+    properties: {
+      [`answer${index}`]: { type: "string" },
+    },
+    required: [`answer${index}`],
+    additionalProperties: false,
+  };
+}
 
 describe("resolveLobsterCwd", () => {
   it("defaults to the current working directory", () => {
@@ -354,6 +388,53 @@ describe("createEmbeddedLobsterRunner", () => {
     });
 
     expect(loadRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs an Ajv content cache before loading the embedded runtime", async () => {
+    const AjvModule = await import("ajv");
+    const AjvCtor = AjvModule.default as unknown as new (opts?: object) => import("ajv").default;
+    const ajv = new AjvCtor({ allErrors: true, strict: false, addUsedSchema: false });
+    const before = readAjvInternalCacheSize(ajv);
+
+    await loadEmbeddedToolRuntimeFromPackage({
+      importModule: async () => ({
+        runToolRequest: vi.fn(),
+        resumeToolRequest: vi.fn(),
+      }),
+    });
+
+    const first = ajv.compile(createRepeatedResponseSchema());
+    const second = ajv.compile(createRepeatedResponseSchema());
+    const afterRepeated = readAjvInternalCacheSize(ajv);
+
+    expect(second).toBe(first);
+    expect(afterRepeated - before).toBe(1);
+
+    for (let index = 0; index < 520; index += 1) {
+      ajv.compile(createUniqueResponseSchema(index));
+    }
+
+    expect(readAjvInternalCacheSize(ajv)).toBeLessThanOrEqual(before + 512);
+  });
+
+  it("deduplicates content-identical schema compilation in the installed Lobster runtime", async () => {
+    await loadEmbeddedToolRuntimeFromPackage();
+
+    const corePath = requireForTest.resolve("@clawdbot/lobster/core");
+    const validationPath = path.join(path.dirname(path.dirname(corePath)), "validation.js");
+    const validationModule = (await import(pathToFileURL(validationPath).href)) as {
+      sharedAjv: import("ajv").default;
+    };
+    const before = readAjvInternalCacheSize(validationModule.sharedAjv);
+
+    const first = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+    for (let index = 0; index < 1000; index += 1) {
+      validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+    }
+    const second = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+
+    expect(second).toBe(first);
+    expect(readAjvInternalCacheSize(validationModule.sharedAjv) - before).toBe(1);
   });
 
   it("falls back to the installed package core file when the core export is unavailable", async () => {

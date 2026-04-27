@@ -12,10 +12,6 @@ vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: () => pluginRegistry.list,
-}));
-
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig: listReadOnlyChannelPluginsForConfigMock,
 }));

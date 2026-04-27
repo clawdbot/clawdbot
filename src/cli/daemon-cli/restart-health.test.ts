@@ -438,6 +438,44 @@ describe("inspectGatewayRestart", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it("stops waiting once the expected-version gateway reports channel probe errors", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.24", connId: "new" },
+      health: {
+        ok: true,
+        channels: {
+          telegram: {
+            configured: true,
+            probe: { ok: false, error: "This operation was aborted" },
+          },
+        },
+      },
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.4.24",
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      waitOutcome: "channel-errors",
+      elapsedMs: 0,
+      channelProbeErrors: [{ id: "telegram", error: "This operation was aborted" }],
+    });
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("treats busy ports with unavailable listener details as healthy when runtime is running", async () => {
     const service = {
       readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),

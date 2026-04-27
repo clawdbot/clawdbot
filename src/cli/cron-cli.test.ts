@@ -963,4 +963,48 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert?.mode).toBe("webhook");
     expect(patch?.patch?.failureAlert?.accountId).toBe("bot-a");
   });
+
+  it("patches skipped-run inclusion for failure alerts on cron edit", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await program.parseAsync(["cron", "edit", "job-1", "--failure-alert-include-skipped"], {
+      from: "user",
+    });
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as {
+      patch?: {
+        failureAlert?: {
+          includeSkipped?: boolean;
+        };
+      };
+    };
+
+    expect(patch?.patch?.failureAlert?.includeSkipped).toBe(true);
+  });
+
+  it("rejects conflicting skipped-run failure alert flags", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await expect(
+      program.parseAsync(
+        [
+          "cron",
+          "edit",
+          "job-1",
+          "--failure-alert-include-skipped",
+          "--failure-alert-exclude-skipped",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Use either --failure-alert-include-skipped"),
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
 });

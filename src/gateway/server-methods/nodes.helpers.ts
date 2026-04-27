@@ -1,6 +1,7 @@
 import type { ErrorObject } from "ajv";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ErrorCodes, errorShape, formatValidationErrors } from "../protocol/index.js";
+export { safeParseJson } from "../server-json.js";
 import { formatForLog } from "../ws-log.js";
 import type { RespondFn } from "./types.js";
 
@@ -36,18 +37,6 @@ export function uniqueSortedStrings(values: unknown[]) {
     .map((v) => v.trim())
     .filter(Boolean)
     .toSorted();
-}
-
-export function safeParseJson(value: string | null | undefined): unknown {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    return { payloadJSON: value };
-  }
 }
 
 export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; error?: unknown }>(

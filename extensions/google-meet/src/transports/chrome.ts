@@ -1,3 +1,4 @@
+import { callGatewayFromCli } from "openclaw/plugin-sdk/browser-node-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
@@ -22,6 +23,27 @@ import {
 import type { GoogleMeetChromeHealth } from "./types.js";
 
 export const GOOGLE_MEET_SYSTEM_PROFILER_COMMAND = "/usr/sbin/system_profiler";
+
+type BrowserRequestParams = {
+  method: "GET" | "POST" | "DELETE";
+  path: string;
+  body?: unknown;
+  timeoutMs: number;
+};
+
+type BrowserRequestCaller = (params: BrowserRequestParams) => Promise<unknown>;
+
+const chromeTransportDeps: {
+  callGatewayFromCli: typeof callGatewayFromCli;
+} = {
+  callGatewayFromCli,
+};
+
+export const __testing = {
+  setDepsForTest(deps: { callGatewayFromCli?: typeof callGatewayFromCli } | null) {
+    chromeTransportDeps.callGatewayFromCli = deps?.callGatewayFromCli ?? callGatewayFromCli;
+  },
+};
 
 export function outputMentionsBlackHole2ch(output: string): boolean {
   return /\bBlackHole\s+2ch\b/i.test(output);
@@ -213,6 +235,23 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
       ? parsed.notes.filter((note): note is string => typeof note === "string")
       : undefined,
   };
+}
+
+async function callLocalBrowserRequest(params: BrowserRequestParams) {
+  return await chromeTransportDeps.callGatewayFromCli(
+    "browser.request",
+    {
+      json: true,
+      timeout: String(params.timeoutMs + 5_000),
+    },
+    {
+      method: params.method,
+      path: params.path,
+      body: params.body,
+      timeoutMs: params.timeoutMs,
+    },
+    { progress: false },
+  );
 }
 
 function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
@@ -412,11 +451,96 @@ function isRecoverableMeetTab(tab: BrowserTab, url?: string): boolean {
   );
 }
 
+async function inspectRecoverableMeetTab(params: {
+  callBrowser: BrowserRequestCaller;
+  config: GoogleMeetConfig;
+  timeoutMs: number;
+  tab: BrowserTab;
+  targetId: string;
+}) {
+  await params.callBrowser({
+    method: "POST",
+    path: "/tabs/focus",
+    body: { targetId: params.targetId },
+    timeoutMs: Math.min(params.timeoutMs, 5_000),
+  });
+  const evaluated = await params.callBrowser({
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "evaluate",
+      targetId: params.targetId,
+      fn: meetStatusScript({
+        guestName: params.config.chrome.guestName,
+        autoJoin: false,
+      }),
+    },
+    timeoutMs: Math.min(params.timeoutMs, 10_000),
+  });
+  const browser = parseMeetBrowserStatus(evaluated);
+  const manual = browser?.manualActionRequired
+    ? browser.manualActionMessage || browser.manualActionReason
+    : undefined;
+  return {
+    found: true,
+    targetId: params.targetId,
+    tab: params.tab,
+    browser,
+    message:
+      manual ?? (browser?.inCall ? "Existing Meet tab is in-call." : "Existing Meet tab focused."),
+  };
+}
+
+export async function recoverCurrentMeetTab(params: {
+  config: GoogleMeetConfig;
+  url?: string;
+}): Promise<{
+  transport: "chrome";
+  nodeId?: undefined;
+  found: boolean;
+  targetId?: string;
+  tab?: BrowserTab;
+  browser?: GoogleMeetChromeHealth;
+  message: string;
+}> {
+  const timeoutMs = Math.max(1_000, params.config.chrome.joinTimeoutMs);
+  const tabs = asBrowserTabs(
+    await callLocalBrowserRequest({
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: Math.min(timeoutMs, 5_000),
+    }),
+  );
+  const tab = tabs.find((entry) => isRecoverableMeetTab(entry, params.url));
+  const targetId = tab?.targetId;
+  if (!tab || !targetId) {
+    return {
+      transport: "chrome",
+      found: false,
+      tab,
+      message: params.url
+        ? `No existing Meet tab matched ${params.url}.`
+        : "No existing Meet tab found in local Chrome.",
+    };
+  }
+  return {
+    transport: "chrome",
+    ...(await inspectRecoverableMeetTab({
+      callBrowser: callLocalBrowserRequest,
+      config: params.config,
+      timeoutMs,
+      tab,
+      targetId,
+    })),
+  };
+}
+
 export async function recoverCurrentMeetTabOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
   url?: string;
 }): Promise<{
+  transport: "chrome-node";
   nodeId: string;
   found: boolean;
   targetId?: string;
@@ -442,6 +566,7 @@ export async function recoverCurrentMeetTabOnNode(params: {
   const targetId = tab?.targetId;
   if (!tab || !targetId) {
     return {
+      transport: "chrome-node",
       nodeId,
       found: false,
       tab,
@@ -450,43 +575,30 @@ export async function recoverCurrentMeetTabOnNode(params: {
         : "No existing Meet tab found on the selected Chrome node.",
     };
   }
-  await callBrowserProxyOnNode({
-    runtime: params.runtime,
-    nodeId,
-    method: "POST",
-    path: "/tabs/focus",
-    body: { targetId },
-    timeoutMs: Math.min(timeoutMs, 5_000),
-  });
-  const evaluated = await callBrowserProxyOnNode({
-    runtime: params.runtime,
-    nodeId,
-    method: "POST",
-    path: "/act",
-    body: {
-      kind: "evaluate",
-      targetId,
-      fn: meetStatusScript({
-        guestName: params.config.chrome.guestName,
-        autoJoin: false,
-      }),
-    },
-    timeoutMs: Math.min(timeoutMs, 10_000),
-  });
-  const browser = parseMeetBrowserStatus(evaluated);
-  const manual = browser?.manualActionRequired
-    ? browser.manualActionMessage || browser.manualActionReason
-    : undefined;
   return {
+    transport: "chrome-node",
     nodeId,
-    found: true,
-    targetId,
-    tab,
-    browser,
-    message:
-      manual ?? (browser?.inCall ? "Existing Meet tab is in-call." : "Existing Meet tab focused."),
+    ...(await inspectRecoverableMeetTab({
+      callBrowser: async (request) =>
+        await callBrowserProxyOnNode({
+          runtime: params.runtime,
+          nodeId,
+          method: request.method,
+          path: request.path,
+          body: request.body,
+          timeoutMs: request.timeoutMs,
+        }),
+      config: params.config,
+      timeoutMs,
+      tab,
+      targetId,
+    })),
   };
 }
+
+export type GoogleMeetCurrentTabRecoveryResult = Awaited<
+  ReturnType<typeof recoverCurrentMeetTab | typeof recoverCurrentMeetTabOnNode>
+>;
 
 export async function launchChromeMeetOnNode(params: {
   runtime: PluginRuntime;
@@ -508,6 +620,24 @@ export async function launchChromeMeetOnNode(params: {
     runtime: params.runtime,
     requestedNode: params.config.chromeNode.node,
   });
+  try {
+    await params.runtime.nodes.invoke({
+      nodeId,
+      command: "googlemeet.chrome",
+      params: {
+        action: "stopByUrl",
+        url: params.url,
+        mode: params.mode,
+      },
+      timeoutMs: 5_000,
+    });
+  } catch (error) {
+    params.logger.debug?.(
+      `[google-meet] node bridge cleanup before join ignored: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
   const browserControl = await openMeetWithBrowserProxy({
     runtime: params.runtime,
     nodeId,

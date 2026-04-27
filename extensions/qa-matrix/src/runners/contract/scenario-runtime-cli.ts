@@ -146,7 +146,15 @@ export function startMatrixQaOpenClawCli(params: {
     child.kill("SIGTERM");
     finish(
       result,
-      new Error(`${formatMatrixQaCliCommand(params.args)} timed out after ${params.timeoutMs}ms`),
+      new Error(
+        [
+          `${formatMatrixQaCliCommand(params.args)} timed out after ${params.timeoutMs}ms`,
+          result.stderr.trim() ? `stderr:\n${redactMatrixQaCliOutput(result.stderr.trim())}` : null,
+          result.stdout.trim() ? `stdout:\n${redactMatrixQaCliOutput(result.stdout.trim())}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      ),
     );
   }, params.timeoutMs);
 

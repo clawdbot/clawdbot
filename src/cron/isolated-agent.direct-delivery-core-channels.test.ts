@@ -363,6 +363,18 @@ describe("runCronIsolatedAgentTurn telegram forum-topic direct delivery", () => 
     });
   });
 
+  it("preserves explicit supergroup topic targets for cron announce delivery", async () => {
+    await expectTelegramAnnounceDelivery({
+      to: "-1003774691294:topic:47",
+      payloads: [{ text: "topic 47 completion" }],
+      expected: {
+        chatId: "-1003774691294",
+        text: "topic 47 completion",
+        messageThreadId: 47,
+      },
+    });
+  });
+
   it("delivers only the final assistant-visible text to forum-topic telegram targets", async () => {
     await expectTelegramAnnounceDelivery({
       to: "123:topic:42",

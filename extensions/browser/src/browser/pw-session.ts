@@ -11,7 +11,6 @@ import type {
   Response,
   Route,
 } from "playwright-core";
-import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
@@ -36,8 +35,11 @@ import {
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+import { playwrightCore } from "./playwright-core.runtime.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 import { sanitizeUntrustedFileName } from "./safe-filename.js";
+
+const { chromium } = playwrightCore;
 
 export type BrowserConsoleMessage = {
   type: string;

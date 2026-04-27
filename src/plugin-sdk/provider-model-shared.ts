@@ -136,7 +136,10 @@ export function buildProviderReplayFamilyHooks(
       const policyOptions = { sanitizeToolCallIds: options.sanitizeToolCallIds };
       return {
         buildReplayPolicy: (ctx: ProviderReplayPolicyContext) =>
-          buildOpenAICompatibleReplayPolicy(ctx.modelApi, policyOptions),
+          buildOpenAICompatibleReplayPolicy(ctx.modelApi, {
+            ...policyOptions,
+            modelId: ctx.modelId,
+          }),
       };
     }
     case "anthropic-by-model":

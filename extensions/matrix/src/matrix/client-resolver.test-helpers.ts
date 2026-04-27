@@ -44,6 +44,7 @@ export function createMockMatrixClient(): MatrixClient {
     start: vi.fn(async () => undefined),
     stop: vi.fn(() => undefined),
     stopAndPersist: vi.fn(async () => undefined),
+    stopWithoutPersist: vi.fn(() => undefined),
   } as unknown as MatrixClient;
 }
 
@@ -114,7 +115,7 @@ export async function expectOneOffSharedMatrixClient(params?: {
   timeoutMs?: number;
   prepareForOneOffCalls?: number;
   startCalls?: number;
-  releaseMode?: "persist" | "stop";
+  releaseMode?: "persist" | "stop" | "discard";
 }) {
   const {
     getActiveMatrixClientMock,

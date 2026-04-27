@@ -145,6 +145,65 @@ describe("repairSessionFileIfNeeded", () => {
     ]);
   });
 
+  it("drops persisted blank user text messages", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const blankUserEntry = {
+      type: "message",
+      id: "msg-blank",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "" }],
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(blankUserEntry)}\n${JSON.stringify(message)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const warn = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedBlankUserMessages).toBe(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("dropped 1 blank user message(s)");
+
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedLines = repaired.trim().split("\n");
+    expect(repairedLines).toHaveLength(2);
+    expect(JSON.parse(repairedLines[1])?.id).toBe("msg-1");
+  });
+
+  it("removes blank user text blocks while preserving media blocks", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const mediaUserEntry = {
+      type: "message",
+      id: "msg-media",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "   " },
+          { type: "image", data: "AA==", mimeType: "image/png" },
+        ],
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(mediaUserEntry)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.rewrittenUserMessages).toBe(1);
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedEntry = JSON.parse(repaired.trim().split("\n")[1] ?? "{}");
+    expect(repairedEntry.message.content).toEqual([
+      { type: "image", data: "AA==", mimeType: "image/png" },
+    ]);
+  });
+
   it("reports both drops and rewrites in the warn message when both occur", async () => {
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();

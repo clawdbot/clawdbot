@@ -119,6 +119,30 @@ describe("discordPlugin outbound", () => {
     expect(discordPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
   });
 
+  it("preserves normalized explicit Discord targets for delivery routing", () => {
+    const parseExplicitTarget = discordPlugin.messaging?.parseExplicitTarget;
+    if (!parseExplicitTarget) {
+      throw new Error("Expected discordPlugin.messaging.parseExplicitTarget to be defined");
+    }
+
+    expect(parseExplicitTarget({ raw: "user:123" })).toEqual({
+      to: "user:123",
+      chatType: "direct",
+    });
+    expect(parseExplicitTarget({ raw: "<@!456>" })).toEqual({
+      to: "user:456",
+      chatType: "direct",
+    });
+    expect(parseExplicitTarget({ raw: "channel:789" })).toEqual({
+      to: "channel:789",
+      chatType: "channel",
+    });
+    expect(parseExplicitTarget({ raw: "1470130713209602050" })).toEqual({
+      to: "channel:1470130713209602050",
+      chatType: "channel",
+    });
+  });
+
   it("honors per-account replyToMode overrides", () => {
     const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
     if (!resolveReplyToMode) {

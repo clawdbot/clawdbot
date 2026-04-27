@@ -104,7 +104,7 @@ turns do not pay the full token cost.
 
 ## Missing browser command or tool
 
-If `openclaw browser` is unknown after an upgrade, `browser.request` is missing, or the agent reports the browser tool as unavailable, the usual cause is a `plugins.allow` list that omits `browser`. Add it:
+If `openclaw browser` is unknown after an upgrade, `browser.request` is missing, or the agent reports the browser tool as unavailable, the usual cause is a `plugins.allow` list that omits `browser` and no root `browser` config block exists. Add it:
 
 ```json5
 {
@@ -114,7 +114,7 @@ If `openclaw browser` is unknown after an upgrade, `browser.request` is missing,
 }
 ```
 
-`browser.enabled=true`, `plugins.entries.browser.enabled=true`, and `tools.alsoAllow: ["browser"]` do not substitute for allowlist membership — the allowlist gates plugin loading, and tool policy only runs after load. Removing `plugins.allow` entirely also restores the default.
+An explicit root `browser` block, for example `browser.enabled=true` or `browser.profiles.<name>`, activates the bundled browser plugin even under a restrictive `plugins.allow`, matching channel config behavior. `plugins.entries.browser.enabled=true` and `tools.alsoAllow: ["browser"]` do not substitute for allowlist membership by themselves. Removing `plugins.allow` entirely also restores the default.
 
 ## Profiles: `openclaw` vs `user`
 
@@ -203,6 +203,11 @@ Browser settings live in `~/.openclaw/openclaw.json`.
   Raise these on Raspberry Pi, low-end VPS, or older hardware where Chromium
   starts slowly. Values must be positive integers up to `120000` ms; invalid
   config values are rejected.
+- Repeated managed Chrome launch/readiness failures are circuit-broken per
+  profile. After several consecutive failures, OpenClaw pauses new launch
+  attempts briefly instead of spawning Chromium on every browser tool call. Fix
+  the startup problem, disable the browser if it is not needed, or restart the
+  Gateway after repair.
 - `actionTimeoutMs` is the default budget for browser `act` requests when the caller does not pass `timeoutMs`. The client transport adds a small slack window so long waits can finish instead of timing out at the HTTP boundary.
 - `tabCleanup` is best-effort cleanup for tabs opened by primary-agent browser sessions. Subagent, cron, and ACP lifecycle cleanup still closes their explicit tracked tabs at session end; primary sessions keep active tabs reusable, then close idle or excess tracked tabs in the background.
 
@@ -248,7 +253,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 </AccordionGroup>
 
-## Use Brave (or another Chromium-based browser)
+## Use Brave or another Chromium-based browser
 
 If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
 OpenClaw uses it automatically. Set `browser.executablePath` to override

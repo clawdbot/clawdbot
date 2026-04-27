@@ -28,7 +28,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
   };
 });
 
-type StreamEvent = { type: string };
+type StreamEvent = { type: string } & Record<string, unknown>;
 
 async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
   const resolved = stream instanceof Promise ? await stream : stream;
@@ -44,6 +44,19 @@ function buildDoneStreamFn(): StreamFn {
     const stream = createAssistantMessageEventStream();
     queueMicrotask(() => {
       stream.push({ type: "done", reason: "stop", message: {} as never });
+      stream.end();
+    });
+    return stream;
+  });
+}
+
+function buildEventStreamFn(events: unknown[]): StreamFn {
+  return vi.fn((_model, _context, _options) => {
+    const stream = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      for (const event of events) {
+        stream.push(event as never);
+      }
       stream.end();
     });
     return stream;
@@ -75,6 +88,7 @@ function runWrappedLmstudioStream(
   wrapped: StreamFn,
   model: Record<string, unknown>,
   options?: Record<string, unknown>,
+  context?: Record<string, unknown>,
 ) {
   return wrapped(
     {
@@ -83,7 +97,7 @@ function runWrappedLmstudioStream(
       id: "lmstudio/qwen3-8b-instruct",
       ...model,
     } as never,
-    { messages: [] } as never,
+    { messages: [], ...context } as never,
     options as never,
   );
 }
@@ -399,5 +413,100 @@ describe("lmstudio stream wrapper", () => {
       expect.anything(),
       undefined,
     );
+  });
+
+  it("promotes standalone bracketed local-model tool text to a structured tool call", async () => {
+    const rawToolText = [
+      "[mempalace_mempalace_search]",
+      '{"query":"codename","wing":"personal","room":"identities"}',
+      "[END_TOOL_REQUEST]",
+    ].join("\n");
+    const baseStream = buildEventStreamFn([
+      { type: "start", partial: { content: [] } },
+      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "text_delta", contentIndex: 0, delta: rawToolText },
+      { type: "text_end", contentIndex: 0, content: rawToolText },
+      {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: rawToolText }],
+          stopReason: "stop",
+        },
+      },
+    ]);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {}, undefined, {
+        tools: [
+          {
+            name: "mempalace_mempalace_search",
+            description: "Search MemPalace",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    expect(events.some((event) => event.type === "text_delta")).toBe(false);
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+      reason?: string;
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content?.[0]).toMatchObject({
+      type: "toolCall",
+      name: "mempalace_mempalace_search",
+      arguments: { query: "codename", wing: "personal", room: "identities" },
+    });
+    expect(String(done.message?.content?.[0]?.id)).toMatch(/^call_[a-f0-9]{24}$/);
+  });
+
+  it("passes through bracketed text when the tool is not registered", async () => {
+    const rawToolText = [
+      "[mempalace_mempalace_search]",
+      '{"query":"codename"}',
+      "[/mempalace_mempalace_search]",
+    ].join("\n");
+    const baseStream = buildEventStreamFn([
+      { type: "start", partial: { content: [] } },
+      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "text_delta", contentIndex: 0, delta: rawToolText },
+      { type: "text_end", contentIndex: 0, content: rawToolText },
+      {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: rawToolText }],
+          stopReason: "stop",
+        },
+      },
+    ]);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {}, undefined, {
+        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(events.find((event) => event.type === "text_delta")).toMatchObject({
+      delta: rawToolText,
+    });
   });
 });

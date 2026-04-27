@@ -24,9 +24,9 @@ import {
   createMatrixQaScenarioClient,
   isMatrixQaExactMarkerReply,
   isMatrixQaMessageLikeKind,
-  NO_REPLY_WINDOW_MS,
   primeMatrixQaActorCursor,
   primeMatrixQaDriverScenarioClient,
+  resolveMatrixQaNoReplyWindowMs,
   runAssertedDriverTopLevelScenario,
   runConfigurableTopLevelScenario,
   runDriverTopLevelMentionScenario,
@@ -530,7 +530,7 @@ export async function runAllowlistHotReloadScenario(context: MatrixQaScenarioCon
         sutUserId: context.sutUserId,
         token: blockedToken,
       }),
-    timeoutMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+    timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
     token: blockedToken,
   });
 
@@ -767,7 +767,7 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     syncState: context.syncState,
     syncStreams: context.syncStreams,
     sutUserId: context.sutUserId,
-    timeoutMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+    timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
     token: noReplyToken,
   });
 

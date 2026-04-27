@@ -1,3 +1,6 @@
+// Shared MCP-channel Docker E2E harness helpers.
+// The mounted test harness imports packaged dist modules so bridge assertions run
+// against the OpenClaw npm tarball installed in the functional image.
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import process from "node:process";
@@ -6,10 +9,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WebSocket } from "ws";
 import { z } from "zod";
-import { PROTOCOL_VERSION } from "../../src/gateway/protocol/index.ts";
-import { formatErrorMessage } from "../../src/infra/errors.ts";
-import { rawDataToString } from "../../src/infra/ws.ts";
-import { readStringValue } from "../../src/shared/string-coerce.ts";
+import { PROTOCOL_VERSION } from "../../dist/gateway/protocol/index.js";
+import { formatErrorMessage } from "../../dist/infra/errors.js";
+import { rawDataToString } from "../../dist/infra/ws.js";
+import { readStringValue } from "../../dist/shared/string-coerce.js";
 
 export const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
@@ -388,7 +391,10 @@ export async function maybeApprovePendingBridgePairing(
     }>("device.pair.list", {});
   } catch (error) {
     const message = formatErrorMessage(error);
-    if (message.includes("missing scope: operator.pairing")) {
+    if (
+      message.includes("missing scope: operator.pairing") ||
+      message.includes("device.pair.list")
+    ) {
       return false;
     }
     throw error;

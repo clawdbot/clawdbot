@@ -11,7 +11,6 @@ import {
   closeSync,
   existsSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -35,18 +34,6 @@ const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
-const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
-const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
-const LEGACY_UPDATE_COMPAT_SIDECARS = [
-  {
-    path: `dist/extensions/${LEGACY_QA_CHANNEL_DIR}/runtime-api.js`,
-    content: "export {};\n",
-  },
-  {
-    path: `dist/extensions/${LEGACY_QA_LAB_DIR}/runtime-api.js`,
-    content: "export {};\n",
-  },
-];
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
@@ -327,29 +314,6 @@ export function pruneInstalledPackageDist(params = {}) {
     log.log(`[postinstall] pruned stale dist files: ${removed.join(", ")}`);
   }
   return removed;
-}
-
-export function restoreLegacyUpdaterCompatSidecars(params = {}) {
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const writeFile = params.writeFileSync ?? writeFileSync;
-  const makeDirectory = params.mkdirSync ?? mkdirSync;
-  const log = params.log ?? console;
-  const restored = [];
-
-  for (const sidecar of LEGACY_UPDATE_COMPAT_SIDECARS) {
-    // Older npm updater builds verify these exact sidecars after npm has
-    // already replaced the package, so generate them independently of prune
-    // results.
-    const sidecarPath = join(packageRoot, sidecar.path);
-    makeDirectory(dirname(sidecarPath), { recursive: true });
-    writeFile(sidecarPath, sidecar.content, "utf8");
-    restored.push(sidecar.path);
-  }
-
-  if (restored.length > 0) {
-    log.log(`[postinstall] restored legacy updater compat sidecars: ${restored.join(", ")}`);
-  }
-  return restored;
 }
 
 function dependencySentinelPath(depName) {
@@ -781,19 +745,12 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
-  const prunedDistFiles = pruneInstalledPackageDist({
+  pruneInstalledPackageDist({
     packageRoot,
     existsSync: pathExists,
     readFileSync: params.readFileSync,
     readdirSync: params.readdirSync,
     rmSync: params.rmSync,
-    log,
-  });
-  restoreLegacyUpdaterCompatSidecars({
-    packageRoot,
-    removedFiles: prunedDistFiles,
-    mkdirSync: params.mkdirSync,
-    writeFileSync: params.writeFileSync,
     log,
   });
   if (
@@ -860,6 +817,7 @@ export function runBundledPluginPostinstall(params = {}) {
       encoding: "utf8",
       env: npmRunner.env ?? installEnv,
       stdio: "pipe",
+      windowsHide: true,
       shell: npmRunner.shell,
       windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
     });

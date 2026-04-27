@@ -7,6 +7,7 @@ import {
   resolveFileNpmSpecToLocalPath,
 } from "../../cli/plugins-command-helpers.js";
 import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
+import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
   readConfigFileSnapshot,
@@ -162,7 +163,7 @@ function looksLikeLocalPluginInstallSpec(raw: string): boolean {
 
 async function installPluginFromPluginsCommand(params: {
   raw: string;
-  config: OpenClawConfig;
+  snapshot: ConfigSnapshotForInstallPersist;
 }): Promise<{ ok: true; pluginId: string } | { ok: false; error: string }> {
   const fileSpec = resolveFileNpmSpecToLocalPath(params.raw);
   if (fileSpec && !fileSpec.ok) {
@@ -182,7 +183,7 @@ async function installPluginFromPluginsCommand(params: {
     clearPluginManifestRegistryCache();
     const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
     await persistPluginInstall({
-      config: params.config,
+      snapshot: params.snapshot,
       pluginId: result.pluginId,
       install: {
         source,
@@ -209,7 +210,7 @@ async function installPluginFromPluginsCommand(params: {
     }
     clearPluginManifestRegistryCache();
     await persistPluginInstall({
-      config: params.config,
+      snapshot: params.snapshot,
       pluginId: result.pluginId,
       install: {
         source: "clawhub",
@@ -236,7 +237,7 @@ async function installPluginFromPluginsCommand(params: {
     if (clawhubResult.ok) {
       clearPluginManifestRegistryCache();
       await persistPluginInstall({
-        config: params.config,
+        snapshot: params.snapshot,
         pluginId: clawhubResult.pluginId,
         install: {
           source: "clawhub",
@@ -273,7 +274,7 @@ async function installPluginFromPluginsCommand(params: {
     resolution: result.npmResolution,
   });
   await persistPluginInstall({
-    config: params.config,
+    snapshot: params.snapshot,
     pluginId: result.pluginId,
     install: installRecord,
   });
@@ -313,7 +314,8 @@ async function loadPluginCommandState(
 }
 
 async function loadPluginCommandConfig(): Promise<
-  { ok: true; path: string; config: OpenClawConfig } | { ok: false; path: string; error: string }
+  | { ok: true; path: string; snapshot: ConfigSnapshotForInstallPersist }
+  | { ok: false; path: string; error: string }
 > {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -326,7 +328,10 @@ async function loadPluginCommandConfig(): Promise<
   return {
     ok: true,
     path: snapshot.path,
-    config: structuredClone(snapshot.resolved),
+    snapshot: {
+      config: structuredClone(snapshot.sourceConfig),
+      baseHash: snapshot.hash,
+    },
   };
 }
 
@@ -382,7 +387,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     }
     const installed = await installPluginFromPluginsCommand({
       raw: pluginsCommand.spec,
-      config: loadedConfig.config,
+      snapshot: loadedConfig.snapshot,
     });
     if (!installed.ok) {
       return {

@@ -26,6 +26,22 @@ const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>
   global: 2,
   workspace: 3,
 };
+let providerAuthAliasMapCache = new WeakMap<
+  NodeJS.ProcessEnv,
+  Map<string, Record<string, string>>
+>();
+
+function buildProviderAuthAliasMapCacheKey(params?: ProviderAuthAliasLookupParams): string {
+  return JSON.stringify({
+    workspaceDir: params?.workspaceDir ?? "",
+    includeUntrustedWorkspacePlugins: params?.includeUntrustedWorkspacePlugins === true,
+    plugins: params?.config?.plugins ?? null,
+  });
+}
+
+export function resetProviderAuthAliasMapCacheForTest(): void {
+  providerAuthAliasMapCache = new WeakMap<NodeJS.ProcessEnv, Map<string, Record<string, string>>>();
+}
 
 function resolveProviderAuthAliasOriginPriority(origin: PluginOrigin | undefined): number {
   if (!origin) {
@@ -83,10 +99,21 @@ function setPreferredAlias(params: {
 export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
 ): Record<string, string> {
+  const env = params?.env ?? process.env;
+  const cacheKey = buildProviderAuthAliasMapCacheKey(params);
+  let envCache = providerAuthAliasMapCache.get(env);
+  if (!envCache) {
+    envCache = new Map<string, Record<string, string>>();
+    providerAuthAliasMapCache.set(env, envCache);
+  }
+  const cached = envCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const registry = loadPluginManifestRegistryForPluginRegistry({
     config: params?.config,
     workspaceDir: params?.workspaceDir,
-    env: params?.env,
+    env,
     includeDisabled: true,
   });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
@@ -119,6 +146,7 @@ export function resolveProviderAuthAliasMap(
   for (const [alias, candidate] of preferredAliases) {
     aliases[alias] = candidate.target;
   }
+  envCache.set(cacheKey, aliases);
   return aliases;
 }
 

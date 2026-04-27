@@ -15,38 +15,37 @@ This repo supports “remote over SSH” by keeping a single Gateway (the master
 - The Gateway WebSocket binds to **loopback** on your configured port (defaults to 18789).
 - For remote use, you forward that loopback port over SSH (or use a tailnet/VPN and tunnel less).
 
-## Common VPN/tailnet setups (where the agent lives)
+## Common VPN and tailnet setups
 
-Think of the **Gateway host** as “where the agent lives.” It owns sessions, auth profiles, channels, and state.
-Your laptop/desktop (and nodes) connect to that host.
+Think of the **Gateway host** as where the agent lives. It owns sessions, auth profiles, channels, and state. Your laptop, desktop, and nodes connect to that host.
 
-### 1) Always-on Gateway in your tailnet (VPS or home server)
+### Always-on Gateway in your tailnet
 
-Run the Gateway on a persistent host and reach it via **Tailscale** or SSH.
+Run the Gateway on a persistent host (VPS or home server) and reach it via **Tailscale** or SSH.
 
 - **Best UX:** keep `gateway.bind: "loopback"` and use **Tailscale Serve** for the Control UI.
-- **Fallback:** keep loopback + SSH tunnel from any machine that needs access.
+- **Fallback:** keep loopback plus SSH tunnel from any machine that needs access.
 - **Examples:** [exe.dev](/install/exe-dev) (easy VM) or [Hetzner](/install/hetzner) (production VPS).
 
-This is ideal when your laptop sleeps often but you want the agent always-on.
+Ideal when your laptop sleeps often but you want the agent always-on.
 
-### 2) Home desktop runs the Gateway, laptop is remote control
+### Home desktop runs the Gateway
 
 The laptop does **not** run the agent. It connects remotely:
 
-- Use the macOS app’s **Remote over SSH** mode (Settings → General → “OpenClaw runs”).
-- The app opens and manages the tunnel, so WebChat + health checks “just work.”
+- Use the macOS app's **Remote over SSH** mode (Settings → General → OpenClaw runs).
+- The app opens and manages the tunnel, so WebChat and health checks just work.
 
 Runbook: [macOS remote access](/platforms/mac/remote).
 
-### 3) Laptop runs the Gateway, remote access from other machines
+### Laptop runs the Gateway
 
 Keep the Gateway local but expose it safely:
 
 - SSH tunnel to the laptop from other machines, or
 - Tailscale Serve the Control UI and keep the Gateway loopback-only.
 
-Guide: [Tailscale](/gateway/tailscale) and [Web overview](/web).
+Guides: [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
 ## Command flow (what runs where)
 
@@ -77,9 +76,13 @@ With the tunnel up:
 - `openclaw health` and `openclaw status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
 - `openclaw gateway status`, `openclaw gateway health`, `openclaw gateway probe`, and `openclaw gateway call` can also target the forwarded URL via `--url` when needed.
 
-Note: replace `18789` with your configured `gateway.port` (or `--port`/`OPENCLAW_GATEWAY_PORT`).
-Note: when you pass `--url`, the CLI does not fall back to config or environment credentials.
-Include `--token` or `--password` explicitly. Missing explicit credentials is an error.
+<Note>
+Replace `18789` with your configured `gateway.port` (or `--port` or `OPENCLAW_GATEWAY_PORT`).
+</Note>
+
+<Warning>
+When you pass `--url`, the CLI does not fall back to config or environment credentials. Include `--token` or `--password` explicitly. Missing explicit credentials is an error.
+</Warning>
 
 ## CLI remote defaults
 
@@ -126,7 +129,7 @@ WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects direct
 - Forward `18789` over SSH (see above), then connect clients to `ws://127.0.0.1:18789`.
 - On macOS, prefer the app’s “Remote over SSH” mode, which manages the tunnel automatically.
 
-## macOS app "Remote over SSH"
+## macOS app Remote over SSH
 
 The macOS menu bar app can drive the same setup end-to-end (remote status checks, WebChat, and Voice Wake forwarding).
 
@@ -222,7 +225,9 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist
 
 The tunnel will start automatically at login, restart on crash, and keep the forwarded port live.
 
-Note: if you have a leftover `com.openclaw.ssh-tunnel` LaunchAgent from an older setup, unload and delete it.
+<Note>
+If you have a leftover `com.openclaw.ssh-tunnel` LaunchAgent from an older setup, unload and delete it.
+</Note>
 
 #### Troubleshooting
 

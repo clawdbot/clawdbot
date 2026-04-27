@@ -131,6 +131,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.extension-browser.config.ts",
       "test/vitest/vitest.extension-qa.config.ts",
       "test/vitest/vitest.extension-media.config.ts",
+      "test/vitest/vitest.extensions.config.ts",
       "test/vitest/vitest.extension-misc.config.ts",
     ],
   },

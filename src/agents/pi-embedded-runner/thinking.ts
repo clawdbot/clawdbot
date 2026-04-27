@@ -29,6 +29,26 @@ function isThinkingBlock(block: AssistantContentBlock): boolean {
   );
 }
 
+function isToolCallBlock(block: AssistantContentBlock): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "toolCall" || type === "tool_use" || type === "function_call";
+}
+
+function hasAssistantToolCall(message: AssistantMessage): boolean {
+  return message.content.some((block) => isToolCallBlock(block));
+}
+
+function isToolResultMessage(message: AgentMessage): boolean {
+  return (
+    !!message &&
+    typeof message === "object" &&
+    (message as { role?: unknown }).role === "toolResult"
+  );
+}
+
 function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
   if (!isThinkingBlock(block)) {
     return false;
@@ -177,11 +197,86 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   return touched ? out : messages;
 }
 
+function shouldPreserveCurrentToolTurnReasoning(
+  messages: AgentMessage[],
+  index: number,
+  latestUserIndex: number,
+): boolean {
+  const message = messages[index];
+  if (
+    index < latestUserIndex ||
+    !isAssistantMessageWithContent(message) ||
+    !hasAssistantToolCall(message)
+  ) {
+    return false;
+  }
+
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const role = (messages[i] as { role?: unknown })?.role;
+    if (role === "user") {
+      break;
+    }
+    if (role === "assistant") {
+      return false;
+    }
+  }
+
+  for (let i = index + 1; i < messages.length; i += 1) {
+    const next = messages[i];
+    const role = (next as { role?: unknown })?.role;
+    if (isToolResultMessage(next)) {
+      return true;
+    }
+    if (role === "user") {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const message of messages) {
     if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+
+    const nextContent = message.content.filter((block) => !isThinkingBlock(block));
+    if (nextContent.length === message.content.length) {
+      out.push(message);
+      continue;
+    }
+
+    touched = true;
+    out.push({
+      ...message,
+      content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
+    });
+  }
+  return touched ? out : messages;
+}
+
+export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage[] {
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if ((messages[index] as { role?: unknown })?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+    if (shouldPreserveCurrentToolTurnReasoning(messages, index, latestUserIndex)) {
       out.push(message);
       continue;
     }

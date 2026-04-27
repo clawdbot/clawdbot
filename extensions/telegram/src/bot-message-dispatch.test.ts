@@ -740,6 +740,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("does not materialize native draft tool progress before final-only text", async () => {
+    const draftStream = createTestDraftStream({ previewMode: "draft" });
+    draftStream.materialize.mockResolvedValue(321);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).toHaveBeenCalledWith("Working…\n• `tool: exec`");
+    expect(draftStream.update).not.toHaveBeenCalledWith("Done");
+    expect(draftStream.materialize).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Done" })],
+      }),
+    );
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
   it("suppresses Telegram tool progress when explicitly disabled", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -1201,12 +1226,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await replyOptions?.onPartialReply?.({ text: "Message A partial" });
         await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
         const startPromise = replyOptions?.onAssistantMessageStart?.();
+        const partialPromise = replyOptions?.onPartialReply?.({ text: "Message B partial" });
         const finalPromise = dispatcherOptions.deliver(
           { text: "Message B final" },
           { kind: "final" },
         );
         resolveMaterialize?.(1001);
         await startPromise;
+        await partialPromise;
         await finalPromise;
         return { queuedFinal: true };
       },
@@ -1368,7 +1395,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(boundaryRotationOrder).toBeLessThan(secondUpdateOrder);
   });
 
-  it("keeps final-only preview lane finalized until a real boundary rotation happens", async () => {
+  it("sends final-only text without creating a synthetic preview before real partials", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();
     createTelegramDraftStream
@@ -1392,17 +1419,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Message A final" })],
+      }),
+    );
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenNthCalledWith(
       1,
       123,
       1001,
-      "Message A final",
-      expect.any(Object),
-    );
-    expect(editMessageTelegram).toHaveBeenNthCalledWith(
-      2,
-      123,
-      1002,
       "Message B final",
       expect.any(Object),
     );
@@ -2859,6 +2885,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replies: [expect.objectContaining({ text: expect.stringContaining("⚠️") })],
       }),
     );
+  });
+
+  it("finalizes explicit failed-action replies without a standalone warning delivery", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Let me update that file." });
+        await dispatcherOptions.deliver(
+          { text: "I couldn't update the file, so no changes were applied." },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "I couldn't update the file, so no changes were applied.",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
   it("clears preview for error-only finals", async () => {

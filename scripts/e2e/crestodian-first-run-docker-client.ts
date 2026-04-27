@@ -1,11 +1,14 @@
+// Crestodian first-run Docker harness.
+// Imports packaged dist modules so the Docker lane verifies the npm tarball,
+// while this small test driver stays mounted from the checkout.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runCli, shouldStartCrestodianForBareRoot } from "../../src/cli/run-main.js";
-import { clearConfigCache } from "../../src/config/config.js";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { runCrestodian } from "../../src/crestodian/crestodian.js";
-import type { RuntimeEnv } from "../../src/runtime.js";
+import { runCli, shouldStartCrestodianForBareRoot } from "../../dist/cli/run-main.js";
+import { clearConfigCache } from "../../dist/config/config.js";
+import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
+import { runCrestodian } from "../../dist/crestodian/crestodian.js";
+import type { RuntimeEnv } from "../../dist/runtime.js";
 
 type CrestodianFirstRunCommand = {
   id: string;

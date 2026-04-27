@@ -21,6 +21,7 @@ import {
   createPackedBundledPluginPostinstallEnv,
   PACKED_CLI_SMOKE_COMMANDS,
   packageNameFromSpecifier,
+  resolveMissingPackBuildHint,
 } from "../scripts/release-check.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
@@ -451,19 +452,27 @@ describe("collectForbiddenPackPaths", () => {
         "dist/index.js",
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
+        "dist/plugin-sdk/extensions/qa-channel/api.d.ts",
         "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+        "dist/plugin-sdk/qa-channel.js",
+        "dist/plugin-sdk/qa-channel-protocol.d.ts",
         "dist/plugin-sdk/qa-lab.js",
         "dist/plugin-sdk/qa-runtime.js",
         "dist/qa-runtime-B9LDtssJ.js",
+        "docs/channels/qa-channel.md",
         "qa/scenarios/index.md",
       ]),
     ).toEqual([
       "dist/extensions/qa-channel/runtime-api.js",
       "dist/extensions/qa-lab/runtime-api.js",
+      "dist/plugin-sdk/extensions/qa-channel/api.d.ts",
       "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+      "dist/plugin-sdk/qa-channel-protocol.d.ts",
+      "dist/plugin-sdk/qa-channel.js",
       "dist/plugin-sdk/qa-lab.js",
       "dist/plugin-sdk/qa-runtime.js",
       "dist/qa-runtime-B9LDtssJ.js",
+      "docs/channels/qa-channel.md",
       "qa/scenarios/index.md",
     ]);
   });
@@ -488,7 +497,7 @@ describe("collectForbiddenPackPaths", () => {
     }
   });
 
-  it("allows legacy QA compatibility paths in the generated dist inventory", () => {
+  it("blocks private QA paths in the generated dist inventory", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-inventory-"));
 
     try {
@@ -501,7 +510,7 @@ describe("collectForbiddenPackPaths", () => {
 
       expect(
         collectForbiddenPackContentPaths([PACKAGE_DIST_INVENTORY_RELATIVE_PATH], tempRoot),
-      ).toEqual([]);
+      ).toEqual([PACKAGE_DIST_INVENTORY_RELATIVE_PATH]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -574,6 +583,32 @@ describe("collectMissingPackPaths", () => {
         bundledDistPluginFile("whatsapp", "runtime-api.js"),
       ]),
     );
+  });
+});
+
+describe("resolveMissingPackBuildHint", () => {
+  it("points missing runtime build artifacts at pnpm build", () => {
+    expect(resolveMissingPackBuildHint(["dist/build-info.json"])).toBe(
+      "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
+    );
+  });
+
+  it("points missing Control UI artifacts at pnpm ui:build", () => {
+    expect(resolveMissingPackBuildHint(["dist/control-ui/index.html"])).toBe(
+      "release-check: Control UI artifacts are missing. Run `pnpm ui:build` before `pnpm release:check`.",
+    );
+  });
+
+  it("points combined runtime and Control UI misses at both build commands", () => {
+    expect(
+      resolveMissingPackBuildHint(["dist/build-info.json", "dist/control-ui/index.html"]),
+    ).toBe(
+      "release-check: build and Control UI artifacts are missing. Run `pnpm build && pnpm ui:build` before `pnpm release:check`.",
+    );
+  });
+
+  it("does not emit a build hint for unrelated packed paths", () => {
+    expect(resolveMissingPackBuildHint(["scripts/npm-runner.mjs"])).toBeNull();
   });
 });
 

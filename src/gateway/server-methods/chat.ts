@@ -1854,6 +1854,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
         kind: "chat-send",
       });
+      if (!activeRunAbort.registered) {
+        respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+          cached: true,
+          runId: clientRunId,
+        });
+        return;
+      }
       context.addChatRun(clientRunId, {
         sessionKey,
         clientRunId,

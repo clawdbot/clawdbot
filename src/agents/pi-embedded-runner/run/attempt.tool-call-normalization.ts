@@ -525,6 +525,32 @@ function sanitizeAnthropicReplayToolResults(
   return changed ? out : messages;
 }
 
+function assistantTurnHasReplayToolCall(message: AgentMessage): boolean {
+  if (!message || typeof message !== "object" || message.role !== "assistant") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => isReplayToolCallBlock(block));
+}
+
+function stripTrailingAssistantPrefillTurns(messages: AgentMessage[]): AgentMessage[] {
+  let end = messages.length;
+  while (end > 0) {
+    const message = messages[end - 1];
+    if (!message || typeof message !== "object" || message.role !== "assistant") {
+      break;
+    }
+    if (assistantTurnHasReplayToolCall(message)) {
+      break;
+    }
+    end -= 1;
+  }
+  return end === messages.length ? messages : messages.slice(0, end);
+}
+
 function normalizeToolCallIdsInMessage(message: unknown): void {
   if (!message || typeof message !== "object") {
     return;
@@ -869,15 +895,25 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     let nextMessages = replayInputsChanged
       ? sanitizeToolUseResultPairing(sanitized.messages)
       : sanitized.messages;
+    let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {
         disallowEmbeddedUserToolResultsForSignedThinkingReplay: allowProviderOwnedThinkingReplay,
       });
     }
+    if (transcriptPolicy?.validateAnthropicTurns || transcriptPolicy?.validateGeminiTurns) {
+      const beforeStrip = nextMessages;
+      nextMessages = stripTrailingAssistantPrefillTurns(nextMessages);
+      strippedTrailingAssistantPrefill ||= nextMessages !== beforeStrip;
+    }
     if (nextMessages === messages) {
       return baseFn(model, context, options);
     }
-    if (sanitized.droppedAssistantMessages > 0 || transcriptPolicy?.validateAnthropicTurns) {
+    if (
+      sanitized.droppedAssistantMessages > 0 ||
+      transcriptPolicy?.validateAnthropicTurns ||
+      strippedTrailingAssistantPrefill
+    ) {
       if (transcriptPolicy?.validateGeminiTurns) {
         nextMessages = validateGeminiTurns(nextMessages);
       }

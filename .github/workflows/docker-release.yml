@@ -63,7 +63,7 @@ jobs:
 
   # KEEP THIS WORKFLOW ON GITHUB-HOSTED RUNNERS.
   # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
-  # Build amd64 images (default + slim share the build stage cache)
+  # Build amd64 image. Default and slim tags point to the same slim runtime.
   build-amd64:
     needs: [approve_manual_backfill]
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
@@ -74,7 +74,6 @@ jobs:
       contents: read
     outputs:
       digest: ${{ steps.build.outputs.digest }}
-      slim-digest: ${{ steps.build-slim.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -117,12 +116,7 @@ jobs:
           fi
           {
             echo "value<<EOF"
-            printf "%s\n" "${tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "slim<<EOF"
-            printf "%s\n" "${slim_tags[@]}"
+            printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -159,28 +153,15 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha,scope=docker-release-amd64
           cache-to: type=gha,mode=max,scope=docker-release-amd64
+          build-args: |
+            OPENCLAW_EXTENSIONS=diagnostics-otel
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
-          provenance: false
+          sbom: true
+          provenance: mode=max
           push: true
 
-      - name: Build and push amd64 slim image
-        id: build-slim
-        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        with:
-          context: .
-          platforms: linux/amd64
-          cache-from: type=gha,scope=docker-release-amd64
-          cache-to: type=gha,mode=max,scope=docker-release-amd64
-          build-args: |
-            OPENCLAW_VARIANT=slim
-          tags: ${{ steps.tags.outputs.slim }}
-          labels: ${{ steps.labels.outputs.value }}
-          provenance: false
-          push: true
-
-  # Build arm64 images (default + slim share the build stage cache)
+  # Build arm64 image. Default and slim tags point to the same slim runtime.
   build-arm64:
     needs: [approve_manual_backfill]
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
@@ -191,7 +172,6 @@ jobs:
       contents: read
     outputs:
       digest: ${{ steps.build.outputs.digest }}
-      slim-digest: ${{ steps.build-slim.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -234,12 +214,7 @@ jobs:
           fi
           {
             echo "value<<EOF"
-            printf "%s\n" "${tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "slim<<EOF"
-            printf "%s\n" "${slim_tags[@]}"
+            printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -276,25 +251,12 @@ jobs:
           platforms: linux/arm64
           cache-from: type=gha,scope=docker-release-arm64
           cache-to: type=gha,mode=max,scope=docker-release-arm64
+          build-args: |
+            OPENCLAW_EXTENSIONS=diagnostics-otel
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
-          provenance: false
-          push: true
-
-      - name: Build and push arm64 slim image
-        id: build-slim
-        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        with:
-          context: .
-          platforms: linux/arm64
-          cache-from: type=gha,scope=docker-release-arm64
-          cache-to: type=gha,mode=max,scope=docker-release-arm64
-          build-args: |
-            OPENCLAW_VARIANT=slim
-          tags: ${{ steps.tags.outputs.slim }}
-          labels: ${{ steps.labels.outputs.value }}
-          provenance: false
+          sbom: true
+          provenance: mode=max
           push: true
 
   # Create multi-platform manifests
@@ -351,16 +313,11 @@ jobs:
           fi
           {
             echo "value<<EOF"
-            printf "%s\n" "${tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "slim<<EOF"
-            printf "%s\n" "${slim_tags[@]}"
+            printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Create and push default manifest
+      - name: Create and push manifest
         shell: bash
         env:
           TAGS: ${{ steps.tags.outputs.value }}
@@ -378,20 +335,94 @@ jobs:
             "${AMD64_DIGEST}" \
             "${ARM64_DIGEST}"
 
-      - name: Create and push slim manifest
+  verify-attestations:
+    needs: [create-manifest]
+    if: ${{ always() && needs.create-manifest.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Docker Builder
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image refs
+        id: refs
         shell: bash
         env:
-          SLIM_TAGS: ${{ steps.tags.outputs.slim }}
-          AMD64_SLIM_DIGEST: ${{ needs.build-amd64.outputs.slim-digest }}
-          ARM64_SLIM_DIGEST: ${{ needs.build-arm64.outputs.slim-digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: |
           set -euo pipefail
-          mapfile -t tags <<< "${SLIM_TAGS}"
-          args=()
-          for tag in "${tags[@]}"; do
-            [ -z "$tag" ] && continue
-            args+=("-t" "$tag")
-          done
-          docker buildx imagetools create "${args[@]}" \
-            "${AMD64_SLIM_DIGEST}" \
-            "${ARM64_SLIM_DIGEST}"
+          multi_refs=()
+          slim_multi_refs=()
+          amd64_refs=()
+          arm64_refs=()
+          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
+            multi_refs+=("${IMAGE}:main")
+            slim_multi_refs+=("${IMAGE}:main-slim")
+            amd64_refs+=("${IMAGE}:main-amd64" "${IMAGE}:main-slim-amd64")
+            arm64_refs+=("${IMAGE}:main-arm64" "${IMAGE}:main-slim-arm64")
+          fi
+          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
+            version="${SOURCE_REF#refs/tags/v}"
+            multi_refs+=("${IMAGE}:${version}")
+            slim_multi_refs+=("${IMAGE}:${version}-slim")
+            amd64_refs+=("${IMAGE}:${version}-amd64" "${IMAGE}:${version}-slim-amd64")
+            arm64_refs+=("${IMAGE}:${version}-arm64" "${IMAGE}:${version}-slim-arm64")
+            if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+              multi_refs+=("${IMAGE}:latest")
+              slim_multi_refs+=("${IMAGE}:slim")
+            fi
+          fi
+          if [[ ${#multi_refs[@]} -eq 0 || ${#amd64_refs[@]} -eq 0 || ${#arm64_refs[@]} -eq 0 ]]; then
+            echo "::error::No Docker image refs resolved for ref ${SOURCE_REF}"
+            exit 1
+          fi
+          {
+            echo "multi<<EOF"
+            printf "%s\n" "${multi_refs[@]}" "${slim_multi_refs[@]}"
+            echo "EOF"
+            echo "amd64<<EOF"
+            printf "%s\n" "${amd64_refs[@]}"
+            echo "EOF"
+            echo "arm64<<EOF"
+            printf "%s\n" "${arm64_refs[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify Docker attestations
+        shell: bash
+        env:
+          MULTI_REFS: ${{ steps.refs.outputs.multi }}
+          AMD64_REFS: ${{ steps.refs.outputs.amd64 }}
+          ARM64_REFS: ${{ steps.refs.outputs.arm64 }}
+        run: |
+          set -euo pipefail
+          mapfile -t multi_refs <<< "${MULTI_REFS}"
+          mapfile -t amd64_refs <<< "${AMD64_REFS}"
+          mapfile -t arm64_refs <<< "${ARM64_REFS}"
+
+          node scripts/verify-docker-attestations.mjs \
+            --platform linux/amd64 \
+            --platform linux/arm64 \
+            "${multi_refs[@]}"
+          node scripts/verify-docker-attestations.mjs \
+            --platform linux/amd64 \
+            "${amd64_refs[@]}"
+          node scripts/verify-docker-attestations.mjs \
+            --platform linux/arm64 \
+            "${arm64_refs[@]}"

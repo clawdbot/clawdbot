@@ -6,6 +6,7 @@ import {
 } from "./run.suite-helpers.js";
 import {
   buildWorkspaceSkillSnapshotMock,
+  dispatchCronDeliveryMock,
   getCliSessionIdMock,
   isCliProviderMock,
   lookupContextTokensMock,
@@ -257,6 +258,40 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   });
 
   describe("CLI session handoff (issue #29774)", () => {
+    it("passes the cron abort signal to CLI runs and drops late CLI results", async () => {
+      const abortController = new AbortController();
+      let markCliStarted!: () => void;
+      const cliStarted = new Promise<void>((resolve) => {
+        markCliStarted = resolve;
+      });
+
+      isCliProviderMock.mockReturnValue(true);
+      runCliAgentMock.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
+        expect(params.abortSignal).toBe(abortController.signal);
+        markCliStarted();
+        await new Promise<void>((resolve) => {
+          params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return {
+          payloads: [{ text: "late cli output" }],
+          meta: { agentMeta: { sessionId: "late-cli-session", usage: { input: 5, output: 10 } } },
+        };
+      });
+      mockCliFallbackInvocation();
+
+      const runPromise = runCronIsolatedAgentTurn(
+        makeSkillParams({ abortSignal: abortController.signal }),
+      );
+      await cliStarted;
+      abortController.abort("cron: job execution timed out");
+
+      const result = await runPromise;
+
+      expect(result.status).toBe("error");
+      expect(result.error).toBe("cron: job execution timed out");
+      expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    });
+
     it("does not pass stored cliSessionId on fresh isolated runs (isNewSession=true)", async () => {
       // Simulate a persisted CLI session ID from a previous run.
       getCliSessionIdMock.mockReturnValue("prev-cli-session-abc");

@@ -1,8 +1,10 @@
+// Shared Docker E2E OpenAI provider config seed helper.
+// Uses packaged plugin-sdk runtime modules so seeded configs match the npm tarball.
 import {
   applyProviderConfigWithDefaultModelPreset,
   type ModelDefinitionConfig,
   type OpenClawConfig,
-} from "../../src/plugin-sdk/provider-onboard.ts";
+} from "../../dist/plugin-sdk/provider-onboard.js";
 
 export type { OpenClawConfig };
 

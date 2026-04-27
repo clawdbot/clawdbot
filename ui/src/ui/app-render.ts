@@ -143,6 +143,7 @@ import {
   createDefaultDraft,
   draftToCronFormPatch,
 } from "./views/cron-quick-create.ts";
+import { renderDreamingRestartConfirmation } from "./views/dreaming-restart-confirmation.ts";
 import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
@@ -738,16 +739,49 @@ export function renderApp(state: AppViewState) {
     };
   };
   const applyDreamingEnabled = (enabled: boolean) => {
-    if (state.dreamingModeSaving || dreamingOn === enabled) {
+    if (
+      state.dreamingModeSaving ||
+      state.dreamingRestartConfirmLoading ||
+      state.dreamingRestartConfirmOpen ||
+      dreamingOn === enabled
+    ) {
+      return;
+    }
+    state.dreamingPendingEnabled = enabled;
+    state.dreamingRestartConfirmOpen = true;
+    state.dreamingStatusError = null;
+  };
+  const cancelDreamingRestart = () => {
+    if (state.dreamingRestartConfirmLoading) {
+      return;
+    }
+    state.dreamingRestartConfirmOpen = false;
+    state.dreamingPendingEnabled = null;
+    state.dreamingStatusError = null;
+  };
+  const confirmDreamingRestart = () => {
+    const enabled = state.dreamingPendingEnabled;
+    if (enabled == null || state.dreamingRestartConfirmLoading) {
       return;
     }
     void (async () => {
-      const updated = await updateDreamingEnabled(state, enabled);
-      if (!updated) {
-        return;
+      state.dreamingRestartConfirmLoading = true;
+      state.dreamingStatusError = null;
+      try {
+        const updated = await updateDreamingEnabled(state, enabled);
+        if (!updated) {
+          if (!state.dreamingStatusError) {
+            state.dreamingStatusError = t("dreaming.restartConfirmation.failed");
+          }
+          return;
+        }
+        await loadConfig(state);
+        await loadDreamingStatus(state);
+        state.dreamingRestartConfirmOpen = false;
+        state.dreamingPendingEnabled = null;
+      } finally {
+        state.dreamingRestartConfirmLoading = false;
       }
-      await loadConfig(state);
-      await loadDreamingStatus(state);
     })();
   };
   const basePath = normalizeBasePath(state.basePath ?? "");
@@ -2491,7 +2525,15 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
       </main>
-      ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}
+      ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)}
+      ${renderDreamingRestartConfirmation({
+        open: state.dreamingRestartConfirmOpen,
+        loading: state.dreamingRestartConfirmLoading,
+        onConfirm: confirmDreamingRestart,
+        onCancel: cancelDreamingRestart,
+        hasError: Boolean(state.dreamingStatusError),
+      })}
+      ${nothing}
     </div>
   `;
 }

@@ -118,6 +118,8 @@ USER.md
 !.agents/skills/openclaw-test-heap-leaks/**
 !.agents/skills/openclaw-test-performance/
 !.agents/skills/openclaw-test-performance/**
+!.agents/skills/openclaw-testing/
+!.agents/skills/openclaw-testing/**
 !.agents/skills/optimizetests/
 !.agents/skills/optimizetests/**
 !.agents/skills/parallels-discord-roundtrip/

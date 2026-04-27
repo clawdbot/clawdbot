@@ -1,22 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  packageNameMatchesId,
-  resolveSafeInstallDir,
-  safeDirName,
-  safePathSegmentHashed,
-  unscopedPackageName,
-} from "../infra/install-safe-path.js";
+import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import {
+  encodePluginInstallDirName,
+  matchesExpectedPluginId,
+  safePluginInstallFileName,
+  validatePluginId,
+} from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import {
   resolvePackageExtensionEntries,
   type PackageManifest as PluginPackageManifest,
 } from "./manifest.js";
+import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
+
+export { resolvePluginInstallDir } from "./install-paths.js";
 
 let pluginInstallRuntimePromise: Promise<typeof import("./install.runtime.js")> | undefined;
 
@@ -54,6 +57,7 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   MISSING_OPENCLAW_EXTENSIONS: "missing_openclaw_extensions",
   MISSING_PLUGIN_MANIFEST: "missing_plugin_manifest",
   EMPTY_OPENCLAW_EXTENSIONS: "empty_openclaw_extensions",
+  INVALID_OPENCLAW_EXTENSIONS: "invalid_openclaw_extensions",
   NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
   PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
   SECURITY_SCAN_BLOCKED: "security_scan_blocked",
@@ -89,71 +93,6 @@ type PluginInstallPolicyRequest = {
 };
 
 const defaultLogger: PluginInstallLogger = {};
-function safeFileName(input: string): string {
-  return safeDirName(input);
-}
-
-function encodePluginInstallDirName(pluginId: string): string {
-  const trimmed = pluginId.trim();
-  if (!trimmed.includes("/")) {
-    return safeDirName(trimmed);
-  }
-  // Scoped plugin ids need a reserved on-disk namespace so they cannot collide
-  // with valid unscoped ids that happen to match the hashed slug.
-  return `@${safePathSegmentHashed(trimmed)}`;
-}
-
-function validatePluginId(pluginId: string): string | null {
-  const trimmed = pluginId.trim();
-  if (!trimmed) {
-    return "invalid plugin name: missing";
-  }
-  if (trimmed.includes("\\")) {
-    return "invalid plugin name: path separators not allowed";
-  }
-  const segments = trimmed.split("/");
-  if (segments.some((segment) => !segment)) {
-    return "invalid plugin name: malformed scope";
-  }
-  if (segments.some((segment) => segment === "." || segment === "..")) {
-    return "invalid plugin name: reserved path segment";
-  }
-  if (segments.length === 1) {
-    if (trimmed.startsWith("@")) {
-      return "invalid plugin name: scoped ids must use @scope/name format";
-    }
-    return null;
-  }
-  if (segments.length !== 2) {
-    return "invalid plugin name: path separators not allowed";
-  }
-  if (!segments[0]?.startsWith("@") || segments[0].length < 2) {
-    return "invalid plugin name: scoped ids must use @scope/name format";
-  }
-  return null;
-}
-
-function matchesExpectedPluginId(params: {
-  expectedPluginId?: string;
-  pluginId: string;
-  manifestPluginId?: string;
-  npmPluginId: string;
-}): boolean {
-  if (!params.expectedPluginId) {
-    return true;
-  }
-  if (params.expectedPluginId === params.pluginId) {
-    return true;
-  }
-  // Backward compatibility: older install records keyed scoped npm packages by
-  // their unscoped package name. Preserve update-in-place for those records
-  // unless the package declares an explicit manifest id override.
-  return (
-    !params.manifestPluginId &&
-    params.pluginId === params.npmPluginId &&
-    params.expectedPluginId === unscopedPackageName(params.npmPluginId)
-  );
-}
 
 function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
   | {
@@ -440,26 +379,6 @@ async function installPluginDirectoryIntoExtensions(params: {
     version: params.version,
     extensions: params.extensions,
   });
-}
-
-export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string): string {
-  const extensionsBase = extensionsDir
-    ? resolveUserPath(extensionsDir)
-    : path.join(CONFIG_DIR, "extensions");
-  const pluginIdError = validatePluginId(pluginId);
-  if (pluginIdError) {
-    throw new Error(pluginIdError);
-  }
-  const targetDirResult = resolveSafeInstallDir({
-    baseDir: extensionsBase,
-    id: pluginId,
-    invalidNameMessage: "invalid plugin name: path traversal detected",
-    nameEncoder: encodePluginInstallDirName,
-  });
-  if (!targetDirResult.ok) {
-    throw new Error(targetDirResult.error);
-  }
-  return targetDirResult.path;
 }
 
 async function resolvePluginInstallTarget(params: {
@@ -766,6 +685,19 @@ async function installPluginFromPackageDir(
     };
   }
 
+  const extensionValidation = await validatePackageExtensionEntriesForInstall({
+    packageDir: params.packageDir,
+    extensions,
+    manifest,
+  });
+  if (!extensionValidation.ok) {
+    return {
+      ok: false,
+      error: extensionValidation.error,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS,
+    };
+  }
+
   const targetResult = await resolvePreparedDirectoryInstallTarget({
     runtime,
     pluginId,
@@ -819,18 +751,6 @@ async function installPluginFromPackageDir(
     hasDeps: Object.keys(deps).length > 0,
     depsLogMessage: "Installing plugin dependencies…",
     nameEncoder: encodePluginInstallDirName,
-    afterCopy: async (installedDir) => {
-      for (const entry of extensions) {
-        const resolvedEntry = path.resolve(installedDir, entry);
-        if (!runtime.isPathInside(installedDir, resolvedEntry)) {
-          logger.warn?.(`extension entry escapes plugin directory: ${entry}`);
-          continue;
-        }
-        if (!(await runtime.fileExists(resolvedEntry))) {
-          logger.warn?.(`extension entry not found: ${entry}`);
-        }
-      }
-    },
     afterInstall: async (installedDir) => {
       // Run the dependency-tree security scan BEFORE linking peer deps.
       // The scan rejects any node_modules/ symlink whose target resolves
@@ -963,7 +883,10 @@ export async function installPluginFromFile(params: {
   if (pluginIdError) {
     return { ok: false, error: pluginIdError };
   }
-  const targetFile = path.join(extensionsDir, `${safeFileName(pluginId)}${path.extname(filePath)}`);
+  const targetFile = path.join(
+    extensionsDir,
+    `${safePluginInstallFileName(pluginId)}${path.extname(filePath)}`,
+  );
   const preparedTarget: PreparedInstallTarget = {
     targetPath: targetFile,
     effectiveMode: await resolveEffectiveInstallMode({

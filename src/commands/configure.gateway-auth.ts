@@ -133,7 +133,8 @@ export async function promptAuthConfig(
         prompter,
         allowKeep: true,
         ignoreAllowlist: true,
-        includeProviderPluginSetups: true,
+        includeProviderPluginSetups: false,
+        loadCatalog: false,
         preferredProvider,
         workspaceDir: resolveDefaultAgentWorkspaceDir(),
         runtime,
@@ -176,6 +177,7 @@ export async function promptAuthConfig(
       initialSelections: modelAllowlist?.initialSelections,
       message: modelAllowlist?.message,
       preferredProvider,
+      loadCatalog: false,
     });
     if (allowlistSelection.models) {
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {

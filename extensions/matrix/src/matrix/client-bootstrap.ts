@@ -11,7 +11,7 @@ type ResolvedRuntimeMatrixClient = {
 };
 
 type MatrixRuntimeClientReadiness = "none" | "prepared" | "started";
-type ResolvedRuntimeMatrixClientStopMode = "stop" | "persist";
+type ResolvedRuntimeMatrixClientStopMode = "stop" | "persist" | "discard";
 
 type MatrixResolvedClientHook = (
   client: MatrixClient,
@@ -144,6 +144,10 @@ export async function stopResolvedRuntimeMatrixClient(
   }
   if (mode === "persist") {
     await resolved.client.stopAndPersist();
+    return;
+  }
+  if (mode === "discard") {
+    resolved.client.stopWithoutPersist();
     return;
   }
   resolved.client.stop();

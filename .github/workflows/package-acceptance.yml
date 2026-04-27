@@ -1,0 +1,517 @@
+name: Package Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_ref:
+        description: Trusted repo ref for workflow scripts and Docker E2E harness
+        required: true
+        default: main
+        type: string
+      source:
+        description: Package candidate source
+        required: true
+        default: npm
+        type: choice
+        options:
+          - npm
+          - ref
+          - url
+          - artifact
+      package_ref:
+        description: Trusted package source ref when source=ref
+        required: true
+        default: main
+        type: string
+      package_spec:
+        description: Published package spec when source=npm
+        required: false
+        default: openclaw@beta
+        type: string
+      package_url:
+        description: HTTPS .tgz URL when source=url
+        required: false
+        default: ""
+        type: string
+      package_sha256:
+        description: Expected package SHA-256; required for source=url
+        required: false
+        default: ""
+        type: string
+      artifact_run_id:
+        description: GitHub Actions run id when source=artifact
+        required: false
+        default: ""
+        type: string
+      artifact_name:
+        description: Artifact name containing one .tgz when source=artifact
+        required: false
+        default: package-under-test
+        type: string
+      suite_profile:
+        description: Acceptance profile
+        required: true
+        default: package
+        type: choice
+        options:
+          - smoke
+          - package
+          - product
+          - full
+          - custom
+      docker_lanes:
+        description: Comma/space separated Docker lanes when suite_profile=custom
+        required: false
+        default: ""
+        type: string
+      telegram_mode:
+        description: Optional Telegram QA lane for the resolved package candidate
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - mock-openai
+          - live-frontier
+  workflow_call:
+    inputs:
+      workflow_ref:
+        description: Trusted repo ref for workflow scripts and Docker E2E harness
+        required: false
+        default: main
+        type: string
+      source:
+        description: "Package candidate source: npm, ref, url, or artifact"
+        required: true
+        type: string
+      package_ref:
+        description: Trusted package source ref when source=ref
+        required: false
+        default: main
+        type: string
+      package_spec:
+        description: Published package spec when source=npm
+        required: false
+        default: openclaw@beta
+        type: string
+      package_url:
+        description: HTTPS .tgz URL when source=url
+        required: false
+        default: ""
+        type: string
+      package_sha256:
+        description: Expected package SHA-256; required for source=url
+        required: false
+        default: ""
+        type: string
+      artifact_run_id:
+        description: GitHub Actions run id when source=artifact
+        required: false
+        default: ""
+        type: string
+      artifact_name:
+        description: Artifact name containing one .tgz when source=artifact
+        required: false
+        default: package-under-test
+        type: string
+      suite_profile:
+        description: "Acceptance profile: smoke, package, product, full, or custom"
+        required: false
+        default: package
+        type: string
+      docker_lanes:
+        description: Comma/space separated Docker lanes when suite_profile=custom
+        required: false
+        default: ""
+        type: string
+      telegram_mode:
+        description: Optional Telegram QA lane for the resolved package candidate
+        required: false
+        default: none
+        type: string
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+      OPENAI_BASE_URL:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY_OLD:
+        required: false
+      ANTHROPIC_API_TOKEN:
+        required: false
+      BYTEPLUS_API_KEY:
+        required: false
+      CEREBRAS_API_KEY:
+        required: false
+      DASHSCOPE_API_KEY:
+        required: false
+      GROQ_API_KEY:
+        required: false
+      KIMI_API_KEY:
+        required: false
+      MODELSTUDIO_API_KEY:
+        required: false
+      MOONSHOT_API_KEY:
+        required: false
+      MISTRAL_API_KEY:
+        required: false
+      MINIMAX_API_KEY:
+        required: false
+      OPENCODE_API_KEY:
+        required: false
+      OPENCODE_ZEN_API_KEY:
+        required: false
+      OPENCLAW_LIVE_BROWSER_CDP_URL:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE:
+        required: false
+      GEMINI_API_KEY:
+        required: false
+      GOOGLE_API_KEY:
+        required: false
+      OPENROUTER_API_KEY:
+        required: false
+      QWEN_API_KEY:
+        required: false
+      FAL_KEY:
+        required: false
+      RUNWAY_API_KEY:
+        required: false
+      DEEPGRAM_API_KEY:
+        required: false
+      TOGETHER_API_KEY:
+        required: false
+      VYDRA_API_KEY:
+        required: false
+      XAI_API_KEY:
+        required: false
+      ZAI_API_KEY:
+        required: false
+      Z_AI_API_KEY:
+        required: false
+      BYTEPLUS_ACCESS_KEY_ID:
+        required: false
+      BYTEPLUS_SECRET_ACCESS_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      OPENCLAW_CODEX_AUTH_JSON:
+        required: false
+      OPENCLAW_CODEX_CONFIG_TOML:
+        required: false
+      OPENCLAW_CLAUDE_JSON:
+        required: false
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON:
+        required: false
+      OPENCLAW_CLAUDE_SETTINGS_JSON:
+        required: false
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON:
+        required: false
+      OPENCLAW_GEMINI_SETTINGS_JSON:
+        required: false
+      FIREWORKS_API_KEY:
+        required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        required: false
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+  pull-requests: read
+
+concurrency:
+  group: package-acceptance-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.33.0"
+  PACKAGE_ARTIFACT_NAME: package-under-test
+
+jobs:
+  resolve_package:
+    name: Resolve package candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      docker_lanes: ${{ steps.profile.outputs.docker_lanes }}
+      include_live_suites: ${{ steps.profile.outputs.include_live_suites }}
+      include_openwebui: ${{ steps.profile.outputs.include_openwebui }}
+      include_release_path_suites: ${{ steps.profile.outputs.include_release_path_suites }}
+      package_artifact_name: ${{ steps.profile.outputs.package_artifact_name }}
+      package_sha256: ${{ steps.resolve.outputs.sha256 }}
+      package_version: ${{ steps.resolve.outputs.package_version }}
+      telegram_enabled: ${{ steps.profile.outputs.telegram_enabled }}
+      telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
+    steps:
+      - name: Checkout package workflow ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.workflow_ref }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
+          install-deps: "false"
+
+      - name: Download package artifact input
+        if: inputs.source == 'artifact'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ARTIFACT_RUN_ID// }" ]]; then
+            echo "artifact_run_id is required when source=artifact." >&2
+            exit 1
+          fi
+          if [[ -z "${ARTIFACT_NAME// }" ]]; then
+            echo "artifact_name is required when source=artifact." >&2
+            exit 1
+          fi
+          mkdir -p .artifacts/package-candidate-input
+          gh run download "$ARTIFACT_RUN_ID" -n "$ARTIFACT_NAME" -D .artifacts/package-candidate-input
+
+      - name: Resolve package candidate
+        id: resolve
+        env:
+          SOURCE: ${{ inputs.source }}
+          PACKAGE_REF: ${{ inputs.package_ref }}
+          PACKAGE_SPEC: ${{ inputs.package_spec }}
+          PACKAGE_URL: ${{ inputs.package_url }}
+          PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir=""
+          if [[ "$SOURCE" == "artifact" ]]; then
+            artifact_dir=".artifacts/package-candidate-input"
+          fi
+
+          node scripts/resolve-openclaw-package-candidate.mjs \
+            --source "$SOURCE" \
+            --package-ref "$PACKAGE_REF" \
+            --package-spec "$PACKAGE_SPEC" \
+            --package-url "$PACKAGE_URL" \
+            --package-sha256 "$PACKAGE_SHA256" \
+            --artifact-dir "${artifact_dir:-.}" \
+            --output-dir .artifacts/docker-e2e-package \
+            --output-name openclaw-current.tgz \
+            --metadata .artifacts/docker-e2e-package/package-candidate.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Select acceptance profile
+        id: profile
+        env:
+          SOURCE: ${{ inputs.source }}
+          SUITE_PROFILE: ${{ inputs.suite_profile }}
+          CUSTOM_DOCKER_LANES: ${{ inputs.docker_lanes }}
+          TELEGRAM_MODE: ${{ inputs.telegram_mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          include_release_path_suites=false
+          include_openwebui=false
+          include_live_suites=false
+          docker_lanes=""
+
+          case "$SUITE_PROFILE" in
+            smoke)
+              docker_lanes="npm-onboard-channel-agent gateway-network config-reload"
+              ;;
+            package)
+              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps-compat plugins-offline plugin-update"
+              ;;
+            product)
+              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps-compat plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
+              include_openwebui=true
+              ;;
+            full)
+              include_release_path_suites=true
+              include_openwebui=true
+              ;;
+            custom)
+              docker_lanes="$CUSTOM_DOCKER_LANES"
+              if [[ -z "${docker_lanes// }" ]]; then
+                echo "docker_lanes is required when suite_profile=custom." >&2
+                exit 1
+              fi
+              if [[ "$docker_lanes" == *"openwebui"* ]]; then
+                include_openwebui=true
+              fi
+              ;;
+            *)
+              echo "Unknown suite_profile: $SUITE_PROFILE" >&2
+              exit 1
+              ;;
+          esac
+
+          telegram_enabled=false
+          if [[ "$TELEGRAM_MODE" != "none" ]]; then
+            telegram_enabled=true
+          fi
+
+          {
+            echo "docker_lanes=$docker_lanes"
+            echo "include_release_path_suites=$include_release_path_suites"
+            echo "include_openwebui=$include_openwebui"
+            echo "include_live_suites=$include_live_suites"
+            echo "telegram_enabled=$telegram_enabled"
+            echo "telegram_mode=$TELEGRAM_MODE"
+            echo "package_artifact_name=${PACKAGE_ARTIFACT_NAME}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload package-under-test artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PACKAGE_ARTIFACT_NAME }}
+          path: |
+            .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/package-candidate.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Summarize package candidate
+        env:
+          PACKAGE_SHA256: ${{ steps.resolve.outputs.sha256 }}
+          PACKAGE_VERSION: ${{ steps.resolve.outputs.package_version }}
+          PACKAGE_REF: ${{ inputs.package_ref }}
+          SOURCE: ${{ inputs.source }}
+          SUITE_PROFILE: ${{ inputs.suite_profile }}
+          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+        shell: bash
+        run: |
+          {
+            echo "## Package acceptance"
+            echo
+            echo "- Source: \`${SOURCE}\`"
+            echo "- Workflow ref: \`${WORKFLOW_REF}\`"
+            if [[ "${SOURCE}" == "ref" ]]; then
+              echo "- Package ref: \`${PACKAGE_REF}\`"
+            fi
+            echo "- Version: \`${PACKAGE_VERSION}\`"
+            echo "- SHA-256: \`${PACKAGE_SHA256}\`"
+            echo "- Profile: \`${SUITE_PROFILE}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  docker_acceptance:
+    name: Docker product acceptance
+    needs: resolve_package
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ inputs.workflow_ref }}
+      include_repo_e2e: false
+      include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
+      include_openwebui: ${{ needs.resolve_package.outputs.include_openwebui == 'true' }}
+      docker_lanes: ${{ needs.resolve_package.outputs.docker_lanes }}
+      package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
+      include_live_suites: ${{ needs.resolve_package.outputs.include_live_suites == 'true' }}
+      live_models_only: false
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+      BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+
+  package_telegram:
+    name: Telegram package acceptance
+    needs: resolve_package
+    if: needs.resolve_package.outputs.telegram_enabled == 'true'
+    uses: ./.github/workflows/npm-telegram-beta-e2e.yml
+    with:
+      package_spec: ${{ inputs.package_spec }}
+      package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
+      package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}
+      provider_mode: ${{ needs.resolve_package.outputs.telegram_mode }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+
+  summary:
+    name: Verify package acceptance
+    needs: [resolve_package, docker_acceptance, package_telegram]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify package acceptance results
+        env:
+          DOCKER_RESULT: ${{ needs.docker_acceptance.result }}
+          PACKAGE_TELEGRAM_RESULT: ${{ needs.package_telegram.result }}
+          RESOLVE_RESULT: ${{ needs.resolve_package.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          for item in \
+            "resolve_package=${RESOLVE_RESULT}" \
+            "docker_acceptance=${DOCKER_RESULT}" \
+            "package_telegram=${PACKAGE_TELEGRAM_RESULT}"
+          do
+            name="${item%%=*}"
+            result="${item#*=}"
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "::error::${name} ended with ${result}"
+              failed=1
+            fi
+          done
+          exit "$failed"

@@ -36,6 +36,7 @@ import type {
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
+const LAUNCH_AGENT_PRIVATE_DIR_MODE = 0o700;
 
 function assertValidLaunchAgentLabel(label: string): string {
   const trimmed = label.trim();
@@ -209,17 +210,30 @@ async function bootstrapLaunchAgentOrThrow(params: {
   throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
 
-async function ensureSecureDirectory(targetPath: string): Promise<void> {
-  await fs.mkdir(targetPath, { recursive: true, mode: LAUNCH_AGENT_DIR_MODE });
+async function ensureSecureDirectory(
+  targetPath: string,
+  dirMode = LAUNCH_AGENT_DIR_MODE,
+): Promise<void> {
+  await fs.mkdir(targetPath, { recursive: true, mode: dirMode });
   try {
     const stat = await fs.stat(targetPath);
     const mode = stat.mode & 0o777;
-    const tightenedMode = mode & ~0o022;
+    const forbiddenMode = dirMode === LAUNCH_AGENT_PRIVATE_DIR_MODE ? 0o077 : 0o022;
+    const tightenedMode = mode & ~forbiddenMode;
     if (tightenedMode !== mode) {
       await fs.chmod(targetPath, tightenedMode);
     }
   } catch {
     // Best effort: keep install working even if chmod/stat is unavailable.
+  }
+}
+
+async function ensureLaunchAgentEnvironmentDirectories(
+  environment: Record<string, string | undefined> | undefined,
+): Promise<void> {
+  const tmpDir = environment?.TMPDIR?.trim();
+  if (tmpDir) {
+    await ensureSecureDirectory(tmpDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
   }
 }
 
@@ -291,10 +305,11 @@ export async function readLaunchAgentRuntime(
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
+    const plistExists = await launchAgentPlistExists(env);
     return {
       status: "unknown",
       detail: (res.stderr || res.stdout).trim() || undefined,
-      missingUnit: true,
+      ...(plistExists ? { missingSupervision: true } : { missingUnit: true }),
     };
   }
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
@@ -535,6 +550,7 @@ async function writeLaunchAgentPlist({
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);
   await ensureSecureDirectory(path.dirname(plistPath));
+  await ensureLaunchAgentEnvironmentDirectories(environment);
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const plist = buildLaunchAgentPlist({

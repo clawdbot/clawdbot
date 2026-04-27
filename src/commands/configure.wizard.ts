@@ -9,6 +9,7 @@ import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -199,9 +200,13 @@ async function promptWebToolsConfig(
   type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
   const { isCodexNativeWebSearchRelevant } = await import("../agents/codex-native-web-search.js");
-  const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
+  const hasManagedSearchProviders =
+    resolvePluginContributionOwners({
+      config: nextConfig,
+      contribution: "contracts",
+      matches: "webSearchProviders",
+    }).length > 0;
 
   note(
     [
@@ -215,7 +220,7 @@ async function promptWebToolsConfig(
   const enableSearch = guardCancel(
     await confirm({
       message: "Enable web_search?",
-      initialValue: existingSearch?.enabled ?? searchProviderOptions.length > 0,
+      initialValue: existingSearch?.enabled ?? hasManagedSearchProviders,
     }),
     runtime,
   );
@@ -297,8 +302,10 @@ async function promptWebToolsConfig(
       }
     }
 
-    if (searchProviderOptions.length === 0) {
-      if (configureManagedProvider) {
+    if (configureManagedProvider) {
+      const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
+      const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
+      if (searchProviderOptions.length === 0) {
         note(
           [
             "No web search providers are currently available under this plugin policy.",
@@ -307,23 +314,23 @@ async function promptWebToolsConfig(
           ].join("\n"),
           "Web search",
         );
-      }
-      if (nextSearch.openaiCodex?.enabled !== true) {
+        if (nextSearch.openaiCodex?.enabled !== true) {
+          nextSearch = {
+            ...existingSearch,
+            enabled: false,
+          };
+        }
+      } else {
+        workingConfig = await setupSearch(workingConfig, runtime, prompter);
         nextSearch = {
-          ...existingSearch,
-          enabled: false,
+          ...workingConfig.tools?.web?.search,
+          enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
+          openaiCodex: {
+            ...existingSearch?.openaiCodex,
+            ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
+          },
         };
       }
-    } else if (configureManagedProvider) {
-      workingConfig = await setupSearch(workingConfig, runtime, prompter);
-      nextSearch = {
-        ...workingConfig.tools?.web?.search,
-        enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
-        openaiCodex: {
-          ...existingSearch?.openaiCodex,
-          ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
-        },
-      };
     }
   }
 

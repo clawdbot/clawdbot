@@ -147,9 +147,17 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - **Traces:** `diagnostics.otel.sampleRate` (root-span only, `0.0` drops all,
   `1.0` keeps all).
 - **Metrics:** `diagnostics.otel.flushIntervalMs` (minimum `1000`).
-- **Logs:** OTLP logs respect `logging.level` (file log level). Console
-  redaction does **not** apply to OTLP logs. High-volume installs should
-  prefer OTLP collector sampling/filtering over local sampling.
+- **Logs:** OTLP logs respect `logging.level` (file log level). They use the
+  diagnostic log-record redaction path, not console formatting. High-volume
+  installs should prefer OTLP collector sampling/filtering over local sampling.
+- **File-log correlation:** JSONL file logs include top-level `traceId`,
+  `spanId`, `parentSpanId`, and `traceFlags` when the log call carries a valid
+  diagnostic trace context, which lets log processors join local log lines with
+  exported spans.
+- **Request correlation:** Gateway HTTP requests and WebSocket frames create an
+  internal request trace scope. Logs and diagnostic events inside that scope
+  inherit the request trace by default, while agent run and model-call spans are
+  created as children so provider `traceparent` headers stay on the same trace.
 
 ## Exported metrics
 
@@ -161,6 +169,10 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.context.tokens` (histogram, attrs: `openclaw.context`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`)
 - `gen_ai.client.token.usage` (histogram, GenAI semantic-conventions metric, attrs: `gen_ai.token.type` = `input`/`output`, `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`)
 - `gen_ai.client.operation.duration` (histogram, seconds, GenAI semantic-conventions metric, attrs: `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`, optional `error.type`)
+- `openclaw.model_call.duration_ms` (histogram, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, plus `openclaw.errorCategory` and `openclaw.failureKind` on classified errors)
+- `openclaw.model_call.request_bytes` (histogram, UTF-8 byte size of the final model request payload; no raw payload content)
+- `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed model response events; no raw response content)
+- `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event)
 
 ### Message flow
 
@@ -212,6 +224,8 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.model.call`
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
   - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`
+  - `openclaw.errorCategory` and optional `openclaw.failureKind` on errors
+  - `openclaw.model_call.request_bytes`, `openclaw.model_call.response_bytes`, `openclaw.model_call.time_to_first_byte_ms`
   - `openclaw.provider.request_id_hash` (bounded SHA-based hash of the upstream provider request id; raw ids are not exported)
 - `openclaw.harness.run`
   - `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.provider`, `openclaw.model`, `openclaw.channel`

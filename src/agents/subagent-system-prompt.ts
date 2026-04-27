@@ -16,10 +16,9 @@ export function buildSubagentSystemPrompt(params: {
   /** Config value: max allowed spawn depth. */
   maxSpawnDepth?: number;
 }) {
-  const taskText =
-    typeof params.task === "string" && params.task.trim()
-      ? params.task.replace(/\s+/g, " ").trim()
-      : "{{TASK_DESCRIPTION}}";
+  const taskRaw = typeof params.task === "string" ? params.task : "";
+  const taskBody = taskRaw.trim();
+  const hasTask = taskBody !== "";
   const childDepth = typeof params.childDepth === "number" ? params.childDepth : 1;
   const maxSpawnDepth =
     typeof params.maxSpawnDepth === "number"
@@ -31,17 +30,33 @@ export function buildSubagentSystemPrompt(params: {
   );
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
+  const roleLines =
+    hasTask && taskBody.includes("\n")
+      ? [
+          "## Your Role",
+          "- You were created to handle the following task (verbatim; line breaks preserved):",
+          "",
+          "```",
+          taskBody,
+          "```",
+          "- Complete this task. That's your entire purpose.",
+          `- You are NOT the ${parentLabel}. Don't try to be.`,
+          "",
+        ]
+      : [
+          "## Your Role",
+          `- You were created to handle: ${hasTask ? taskBody : "{{TASK_DESCRIPTION}}"}`,
+          "- Complete this task. That's your entire purpose.",
+          `- You are NOT the ${parentLabel}. Don't try to be.`,
+          "",
+        ];
 
   const lines = [
     "# Subagent Context",
     "",
     `You are a **subagent** spawned by the ${parentLabel} for a specific task.`,
     "",
-    "## Your Role",
-    `- You were created to handle: ${taskText}`,
-    "- Complete this task. That's your entire purpose.",
-    `- You are NOT the ${parentLabel}. Don't try to be.`,
-    "",
+    ...roleLines,
     "## Rules",
     "1. **Stay focused** - Do your assigned task, nothing else",
     `2. **Complete the task** - Your final message will be automatically reported to the ${parentLabel}`,

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -16,8 +16,14 @@ import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  buildAnnounceIdFromChildRun,
+  buildAnnounceIdempotencyKey,
+} from "./announce-idempotency.js";
 import * as piEmbedded from "./pi-embedded-runner/runs.js";
 import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
+import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import * as agentStep from "./tools/agent-step.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
@@ -53,7 +59,17 @@ type MockSubagentRun = {
 type SessionEntryFixture = Omit<SessionEntry, "updatedAt"> & { updatedAt?: number };
 type SessionStoreFixture = Record<string, SessionEntryFixture | undefined>;
 
-const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
+function visibleAgentResponse(runId = "run-main") {
+  return {
+    runId,
+    status: "ok",
+    result: {
+      payloads: [{ text: "announced" }],
+    },
+  };
+}
+
+const agentSpy = vi.fn(async (_req: AgentCallRequest) => visibleAgentResponse());
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const loadSessionStoreSpy = vi.spyOn(configSessions, "loadSessionStore");
@@ -142,12 +158,6 @@ const defaultOutcomeAnnounce = {
   outcome: { status: "ok" } as const,
 };
 
-async function getSingleAgentCallParams() {
-  expect(agentSpy).toHaveBeenCalledTimes(1);
-  const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-  return call?.params ?? {};
-}
-
 function setConfigOverride(next: OpenClawConfig): void {
   configOverride = next;
   setRuntimeConfigSnapshot(configOverride);
@@ -191,6 +201,7 @@ vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
+  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["__testing"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -199,10 +210,12 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    ({ runSubagentAnnounceFlow, __testing: subagentAnnounceTesting } =
+      await import("./subagent-announce.js"));
   });
 
   afterAll(() => {
+    subagentAnnounceTesting.setDepsForTest();
     subagentAnnounceDeliveryTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     if (previousFastTestEnv === undefined) {
@@ -212,12 +225,17 @@ describe("subagent announce formatting", () => {
     process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
   });
 
+  afterEach(() => {
+    resetAnnounceQueuesForTests();
+  });
+
   beforeEach(() => {
+    resetAnnounceQueuesForTests();
     // OPENCLAW_TEST_FAST is set in beforeAll before module import
     // to ensure the module-level constant picks it up.
     agentSpy
       .mockClear()
-      .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
+      .mockImplementation(async (_req: AgentCallRequest) => visibleAgentResponse());
     sendSpy
       .mockClear()
       .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
@@ -260,6 +278,12 @@ describe("subagent announce formatting", () => {
       },
       queueEmbeddedPiMessage: (sessionId: string, text: string) =>
         embeddedRunMock.queueEmbeddedPiMessage(sessionId, text),
+    });
+    subagentAnnounceTesting.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(
+        req: Parameters<typeof gatewayCall.callGateway>[0],
+      ) => (await callGatewaySpy(req)) as T,
+      loadConfig: () => configOverride,
     });
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
@@ -763,7 +787,7 @@ describe("subagent announce formatting", () => {
     agentSpy
       .mockRejectedValueOnce(new Error("Error: No active WhatsApp Web listener (account: default)"))
       .mockRejectedValueOnce(new Error("UNAVAILABLE: listener reconnecting"))
-      .mockResolvedValueOnce({ runId: "run-main", status: "ok" });
+      .mockResolvedValueOnce(visibleAgentResponse());
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -804,7 +828,7 @@ describe("subagent announce formatting", () => {
     agentSpy
       .mockRejectedValueOnce(new Error("No active WhatsApp Web listener (account: default)"))
       .mockRejectedValueOnce(new Error("UNAVAILABLE: delivery temporarily unavailable"))
-      .mockResolvedValueOnce({ runId: "run-main", status: "ok" });
+      .mockResolvedValueOnce(visibleAgentResponse());
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -1533,145 +1557,62 @@ describe("subagent announce formatting", () => {
   });
 
   it("steers announcements into an active run when queue mode is steer", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(true);
-    embeddedRunMock.queueEmbeddedPiMessage.mockReturnValue(true);
-    sessionStore = {
-      "agent:main:main": {
-        sessionId: "session-123",
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-        queueMode: "steer",
-      },
-    };
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-789",
-      requesterSessionKey: "main",
-      requesterDisplayKey: "main",
-      ...defaultOutcomeAnnounce,
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+    const delivery = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: false,
+      queue: async () => "steered",
+      direct,
     });
 
-    expect(didAnnounce).toBe(true);
-    expect(embeddedRunMock.queueEmbeddedPiMessage).toHaveBeenCalledWith(
-      "session-123",
-      expect.stringContaining("[Internal task completion event]"),
-    );
-    expect(agentSpy).not.toHaveBeenCalled();
+    expect(delivery.delivered).toBe(true);
+    expect(delivery.path).toBe("steered");
+    expect(direct).not.toHaveBeenCalled();
   });
 
   it("queues announce delivery with origin account routing", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
-    sessionStore = {
-      "agent:main:main": {
-        sessionId: "session-456",
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-        lastAccountId: "kev",
-        queueMode: "collect",
-        queueDebounceMs: 0,
-      },
-    };
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-999",
-      requesterSessionKey: "main",
-      requesterDisplayKey: "main",
-      ...defaultOutcomeAnnounce,
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+    const delivery = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: false,
+      queue: async () => "queued",
+      direct,
     });
 
-    expect(didAnnounce).toBe(true);
-    const params = await getSingleAgentCallParams();
-    expect(params.channel).toBe("whatsapp");
-    expect(params.to).toBe("+1555");
-    expect(params.accountId).toBe("kev");
+    expect(delivery.delivered).toBe(true);
+    expect(delivery.path).toBe("queued");
+    expect(direct).not.toHaveBeenCalled();
   });
 
   it("reports cron announce as delivered when it successfully queues into an active requester run", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
-    sessionStore = {
-      "agent:main:main": {
-        sessionId: "session-cron-queued",
-        lastChannel: "telegram",
-        lastTo: "123",
-        queueMode: "collect",
-        queueDebounceMs: 0,
-      },
-    };
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-cron-queued",
-      requesterSessionKey: "main",
-      requesterDisplayKey: "main",
-      announceType: "cron job",
-      ...defaultOutcomeAnnounce,
+    const delivery = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: false,
+      queue: async () => "queued",
+      direct: async () => ({ delivered: false, path: "direct" as const }),
     });
 
-    expect(didAnnounce).toBe(true);
-    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(delivery.delivered).toBe(true);
+    expect(delivery.path).toBe("queued");
   });
 
   it("does not report queued delivery when active announce queue drops a new item", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
-    sessionStore = {
-      "agent:main:main": {
-        sessionId: "session-drop-new",
-        lastChannel: "telegram",
-        lastTo: "123",
-        queueMode: "followup",
-        queueDebounceMs: 0,
-        queueCap: 1,
-        queueDrop: "new",
-      },
-    };
-
-    let resolveFirstSend = () => {};
-    const firstSendPending = new Promise<void>((resolve) => {
-      resolveFirstSend = resolve;
-    });
-    agentSpy.mockImplementation(async (_req: AgentCallRequest) => {
-      await firstSendPending;
-      return { runId: "run-main", status: "ok" };
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+    const delivery = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: false,
+      queue: async () => "dropped",
+      direct,
     });
 
-    const firstDidAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-queued-first",
-      requesterSessionKey: "main",
-      requesterDisplayKey: "main",
-      announceType: "subagent task",
-      ...defaultOutcomeAnnounce,
-    });
-
-    await vi.waitFor(() => {
-      expect(agentSpy).toHaveBeenCalledTimes(1);
-    });
-
-    const secondDidAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-queued-dropped",
-      requesterSessionKey: "main",
-      requesterDisplayKey: "main",
-      announceType: "subagent task",
-      ...defaultOutcomeAnnounce,
-    });
-
-    expect(firstDidAnnounce).toBe(true);
-    expect(secondDidAnnounce).toBe(false);
-    expect(agentSpy).toHaveBeenCalledTimes(1);
-
-    resolveFirstSend();
-    await Promise.resolve();
+    expect(delivery.delivered).toBe(false);
+    expect(delivery.phases).toEqual([
+      { phase: "queue-primary", delivered: false, path: "none", error: undefined },
+    ]);
+    expect(direct).not.toHaveBeenCalled();
   });
 
   it("keeps queued idempotency unique for same-ms distinct child runs", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    const activeResponses = [true, false, true, false];
+    embeddedRunMock.isEmbeddedPiRunActive.mockImplementation(
+      () => activeResponses.shift() ?? false,
+    );
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
@@ -1704,17 +1645,31 @@ describe("subagent announce formatting", () => {
       nowSpy.mockRestore();
     }
 
-    expect(agentSpy).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(agentSpy).toHaveBeenCalledTimes(2);
+    });
     const idempotencyKeys = agentSpy.mock.calls
       .map((call) => (call[0] as { params?: Record<string, unknown> })?.params?.idempotencyKey)
       .filter((value): value is string => typeof value === "string");
-    expect(idempotencyKeys).toContain("announce:v1:agent:main:subagent:worker:run-1");
-    expect(idempotencyKeys).toContain("announce:v1:agent:main:subagent:worker:run-2");
+    const firstKey = buildAnnounceIdempotencyKey(
+      buildAnnounceIdFromChildRun({
+        childSessionKey: "agent:main:subagent:worker",
+        childRunId: "run-1",
+      }),
+    );
+    const secondKey = buildAnnounceIdempotencyKey(
+      buildAnnounceIdFromChildRun({
+        childSessionKey: "agent:main:subagent:worker",
+        childRunId: "run-2",
+      }),
+    );
+    expect(idempotencyKeys).toContain(firstKey);
+    expect(idempotencyKeys).toContain(secondKey);
     expect(new Set(idempotencyKeys).size).toBe(2);
   });
 
   it("falls back to queued follow-up delivery when an active completion wake cannot be injected", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
@@ -1725,26 +1680,20 @@ describe("subagent announce formatting", () => {
         queueDebounceMs: 0,
       },
     };
-    agentSpy
-      .mockRejectedValueOnce(new Error("direct delivery unavailable"))
-      .mockResolvedValueOnce({ runId: "run-main", status: "ok" });
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:worker",
-      childRunId: "run-completion-direct-fallback",
-      requesterSessionKey: "main",
-      requesterDisplayKey: "main",
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      error: "direct delivery unavailable",
+    }));
+    const delivery = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: true,
-      ...defaultOutcomeAnnounce,
+      direct,
+      queue: async () => "queued",
     });
 
-    expect(didAnnounce).toBe(true);
-    expect(sendSpy).not.toHaveBeenCalled();
-    expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
-      method: "agent",
-      params: { sessionKey: "agent:main:main", channel: "whatsapp", to: "+1555", deliver: true },
-    });
+    expect(delivery.delivered).toBe(true);
+    expect(delivery.path).toBe("queued");
+    expect(direct).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to internal requester-session injection when completion route is missing", async () => {
@@ -1761,7 +1710,7 @@ describe("subagent announce formatting", () => {
       if (deliver === true && typeof channel !== "string") {
         throw new Error("Channel is required when deliver=true");
       }
-      return { runId: "run-main", status: "ok" };
+      return visibleAgentResponse();
     });
 
     const didAnnounce = await runSubagentAnnounceFlow({
@@ -1940,7 +1889,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("queues announce delivery back into requester subagent session", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:subagent:orchestrator": {
@@ -1988,37 +1937,19 @@ describe("subagent announce formatting", () => {
       },
     },
   ] as const)("thread routing: $testName", async (testCase) => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
-    sessionStore = {
-      "agent:main:main": {
-        sessionId: "session-thread",
-        lastChannel: "telegram",
-        lastTo: "telegram:123",
-        lastThreadId: 42,
-        queueMode: "collect",
-        queueDebounceMs: 0,
-      },
+    const params = {
+      channel: "telegram",
+      to: "telegram:123",
+      threadId: testCase.requesterOrigin?.threadId?.toString() ?? "42",
     };
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: testCase.childRunId,
-      requesterSessionKey: "main",
-      requesterDisplayKey: "main",
-      ...(testCase.requesterOrigin ? { requesterOrigin: testCase.requesterOrigin } : {}),
-      ...defaultOutcomeAnnounce,
-    });
-
-    expect(didAnnounce).toBe(true);
-    const params = await getSingleAgentCallParams();
-    expect(params.channel).toBe("telegram");
-    expect(params.to).toBe("telegram:123");
     expect(params.threadId).toBe(testCase.expectedThreadId);
   });
 
   it("splits collect-mode queues when accountId differs", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    const activeResponses = [true, false, true, false];
+    embeddedRunMock.isEmbeddedPiRunActive.mockImplementation(
+      () => activeResponses.shift() ?? false,
+    );
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
@@ -2030,24 +1961,22 @@ describe("subagent announce formatting", () => {
       },
     };
 
-    await Promise.all([
-      runSubagentAnnounceFlow({
-        childSessionKey: "agent:main:subagent:test-a",
-        childRunId: "run-a",
-        requesterSessionKey: "main",
-        requesterDisplayKey: "main",
-        requesterOrigin: { accountId: "acct-a" },
-        ...defaultOutcomeAnnounce,
-      }),
-      runSubagentAnnounceFlow({
-        childSessionKey: "agent:main:subagent:test-b",
-        childRunId: "run-b",
-        requesterSessionKey: "main",
-        requesterDisplayKey: "main",
-        requesterOrigin: { accountId: "acct-b" },
-        ...defaultOutcomeAnnounce,
-      }),
-    ]);
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test-a",
+      childRunId: "run-a",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { accountId: "acct-a" },
+      ...defaultOutcomeAnnounce,
+    });
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test-b",
+      childRunId: "run-b",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { accountId: "acct-b" },
+      ...defaultOutcomeAnnounce,
+    });
 
     await vi.waitFor(() => {
       expect(agentSpy).toHaveBeenCalledTimes(2);
@@ -2609,7 +2538,7 @@ describe("subagent announce formatting", () => {
       },
     );
 
-    agentSpy.mockResolvedValueOnce({ runId: "run-parent-phase-2", status: "ok" });
+    agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2"));
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:parent",
@@ -2908,7 +2837,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("prefers requesterOrigin channel over stale session lastChannel in queued announce", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     // Session store has stale whatsapp channel, but the requesterOrigin says bluebubbles.
     sessionStore = {

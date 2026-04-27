@@ -11,11 +11,70 @@ export type UninstallActions = {
   entry: boolean;
   install: boolean;
   allowlist: boolean;
+  denylist: boolean;
   loadPath: boolean;
   memorySlot: boolean;
+  contextEngineSlot: boolean;
   channelConfig: boolean;
   directory: boolean;
 };
+
+export const UNINSTALL_ACTION_LABELS = {
+  entry: "config entry",
+  install: "install record",
+  allowlist: "allowlist entry",
+  denylist: "denylist entry",
+  loadPath: "load path",
+  memorySlot: "memory slot",
+  contextEngineSlot: "context engine slot",
+  channelConfig: "channel config",
+  directory: "directory",
+} satisfies Record<keyof UninstallActions, string>;
+
+const UNINSTALL_ACTION_ORDER = [
+  "entry",
+  "install",
+  "allowlist",
+  "denylist",
+  "loadPath",
+  "memorySlot",
+  "contextEngineSlot",
+  "channelConfig",
+  "directory",
+] as const satisfies ReadonlyArray<keyof UninstallActions>;
+
+export function createEmptyUninstallActions(
+  overrides: Partial<UninstallActions> = {},
+): UninstallActions {
+  return {
+    entry: false,
+    install: false,
+    allowlist: false,
+    denylist: false,
+    loadPath: false,
+    memorySlot: false,
+    contextEngineSlot: false,
+    channelConfig: false,
+    directory: false,
+    ...overrides,
+  };
+}
+
+export function createEmptyConfigUninstallActions(): Omit<UninstallActions, "directory"> {
+  const { directory: _directory, ...actions } = createEmptyUninstallActions();
+  return actions;
+}
+
+export function formatUninstallActionLabels(actions: UninstallActions): string[] {
+  return UNINSTALL_ACTION_ORDER.flatMap((key) =>
+    actions[key] ? [UNINSTALL_ACTION_LABELS[key]] : [],
+  );
+}
+
+export function formatUninstallSlotResetPreview(slotKey: "memory" | "contextEngine"): string {
+  const actionKey = slotKey === "memory" ? "memorySlot" : "contextEngineSlot";
+  return `${UNINSTALL_ACTION_LABELS[actionKey]} (will reset to "${defaultSlotIdForKey(slotKey)}")`;
+}
 
 export type UninstallPluginResult =
   | {
@@ -24,6 +83,20 @@ export type UninstallPluginResult =
       pluginId: string;
       actions: UninstallActions;
       warnings: string[];
+    }
+  | { ok: false; error: string };
+
+export type PluginUninstallDirectoryRemoval = {
+  target: string;
+};
+
+export type PluginUninstallPlanResult =
+  | {
+      ok: true;
+      config: OpenClawConfig;
+      pluginId: string;
+      actions: UninstallActions;
+      directoryRemoval: PluginUninstallDirectoryRemoval | null;
     }
   | { ok: false; error: string };
 
@@ -149,14 +222,7 @@ export function removePluginFromConfig(
   pluginId: string,
   opts?: { channelIds?: string[] },
 ): { config: OpenClawConfig; actions: Omit<UninstallActions, "directory"> } {
-  const actions: Omit<UninstallActions, "directory"> = {
-    entry: false,
-    install: false,
-    allowlist: false,
-    loadPath: false,
-    memorySlot: false,
-    channelConfig: false,
-  };
+  const actions = createEmptyConfigUninstallActions();
 
   const pluginsConfig = cfg.plugins ?? {};
 
@@ -187,6 +253,17 @@ export function removePluginFromConfig(
     actions.allowlist = true;
   }
 
+  // Remove from denylist. An explicit uninstall should clear stale policy so a
+  // later reinstall can enable the plugin deterministically.
+  let deny = pluginsConfig.deny;
+  if (Array.isArray(deny) && deny.includes(pluginId)) {
+    deny = deny.filter((id) => id !== pluginId);
+    if (deny.length === 0) {
+      deny = undefined;
+    }
+    actions.denylist = true;
+  }
+
   // Remove linked path from load.paths (for source === "path" plugins)
   let load = pluginsConfig.load;
   if (installRecord?.source === "path" && installRecord.sourcePath) {
@@ -204,7 +281,7 @@ export function removePluginFromConfig(
     }
   }
 
-  // Reset memory slot if this plugin was selected
+  // Reset slots if this plugin was selected.
   let slots = pluginsConfig.slots;
   if (slots?.memory === pluginId) {
     slots = {
@@ -212,6 +289,13 @@ export function removePluginFromConfig(
       memory: defaultSlotIdForKey("memory"),
     };
     actions.memorySlot = true;
+  }
+  if (slots?.contextEngine === pluginId) {
+    slots = {
+      ...slots,
+      contextEngine: defaultSlotIdForKey("contextEngine"),
+    };
+    actions.contextEngineSlot = true;
   }
   if (slots && Object.keys(slots).length === 0) {
     slots = undefined;
@@ -222,6 +306,7 @@ export function removePluginFromConfig(
     entries,
     installs,
     allow,
+    deny,
     load,
     slots,
   };
@@ -236,6 +321,9 @@ export function removePluginFromConfig(
   }
   if (cleanedPlugins.allow === undefined) {
     delete cleanedPlugins.allow;
+  }
+  if (cleanedPlugins.deny === undefined) {
+    delete cleanedPlugins.deny;
   }
   if (cleanedPlugins.load === undefined) {
     delete cleanedPlugins.load;
@@ -280,12 +368,10 @@ export type UninstallPluginParams = {
 };
 
 /**
- * Uninstall a plugin by removing it from config and optionally deleting installed files.
+ * Plan a plugin uninstall by removing it from config and resolving a safe file-removal target.
  * Linked plugins (source === "path") never have their source directory deleted.
  */
-export async function uninstallPlugin(
-  params: UninstallPluginParams,
-): Promise<UninstallPluginResult> {
+export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
   const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
 
   // Validate plugin exists
@@ -308,7 +394,6 @@ export async function uninstallPlugin(
     ...configActions,
     directory: false,
   };
-  const warnings: string[] = [];
 
   const deleteTarget =
     deleteFiles && !isLinked
@@ -320,29 +405,56 @@ export async function uninstallPlugin(
         })
       : null;
 
-  // Delete installed directory if requested and safe.
-  if (deleteTarget) {
-    const existed =
-      (await fs
-        .access(deleteTarget)
-        .then(() => true)
-        .catch(() => false)) ?? false;
-    try {
-      await fs.rm(deleteTarget, { recursive: true, force: true });
-      actions.directory = existed;
-    } catch (error) {
-      warnings.push(
-        `Failed to remove plugin directory ${deleteTarget}: ${formatErrorMessage(error)}`,
-      );
-      // Directory deletion failure is not fatal; config is the source of truth.
-    }
-  }
-
   return {
     ok: true,
     config: newConfig,
     pluginId,
     actions,
-    warnings,
+    directoryRemoval: deleteTarget ? { target: deleteTarget } : null,
+  };
+}
+
+export async function applyPluginUninstallDirectoryRemoval(
+  removal: PluginUninstallDirectoryRemoval | null,
+): Promise<{ directoryRemoved: boolean; warnings: string[] }> {
+  if (!removal) {
+    return { directoryRemoved: false, warnings: [] };
+  }
+
+  const existed =
+    (await fs
+      .access(removal.target)
+      .then(() => true)
+      .catch(() => false)) ?? false;
+  try {
+    await fs.rm(removal.target, { recursive: true, force: true });
+    return { directoryRemoved: existed, warnings: [] };
+  } catch (error) {
+    return {
+      directoryRemoved: false,
+      warnings: [
+        `Failed to remove plugin directory ${removal.target}: ${formatErrorMessage(error)}`,
+      ],
+    };
+  }
+}
+
+export async function uninstallPlugin(
+  params: UninstallPluginParams,
+): Promise<UninstallPluginResult> {
+  const plan = planPluginUninstall(params);
+  if (!plan.ok) {
+    return plan;
+  }
+  const directory = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+  return {
+    ok: true,
+    config: plan.config,
+    pluginId: plan.pluginId,
+    actions: {
+      ...plan.actions,
+      directory: directory.directoryRemoved,
+    },
+    warnings: directory.warnings,
   };
 }

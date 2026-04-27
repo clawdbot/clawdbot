@@ -213,7 +213,7 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
 }
 
 const ONE_PIXEL_PNG_B64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
 const ONE_PIXEL_JPEG_B64 = "QUJDRA==";
 
@@ -668,6 +668,81 @@ describe("image tool implicit imageModel config", () => {
         fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
       });
       expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+    });
+  });
+
+  it("passes the configured image timeout to provider calls", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      await withTempAgentDir(async (agentDir) => {
+        const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+          text: "ok",
+          model: params.model,
+        }));
+        installImageUnderstandingProviderStubs({
+          id: "ollama",
+          capabilities: ["image"],
+          describeImage,
+        });
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "ollama/gemma4:26b-a4b-it-q4_K_M" },
+            },
+          },
+          tools: {
+            media: {
+              image: { timeoutSeconds: 180 },
+            },
+          },
+        };
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        await expectImageToolExecOk(tool, imagePath);
+
+        expect(describeImage).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 180_000 }));
+      });
+    });
+  });
+
+  it("prefers a matching per-image-model timeout over the capability timeout", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      await withTempAgentDir(async (agentDir) => {
+        const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+          text: "ok",
+          model: params.model,
+        }));
+        installImageUnderstandingProviderStubs({
+          id: "ollama",
+          capabilities: ["image"],
+          describeImage,
+        });
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "ollama/gemma4:26b-a4b-it-q4_K_M" },
+            },
+          },
+          tools: {
+            media: {
+              image: {
+                timeoutSeconds: 180,
+                models: [
+                  {
+                    provider: "ollama",
+                    model: "gemma4:26b-a4b-it-q4_K_M",
+                    timeoutSeconds: 300,
+                  },
+                ],
+              },
+            },
+          },
+        };
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        await expectImageToolExecOk(tool, imagePath);
+
+        expect(describeImage).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 300_000 }));
+      });
     });
   });
 

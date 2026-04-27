@@ -69,6 +69,7 @@ export default definePluginEntry({
             const providerSetup = await loadProviderSetup();
             return await providerSetup.promptAndConfigureLmstudioInteractive({
               config: ctx.config,
+              agentDir: ctx.agentDir,
               prompter: ctx.prompter,
               secretInputMode: ctx.secretInputMode,
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,

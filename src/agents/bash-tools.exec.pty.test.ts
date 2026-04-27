@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "vitest";
-import { resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { markBackgrounded, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { createProcessTool } from "./bash-tools.process.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -37,20 +38,78 @@ async function runPtyCommand(command: string) {
   return await handle.promise;
 }
 
-test("exec supports pty output", async () => {
+async function startPtySession(command: string) {
+  const processTool = createProcessTool();
+  const run = await runExecProcess({
+    command,
+    workdir: process.cwd(),
+    env: currentEnv(),
+    usePty: true,
+    warnings: [],
+    maxOutput: 20_000,
+    pendingMaxOutput: 20_000,
+    notifyOnExit: false,
+    timeoutSec: 5,
+  });
+  markBackgrounded(run.session);
+  return { processTool, sessionId: run.session.id };
+}
+
+async function waitForSessionCompletion(params: {
+  processTool: ReturnType<typeof createProcessTool>;
+  sessionId: string;
+  expectedText: string;
+}) {
+  await expect
+    .poll(
+      async () => {
+        const poll = await params.processTool.execute("toolcall", {
+          action: "poll",
+          sessionId: params.sessionId,
+        });
+        const details = poll.details as { status?: string; aggregated?: string };
+        if (details.status === "running") {
+          return false;
+        }
+        expect(details.status).toBe("completed");
+        expect(details.aggregated ?? "").toContain(params.expectedText);
+        return true;
+      },
+      {
+        timeout: process.platform === "win32" ? 12_000 : 8_000,
+        interval: 30,
+      },
+    )
+    .toBe(true);
+}
+
+test("exec supports pty output and OPENCLAW_SHELL", async () => {
   const result = await runPtyCommand(
-    currentNodeEvalCommand("process.stdout.write(String.fromCharCode(111,107))"),
+    currentNodeEvalCommand('process.stdout.write(`ok:${process.env.OPENCLAW_SHELL || ""}`)'),
   );
 
   expect(result.status).toBe("completed");
   expect(result.aggregated).toContain("ok");
+  expect(result.aggregated).toContain("exec");
 });
 
-test("exec sets OPENCLAW_SHELL in pty mode", async () => {
-  const result = await runPtyCommand(
-    currentNodeEvalCommand('process.stdout.write(process.env.OPENCLAW_SHELL || "")'),
+test("process send-keys and submit send Enter for pty sessions", async () => {
+  const { processTool, sessionId } = await startPtySession(
+    currentNodeEvalCommand(
+      "const dataEvent=String.fromCharCode(100,97,116,97);const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);let first=false;process.stdin.on(dataEvent,d=>{process.stdout.write(d);if(d.includes(10)||d.includes(13)){if(first){process.stdout.write(submitted);process.exit(0);}first=true;}});",
+    ),
   );
 
-  expect(result.status).toBe("completed");
-  expect(result.aggregated).toContain("exec");
+  await processTool.execute("toolcall", {
+    action: "send-keys",
+    sessionId,
+    keys: ["h", "i", "Enter"],
+  });
+
+  await processTool.execute("toolcall", {
+    action: "submit",
+    sessionId,
+  });
+
+  await waitForSessionCompletion({ processTool, sessionId, expectedText: "submitted" });
 });

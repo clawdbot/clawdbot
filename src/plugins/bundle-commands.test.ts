@@ -13,7 +13,7 @@ vi.mock("./manifest-registry.js", () => ({
   loadPluginManifestRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
 }));
 
-vi.mock("./plugin-registry.js", () => ({
+vi.mock("./plugin-registry-contributions.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
 }));
 

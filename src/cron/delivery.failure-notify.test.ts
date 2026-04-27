@@ -95,7 +95,7 @@ describe("sendFailureNotificationAnnounce", () => {
     );
   });
 
-  it("passes sessionKey through to delivery-target resolution", async () => {
+  it("uses sessionKey for delivery-target resolution and outbound context", async () => {
     await sendFailureNotificationAnnounce(
       {} as never,
       {} as never,
@@ -112,6 +112,11 @@ describe("sendFailureNotificationAnnounce", () => {
       channel: "telegram",
       to: undefined,
       accountId: undefined,
+      sessionKey: "agent:main:telegram:direct:123:thread:99",
+    });
+    expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
       sessionKey: "agent:main:telegram:direct:123:thread:99",
     });
   });

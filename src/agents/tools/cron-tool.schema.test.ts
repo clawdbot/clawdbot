@@ -126,9 +126,9 @@ describe("CronToolSchema", () => {
     );
   });
 
-  it("job.failureAlert exposes after, channel, to, cooldownMs, mode, accountId", () => {
+  it("job.failureAlert exposes after, channel, to, cooldownMs, includeSkipped, mode, accountId", () => {
     expect(keysAt(schemaRecord, "job.failureAlert")).toEqual(
-      ["accountId", "after", "channel", "cooldownMs", "mode", "to"].toSorted(),
+      ["accountId", "after", "channel", "cooldownMs", "includeSkipped", "mode", "to"].toSorted(),
     );
   });
 

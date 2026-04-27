@@ -17,7 +17,11 @@
       "choiceHint": "Device login with your GitHub account",
       "groupId": "copilot",
       "groupLabel": "Copilot",
-      "groupHint": "GitHub + local proxy"
+      "groupHint": "GitHub + local proxy",
+      "optionKey": "githubCopilotToken",
+      "cliFlag": "--github-copilot-token",
+      "cliOption": "--github-copilot-token <token>",
+      "cliDescription": "GitHub Copilot OAuth token"
     }
   ],
   "configSchema": {

@@ -19,7 +19,7 @@ export function runAgentHarnessLlmInputHook(params: {
   hookRunner?: AgentHarnessHookRunner;
 }): void {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("llm_input")) {
+  if (!hookRunner?.hasHooks("llm_input") || typeof hookRunner.runLlmInput !== "function") {
     return;
   }
   void hookRunner.runLlmInput(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
@@ -33,7 +33,7 @@ export function runAgentHarnessLlmOutputHook(params: {
   hookRunner?: AgentHarnessHookRunner;
 }): void {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("llm_output")) {
+  if (!hookRunner?.hasHooks("llm_output") || typeof hookRunner.runLlmOutput !== "function") {
     return;
   }
   void hookRunner.runLlmOutput(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
@@ -47,7 +47,7 @@ export function runAgentHarnessAgentEndHook(params: {
   hookRunner?: AgentHarnessHookRunner;
 }): void {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("agent_end")) {
+  if (!hookRunner?.hasHooks("agent_end") || typeof hookRunner.runAgentEnd !== "function") {
     return;
   }
   void hookRunner.runAgentEnd(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
@@ -66,7 +66,10 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
   hookRunner?: AgentHarnessHookRunner;
 }): Promise<AgentHarnessBeforeAgentFinalizeOutcome> {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("before_agent_finalize")) {
+  if (
+    !hookRunner?.hasHooks("before_agent_finalize") ||
+    typeof hookRunner.runBeforeAgentFinalize !== "function"
+  ) {
     return { action: "continue" };
   }
   try {

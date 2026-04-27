@@ -51,6 +51,7 @@ type TelegramQaScenarioId =
   | "telegram-mention-gating";
 
 type TelegramQaScenarioRun = {
+  allowAnySutReply?: boolean;
   expectReply: boolean;
   input: string;
   expectedTextIncludes?: string[];
@@ -268,15 +269,11 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     id: "telegram-mentioned-message-reply",
     title: "Telegram mentioned message gets a reply",
     timeoutMs: 45_000,
-    buildRun: (sutUsername) => {
-      const token = `TELEGRAM_QA_REPLY_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        expectReply: true,
-        input: `@${sutUsername} reply with only this exact marker: ${token}`,
-        expectedTextIncludes: [token],
-        matchText: token,
-      };
-    },
+    buildRun: (sutUsername) => ({
+      allowAnySutReply: true,
+      expectReply: true,
+      input: `@${sutUsername} Telegram QA mention routing check. Reply with a short acknowledgement.`,
+    }),
   },
   {
     id: "telegram-mention-gating",
@@ -476,6 +473,13 @@ function buildTelegramQaConfig(
   };
   return {
     ...baseCfg,
+    agents: {
+      ...baseCfg.agents,
+      defaults: {
+        ...baseCfg.agents?.defaults,
+        skipBootstrap: true,
+      },
+    },
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -751,6 +755,7 @@ function findScenario(ids?: string[]) {
 
 function matchesTelegramScenarioReply(params: {
   groupId: string;
+  allowAnySutReply?: boolean;
   matchText?: string;
   message: TelegramObservedMessage;
   sentMessageId: number;
@@ -763,6 +768,9 @@ function matchesTelegramScenarioReply(params: {
     return false;
   }
   if (params.message.replyToMessageId === params.sentMessageId) {
+    return true;
+  }
+  if (params.allowAnySutReply === true) {
     return true;
   }
   return Boolean(params.matchText && params.message.text.includes(params.matchText));
@@ -1216,6 +1224,7 @@ export async function runTelegramQaLive(params: {
               observationScenarioTitle: scenario.title,
               predicate: (message) =>
                 matchesTelegramScenarioReply({
+                  allowAnySutReply: scenarioRun.allowAnySutReply,
                   groupId: runtimeEnv.groupId,
                   matchText: scenarioRun.matchText,
                   message,

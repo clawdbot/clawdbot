@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { saveJsonFile } from "../infra/json-file.js";
 import { readJsonFile, readJsonFileSync, writeJsonAtomic } from "../infra/json-files.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import {
   resolveInstalledPluginIndexStorePath,
@@ -15,6 +16,7 @@ import {
   loadInstalledPluginIndex,
   refreshInstalledPluginIndex,
   type InstalledPluginIndex,
+  type InstalledPluginInstallRecordInfo,
   type InstalledPluginIndexRefreshReason,
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
@@ -36,71 +38,80 @@ export type InstalledPluginIndexStoreInspection = {
 
 const StringArraySchema = z.array(z.string());
 
-const InstalledPluginIndexStartupSchema = z
-  .object({
-    sidecar: z.boolean(),
-    memory: z.boolean(),
-    deferConfiguredChannelFullLoadUntilAfterListen: z.boolean(),
-    agentHarnesses: StringArraySchema,
-  })
-  .passthrough();
+const InstalledPluginIndexStartupSchema = z.object({
+  sidecar: z.boolean(),
+  memory: z.boolean(),
+  deferConfiguredChannelFullLoadUntilAfterListen: z.boolean(),
+  agentHarnesses: StringArraySchema,
+});
 
-const InstalledPluginIndexRecordSchema = z
-  .object({
-    pluginId: z.string(),
-    packageName: z.string().optional(),
-    packageVersion: z.string().optional(),
-    installRecord: z.record(z.string(), z.unknown()).optional(),
-    installRecordHash: z.string().optional(),
-    packageInstall: z.unknown().optional(),
-    packageChannel: z.unknown().optional(),
-    manifestPath: z.string(),
-    manifestHash: z.string(),
-    format: z.string().optional(),
-    bundleFormat: z.string().optional(),
-    source: z.string().optional(),
-    setupSource: z.string().optional(),
-    packageJson: z
-      .object({
-        path: z.string(),
-        hash: z.string(),
-      })
-      .optional(),
-    rootDir: z.string(),
-    origin: z.string(),
-    enabled: z.boolean(),
-    enabledByDefault: z.boolean().optional(),
-    startup: InstalledPluginIndexStartupSchema,
-    compat: z.array(z.string()),
-  })
-  .passthrough();
+const InstalledPluginIndexRecordSchema = z.object({
+  pluginId: z.string(),
+  packageName: z.string().optional(),
+  packageVersion: z.string().optional(),
+  installRecord: z.record(z.string(), z.unknown()).optional(),
+  installRecordHash: z.string().optional(),
+  packageInstall: z.unknown().optional(),
+  packageChannel: z.unknown().optional(),
+  manifestPath: z.string(),
+  manifestHash: z.string(),
+  format: z.string().optional(),
+  bundleFormat: z.string().optional(),
+  source: z.string().optional(),
+  setupSource: z.string().optional(),
+  packageJson: z
+    .object({
+      path: z.string(),
+      hash: z.string(),
+    })
+    .optional(),
+  rootDir: z.string(),
+  origin: z.string(),
+  enabled: z.boolean(),
+  enabledByDefault: z.boolean().optional(),
+  syntheticAuthRefs: StringArraySchema.optional(),
+  startup: InstalledPluginIndexStartupSchema,
+  compat: z.array(z.string()),
+});
 
 const InstalledPluginInstallRecordSchema = z.record(z.string(), z.unknown());
 
-const PluginDiagnosticSchema = z
-  .object({
-    level: z.union([z.literal("warn"), z.literal("error")]),
-    message: z.string(),
-    pluginId: z.string().optional(),
-    source: z.string().optional(),
-  })
-  .passthrough();
+const PluginDiagnosticSchema = z.object({
+  level: z.union([z.literal("warn"), z.literal("error")]),
+  message: z.string(),
+  pluginId: z.string().optional(),
+  source: z.string().optional(),
+});
 
-const InstalledPluginIndexSchema = z
-  .object({
-    version: z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
-    warning: z.string().optional(),
-    hostContractVersion: z.string(),
-    compatRegistryVersion: z.string(),
-    migrationVersion: z.literal(INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION),
-    policyHash: z.string(),
-    generatedAtMs: z.number(),
-    refreshReason: z.string().optional(),
-    installRecords: z.record(z.string(), InstalledPluginInstallRecordSchema).optional(),
-    plugins: z.array(InstalledPluginIndexRecordSchema),
-    diagnostics: z.array(PluginDiagnosticSchema),
-  })
-  .passthrough();
+const InstalledPluginIndexSchema = z.object({
+  version: z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
+  warning: z.string().optional(),
+  hostContractVersion: z.string(),
+  compatRegistryVersion: z.string(),
+  migrationVersion: z.literal(INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION),
+  policyHash: z.string(),
+  generatedAtMs: z.number(),
+  refreshReason: z.string().optional(),
+  installRecords: z.record(z.string(), InstalledPluginInstallRecordSchema).optional(),
+  plugins: z.array(InstalledPluginIndexRecordSchema),
+  diagnostics: z.array(PluginDiagnosticSchema),
+});
+
+function copySafeInstallRecords(
+  records: Readonly<Record<string, InstalledPluginInstallRecordInfo>> | undefined,
+): Record<string, InstalledPluginInstallRecordInfo> | undefined {
+  if (!records) {
+    return undefined;
+  }
+  const safeRecords: Record<string, InstalledPluginInstallRecordInfo> = {};
+  for (const [pluginId, record] of Object.entries(records)) {
+    if (isBlockedObjectKey(pluginId)) {
+      continue;
+    }
+    safeRecords[pluginId] = record;
+  }
+  return safeRecords;
+}
 
 function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null {
   const parsed = safeParseWithSchema(InstalledPluginIndexSchema, value) as
@@ -111,11 +122,24 @@ function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null 
   if (!parsed) {
     return null;
   }
-  return {
-    ...parsed,
-    installRecords:
-      parsed.installRecords ??
+  const installRecords =
+    copySafeInstallRecords(parsed.installRecords) ??
+    copySafeInstallRecords(
       extractPluginInstallRecordsFromInstalledPluginIndex(parsed as InstalledPluginIndex),
+    ) ??
+    {};
+  return {
+    version: parsed.version,
+    ...(parsed.warning ? { warning: parsed.warning } : {}),
+    hostContractVersion: parsed.hostContractVersion,
+    compatRegistryVersion: parsed.compatRegistryVersion,
+    migrationVersion: parsed.migrationVersion,
+    policyHash: parsed.policyHash,
+    generatedAtMs: parsed.generatedAtMs,
+    ...(parsed.refreshReason ? { refreshReason: parsed.refreshReason } : {}),
+    installRecords,
+    plugins: parsed.plugins,
+    diagnostics: parsed.diagnostics,
   };
 }
 

@@ -1502,6 +1502,181 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   type: "string",
                   minLength: 1,
                 },
+                persona: {
+                  type: "string",
+                },
+                personas: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {
+                    type: "object",
+                    properties: {
+                      label: {
+                        type: "string",
+                      },
+                      description: {
+                        type: "string",
+                      },
+                      provider: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                      fallbackPolicy: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            const: "preserve-persona",
+                          },
+                          {
+                            type: "string",
+                            const: "provider-defaults",
+                          },
+                          {
+                            type: "string",
+                            const: "fail",
+                          },
+                        ],
+                      },
+                      prompt: {
+                        type: "object",
+                        properties: {
+                          profile: {
+                            type: "string",
+                          },
+                          scene: {
+                            type: "string",
+                          },
+                          sampleContext: {
+                            type: "string",
+                          },
+                          style: {
+                            type: "string",
+                          },
+                          accent: {
+                            type: "string",
+                          },
+                          pacing: {
+                            type: "string",
+                          },
+                          constraints: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                      providers: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {
+                          type: "object",
+                          properties: {
+                            apiKey: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  oneOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "env",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "file",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "exec",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                          },
+                          additionalProperties: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                              {
+                                type: "boolean",
+                              },
+                              {
+                                type: "null",
+                              },
+                              {
+                                type: "array",
+                                items: {},
+                              },
+                              {
+                                type: "object",
+                                propertyNames: {
+                                  type: "string",
+                                },
+                                additionalProperties: {},
+                              },
+                            ],
+                          },
+                        },
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                },
                 summaryModel: {
                   type: "string",
                 },
@@ -2682,6 +2857,181 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         type: "string",
                         minLength: 1,
                       },
+                      persona: {
+                        type: "string",
+                      },
+                      personas: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {
+                          type: "object",
+                          properties: {
+                            label: {
+                              type: "string",
+                            },
+                            description: {
+                              type: "string",
+                            },
+                            provider: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                            fallbackPolicy: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                  const: "preserve-persona",
+                                },
+                                {
+                                  type: "string",
+                                  const: "provider-defaults",
+                                },
+                                {
+                                  type: "string",
+                                  const: "fail",
+                                },
+                              ],
+                            },
+                            prompt: {
+                              type: "object",
+                              properties: {
+                                profile: {
+                                  type: "string",
+                                },
+                                scene: {
+                                  type: "string",
+                                },
+                                sampleContext: {
+                                  type: "string",
+                                },
+                                style: {
+                                  type: "string",
+                                },
+                                accent: {
+                                  type: "string",
+                                },
+                                pacing: {
+                                  type: "string",
+                                },
+                                constraints: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                            providers: {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {
+                                type: "object",
+                                properties: {
+                                  apiKey: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                },
+                                additionalProperties: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      type: "number",
+                                    },
+                                    {
+                                      type: "boolean",
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                    {
+                                      type: "array",
+                                      items: {},
+                                    },
+                                    {
+                                      type: "object",
+                                      propertyNames: {
+                                        type: "string",
+                                      },
+                                      additionalProperties: {},
+                                    },
+                                  ],
+                                },
+                              },
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
                       summaryModel: {
                         type: "string",
                       },
@@ -3792,6 +4142,78 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           default: true,
           type: "boolean",
         },
+        tts: {
+          type: "object",
+          properties: {
+            auto: {
+              type: "string",
+              enum: ["off", "always", "inbound", "tagged"],
+            },
+            enabled: {
+              type: "boolean",
+            },
+            mode: {
+              type: "string",
+              enum: ["final", "all"],
+            },
+            provider: {
+              type: "string",
+            },
+            persona: {
+              type: "string",
+            },
+            personas: {
+              type: "object",
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {},
+              },
+            },
+            summaryModel: {
+              type: "string",
+            },
+            modelOverrides: {
+              type: "object",
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {},
+            },
+            providers: {
+              type: "object",
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {},
+              },
+            },
+            prefsPath: {
+              type: "string",
+            },
+            maxTextLength: {
+              type: "integer",
+              minimum: 1,
+              maximum: 9007199254740991,
+            },
+            timeoutMs: {
+              type: "integer",
+              minimum: 1000,
+              maximum: 120000,
+            },
+          },
+          additionalProperties: false,
+        },
         groupSessionScope: {
           type: "string",
           enum: ["group", "group_sender", "group_topic", "group_topic_sender"],
@@ -4344,6 +4766,78 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               resolveSenderNames: {
                 type: "boolean",
+              },
+              tts: {
+                type: "object",
+                properties: {
+                  auto: {
+                    type: "string",
+                    enum: ["off", "always", "inbound", "tagged"],
+                  },
+                  enabled: {
+                    type: "boolean",
+                  },
+                  mode: {
+                    type: "string",
+                    enum: ["final", "all"],
+                  },
+                  provider: {
+                    type: "string",
+                  },
+                  persona: {
+                    type: "string",
+                  },
+                  personas: {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {},
+                    },
+                  },
+                  summaryModel: {
+                    type: "string",
+                  },
+                  modelOverrides: {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {},
+                  },
+                  providers: {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {},
+                    },
+                  },
+                  prefsPath: {
+                    type: "string",
+                  },
+                  maxTextLength: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 9007199254740991,
+                  },
+                  timeoutMs: {
+                    type: "integer",
+                    minimum: 1000,
+                    maximum: 120000,
+                  },
+                },
+                additionalProperties: false,
               },
               groupSessionScope: {
                 type: "string",

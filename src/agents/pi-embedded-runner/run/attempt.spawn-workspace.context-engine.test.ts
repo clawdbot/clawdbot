@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMemorySystemPromptAddition } from "../../../plugin-sdk/core.js";
+import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
@@ -251,6 +251,27 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(bootstrap, sessionKey);
     expectCalledWithSessionKey(assemble, sessionKey);
     expectCalledWithSessionKey(afterTurn, sessionKey);
+  });
+
+  it("resolves bootstrap context before acquiring the session write lock", async () => {
+    const events: string[] = [];
+    hoisted.resolveBootstrapContextForRunMock.mockImplementation(async () => {
+      events.push("bootstrap");
+      return { bootstrapFiles: [], contextFiles: [] };
+    });
+    hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
+      events.push("lock");
+      return { release: async () => {} };
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+    });
+
+    expect(events).toEqual(expect.arrayContaining(["bootstrap", "lock"]));
+    expect(events.indexOf("bootstrap")).toBeLessThan(events.indexOf("lock"));
   });
 
   it("forwards modelId to assemble", async () => {

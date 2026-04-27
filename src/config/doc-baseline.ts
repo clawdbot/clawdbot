@@ -368,6 +368,7 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     cache: false,
     env,
     config: {},
+    bundledChannelConfigCollector: runtime.collectBundledChannelConfigs,
   });
   logConfigDocBaselineDebug(`loaded ${manifestRegistry.plugins.length} bundled plugin manifests`);
   const bundledRegistry = {

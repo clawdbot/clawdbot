@@ -96,6 +96,7 @@ export type DetachedTaskDeliveryStatusParams = {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 };
 
 export type DetachedTaskCancelParams = {

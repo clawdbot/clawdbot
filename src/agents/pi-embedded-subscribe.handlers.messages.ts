@@ -27,6 +27,7 @@ import type {
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
+import { warnIfAssistantEmittedToolText } from "./pi-embedded-subscribe.tool-text-diagnostics.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -674,6 +675,7 @@ export function handleMessageEnd(
     rawText,
     rawThinking: extractAssistantThinking(assistantMessage),
   });
+  warnIfAssistantEmittedToolText(ctx, assistantMessage);
 
   const text = resolveSilentReplyFallbackText({
     text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }),

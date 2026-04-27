@@ -7,12 +7,14 @@ import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { isMainModule } from "../infra/is-main.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
 
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
+  routeLogsToStderr();
   const cfg = loadConfig();
   const bootstrap = await resolveGatewayClientBootstrap({
     config: cfg,

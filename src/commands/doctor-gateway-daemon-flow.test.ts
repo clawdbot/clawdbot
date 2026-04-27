@@ -294,7 +294,6 @@ describe("maybeRepairGatewayDaemon", () => {
   it("skips LaunchAgent bootstrap repair when service repair policy is external", async () => {
     setPlatform("darwin");
     service.isLoaded.mockResolvedValue(false);
-    vi.mocked(launchd.isLaunchAgentListed).mockResolvedValue(true);
     vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
     vi.mocked(launchd.launchAgentPlistExists).mockResolvedValue(true);
 

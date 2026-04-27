@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import { refreshSlashCommands, resetSlashCommandsForTest } from "../chat/slash-commands.ts";
-import { getPaletteItems } from "./command-palette.ts";
+import { getFilteredPaletteItems, getPaletteItems } from "./command-palette.ts";
 
-afterEach(() => {
+afterEach(async () => {
   resetSlashCommandsForTest();
+  await i18n.setLocale("en");
 });
 
 describe("command palette", () => {
@@ -48,6 +50,22 @@ describe("command palette", () => {
       expect.objectContaining({
         id: "slash:prose",
         label: "/prose",
+      }),
+    );
+  });
+
+  it("matches localized base item labels and descriptions", async () => {
+    await i18n.setLocale("zh-CN");
+
+    expect(getPaletteItems()).toContainEqual(
+      expect.objectContaining({
+        id: "nav-config",
+        label: "设置",
+      }),
+    );
+    expect(getFilteredPaletteItems("切换调试")).toContainEqual(
+      expect.objectContaining({
+        id: "skill-debug",
       }),
     );
   });

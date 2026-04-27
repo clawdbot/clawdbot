@@ -56,6 +56,10 @@ type BrowserEnsureOptions = {
   headless?: boolean;
 };
 
+const MANAGED_LAUNCH_FAILURE_THRESHOLD = 3;
+const MANAGED_LAUNCH_COOLDOWN_BASE_MS = 30_000;
+const MANAGED_LAUNCH_COOLDOWN_MAX_MS = 5 * 60_000;
+
 function launchOptionsForEnsure(options?: BrowserEnsureOptions) {
   return typeof options?.headless === "boolean"
     ? { headlessOverride: options.headless }
@@ -78,6 +82,51 @@ function formatLocalPortOwnershipHint(profile: ResolvedBrowserProfile): string {
     `set browser.profiles.${profile.name}.attachOnly=true so OpenClaw attaches without trying ` +
     "to manage the local process. For Browserless Docker, set EXTERNAL to the same WebSocket " +
     "endpoint OpenClaw can reach via browser.profiles.<name>.cdpUrl."
+  );
+}
+
+function normalizeFailureMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const trimmed = raw.trim();
+  return trimmed || "unknown browser launch failure";
+}
+
+function resetManagedLaunchFailure(profileState: ProfileRuntimeState): void {
+  profileState.managedLaunchFailure = undefined;
+}
+
+function recordManagedLaunchFailure(profileState: ProfileRuntimeState, err: unknown): void {
+  const previous = profileState.managedLaunchFailure;
+  const consecutiveFailures = (previous?.consecutiveFailures ?? 0) + 1;
+  const exponent = Math.max(0, consecutiveFailures - MANAGED_LAUNCH_FAILURE_THRESHOLD);
+  const cooldownMs =
+    consecutiveFailures >= MANAGED_LAUNCH_FAILURE_THRESHOLD
+      ? Math.min(MANAGED_LAUNCH_COOLDOWN_MAX_MS, MANAGED_LAUNCH_COOLDOWN_BASE_MS * 2 ** exponent)
+      : 0;
+  const now = Date.now();
+  profileState.managedLaunchFailure = {
+    consecutiveFailures,
+    lastFailureAt: now,
+    ...(cooldownMs > 0 ? { cooldownUntil: now + cooldownMs } : {}),
+    lastError: normalizeFailureMessage(err),
+  };
+}
+
+function assertManagedLaunchNotCoolingDown(profileName: string, profileState: ProfileRuntimeState) {
+  const failure = profileState.managedLaunchFailure;
+  if (!failure || failure.consecutiveFailures < MANAGED_LAUNCH_FAILURE_THRESHOLD) {
+    return;
+  }
+  const cooldownUntil = failure.cooldownUntil ?? 0;
+  const remainingMs = cooldownUntil - Date.now();
+  if (remainingMs <= 0) {
+    return;
+  }
+  const retrySeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+  throw new BrowserProfileUnavailableError(
+    `Browser launch for profile "${profileName}" is cooling down after ${failure.consecutiveFailures} consecutive managed Chrome launch failures. ` +
+      `Retry in ${retrySeconds}s after fixing Chrome startup, or set browser.enabled=false if the browser tool is not needed. ` +
+      `Last error: ${failure.lastError}`,
   );
 }
 
@@ -189,6 +238,7 @@ export function createProfileAvailability({
     profileState.lastTargetId = null;
 
     const previousProfile = reconcile.previousProfile;
+    resetManagedLaunchFailure(profileState);
     if (profileState.running) {
       await stopOpenClawChrome(profileState.running).catch(() => {});
       setProfileRunning(null);
@@ -243,7 +293,19 @@ export function createProfileAvailability({
     throw new BrowserProfileUnavailableError(formatChromeMcpAttachFailure(lastError));
   };
 
-  let inflightEnsureBrowserAvailable: { key: string; promise: Promise<void> } | null = null;
+  const launchManagedChrome = async (
+    profileState: ProfileRuntimeState,
+    current: BrowserServerState,
+    launchOptions: ReturnType<typeof launchOptionsForEnsure>,
+  ) => {
+    assertManagedLaunchNotCoolingDown(profile.name, profileState);
+    try {
+      return await launchOpenClawChrome(current.resolved, profile, launchOptions);
+    } catch (err) {
+      recordManagedLaunchFailure(profileState, err);
+      throw err;
+    }
+  };
 
   const ensureBrowserAvailableOnce = async (options?: BrowserEnsureOptions): Promise<void> => {
     await reconcileProfileRuntime();
@@ -280,6 +342,7 @@ export function createProfileAvailability({
           (await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) &&
           (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))
         ) {
+          resetManagedLaunchFailure(profileState);
           return;
         }
       }
@@ -290,13 +353,15 @@ export function createProfileAvailability({
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }
-      const launched = await launchOpenClawChrome(current.resolved, profile, launchOptions);
+      const launched = await launchManagedChrome(profileState, current, launchOptions);
       attachRunning(launched);
       try {
         await waitForCdpReadyAfterLaunch();
+        resetManagedLaunchFailure(profileState);
       } catch (err) {
         await stopOpenClawChrome(launched).catch(() => {});
         setProfileRunning(null);
+        recordManagedLaunchFailure(profileState, err);
         throw err;
       }
       return;
@@ -304,6 +369,7 @@ export function createProfileAvailability({
 
     // Port is reachable - check if we own it.
     if (await isReachable()) {
+      resetManagedLaunchFailure(profileState);
       return;
     }
 
@@ -339,22 +405,26 @@ export function createProfileAvailability({
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);
 
-    const relaunched = await launchOpenClawChrome(current.resolved, profile, launchOptions);
+    const relaunched = await launchManagedChrome(profileState, current, launchOptions);
     attachRunning(relaunched);
 
     if (!(await isReachable(PROFILE_POST_RESTART_WS_TIMEOUT_MS))) {
-      throw new Error(
+      const err = new Error(
         `Chrome CDP websocket for profile "${profile.name}" is not reachable after restart. ${await describeCdpFailure(
           PROFILE_POST_RESTART_WS_TIMEOUT_MS,
         )}`,
       );
+      recordManagedLaunchFailure(profileState, err);
+      throw err;
     }
+    resetManagedLaunchFailure(profileState);
   };
 
   const ensureBrowserAvailable = async (options?: BrowserEnsureOptions): Promise<void> => {
     const key = ensureOptionsKey(options);
+    const profileState = getProfileState();
     for (;;) {
-      const current = inflightEnsureBrowserAvailable;
+      const current = profileState.ensureBrowserAvailable;
       if (!current) {
         break;
       }
@@ -364,11 +434,11 @@ export function createProfileAvailability({
       await current.promise.catch(() => {});
     }
     const promise = ensureBrowserAvailableOnce(options).finally(() => {
-      if (inflightEnsureBrowserAvailable?.promise === promise) {
-        inflightEnsureBrowserAvailable = null;
+      if (profileState.ensureBrowserAvailable?.promise === promise) {
+        profileState.ensureBrowserAvailable = null;
       }
     });
-    inflightEnsureBrowserAvailable = { key, promise };
+    profileState.ensureBrowserAvailable = { key, promise };
     return promise;
   };
 
@@ -380,6 +450,7 @@ export function createProfileAvailability({
       return { stopped };
     }
     const profileState = getProfileState();
+    resetManagedLaunchFailure(profileState);
     if (!profileState.running) {
       const idleStop = resolveIdleProfileStopOutcome(profile);
       if (idleStop.closePlaywright) {

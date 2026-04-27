@@ -786,14 +786,7 @@ describe("runCliAgent spawn path", () => {
           runId: "run-live-1",
           prompt: "first",
           backend: {
-            args: [
-              "-p",
-              "--output-format",
-              "stream-json",
-              "--strict-mcp-config",
-              "--mcp-config",
-              "/tmp/mcp-one.json",
-            ],
+            args: ["-p", "--strict-mcp-config", "--mcp-config", "/tmp/mcp-one.json"],
             liveSession: "claude-stdio",
           },
           mcpConfigHash: "same-mcp-config",
@@ -806,14 +799,7 @@ describe("runCliAgent spawn path", () => {
           runId: "run-live-2",
           prompt: "second",
           backend: {
-            args: [
-              "-p",
-              "--output-format",
-              "stream-json",
-              "--strict-mcp-config",
-              "--mcp-config",
-              "/tmp/mcp-two.json",
-            ],
+            args: ["-p", "--strict-mcp-config", "--mcp-config", "/tmp/mcp-two.json"],
             liveSession: "claude-stdio",
           },
           mcpConfigHash: "same-mcp-config",
@@ -829,6 +815,7 @@ describe("runCliAgent spawn path", () => {
       expect(supervisorSpawnMock).toHaveBeenCalledOnce();
       expect(spawnInput.stdinMode).toBe("pipe-open");
       expect(spawnInput.argv).toContain("--input-format");
+      expect(spawnInput.argv).toContain("--output-format");
       expect(spawnInput.argv).toContain("stream-json");
       expect(spawnInput.argv).toContain("--replay-user-messages");
       expect(spawnInput.argv).not.toContain("--session-id");
@@ -1212,6 +1199,36 @@ describe("runCliAgent spawn path", () => {
     expect(args).not.toContain("--append-system-prompt");
     expect(args).not.toContain("old prompt");
     expect(args).not.toContain("current prompt");
+  });
+
+  it("adds Claude stream-json output format when building live session argv", () => {
+    const backend: PreparedCliRunContext["preparedBackend"]["backend"] = {
+      command: "claude",
+      args: ["-p"],
+      output: "jsonl",
+      input: "stdin",
+      sessionArg: "--session-id",
+      systemPromptArg: "--append-system-prompt",
+      systemPromptFileArg: "--append-system-prompt-file",
+    };
+
+    const args = buildClaudeLiveArgs({
+      args: ["-p"],
+      backend,
+      systemPrompt: "current prompt",
+      useResume: false,
+    });
+
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--permission-prompt-tool",
+        "stdio",
+      ]),
+    );
   });
 
   it("restarts Claude live sessions for env changes and fresh retries", async () => {

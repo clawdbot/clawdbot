@@ -69,6 +69,64 @@ describe("parseCliProfileArgs", () => {
     expect(res.argv).toEqual(["node", "openclaw", "status", "--deep"]);
   });
 
+  it("preserves Matrix QA --profile for the command parser", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "matrix",
+      "--profile",
+      "fast",
+      "--fail-fast",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "qa",
+      "matrix",
+      "--profile",
+      "fast",
+      "--fail-fast",
+    ]);
+  });
+
+  it("preserves Matrix QA --profile after leading root options", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--no-color",
+      "qa",
+      "matrix",
+      "--profile=fast",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual(["node", "openclaw", "--no-color", "qa", "matrix", "--profile=fast"]);
+  });
+
+  it("still parses root --profile before Matrix QA", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "qa",
+      "matrix",
+      "--fail-fast",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "matrix", "--fail-fast"]);
+  });
+
   it("parses interleaved --dev after the command token", () => {
     const res = parseCliProfileArgs(["node", "openclaw", "status", "--dev"]);
     if (!res.ok) {

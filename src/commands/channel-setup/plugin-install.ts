@@ -41,6 +41,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  promptInstall?: boolean;
 }): Promise<InstallResult> {
   const result = await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
@@ -48,6 +49,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
     prompter: params.prompter,
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
+    ...(params.promptInstall !== undefined ? { promptInstall: params.promptInstall } : {}),
   });
   return {
     cfg: result.cfg,

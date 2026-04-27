@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
@@ -17,6 +18,7 @@ import {
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
+  resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import {
   countActiveDescendantRuns,
@@ -31,10 +33,7 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
-import {
-  listThinkingLevelOptions,
-  resolveThinkingDefaultForModel,
-} from "../auto-reply/thinking.js";
+import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -1038,6 +1037,25 @@ export function resolveGatewaySessionStoreTarget(params: {
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
+function resolveGatewaySessionThinkingDefault(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentId?: string;
+}) {
+  const agentThinkingDefault = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
+    : undefined;
+  return (
+    agentThinkingDefault ??
+    resolveThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+    })
+  );
+}
+
 export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
@@ -1055,7 +1073,8 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     contextTokens: contextTokens ?? null,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveThinkingDefaultForModel({
+    thinkingDefault: resolveGatewaySessionThinkingDefault({
+      cfg,
       provider: resolved.provider,
       model: resolved.model,
     }),
@@ -1429,9 +1448,11 @@ export function buildGatewaySessionRow(params: {
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveThinkingDefaultForModel({
+    thinkingDefault: resolveGatewaySessionThinkingDefault({
+      cfg,
       provider: thinkingProvider,
       model: thinkingModel,
+      agentId: sessionAgentId,
     }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,

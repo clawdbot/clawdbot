@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
-import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -44,9 +44,52 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "requires",
 ] as const;
 
+const MUTATING_FAILURE_ACTION_PATTERN =
+  "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|tool|action|operation)";
+
+const MUTATING_FAILURE_INABILITY_PATTERN = new RegExp(
+  `\\b(?:couldn't|could not|can't|cannot|unable to|am unable to|wasn't able to|was not able to|were unable to)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
+  "u",
+);
+const MUTATING_FAILURE_ACTION_THEN_FAILURE_PATTERN = new RegExp(
+  `\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b.{0,100}\\b(?:failed|failure|errored)\\b`,
+  "u",
+);
+const MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN = new RegExp(
+  `\\b(?:failed|failure)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
+  "u",
+);
+const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
+  `\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
+  "u",
+);
+const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
+const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
+
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = normalizeOptionalLowercaseString(error) ?? "";
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
+}
+
+function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
+  const normalizedText = normalizeTextForComparison(text);
+  if (!normalizedText) {
+    return false;
+  }
+  if (DID_NOT_FAIL_PATTERN.test(normalizedText)) {
+    return false;
+  }
+  if (MUTATING_FAILURE_INABILITY_PATTERN.test(normalizedText)) {
+    return true;
+  }
+  if (NEGATED_FAILURE_PATTERN.test(normalizedText)) {
+    return false;
+  }
+  return (
+    MUTATING_FAILURE_ACTION_THEN_FAILURE_PATTERN.test(normalizedText) ||
+    MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN.test(normalizedText) ||
+    MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN.test(normalizedText)
+  );
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
@@ -84,6 +127,7 @@ function shouldIncludeToolErrorDetails(params: {
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
+  hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
   isCronTrigger?: boolean;
@@ -107,7 +151,10 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
-    return { showWarning: true, includeDetails };
+    return {
+      showWarning: !params.hasUserFacingFailureAcknowledgement,
+      includeDetails,
+    };
   }
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
@@ -130,6 +177,7 @@ export function buildEmbeddedRunPayloads(params: {
   model?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
+  thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
@@ -223,7 +271,7 @@ export function buildEmbeddedRunPayloads(params: {
 
   const reasoningText = suppressAssistantArtifacts
     ? ""
-    : params.lastAssistant && params.reasoningLevel === "on"
+    : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {
@@ -315,6 +363,7 @@ export function buildEmbeddedRunPayloads(params: {
       ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
+  let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {
     const {
       text: cleanedText,
@@ -336,12 +385,16 @@ export function buildEmbeddedRunPayloads(params: {
       replyToCurrent,
     });
     hasUserFacingAssistantReply = true;
+    if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
+      hasUserFacingFailureAcknowledgement = true;
+    }
   }
 
   if (params.lastToolError) {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
+      hasUserFacingFailureAcknowledgement,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       isCronTrigger: params.isCronTrigger,
@@ -349,7 +402,7 @@ export function buildEmbeddedRunPayloads(params: {
       verboseLevel: params.verboseLevel,
     });
 
-    // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
+    // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     if (warningPolicy.showWarning) {
       const toolSummary = formatToolAggregate(

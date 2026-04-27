@@ -26,10 +26,52 @@ vi.mock("./plugin-registry.js", () => ({
 
 import { resolvePluginConfigContractsById } from "./config-contracts.js";
 
+type PluginManifestRecord = PluginManifestRegistry["plugins"][number];
+
 function createRegistry(plugins: PluginManifestRegistry["plugins"]): PluginManifestRegistry {
   return {
     plugins,
     diagnostics: [],
+  };
+}
+
+function createPluginRecord(
+  overrides: Pick<PluginManifestRecord, "id" | "origin"> & Partial<PluginManifestRecord>,
+): PluginManifestRecord {
+  return {
+    rootDir: `/tmp/${overrides.id}`,
+    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
+    channelConfigs: undefined,
+    providerAuthEnvVars: undefined,
+    configUiHints: undefined,
+    configSchema: undefined,
+    configContracts: undefined,
+    contracts: undefined,
+    name: undefined,
+    description: undefined,
+    version: undefined,
+    enabledByDefault: undefined,
+    autoEnableWhenConfiguredProviders: undefined,
+    legacyPluginIds: undefined,
+    format: undefined,
+    bundleFormat: undefined,
+    bundleCapabilities: undefined,
+    kind: undefined,
+    channels: [],
+    providers: [],
+    modelSupport: undefined,
+    cliBackends: [],
+    channelEnvVars: undefined,
+    providerAuthAliases: undefined,
+    providerAuthChoices: undefined,
+    skills: [],
+    settingsFiles: undefined,
+    hooks: [],
+    source: `/tmp/${overrides.id}/openclaw.plugin.json`,
+    setupSource: undefined,
+    startupDeferConfiguredChannelFullLoadUntilAfterListen: undefined,
+    channelCatalogMeta: undefined,
+    ...overrides,
   };
 }
 
@@ -45,42 +87,10 @@ describe("resolvePluginConfigContractsById", () => {
   it("does not fall back to bundled metadata when registry already resolved a plugin without config contracts", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createRegistry([
-        {
+        createPluginRecord({
           id: "brave",
           origin: "bundled",
-          rootDir: "/tmp/brave",
-          manifestPath: "/tmp/brave/openclaw.plugin.json",
-          channelConfigs: undefined,
-          providerAuthEnvVars: undefined,
-          configUiHints: undefined,
-          configSchema: undefined,
-          configContracts: undefined,
-          contracts: undefined,
-          name: undefined,
-          description: undefined,
-          version: undefined,
-          enabledByDefault: undefined,
-          autoEnableWhenConfiguredProviders: undefined,
-          legacyPluginIds: undefined,
-          format: undefined,
-          bundleFormat: undefined,
-          bundleCapabilities: undefined,
-          kind: undefined,
-          channels: [],
-          providers: [],
-          modelSupport: undefined,
-          cliBackends: [],
-          channelEnvVars: undefined,
-          providerAuthAliases: undefined,
-          providerAuthChoices: undefined,
-          skills: [],
-          settingsFiles: undefined,
-          hooks: [],
-          source: "/tmp/brave/openclaw.plugin.json",
-          setupSource: undefined,
-          startupDeferConfiguredChannelFullLoadUntilAfterListen: undefined,
-          channelCatalogMeta: undefined,
-        },
+        }),
       ]),
     );
 
@@ -90,6 +100,92 @@ describe("resolvePluginConfigContractsById", () => {
       }),
     ).toEqual(new Map());
     expect(mocks.findBundledPluginMetadataById).not.toHaveBeenCalled();
+  });
+
+  it("can hydrate missing contracts from bundled metadata for resolved bundled plugins", () => {
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createRegistry([
+        createPluginRecord({
+          id: "voice-call",
+          origin: "bundled",
+          configContracts: {
+            compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
+          },
+        }),
+      ]),
+    );
+    mocks.findBundledPluginMetadataById.mockReturnValue({
+      manifest: {
+        configContracts: {
+          secretInputs: {
+            paths: [{ path: "twilio.authToken", expected: "string" }],
+          },
+        },
+      },
+    });
+
+    expect(
+      resolvePluginConfigContractsById({
+        pluginIds: ["voice-call"],
+        fallbackToBundledMetadataForResolvedBundled: true,
+      }),
+    ).toEqual(
+      new Map([
+        [
+          "voice-call",
+          {
+            origin: "bundled",
+            configContracts: {
+              compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
+              secretInputs: {
+                paths: [{ path: "twilio.authToken", expected: "string" }],
+              },
+            },
+          },
+        ],
+      ]),
+    );
+  });
+
+  it("can hydrate missing contracts for plugin ids known to be bundled by runtime discovery", () => {
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createRegistry([
+        createPluginRecord({
+          id: "voice-call",
+          origin: "config",
+        }),
+      ]),
+    );
+    mocks.findBundledPluginMetadataById.mockReturnValue({
+      manifest: {
+        configContracts: {
+          secretInputs: {
+            paths: [{ path: "tts.providers.*.apiKey", expected: "string" }],
+          },
+        },
+      },
+    });
+
+    expect(
+      resolvePluginConfigContractsById({
+        pluginIds: ["voice-call"],
+        fallbackBundledPluginIds: ["voice-call"],
+      }),
+    ).toEqual(
+      new Map([
+        [
+          "voice-call",
+          {
+            origin: "bundled",
+            configContracts: {
+              secretInputs: {
+                paths: [{ path: "tts.providers.*.apiKey", expected: "string" }],
+              },
+            },
+          },
+        ],
+      ]),
+    );
   });
 
   it("can skip bundled metadata fallback for registry-scoped callers", () => {

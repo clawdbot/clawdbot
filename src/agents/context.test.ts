@@ -187,6 +187,23 @@ describe("applyConfiguredContextWindows", () => {
 
     expect(cache.get("custom/model")).toBe(200_000);
   });
+
+  it("uses provider-level context defaults for configured model entries", () => {
+    const cache = new Map<string, number>();
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          ollama: {
+            contextWindow: 8_192,
+            models: [{ id: "qwen3.5:9b" }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("qwen3.5:9b")).toBe(8_192);
+  });
 });
 
 describe("createSessionManagerRuntimeRegistry", () => {
@@ -210,6 +227,50 @@ describe("createSessionManagerRuntimeRegistry", () => {
 });
 
 describe("resolveContextTokensForModel", () => {
+  it("uses provider-level context defaults when no model-level cap is set", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              contextWindow: 8_192,
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3.5:9b",
+      fallbackContextTokens: 216_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(8_192);
+  });
+
+  it("prefers model-level context caps over provider-level defaults", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              contextWindow: 8_192,
+              models: [{ ...testModelContextWindow("qwen3.5:9b", 216_000), contextTokens: 16_000 }],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3.5:9b",
+      fallbackContextTokens: 216_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(16_000);
+  });
+
   it("returns 1M context when anthropic context1m is enabled for opus/sonnet", () => {
     const result = resolveContextTokensForModel({
       cfg: {

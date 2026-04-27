@@ -71,6 +71,40 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Current OpenClaw session status reports the active model as:",
 ] as const;
 
+export const EXPECTED_CODEX_STATUS_COMMAND_TEXT = [
+  "Codex app-server:",
+  "Model: `codex/",
+  "Model: codex/",
+  "Session: `agent:dev:live-codex-harness`",
+  "Session: agent:dev:live-codex-harness",
+  "OpenClaw `",
+  "OpenClaw status:",
+  "model `codex/",
+  "session `agent:dev:live-codex-harness`",
+  "Model/status card shown above",
+  "Status shown above.",
+] as const;
+
+export function isExpectedCodexStatusCommandText(text: string): boolean {
+  const normalized = text.toLowerCase();
+  const mentionsOpenClawStatus =
+    normalized.includes("openclaw is running on") || normalized.includes("openclaw status:");
+  const mentionsHarnessSession =
+    normalized.includes("session: `agent:dev:live-codex-harness`") ||
+    normalized.includes("session: agent:dev:live-codex-harness") ||
+    normalized.includes("session `agent:dev:live-codex-harness`") ||
+    normalized.includes("current session is `agent:dev:live-codex-harness`") ||
+    normalized.includes("current session is agent:dev:live-codex-harness") ||
+    (normalized.includes("session context") && normalized.includes("active task: `/codex status`"));
+  const mentionsModel =
+    normalized.includes("`openai/") ||
+    normalized.includes(" openai/") ||
+    normalized.includes("`codex/") ||
+    normalized.includes(" codex/");
+
+  return mentionsOpenClawStatus && mentionsHarnessSession && mentionsModel;
+}
+
 export function isExpectedCodexModelsCommandText(text: string): boolean {
   const normalized = text.toLowerCase();
   const mentionsCodexModelsCommand =
@@ -85,6 +119,9 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
       normalized.includes("fails to start") ||
       normalized.includes("repo-local fallback") ||
       normalized.includes("sandbox blocks") ||
+      normalized.includes("sandbox blocked") ||
+      normalized.includes("approval review failed") ||
+      normalized.includes("failed before it could be approved") ||
       ((normalized.includes("rejected") || normalized.includes("not approved")) &&
         (normalized.includes("sandbox") ||
           normalized.includes("permission") ||

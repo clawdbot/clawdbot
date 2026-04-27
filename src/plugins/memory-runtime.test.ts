@@ -60,6 +60,7 @@ function expectMemoryRuntimeLoaded(rawConfig: unknown, autoEnabledConfig: unknow
     expect.objectContaining({
       config: autoEnabledConfig,
       activationSourceConfig: rawConfig,
+      onlyPluginIds: ["memory-core"],
     }),
   );
 }
@@ -157,6 +158,63 @@ describe("memory runtime auto-enable loading", () => {
     },
   ] as const)("$name", async ({ run, expectedResult }) => {
     await expectAutoEnabledMemoryRuntimeCase({ run, expectedResult });
+  });
+
+  it("loads only the configured memory slot plugin", async () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          memory: "memory-lancedb",
+        },
+      },
+    };
+    const runtime = createMemoryRuntimeFixture();
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: rawConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
+    getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
+
+    await getActiveMemorySearchManager({
+      cfg: rawConfig as never,
+      agentId: "main",
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-lancedb"],
+      }),
+    );
+  });
+
+  it("does not fall back to broad plugin loading when the memory slot is disabled", async () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          memory: "none",
+        },
+      },
+    };
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: rawConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
+    getMemoryRuntimeMock.mockReturnValue(undefined);
+
+    await expect(
+      getActiveMemorySearchManager({
+        cfg: rawConfig as never,
+        agentId: "main",
+      }),
+    ).resolves.toEqual({ manager: null, error: "memory plugin unavailable" });
+
+    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
+      config: rawConfig,
+      env: process.env,
+    });
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
   it.each([

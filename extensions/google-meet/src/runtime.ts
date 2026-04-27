@@ -11,6 +11,7 @@ import {
   assertBlackHole2chAvailable,
   launchChromeMeet,
   launchChromeMeetOnNode,
+  recoverCurrentMeetTab,
   recoverCurrentMeetTabOnNode,
 } from "./transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./transports/twilio.js";
@@ -181,11 +182,22 @@ export class GoogleMeetRuntime {
     });
   }
 
-  async recoverCurrentTab(request: { url?: string } = {}) {
-    return recoverCurrentMeetTabOnNode({
-      runtime: this.params.runtime,
+  async recoverCurrentTab(request: { url?: string; transport?: GoogleMeetTransport } = {}) {
+    const transport = resolveTransport(request.transport, this.params.config);
+    if (transport === "twilio") {
+      throw new Error("recover_current_tab only supports chrome or chrome-node transports");
+    }
+    const url = request.url ? normalizeMeetUrl(request.url) : undefined;
+    if (transport === "chrome-node") {
+      return recoverCurrentMeetTabOnNode({
+        runtime: this.params.runtime,
+        config: this.params.config,
+        url,
+      });
+    }
+    return recoverCurrentMeetTab({
       config: this.params.config,
-      url: request.url ? normalizeMeetUrl(request.url) : undefined,
+      url,
     });
   }
 

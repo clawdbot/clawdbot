@@ -8,6 +8,7 @@ import {
 } from "./control-ui-assets.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
+import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import {
@@ -20,13 +21,9 @@ import {
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import {
-  collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
   detectGlobalInstallManagerForRoot,
-  globalInstallArgs,
-  globalInstallFallbackArgs,
-  resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
 } from "./update-global.js";
@@ -141,6 +138,7 @@ const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 const PREFLIGHT_TEMP_PREFIX =
   process.platform === "win32" ? "ocu-pf-" : "openclaw-update-preflight-";
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
+const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
 
@@ -218,10 +216,7 @@ async function removePathRecursive(target: string) {
     .catch(() => {});
 }
 
-async function repairWindowsPreflightCleanup(worktreeDir: string, preflightRoot: string) {
-  if (process.platform !== "win32") {
-    return false;
-  }
+async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string) {
   try {
     await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
     await fs.rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
@@ -941,22 +936,25 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           break;
         }
       } finally {
-        const removeStep = await runStep(
-          step(
+        const removeStep = await runStep({
+          ...step(
             "preflight cleanup",
             ["git", "-C", gitRoot, "worktree", "remove", "--force", worktreeDir],
             gitRoot,
           ),
-        );
+          timeoutMs: Math.min(timeoutMs, PREFLIGHT_CLEANUP_TIMEOUT_MS),
+        });
         if (
           removeStep.exitCode !== 0 &&
-          (await repairWindowsPreflightCleanup(worktreeDir, preflightRoot))
+          (await repairPreflightCleanup(worktreeDir, preflightRoot))
         ) {
           removeStep.exitCode = 0;
+          const fallbackMessage =
+            process.platform === "win32"
+              ? "windows fallback cleanup removed preflight tree"
+              : "fallback cleanup removed preflight tree";
           removeStep.stderrTail = trimLogTail(
-            [removeStep.stderrTail, "windows fallback cleanup removed preflight tree"]
-              .filter(Boolean)
-              .join("\n"),
+            [removeStep.stderrTail, fallbackMessage].filter(Boolean).join("\n"),
             MAX_LOG_CHARS,
           );
         }
@@ -1297,83 +1295,39 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     });
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
-    const steps: UpdateStepResult[] = [];
     const globalInstallEnv = await createGlobalInstallEnv();
     const spec = resolveGlobalInstallSpec({
       packageName,
       tag,
       env: globalInstallEnv,
     });
-    const updateStep = await runStep({
+    const packageUpdate = await runGlobalPackageUpdateSteps({
+      installTarget,
+      installSpec: spec,
+      packageName,
+      packageRoot: pkgRoot,
       runCommand,
-      name: "global update",
-      argv: globalInstallArgs(installTarget, spec),
-      cwd: pkgRoot,
       timeoutMs,
-      env: globalInstallEnv,
-      progress,
-      stepIndex: 0,
-      totalSteps: 1,
-    });
-    steps.push(updateStep);
-
-    let finalStep = updateStep;
-    if (updateStep.exitCode !== 0) {
-      const fallbackArgv = globalInstallFallbackArgs(installTarget, spec);
-      if (fallbackArgv) {
-        const fallbackStep = await runStep({
+      ...(globalInstallEnv === undefined ? {} : { env: globalInstallEnv }),
+      installCwd: pkgRoot,
+      runStep: (stepParams) =>
+        runStep({
           runCommand,
-          name: "global update (omit optional)",
-          argv: fallbackArgv,
-          cwd: pkgRoot,
-          timeoutMs,
-          env: globalInstallEnv,
+          ...stepParams,
+          cwd: stepParams.cwd ?? pkgRoot,
           progress,
           stepIndex: 0,
           totalSteps: 1,
-        });
-        steps.push(fallbackStep);
-        finalStep = fallbackStep;
-      }
-    }
-
-    const verifiedPackageRoot =
-      (
-        await resolveGlobalInstallTarget({
-          manager: installTarget,
-          runCommand,
-          timeoutMs,
-        })
-      ).packageRoot ?? pkgRoot;
-    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
-    const verificationErrors = await collectInstalledGlobalPackageErrors({
-      packageRoot: verifiedPackageRoot,
-      expectedVersion,
+        }),
     });
-    if (verificationErrors.length > 0) {
-      steps.push({
-        name: "global install verify",
-        command: `verify ${verifiedPackageRoot}`,
-        cwd: verifiedPackageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: verificationErrors.join("\n"),
-      });
-    }
-    const afterVersion = await readPackageVersion(verifiedPackageRoot);
-    const failedStep =
-      finalStep.exitCode !== 0
-        ? finalStep
-        : (steps.find((step) => step.name === "global install verify" && step.exitCode !== 0) ??
-          null);
     return {
-      status: failedStep ? "error" : "ok",
+      status: packageUpdate.failedStep ? "error" : "ok",
       mode: globalManager,
-      root: verifiedPackageRoot,
-      reason: failedStep ? failedStep.name : undefined,
+      root: packageUpdate.verifiedPackageRoot ?? pkgRoot,
+      reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,
       before: { version: beforeVersion },
-      after: { version: afterVersion },
-      steps,
+      after: { version: packageUpdate.afterVersion },
+      steps: packageUpdate.steps,
       durationMs: Date.now() - startedAt,
     };
   }

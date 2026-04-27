@@ -722,11 +722,16 @@ describe("grouped chat rendering", () => {
       id: "user-history-document",
       role: "user",
       content: "",
-      MediaPath: "/tmp/openclaw/user-upload.pdf",
+      MediaPath: "/__openclaw__/media/user-upload.pdf",
       MediaType: "application/pdf",
       timestamp: Date.now(),
     });
     expect(container.querySelector(".chat-message-image")).toBeNull();
+    const documentLink = container.querySelector<HTMLAnchorElement>(
+      ".chat-assistant-attachment-card__link",
+    );
+    expect(documentLink?.textContent).toContain("user-upload.pdf");
+    expect(documentLink?.getAttribute("href")).toBe("/__openclaw__/media/user-upload.pdf");
   });
 
   it("fetches managed chat images with auth and renders blob previews", async () => {

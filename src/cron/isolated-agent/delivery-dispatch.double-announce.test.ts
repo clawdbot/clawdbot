@@ -128,6 +128,7 @@ function makeBaseParams(overrides: {
   runStartedAt?: number;
   sessionTarget?: string;
   deliveryBestEffort?: boolean;
+  runSessionKey?: string;
 }): Parameters<typeof dispatchCronDelivery>[0] {
   const resolvedDelivery = makeResolvedDelivery();
   const runStartedAt = overrides.runStartedAt ?? Date.now();
@@ -144,6 +145,7 @@ function makeBaseParams(overrides: {
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main",
+    runSessionKey: overrides.runSessionKey ?? "agent:main",
     sessionId: "test-session-id",
     runStartedAt,
     runEndedAt: runStartedAt,
@@ -268,6 +270,42 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
     expect(deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({ skipQueue: true }),
+    );
+  });
+
+  it("uses the run-scoped session key for isolated cron descendant fallback delivery", async () => {
+    const runStartedAt = 1_000;
+    const agentSessionKey = "agent:main:cron:daily-monitor";
+    const runSessionKey = "agent:main:cron:daily-monitor:run:test-session-id";
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
+    vi.mocked(readDescendantSubagentFallbackReply).mockImplementation(async (params) =>
+      params.sessionKey === runSessionKey
+        ? "Run-scoped child result, everything finished successfully."
+        : undefined,
+    );
+
+    const params = makeBaseParams({
+      synthesizedText: "on it",
+      runStartedAt,
+      runSessionKey,
+    });
+    params.agentSessionKey = agentSessionKey;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(countActiveDescendantRuns).toHaveBeenCalledWith(runSessionKey);
+    expect(countActiveDescendantRuns).not.toHaveBeenCalledWith(agentSessionKey);
+    expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
+      sessionKey: runSessionKey,
+      runStartedAt,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "Run-scoped child result, everything finished successfully." }],
+      }),
     );
   });
 

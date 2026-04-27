@@ -21,7 +21,8 @@ const loadModelCatalog = vi.fn(async () => []);
 const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );
-const loadStaticManifestCatalogRowsForList = vi.fn(() => []);
+const loadStaticManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
+const loadProviderIndexCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
 const hasProviderStaticCatalogForFilter = vi.fn().mockResolvedValue(false);
 const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const modelRegistryState = {
@@ -106,16 +107,98 @@ vi.mock("./models/list.runtime.js", () => {
   };
 });
 
+vi.mock("../agents/agent-paths.js", () => ({
+  resolveOpenClawAgentDir,
+}));
+
+vi.mock("../agents/auth-profiles/profile-list.js", () => ({
+  listProfilesForProvider,
+}));
+
+vi.mock("../agents/auth-profiles/store.js", () => ({
+  loadAuthProfileStoreWithoutExternalProfiles: ensureAuthProfileStore,
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  hasUsableCustomProviderApiKey,
+  resolveAwsSdkEnvVarName,
+  resolveEnvApiKey,
+}));
+
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog,
+}));
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  resolveModelWithRegistry: ({
+    provider,
+    modelId,
+    modelRegistry,
+  }: {
+    provider: string;
+    modelId: string;
+    modelRegistry: { find: (provider: string, id: string) => unknown };
+  }) => modelRegistry.find(provider, modelId),
+}));
+
+vi.mock("../agents/pi-model-discovery.js", () => {
+  class MockModelRegistry {
+    find(provider: string, id: string) {
+      if (modelRegistryState.findError !== undefined) {
+        throw modelRegistryState.findError;
+      }
+      return (
+        modelRegistryState.models.find((model) => model.provider === provider && model.id === id) ??
+        null
+      );
+    }
+
+    getAll() {
+      if (modelRegistryState.getAllError !== undefined) {
+        throw modelRegistryState.getAllError;
+      }
+      return modelRegistryState.models;
+    }
+
+    getAvailable() {
+      if (modelRegistryState.getAvailableError !== undefined) {
+        throw modelRegistryState.getAvailableError;
+      }
+      return modelRegistryState.available;
+    }
+
+    hasConfiguredAuth(model: { provider: string; id: string }) {
+      return modelRegistryState.available.some(
+        (available) => available.provider === model.provider && available.id === model.id,
+      );
+    }
+  }
+
+  return {
+    discoverAuthStorage: () => ({}) as unknown,
+    discoverModels: () => new MockModelRegistry() as unknown,
+  };
+});
+
+vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
+  resolveRuntimeSyntheticAuthProviderRefs: () => [],
+}));
+
 vi.mock("./models/list.provider-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./models/list.provider-catalog.js")>();
   return {
     ...actual,
     hasProviderStaticCatalogForFilter,
+    loadProviderCatalogModelsForList,
   };
 });
 
 vi.mock("./models/list.manifest-catalog.js", () => ({
   loadStaticManifestCatalogRowsForList,
+}));
+
+vi.mock("./models/list.provider-index-catalog.js", () => ({
+  loadProviderIndexCatalogRowsForList,
 }));
 
 vi.mock("../agents/model-suppression.js", () => ({
@@ -169,6 +252,8 @@ beforeEach(() => {
   loadProviderCatalogModelsForList.mockResolvedValue([]);
   loadStaticManifestCatalogRowsForList.mockReset();
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
+  loadProviderIndexCatalogRowsForList.mockReset();
+  loadProviderIndexCatalogRowsForList.mockReturnValue([]);
   hasProviderStaticCatalogForFilter.mockReset();
   hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   shouldSuppressBuiltInModel.mockReset();
@@ -283,6 +368,7 @@ describe("models list/status", () => {
 
   async function expectZaiProviderFilter(provider: string) {
     setDefaultZaiRegistry();
+    loadProviderIndexCatalogRowsForList.mockReturnValueOnce([ZAI_MODEL]);
     const runtime = makeRuntime();
 
     await modelsListCommand({ all: true, provider, json: true }, runtime);
@@ -448,7 +534,7 @@ describe("models list/status", () => {
 
     modelRegistryState.models = [];
     modelRegistryState.available = [];
-    await modelsListCommand({ json: true }, runtime);
+    await modelsListCommand({ local: true, json: true }, runtime);
 
     expectModelRegistryUnavailable(runtime, "model discovery unavailable");
   });

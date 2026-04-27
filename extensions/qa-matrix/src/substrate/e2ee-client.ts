@@ -21,7 +21,7 @@ import { findMatrixQaObservedEventMatch, normalizeMatrixQaObservedEvent } from "
 import type { MatrixQaObservedEvent } from "./events.js";
 import type { MatrixQaRoomEventWaitResult } from "./sync.js";
 
-type MatrixQaE2eeActorId = "driver" | "observer" | `driver-${string}`;
+type MatrixQaE2eeActorId = "driver" | "observer" | `driver-${string}` | `cli-${string}`;
 
 type MatrixQaE2eeRuntime = typeof import("@openclaw/matrix/test-api.js");
 
@@ -42,6 +42,24 @@ const MATRIX_QA_E2EE_SYNC_FILTER = {
     ephemeral: { not_types: ["m.receipt"] },
   },
 };
+
+function shouldRecordMatrixQaObservedEventUpdate(params: {
+  next: MatrixQaObservedEvent;
+  previous: MatrixQaObservedEvent | undefined;
+}) {
+  const previous = params.previous;
+  if (!previous) {
+    return true;
+  }
+  const next = params.next;
+  return (
+    (previous.body === undefined && next.body !== undefined) ||
+    (previous.formattedBody === undefined && next.formattedBody !== undefined) ||
+    (previous.msgtype === undefined && next.msgtype !== undefined) ||
+    (previous.mentions === undefined && next.mentions !== undefined) ||
+    (previous.attachment === undefined && next.attachment !== undefined)
+  );
+}
 
 export type MatrixQaE2eeScenarioClient = {
   acceptVerification(id: string): Promise<MatrixVerificationSummary>;
@@ -111,6 +129,7 @@ export type MatrixQaE2eeScenarioClient = {
     roomId: string;
     timeoutMs: number;
   }): Promise<MatrixQaRoomEventWaitResult>;
+  waitForJoinedMember(params: { roomId: string; timeoutMs: number; userId: string }): Promise<void>;
   waitForRoomEvent(params: {
     predicate: (event: MatrixQaObservedEvent) => boolean;
     roomId: string;
@@ -134,7 +153,6 @@ function buildMatrixQaE2eeStoragePaths(params: {
 }) {
   const rootDir = path.join(params.outputDir, "matrix-e2ee", "accounts", params.actorId);
   const accountDir = path.join(rootDir, "account");
-  const scenarioKey = params.scenarioId.replace(/[^A-Za-z0-9_-]/g, "-").slice(-80);
   const runKey = path
     .basename(params.outputDir)
     .replace(/[^A-Za-z0-9_-]/g, "-")
@@ -146,7 +164,7 @@ function buildMatrixQaE2eeStoragePaths(params: {
     idbSnapshotPath: path.join(accountDir, "crypto-idb-snapshot.json"),
     recoveryKeyPath: path.join(accountDir, "recovery-key.json"),
     rootDir,
-    storagePath: path.join(rootDir, "scenarios", scenarioKey || "scenario", "sync-store.json"),
+    storagePath: path.join(accountDir, "sync-store.json"),
   };
 }
 
@@ -198,15 +216,21 @@ export async function createMatrixQaE2eeScenarioClient(
   const client: MatrixClient = await createMatrixQaE2eeMatrixClient(params);
   const localEvents: MatrixQaObservedEvent[] = [];
   const verificationSummaries: MatrixVerificationSummary[] = [];
-  const observedEventIds = new Set<string>();
+  const observedEventsById = new Map<string, MatrixQaObservedEvent>();
   let cursorIndex = 0;
 
   const recordEvent = (roomId: string, event: MatrixRawEvent) => {
     const normalized = normalizeMatrixQaObservedEvent(roomId, event);
-    if (!normalized || observedEventIds.has(normalized.eventId)) {
+    if (
+      !normalized ||
+      !shouldRecordMatrixQaObservedEventUpdate({
+        next: normalized,
+        previous: observedEventsById.get(normalized.eventId),
+      })
+    ) {
       return;
     }
-    observedEventIds.add(normalized.eventId);
+    observedEventsById.set(normalized.eventId, normalized);
     localEvents.push(normalized);
     params.observedEvents.push(normalized);
   };
@@ -300,6 +324,18 @@ export async function createMatrixQaE2eeScenarioClient(
       );
     },
     prime,
+    async waitForJoinedMember(opts) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < opts.timeoutMs) {
+        if (client.hasSyncedJoinedRoomMember(opts.roomId, opts.userId)) {
+          return;
+        }
+        await sleep(Math.min(250, Math.max(25, opts.timeoutMs - (Date.now() - startedAt))));
+      }
+      throw new Error(
+        `Matrix E2EE client did not sync joined membership for ${opts.userId} in ${opts.roomId}`,
+      );
+    },
     async requestVerification(opts) {
       return await requireCrypto().requestVerification(opts);
     },
@@ -388,4 +424,5 @@ export const __testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
   buildMatrixQaE2eeStoragePaths,
   findMatrixQaObservedEventMatch,
+  shouldRecordMatrixQaObservedEventUpdate,
 };

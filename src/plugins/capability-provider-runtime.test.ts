@@ -502,6 +502,27 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
+  it("reuses manifest-derived capability plugin ids for the same config snapshot", () => {
+    const { cfg, enablementCompat } = createCompatChainConfig();
+    setBundledCapabilityFixture("mediaUnderstandingProviders");
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
+
+    expectNoResolvedCapabilityProviders(
+      resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
+    );
+    expectNoResolvedCapabilityProviders(
+      resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
+    );
+
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledOnce();
+    expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledTimes(2);
+    expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledWith({
+      config: cfg,
+      pluginIds: ["openai"],
+    });
+  });
+
   it("reuses a compatible active registry even when the capability list is empty", () => {
     const active = createEmptyPluginRegistry();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(active);

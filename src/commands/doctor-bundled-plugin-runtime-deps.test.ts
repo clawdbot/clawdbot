@@ -18,12 +18,21 @@ function writeJson(filePath: string, value: unknown) {
 }
 
 function writeBundledChannelPlugin(root: string, id: string, dependencies: Record<string, string>) {
+  writeBundledChannelOwnerPlugin(root, id, [id], dependencies);
+}
+
+function writeBundledChannelOwnerPlugin(
+  root: string,
+  id: string,
+  channels: string[],
+  dependencies: Record<string, string>,
+) {
   writeJson(path.join(root, "dist", "extensions", id, "package.json"), {
     dependencies,
   });
   writeJson(path.join(root, "dist", "extensions", id, "openclaw.plugin.json"), {
     id,
-    channels: [id],
+    channels,
     configSchema: { type: "object" },
   });
 }
@@ -259,7 +268,66 @@ describe("doctor bundled plugin runtime deps", () => {
     expect(result.conflicts).toEqual([]);
   });
 
-  it("reports default-enabled bundled plugin deps", () => {
+  it("reports default-enabled gateway startup sidecar deps", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeJson(path.join(root, "dist", "extensions", "browser", "package.json"), {
+      dependencies: {
+        "browser-only": "1.0.0",
+      },
+    });
+    writeJson(path.join(root, "dist", "extensions", "browser", "openclaw.plugin.json"), {
+      id: "browser",
+      enabledByDefault: true,
+      configSchema: { type: "object" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+      },
+    });
+
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "browser-only@1.0.0",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("reports explicitly enabled provider deps", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeJson(path.join(root, "dist", "extensions", "bedrock", "package.json"), {
+      dependencies: {
+        "bedrock-only": "1.0.0",
+      },
+    });
+    writeJson(path.join(root, "dist", "extensions", "bedrock", "openclaw.plugin.json"), {
+      id: "bedrock",
+      enabledByDefault: true,
+      providers: ["bedrock"],
+      configSchema: { type: "object" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["bedrock"],
+          entries: { bedrock: { enabled: true } },
+        },
+      },
+    });
+
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "bedrock-only@1.0.0",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("does not report allowlist-excluded default-enabled bundled plugin deps", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
     writeJson(path.join(root, "dist", "extensions", "openai", "package.json"), {
@@ -276,14 +344,125 @@ describe("doctor bundled plugin runtime deps", () => {
     const result = scanBundledPluginRuntimeDeps({
       packageRoot: root,
       config: {
-        plugins: { enabled: true },
+        plugins: { enabled: true, allow: ["browser"] },
+      },
+    });
+
+    expect(result.missing).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("lets explicit bundled channel enablement bypass runtime-deps allowlist gating", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "telegram", { "telegram-only": "1.0.0" });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true, allow: ["browser"] },
+        channels: {
+          telegram: { enabled: true },
+        },
       },
     });
 
     expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
-      "openai-only@1.0.0",
+      "telegram-only@1.0.0",
     ]);
     expect(result.conflicts).toEqual([]);
+  });
+
+  it("does not let doctor channel recovery bypass restrictive plugin allowlists", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "telegram", { "telegram-only": "1.0.0" });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      includeConfiguredChannels: true,
+      config: {
+        plugins: { enabled: true, allow: ["browser"] },
+        channels: {
+          telegram: { botToken: "123:abc" },
+        },
+      },
+    });
+
+    expect(result.missing).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("does not repair inactive default-enabled provider deps", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeJson(path.join(root, "dist", "extensions", "bedrock", "package.json"), {
+      dependencies: {
+        "bedrock-only": "1.0.0",
+      },
+    });
+    writeJson(path.join(root, "dist", "extensions", "bedrock", "openclaw.plugin.json"), {
+      id: "bedrock",
+      enabledByDefault: true,
+      providers: ["bedrock"],
+      configSchema: { type: "object" },
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: { error: () => {} } as never,
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    expect(installed).toEqual([]);
+  });
+
+  it("repairs explicitly enabled provider deps", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeJson(path.join(root, "dist", "extensions", "bedrock", "package.json"), {
+      dependencies: {
+        "bedrock-only": "1.0.0",
+      },
+    });
+    writeJson(path.join(root, "dist", "extensions", "bedrock", "openclaw.plugin.json"), {
+      id: "bedrock",
+      enabledByDefault: true,
+      providers: ["bedrock"],
+      configSchema: { type: "object" },
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: { error: () => {} } as never,
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["bedrock"],
+          entries: { bedrock: { enabled: true } },
+        },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    expect(installed).toEqual([
+      {
+        installRoot: resolveBundledRuntimeDependencyPackageInstallRoot(root),
+        missingSpecs: ["bedrock-only@1.0.0"],
+        installSpecs: ["bedrock-only@1.0.0"],
+      },
+    ]);
   });
 
   it("repairs missing deps during non-interactive doctor", async () => {
@@ -315,6 +494,35 @@ describe("doctor bundled plugin runtime deps", () => {
     ]);
     expect(installRoot).not.toBe(root);
     expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
+  });
+
+  it("repairs deps for configured channel owner plugins", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelOwnerPlugin(root, "chat-bridge", ["telegram"], { grammy: "1.37.0" });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: { error: () => {} } as never,
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        channels: { telegram: { enabled: true } },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root);
+    expect(installed).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["grammy@1.37.0"],
+        installSpecs: ["grammy@1.37.0"],
+      },
+    ]);
   });
 
   it("throws when bundled runtime dependency repair fails", async () => {
@@ -406,6 +614,55 @@ describe("doctor bundled plugin runtime deps", () => {
     ]);
     expect(installRoot).toContain(stageDir);
     expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["@slack/web-api@7.15.1"]);
+  });
+
+  it("repairs only missing deps into the final layered stage dir", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    const baselineStageDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-doctor-bundled-baseline-"),
+    );
+    const writableStageDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-doctor-bundled-writable-"),
+    );
+    writeJson(path.join(root, "package.json"), { name: "openclaw", version: "2026.4.25" });
+    writeBundledChannelPlugin(root, "slack", {
+      "@slack/web-api": "7.15.1",
+      grammy: "1.37.0",
+    });
+    const env = {
+      OPENCLAW_PLUGIN_STAGE_DIR: [baselineStageDir, writableStageDir].join(path.delimiter),
+    };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root, { env });
+    const baselineRoot = installRoot.replace(writableStageDir, baselineStageDir);
+    writeJson(path.join(baselineRoot, "node_modules", "@slack", "web-api", "package.json"), {
+      name: "@slack/web-api",
+      version: "7.15.1",
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: { error: () => {} } as never,
+      prompter: createNonInteractivePrompter(),
+      env,
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        channels: { slack: { enabled: true } },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    expect(installRoot).toContain(writableStageDir);
+    expect(installed).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["grammy@1.37.0"],
+        installSpecs: ["grammy@1.37.0"],
+      },
+    ]);
+    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
   });
 
   it("retains already staged bundled deps when repairing a subset", async () => {

@@ -94,6 +94,26 @@ describe("buildGuardedModelFetch", () => {
     );
   });
 
+  it("threads resolved provider timeout metadata into the shared guarded fetch seam", async () => {
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "qwen3:32b",
+      provider: "ollama",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      requestTimeoutMs: 300_000,
+    } as unknown as Model<"ollama">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://127.0.0.1:11434/api/chat", { method: "POST" });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 300_000,
+      }),
+    );
+  });
+
   it("does not force explicit debug proxy overrides onto plain HTTP model transports", async () => {
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
     process.env.OPENCLAW_DEBUG_PROXY_URL = "http://127.0.0.1:7799";

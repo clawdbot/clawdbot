@@ -151,6 +151,9 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
     await stream.clear();
 
+    expect(api.sendMessageDraft).toHaveBeenLastCalledWith(123, expect.any(Number), "", {
+      message_thread_id: 42,
+    });
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 
@@ -159,6 +162,28 @@ describe("createTelegramDraftStream", () => {
 
     expectDmMessagePreviewViaSendMessage(api);
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
+  });
+
+  it("tracks when a message preview first became visible", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-26T01:00:00.000Z"));
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, { previewTransport: "message" });
+
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(stream.visibleSinceMs?.()).toBe(Date.parse("2026-04-26T01:00:00.000Z"));
+
+      vi.setSystemTime(new Date("2026-04-26T01:01:00.000Z"));
+      stream.update("Hello again");
+      await stream.flush();
+
+      expect(stream.visibleSinceMs?.()).toBe(Date.parse("2026-04-26T01:00:00.000Z"));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to message transport when sendMessageDraft is unavailable", async () => {
@@ -436,6 +461,23 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After thinking", undefined);
   });
 
+  it("creates new message after cleanup and forceNewMessage", async () => {
+    const { api, stream } = createForceNewMessageHarness();
+
+    stream.update("Stale preview");
+    await stream.flush();
+
+    await stream.clear();
+    expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+
+    stream.forceNewMessage();
+    stream.update("Next preview");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "Next preview", undefined);
+  });
+
   it("sends first update immediately after forceNewMessage within throttle window", async () => {
     vi.useFakeTimers();
     try {
@@ -487,6 +529,7 @@ describe("createTelegramDraftStream", () => {
       messageId: 17,
       textSnapshot: "Message A partial",
       parseMode: undefined,
+      visibleSinceMs: expect.any(Number),
     });
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Message B partial", undefined);

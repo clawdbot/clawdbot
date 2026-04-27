@@ -225,9 +225,9 @@ export type LoggingConfig = {
   maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
-  /** Redact sensitive tokens in tool summaries. Default: "tools". */
+  /** Redact sensitive tokens in log sinks and persisted transcript text. Default: "tools". */
   redactSensitive?: "off" | "tools";
-  /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
+  /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
   redactPatterns?: string[];
 };
 

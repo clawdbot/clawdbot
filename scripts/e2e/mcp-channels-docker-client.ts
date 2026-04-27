@@ -33,16 +33,18 @@ async function main() {
       });
       mcp = mcpHandle.client;
     }
+    const callTool = <T>(params: Parameters<typeof mcp.callTool>[0]) =>
+      mcp.callTool(params, undefined, { timeout: 240_000 }) as Promise<T>;
 
     const conversation = await waitFor(
       "seeded conversation in conversations_list",
       async () => {
-        const listed = (await mcp.callTool({
+        const listed = await callTool<{
+          structuredContent?: { conversations?: Array<Record<string, unknown>> };
+        }>({
           name: "conversations_list",
           arguments: {},
-        })) as {
-          structuredContent?: { conversations?: Array<Record<string, unknown>> };
-        };
+        });
         return listed.structuredContent?.conversations?.find(
           (entry) => entry.sessionKey === "agent:main:main",
         );
@@ -52,33 +54,40 @@ async function main() {
     assert(conversation.channel === "imessage", "expected seeded channel");
     assert(conversation.to === "+15551234567", "expected seeded target");
 
-    const fetched = (await mcp.callTool({
-      name: "conversation_get",
-      arguments: { session_key: "agent:main:main" },
-    })) as {
+    const fetched = await callTool<{
       structuredContent?: { conversation?: Record<string, unknown> };
       isError?: boolean;
-    };
+    }>({
+      name: "conversation_get",
+      arguments: { session_key: "agent:main:main" },
+    });
     assert(!fetched.isError, "conversation_get should succeed");
     assert(
       fetched.structuredContent?.conversation?.sessionKey === "agent:main:main",
       "conversation_get returned wrong session",
     );
 
+    let lastHistory: unknown;
     const messages = await waitFor(
       "seeded transcript messages",
       async () => {
-        const history = (await mcp.callTool({
+        const history = await callTool<{
+          structuredContent?: { messages?: Array<Record<string, unknown>> };
+        }>({
           name: "messages_read",
           arguments: { session_key: "agent:main:main", limit: 10 },
-        })) as {
-          structuredContent?: { messages?: Array<Record<string, unknown>> };
-        };
+        });
+        lastHistory = history;
         const currentMessages = history.structuredContent?.messages ?? [];
         return currentMessages.length >= 2 ? currentMessages : undefined;
       },
       240_000,
-    );
+    ).catch((error) => {
+      throw new Error(
+        `timeout waiting for seeded transcript messages: ${JSON.stringify(lastHistory, null, 2)}`,
+        { cause: error },
+      );
+    });
     await waitFor(
       "seeded attachment message",
       () =>
@@ -91,13 +100,13 @@ async function main() {
       240_000,
     );
 
-    const attachments = (await mcp.callTool({
-      name: "attachments_fetch",
-      arguments: { session_key: "agent:main:main", message_id: "msg-attachment" },
-    })) as {
+    const attachments = await callTool<{
       structuredContent?: { attachments?: Array<Record<string, unknown>> };
       isError?: boolean;
-    };
+    }>({
+      name: "attachments_fetch",
+      arguments: { session_key: "agent:main:main", message_id: "msg-attachment" },
+    });
     assert(!attachments.isError, "attachments_fetch should succeed");
     assert(
       (attachments.structuredContent?.attachments?.length ?? 0) === 1,
@@ -105,16 +114,16 @@ async function main() {
     );
 
     const waited = (await Promise.all([
-      mcp.callTool({
+      callTool<{
+        structuredContent?: { event?: Record<string, unknown> };
+      }>({
         name: "events_wait",
         arguments: {
           session_key: "agent:main:main",
           after_cursor: 0,
           timeout_ms: 10_000,
         },
-      }) as Promise<{
-        structuredContent?: { event?: Record<string, unknown> };
-      }>,
+      }),
       gateway.request("chat.inject", {
         sessionKey: "agent:main:main",
         message: "assistant live event",
@@ -129,12 +138,12 @@ async function main() {
     assert(assistantEvent.text === "assistant live event", "expected assistant event text");
     const assistantCursor = typeof assistantEvent.cursor === "number" ? assistantEvent.cursor : 0;
 
-    const polled = (await mcp.callTool({
+    const polled = await callTool<{
+      structuredContent?: { events?: Array<Record<string, unknown>> };
+    }>({
       name: "events_poll",
       arguments: { session_key: "agent:main:main", after_cursor: 0, limit: 10 },
-    })) as {
-      structuredContent?: { events?: Array<Record<string, unknown>> };
-    };
+    });
     assert(
       (polled.structuredContent?.events ?? []).some(
         (entry) => entry.text === "assistant live event",
@@ -144,16 +153,16 @@ async function main() {
 
     const channelMessage = `hello from docker ${randomUUID()}`;
     const userEvent = (await Promise.all([
-      mcp.callTool({
+      callTool<{
+        structuredContent?: { event?: Record<string, unknown> };
+      }>({
         name: "events_wait",
         arguments: {
           session_key: "agent:main:main",
           after_cursor: assistantCursor,
           timeout_ms: 10_000,
         },
-      }) as Promise<{
-        structuredContent?: { event?: Record<string, unknown> };
-      }>,
+      }),
       gateway.request("chat.send", {
         sessionKey: "agent:main:main",
         message: channelMessage,

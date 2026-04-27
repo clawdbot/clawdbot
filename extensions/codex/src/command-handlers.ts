@@ -1,5 +1,11 @@
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
+import {
+  installCodexComputerUse,
+  readCodexComputerUseStatus,
+  type CodexComputerUseSetupParams,
+} from "./app-server/computer-use.js";
+import type { CodexComputerUseConfig } from "./app-server/config.js";
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
@@ -10,6 +16,7 @@ import {
 import {
   buildHelp,
   formatAccount,
+  formatComputerUseStatus,
   formatCodexStatus,
   formatList,
   formatModels,
@@ -49,6 +56,8 @@ export type CodexCommandDeps = {
   safeCodexControlRequest: SafeCodexControlRequestFn;
   writeCodexAppServerBinding: typeof writeCodexAppServerBinding;
   clearCodexAppServerBinding: typeof clearCodexAppServerBinding;
+  readCodexComputerUseStatus: typeof readCodexComputerUseStatus;
+  installCodexComputerUse: typeof installCodexComputerUse;
   resolveCodexDefaultWorkspaceDir: typeof resolveCodexDefaultWorkspaceDir;
   startCodexConversationThread: typeof startCodexConversationThread;
   readCodexConversationActiveTurn: typeof readCodexConversationActiveTurn;
@@ -80,6 +89,8 @@ const defaultCodexCommandDeps: CodexCommandDeps = {
   safeCodexControlRequest,
   writeCodexAppServerBinding,
   clearCodexAppServerBinding,
+  readCodexComputerUseStatus,
+  installCodexComputerUse,
   resolveCodexDefaultWorkspaceDir,
   startCodexConversationThread,
   readCodexConversationActiveTurn,
@@ -95,6 +106,13 @@ type ParsedBindArgs = {
   cwd?: string;
   model?: string;
   provider?: string;
+  help?: boolean;
+};
+
+type ParsedComputerUseArgs = {
+  action: "status" | "install";
+  overrides: Partial<CodexComputerUseConfig>;
+  hasOverrides: boolean;
   help?: boolean;
 };
 
@@ -170,6 +188,11 @@ export async function handleCodexSubcommand(
       ),
     };
   }
+  if (normalized === "computer-use" || normalized === "computeruse") {
+    return {
+      text: await handleComputerUseCommand(deps, options.pluginConfig, rest),
+    };
+  }
   if (normalized === "mcp") {
     return {
       text: formatList(
@@ -202,6 +225,29 @@ export async function handleCodexSubcommand(
     return { text: formatAccount(account, limits) };
   }
   return { text: `Unknown Codex command: ${subcommand}\n\n${buildHelp()}` };
+}
+
+async function handleComputerUseCommand(
+  deps: CodexCommandDeps,
+  pluginConfig: unknown,
+  args: string[],
+): Promise<string> {
+  const parsed = parseComputerUseArgs(args);
+  if (parsed.help) {
+    return [
+      "Usage: /codex computer-use [status|install] [--source <marketplace-source>] [--marketplace-path <path>] [--marketplace <name>]",
+      "Checks or installs the configured Codex Computer Use plugin through app-server.",
+    ].join("\n");
+  }
+  const params: CodexComputerUseSetupParams = {
+    pluginConfig,
+    forceEnable: parsed.action === "install" || parsed.hasOverrides,
+    ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
+  };
+  if (parsed.action === "install") {
+    return formatComputerUseStatus(await deps.installCodexComputerUse(params));
+  }
+  return formatComputerUseStatus(await deps.readCodexComputerUseStatus(params));
 }
 
 async function bindConversation(
@@ -502,6 +548,114 @@ function parseBindArgs(args: string[]): ParsedBindArgs {
   parsed.model = normalizeOptionalString(parsed.model);
   parsed.provider = normalizeOptionalString(parsed.provider);
   return parsed;
+}
+
+function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
+  const parsed: ParsedComputerUseArgs = {
+    action: "status",
+    overrides: {},
+    hasOverrides: false,
+  };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--help" || arg === "-h") {
+      parsed.help = true;
+      continue;
+    }
+    if (arg === "status" || arg === "install") {
+      parsed.action = arg;
+      continue;
+    }
+    if (arg === "--source" || arg === "--marketplace-source") {
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.overrides.marketplaceSource = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--marketplace-path" || arg === "--path") {
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.overrides.marketplacePath = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--marketplace") {
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.overrides.marketplaceName = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--plugin") {
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.overrides.pluginName = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--server" || arg === "--mcp-server") {
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.overrides.mcpServerName = value;
+      index += 1;
+      continue;
+    }
+    parsed.help = true;
+  }
+  parsed.overrides = normalizeComputerUseStringOverrides(parsed.overrides);
+  parsed.hasOverrides = Object.values(parsed.overrides).some(Boolean);
+  return parsed;
+}
+
+function readRequiredOptionValue(args: string[], index: number): string | undefined {
+  const value = args[index + 1];
+  if (!value || value.startsWith("-")) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeComputerUseStringOverrides(
+  overrides: Partial<CodexComputerUseConfig>,
+): Partial<CodexComputerUseConfig> {
+  const normalized: Partial<CodexComputerUseConfig> = {};
+  const marketplaceSource = normalizeOptionalString(overrides.marketplaceSource);
+  if (marketplaceSource) {
+    normalized.marketplaceSource = marketplaceSource;
+  }
+  const marketplacePath = normalizeOptionalString(overrides.marketplacePath);
+  if (marketplacePath) {
+    normalized.marketplacePath = marketplacePath;
+  }
+  const marketplaceName = normalizeOptionalString(overrides.marketplaceName);
+  if (marketplaceName) {
+    normalized.marketplaceName = marketplaceName;
+  }
+  const pluginName = normalizeOptionalString(overrides.pluginName);
+  if (pluginName) {
+    normalized.pluginName = pluginName;
+  }
+  const mcpServerName = normalizeOptionalString(overrides.mcpServerName);
+  if (mcpServerName) {
+    normalized.mcpServerName = mcpServerName;
+  }
+  return normalized;
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {

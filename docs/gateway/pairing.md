@@ -75,15 +75,12 @@ Notes:
   - `system.run` / `system.run.prepare` / `system.which` request:
     `operator.pairing` + `operator.admin`
 
-Important:
+<Warning>
+Node pairing is a trust and identity flow plus token issuance. It does **not** pin the live node command surface per node.
 
-- Node pairing is a trust/identity flow plus token issuance.
-- It does **not** pin the live node command surface per node.
-- Live node commands come from what the node declares on connect after the
-  gateway's global node command policy (`gateway.nodes.allowCommands` /
-  `denyCommands`) is applied.
-- Per-node `system.run` allow/ask policy lives on the node in
-  `exec.approvals.node.*`, not in the pairing record.
+- Live node commands come from what the node declares on connect after the gateway's global node command policy (`gateway.nodes.allowCommands` and `denyCommands`) is applied.
+- Per-node `system.run` allow and ask policy lives on the node in `exec.approvals.node.*`, not in the pairing record.
+  </Warning>
 
 ## Node command gating (2026.3.31+)
 

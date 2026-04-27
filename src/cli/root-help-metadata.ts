@@ -1,6 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { readCliStartupMetadata } from "./startup-metadata.js";
 
 let precomputedRootHelpText: string | null | undefined;
 let precomputedBrowserHelpText: string | null | undefined;
@@ -14,17 +12,13 @@ function loadPrecomputedHelpText(
     return cache;
   }
   try {
-    const metadataPath = path.resolve(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "cli-startup-metadata.json",
-    );
-    const raw = fs.readFileSync(metadataPath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const value = parsed[key];
-    if (typeof value === "string" && value.length > 0) {
-      setCache(value);
-      return value;
+    const parsed = readCliStartupMetadata(import.meta.url);
+    if (parsed) {
+      const value = parsed[key];
+      if (typeof value === "string" && value.length > 0) {
+        setCache(value);
+        return value;
+      }
     }
   } catch {
     // Fall back to live help rendering.

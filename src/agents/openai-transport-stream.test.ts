@@ -1,8 +1,10 @@
+import { createServer } from "node:http";
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
+  createOpenAICompletionsTransportStreamFn,
   parseTransportChunkUsage,
   resolveAzureOpenAIApiVersion,
   sanitizeTransportPayloadText,
@@ -343,6 +345,193 @@ describe("openai transport stream", () => {
     expect(resolveAzureOpenAIApiVersion({ AZURE_OPENAI_API_VERSION: "2025-01-01-preview" })).toBe(
       "2025-01-01-preview",
     );
+  });
+
+  it("passes provider request timeouts to OpenAI SDK clients", () => {
+    const context = { systemPrompt: "system", messages: [], tools: [] } as never;
+    const requestTimeoutMs = 900_000;
+
+    const responsesModel = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "custom-openai",
+      baseUrl: "https://api.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+      requestTimeoutMs,
+    } satisfies Model<"openai-responses"> & { requestTimeoutMs: number };
+    const azureModel = {
+      ...responsesModel,
+      api: "azure-openai-responses",
+      provider: "azure-openai",
+      baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-5.4",
+    } satisfies Model<"azure-openai-responses"> & { requestTimeoutMs: number };
+    const completionsModel = {
+      ...responsesModel,
+      api: "openai-completions",
+      reasoning: false,
+    } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
+
+    expect(
+      (
+        __testing.createOpenAIResponsesClient(responsesModel, context, "test-key") as {
+          timeout: number;
+        }
+      ).timeout,
+    ).toBe(requestTimeoutMs);
+    expect(
+      (__testing.createAzureOpenAIClient(azureModel, context, "test-key") as { timeout: number })
+        .timeout,
+    ).toBe(requestTimeoutMs);
+    expect(
+      (
+        __testing.createOpenAICompletionsClient(completionsModel, context, "test-key") as {
+          timeout: number;
+        }
+      ).timeout,
+    ).toBe(requestTimeoutMs);
+  });
+
+  it("passes provider request timeouts to OpenAI SDK per-request options", () => {
+    const signal = new AbortController().signal;
+    const model = {
+      id: "glm-5",
+      name: "GLM-5",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+      requestTimeoutMs: 900_000.7,
+    } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
+
+    expect(__testing.buildOpenAISdkRequestOptions(model, signal)).toEqual({
+      signal,
+      timeout: 900_000,
+    });
+    expect(
+      __testing.buildOpenAISdkRequestOptions(
+        { ...model, requestTimeoutMs: -1 } as Model<"openai-completions">,
+        undefined,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("streams OpenAI-compatible loopback requests with the configured SDK timeout", async () => {
+    let captured: { path?: string; timeout?: string; roles?: string[] } = {};
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const parsed = JSON.parse(body) as { messages?: Array<{ role?: string }> };
+        captured = {
+          path: req.url,
+          timeout: Array.isArray(req.headers["x-stainless-timeout"])
+            ? req.headers["x-stainless-timeout"][0]
+            : req.headers["x-stainless-timeout"],
+          roles: parsed.messages?.map((message) => message.role ?? ""),
+        };
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-timeout-proof",
+            object: "chat.completion.chunk",
+            created,
+            model: "slow-local",
+            choices: [
+              {
+                index: 0,
+                delta: { role: "assistant", content: "OK" },
+                finish_reason: null,
+              },
+            ],
+          })}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-timeout-proof",
+            object: "chat.completion.chunk",
+            created,
+            model: "slow-local",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          })}\n\n`,
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const baseModel = {
+        id: "slow-local",
+        name: "Slow Local",
+        api: "openai-completions",
+        provider: "custom-openai-compatible",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 256,
+        requestTimeoutMs: 900_000,
+      } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
+      const model = attachModelProviderRequestTransport(baseModel, { allowPrivateNetwork: true });
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      let text = "";
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        delta?: string;
+        reason?: string;
+      }>) {
+        if (event.type === "text_delta") {
+          text += event.delta ?? "";
+        }
+        if (event.type === "done") {
+          doneReason = event.reason;
+        }
+      }
+
+      expect(captured.path).toBe("/v1/chat/completions");
+      expect(captured.timeout).toBe("900");
+      expect(captured.roles).toEqual(["system", "user"]);
+      expect(doneReason).toBe("stop");
+      expect(text).toBe("OK");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("does not double-count reasoning tokens and clamps uncached prompt usage at zero", () => {

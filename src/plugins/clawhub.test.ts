@@ -249,6 +249,64 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
+  it("installs when ClawHub advertises a wildcard plugin API range", async () => {
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.3.22",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+        compatibility: {
+          pluginApiRange: "*",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expectSuccessfulClawHubInstall(result);
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledTimes(1);
+    expect(installPluginFromArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        archivePath: "/tmp/clawhub-demo/archive.zip",
+      }),
+    );
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a wildcard plugin API range hide an invalid runtime version", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("invalid");
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.3.22",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+        compatibility: {
+          pluginApiRange: "*",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+      error: 'Plugin "demo" requires plugin API *, but this OpenClaw runtime exposes invalid.',
+    });
+    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).not.toHaveBeenCalled();
+  });
+
   it("passes dangerous force unsafe install through to archive installs", async () => {
     await installPluginFromClawHub({
       spec: "clawhub:demo",

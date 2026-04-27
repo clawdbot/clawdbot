@@ -1,5 +1,5 @@
 import { summarizeMatrixDeviceHealth } from "../device-health.js";
-import { withResolvedActionClient, withStartedActionClient } from "./client.js";
+import { withResolvedActionClient } from "./client.js";
 import type { MatrixActionClientOpts } from "./types.js";
 
 export async function listMatrixOwnDevices(opts: MatrixActionClientOpts = {}) {
@@ -7,7 +7,7 @@ export async function listMatrixOwnDevices(opts: MatrixActionClientOpts = {}) {
 }
 
 export async function pruneMatrixStaleGatewayDevices(opts: MatrixActionClientOpts = {}) {
-  return await withStartedActionClient(opts, async (client) => {
+  return await withResolvedActionClient(opts, async (client) => {
     const devices = await client.listOwnDevices();
     const health = summarizeMatrixDeviceHealth(devices);
     const staleGatewayDeviceIds = health.staleOpenClawDevices.map((device) => device.deviceId);

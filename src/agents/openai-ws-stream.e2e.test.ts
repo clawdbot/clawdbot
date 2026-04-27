@@ -20,6 +20,7 @@ import type {
   AssistantMessageEventStream,
   Context,
 } from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import type { OutputItem, ResponseObject } from "./openai-ws-connection.js";
@@ -108,8 +109,10 @@ async function runWebsocketToolFollowupTurn(params: {
     await collectEvents(
       params.streamFn(model, secondContext, {
         transport: "websocket",
-        maxTokens: 128,
-      }),
+        maxTokens: 16,
+        reasoningEffort: "none",
+        textVerbosity: "low",
+      } as unknown as StreamFnParams[2]),
     ),
   );
 }
@@ -272,7 +275,9 @@ describe("OpenAI WebSocket e2e", () => {
         streamFn(model, firstContext, {
           transport: "websocket",
           toolChoice: "required",
-          maxTokens: 128,
+          maxTokens: 16,
+          reasoningEffort: "none",
+          textVerbosity: "low",
         } as unknown as StreamFnParams[2]),
       );
       const firstDone = expectDone(firstEvents);
@@ -419,15 +424,56 @@ describe("OpenAI WebSocket e2e", () => {
   );
 
   testFn(
-    "falls back to HTTP gracefully with invalid API key",
+    "falls back to HTTP gracefully when websocket connect fails",
     async () => {
       const sid = freshSession("fallback");
-      const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn("sk-invalid-key", sid);
-      const stream = streamFn(model, makeContext("Hello"), {});
+      openAIWsStreamModule.__testing.setDepsForTest({
+        createHttpFallbackStreamFn: () =>
+          (() => {
+            const stream = createAssistantMessageEventStream();
+            queueMicrotask(() => {
+              stream.push({
+                type: "done",
+                reason: "stop",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "FALLBACK_OK" }],
+                  stopReason: "stop",
+                  api: "openai-responses",
+                  provider: "openai",
+                  model: "gpt-5.4",
+                  usage: {
+                    input: 0,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: 0,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                  },
+                  timestamp: Date.now(),
+                },
+              });
+              stream.end();
+            });
+            return stream;
+          }) as never,
+      });
+      const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid, {
+        managerOptions: {
+          url: "ws://127.0.0.1:1",
+          maxRetries: 0,
+          backoffDelaysMs: [0],
+        },
+      });
+      const stream = streamFn(model, makeContext("Reply with exactly FALLBACK_OK."), {
+        maxTokens: 8,
+        reasoningEffort: "none",
+        textVerbosity: "low",
+      } as unknown as StreamFnParams[2]);
       const events = await collectEvents(stream);
 
-      const hasTerminal = events.some((e) => e.type === "done" || e.type === "error");
-      expect(hasTerminal).toBe(true);
+      const done = expectDone(events);
+      expect(assistantText(done)).toContain("FALLBACK_OK");
     },
     45_000,
   );

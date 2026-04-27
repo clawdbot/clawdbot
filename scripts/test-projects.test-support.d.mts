@@ -14,6 +14,12 @@ export type VitestRunSpec = {
   watchMode: boolean;
 };
 
+export type ChangedTestTargetOptions = {
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+  broad?: boolean;
+};
+
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS: string;
 
 export function parseTestProjectsArgs(
@@ -29,15 +35,20 @@ export function buildVitestRunPlans(
   args: string[],
   cwd?: string,
   listChangedPaths?: (baseRef: string, cwd: string) => string[],
+  options?: ChangedTestTargetOptions,
 ): VitestRunPlan[];
 
 export function resolveChangedTargetArgs(
   args: string[],
   cwd?: string,
   listChangedPaths?: (baseRef: string, cwd: string) => string[],
+  options?: ChangedTestTargetOptions,
 ): string[] | null;
 
-export function resolveChangedTestTargetPlan(changedPaths: string[]): {
+export function resolveChangedTestTargetPlan(
+  changedPaths: string[],
+  options?: ChangedTestTargetOptions,
+): {
   mode: "none" | "broad" | "targets";
   targets: string[];
 };

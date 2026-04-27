@@ -14,6 +14,7 @@ import {
   runMatrixQaE2eeServerBackupDeletedLocalStateIntactScenario,
   runMatrixQaE2eeServerBackupDeletedLocalReuploadRestoresScenario,
   runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario,
+  runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario,
   runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario,
   runMatrixQaE2eeStateLossExternalRecoveryKeyScenario,
   runMatrixQaE2eeStateLossNoRecoveryKeyScenario,
@@ -25,6 +26,14 @@ import {
   runMatrixQaE2eeArtifactRedactionScenario,
   runMatrixQaE2eeBasicReplyScenario,
   runMatrixQaE2eeBootstrapSuccessScenario,
+  runMatrixQaE2eeCliAccountAddEnableE2eeScenario,
+  runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario,
+  runMatrixQaE2eeCliEncryptionSetupIdempotentScenario,
+  runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario,
+  runMatrixQaE2eeCliEncryptionSetupScenario,
+  runMatrixQaE2eeCliRecoveryKeyInvalidScenario,
+  runMatrixQaE2eeCliRecoveryKeySetupScenario,
+  runMatrixQaE2eeCliSetupThenGatewayReplyScenario,
   runMatrixQaE2eeCliSelfVerificationScenario,
   runMatrixQaE2eeDeviceSasVerificationScenario,
   runMatrixQaE2eeDmSasVerificationScenario,
@@ -85,8 +94,8 @@ import {
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   buildMentionPrompt,
-  NO_REPLY_WINDOW_MS,
   readMatrixQaSyncCursor,
+  resolveMatrixQaNoReplyWindowMs,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
   writeMatrixQaSyncCursor,
@@ -158,7 +167,7 @@ async function runMultiActorOrderingScenario(context: MatrixQaScenarioContext) {
     body: buildMentionPrompt(context.sutUserId, blockedToken),
     mentionUserIds: [context.sutUserId],
     context,
-    timeoutMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+    timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
     token: blockedToken,
   });
   const accepted = await runDriverTopologyScopedScenario({
@@ -325,6 +334,22 @@ export async function runMatrixQaScenario(
       return await runMatrixQaE2eeRecoveryKeyLifecycleScenario(context);
     case "matrix-e2ee-recovery-owner-verification-required":
       return await runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario(context);
+    case "matrix-e2ee-cli-account-add-enable-e2ee":
+      return await runMatrixQaE2eeCliAccountAddEnableE2eeScenario(context);
+    case "matrix-e2ee-cli-encryption-setup":
+      return await runMatrixQaE2eeCliEncryptionSetupScenario(context);
+    case "matrix-e2ee-cli-encryption-setup-idempotent":
+      return await runMatrixQaE2eeCliEncryptionSetupIdempotentScenario(context);
+    case "matrix-e2ee-cli-encryption-setup-bootstrap-failure":
+      return await runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(context);
+    case "matrix-e2ee-cli-recovery-key-setup":
+      return await runMatrixQaE2eeCliRecoveryKeySetupScenario(context);
+    case "matrix-e2ee-cli-recovery-key-invalid":
+      return await runMatrixQaE2eeCliRecoveryKeyInvalidScenario(context);
+    case "matrix-e2ee-cli-encryption-setup-multi-account":
+      return await runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario(context);
+    case "matrix-e2ee-cli-setup-then-gateway-reply":
+      return await runMatrixQaE2eeCliSetupThenGatewayReplyScenario(context);
     case "matrix-e2ee-cli-self-verification":
       return await runMatrixQaE2eeCliSelfVerificationScenario(context);
     case "matrix-e2ee-state-loss-external-recovery-key":
@@ -343,6 +368,8 @@ export async function runMatrixQaScenario(
       return await runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(context);
     case "matrix-e2ee-server-device-deleted-local-state-intact":
       return await runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario(context);
+    case "matrix-e2ee-server-device-deleted-relogin-recovers":
+      return await runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario(context);
     case "matrix-e2ee-sync-state-loss-crypto-intact":
       return await runMatrixQaE2eeSyncStateLossCryptoIntactScenario(context);
     case "matrix-e2ee-wrong-account-recovery-key":

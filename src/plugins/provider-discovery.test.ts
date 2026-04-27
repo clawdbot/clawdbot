@@ -10,6 +10,7 @@ import {
   runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
+import * as providerDiscoveryModule from "./provider-discovery.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import type { ProviderCatalogResult, ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
@@ -166,6 +167,23 @@ async function expectProviderCatalogResult(params: {
 }
 
 describe("resolveInstalledPluginProviderContributionIds", () => {
+  it("keeps current production callers off the ambiguous runtime-discovery alias", () => {
+    const callerPaths = [
+      "src/agents/models-config.providers.implicit.ts",
+      "src/commands/models/list.provider-catalog.ts",
+    ];
+
+    for (const callerPath of callerPaths) {
+      expect(fs.readFileSync(path.join(process.cwd(), callerPath), "utf-8")).not.toContain(
+        "resolvePluginDiscoveryProviders",
+      );
+    }
+  });
+
+  it("does not keep exporting the ambiguous runtime-discovery alias", () => {
+    expect(Object.keys(providerDiscoveryModule)).not.toContain("resolvePluginDiscoveryProviders");
+  });
+
   it("reads provider ids from the installed plugin index without importing runtime entries", () => {
     const candidate = createProviderContributionCandidate({
       pluginId: "demo",

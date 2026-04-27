@@ -1,3 +1,6 @@
+import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only-command-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
@@ -79,6 +82,37 @@ function resolvePluginNativeName(
     return defaultOverride.trim();
   }
   return command.name;
+}
+
+export function getPluginCommandSpecs(
+  provider?: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    stateDir?: string;
+    workspaceDir?: string;
+    config?: OpenClawConfig;
+  } = {},
+): Array<{
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+}> {
+  const providerName = normalizeOptionalLowercaseString(provider);
+  const commandDefaults =
+    providerName && options.config
+      ? resolveReadOnlyChannelCommandDefaults(providerName, {
+          ...options,
+          config: options.config,
+        })
+      : undefined;
+  if (
+    providerName &&
+    (getLoadedChannelPlugin(providerName)?.commands ?? commandDefaults)
+      ?.nativeCommandsAutoEnabled !== true
+  ) {
+    return [];
+  }
+  return listProviderPluginCommandSpecs(provider);
 }
 
 /** Resolve plugin command specs for a provider's native naming surface without support gating. */

@@ -5,6 +5,7 @@ export function setPluginEnabledInConfig(
   config: OpenClawConfig,
   pluginId: string,
   enabled: boolean,
+  options: { updateChannelConfig?: boolean } = {},
 ): OpenClawConfig {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   const resolvedId = builtInChannelId ?? pluginId;
@@ -23,7 +24,7 @@ export function setPluginEnabledInConfig(
     },
   };
 
-  if (!builtInChannelId) {
+  if (!builtInChannelId || options.updateChannelConfig === false) {
     return next;
   }
 

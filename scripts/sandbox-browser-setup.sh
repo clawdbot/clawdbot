@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
 IMAGE_NAME="openclaw-sandbox-browser:bookworm-slim"
 
-docker build -t "${IMAGE_NAME}" -f Dockerfile.sandbox-browser .
+docker_build_exec -t "${IMAGE_NAME}" -f "$ROOT_DIR/Dockerfile.sandbox-browser" "$ROOT_DIR"
 echo "Built ${IMAGE_NAME}"

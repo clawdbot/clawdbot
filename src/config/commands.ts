@@ -3,6 +3,7 @@ import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { NativeCommandsSetting } from "./types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 export { isCommandFlagEnabled, isRestartEnabled, type CommandFlagKey } from "./commands.flags.js";
 
 function resolveAutoDefault(
@@ -12,6 +13,7 @@ function resolveAutoDefault(
     env?: NodeJS.ProcessEnv;
     stateDir?: string;
     workspaceDir?: string;
+    config?: OpenClawConfig;
     autoDefault?: boolean;
   },
 ): boolean {
@@ -23,7 +25,13 @@ function resolveAutoDefault(
     return options.autoDefault;
   }
   const commandDefaults =
-    getLoadedChannelPlugin(id)?.commands ?? resolveReadOnlyChannelCommandDefaults(id, options);
+    getLoadedChannelPlugin(id)?.commands ??
+    (options?.config
+      ? resolveReadOnlyChannelCommandDefaults(id, {
+          ...options,
+          config: options.config,
+        })
+      : undefined);
   if (kind === "native") {
     return commandDefaults?.nativeCommandsAutoEnabled === true;
   }
@@ -37,6 +45,7 @@ export function resolveNativeSkillsEnabled(params: {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   workspaceDir?: string;
+  config?: OpenClawConfig;
   autoDefault?: boolean;
 }): boolean {
   return resolveNativeCommandSetting({ ...params, kind: "nativeSkills" });
@@ -49,6 +58,7 @@ export function resolveNativeCommandsEnabled(params: {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   workspaceDir?: string;
+  config?: OpenClawConfig;
   autoDefault?: boolean;
 }): boolean {
   return resolveNativeCommandSetting({ ...params, kind: "native" });
@@ -62,6 +72,7 @@ function resolveNativeCommandSetting(params: {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   workspaceDir?: string;
+  config?: OpenClawConfig;
   autoDefault?: boolean;
 }): boolean {
   const { providerId, providerSetting, globalSetting, kind = "native", ...options } = params;

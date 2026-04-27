@@ -6,9 +6,8 @@ import { __testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
-const WORKFLOW_PATH = path.resolve(TEST_DIR, "../../.github/workflows/npm-telegram-beta-e2e.yml");
 
-describe("npm Telegram live Docker E2E", () => {
+describe("package Telegram live Docker E2E", () => {
   it("supports npm-specific Convex credential aliases", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
@@ -29,45 +28,58 @@ describe("npm Telegram live Docker E2E", () => {
     expect(script).toContain('printf "convex"');
   });
 
-  it("installs the npm package before forwarding runtime secrets", () => {
+  it("installs the package candidate before forwarding runtime secrets", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-    const installRunStart = script.indexOf('echo "Running published npm Telegram live Docker E2E');
+    const installRunStart = script.indexOf('echo "Running package Telegram live Docker E2E');
     const installRunEnd = script.indexOf('run_logged docker run --rm \\\n  "${docker_env[@]}"');
     const installRun = script.slice(installRunStart, installRunEnd);
 
-    expect(installRun).toContain('npm install -g "$package_spec" --no-fund --no-audit');
+    expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
+    expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
     expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
     expect(script).toContain('credential_role="ci"');
   });
 
-  it("requires release manager environment approval for the manual npm beta workflow", () => {
-    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+  it("can install a resolved package tarball instead of a registry spec", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
-    expect(workflow).toContain("approve_release_manager:");
-    expect(workflow).toContain("environment: npm-release");
-    expect(workflow).toContain("needs: approve_release_manager");
-    expect(workflow).not.toContain('new Set(["admin", "write"])');
-    expect(workflow).not.toContain("data.role_name");
-    expect(workflow).not.toContain("github.rest.teams.listMembersInOrg");
-    expect(workflow).not.toContain("getMembershipForUserInOrg");
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ");
+    expect(script).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
+    expect(script).toContain(
+      'package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")',
+    );
+    expect(script).toContain('validate_openclaw_package_spec "$PACKAGE_SPEC"');
+    expect(script.indexOf('if [ -n "$resolved_package_tgz" ]; then')).toBeLessThan(
+      script.indexOf('validate_openclaw_package_spec "$PACKAGE_SPEC"'),
+    );
   });
 
-  it("builds and reuses a local Docker E2E image after approval", () => {
-    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+  it("keeps private QA harness imports local while using the installed package dist", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
-    expect(workflow).not.toContain("prepare_docker_e2e_image:");
-    expect(workflow).toContain("run_npm_telegram_beta_e2e:");
-    expect(workflow).toContain("needs: approve_release_manager");
-    expect(workflow).toContain("useblacksmith/setup-docker-builder");
-    expect(workflow).toContain("useblacksmith/build-push-action");
-    expect(workflow).toContain("tags: openclaw-docker-e2e:local");
-    expect(workflow).toContain("load: true");
-    expect(workflow).toContain("push: false");
-    expect(workflow).not.toContain("cache-from: type=gha");
-    expect(workflow).not.toContain("cache-to: type=gha");
-    expect(workflow).toContain('OPENCLAW_SKIP_DOCKER_BUILD: "1"');
-    expect(workflow).toContain("OPENCLAW_DOCKER_E2E_IMAGE: openclaw-docker-e2e:local");
+    expect(script).toContain('ln -sfnT "$openclaw_package_dir/dist" /app/dist');
+    expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
+    expect(script).toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
+    expect(script).toContain('"/app/node_modules/openclaw/package.json"');
+    expect(script).toContain('pkg.exports["./plugin-sdk/qa-channel"]');
+    expect(script).toContain('"./extensions/qa-channel/api.ts"');
+    expect(script).toContain('pkg.exports["./plugin-sdk/qa-channel-protocol"]');
+    expect(script).toContain('"./extensions/qa-channel/src/protocol.ts"');
+  });
+
+  it("exposes installed package dependencies to the mounted QA harness", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("link_installed_package_dependency()");
+    expect(script).toContain(
+      'local source="/npm-global/lib/node_modules/openclaw/node_modules/$name"',
+    );
+    expect(script).toContain('ln -sfn "$source" "$target"');
+    expect(script).toContain("link_installed_package_dependency \"$dependency\"");
+    expect(script).toContain("@modelcontextprotocol/sdk");
+    expect(script).toContain("yaml");
+    expect(script).toContain("zod");
   });
 
   it("lets npm-specific credential aliases override shared QA env", () => {

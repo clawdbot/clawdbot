@@ -2,9 +2,9 @@
 
 .qs-container {
   width: 100%;
-  max-width: none;
-  margin: 0;
-  padding: 32px 0 56px;
+  max-width: 1520px;
+  margin: 0 auto;
+  padding: 32px 16px 56px;
 }
 
 .qs-header {
@@ -44,14 +44,16 @@
 
 .qs-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: start;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: stretch;
   gap: 14px;
 }
 
-.qs-stack {
+.qs-side-stack {
   display: grid;
-  align-content: start;
+  grid-column: span 4;
+  grid-template-rows: auto 1fr;
+  align-self: stretch;
   gap: 14px;
   min-width: 0;
 }
@@ -78,8 +80,14 @@
   grid-column: 1 / -1;
 }
 
+.qs-card--model,
+.qs-card--channels,
+.qs-card--security {
+  grid-column: span 4;
+}
+
 .qs-card--personal {
-  grid-column: 1 / -1;
+  grid-column: span 8;
 }
 
 .qs-card--personal .qs-identity-grid {
@@ -144,7 +152,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 9px 16px;
-  min-height: 38px;
+  min-height: 42px;
   gap: 10px;
 }
 
@@ -156,6 +164,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
   font-size: 0.8125rem;
   font-weight: 450;
   color: var(--text);
@@ -165,9 +175,12 @@
 .qs-row__value {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
   font-size: 0.8125rem;
   color: var(--muted);
+  text-align: right;
 }
 
 .qs-row__value--action {
@@ -226,8 +239,8 @@
 .qs-identity-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
-  gap: 10px;
-  padding: 14px 16px 10px;
+  gap: 12px;
+  padding: 14px 16px 16px;
 }
 
 .qs-identity-card {
@@ -240,23 +253,13 @@
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   border-radius: var(--radius-md);
-  background:
-    radial-gradient(
-      circle at 18% 18%,
-      color-mix(in srgb, var(--accent) 10%, transparent),
-      transparent 46%
-    ),
-    color-mix(in srgb, var(--bg-elevated) 42%, var(--card) 58%);
+  background: color-mix(in srgb, var(--bg-elevated) 42%, var(--card) 58%);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 42%, transparent);
 }
 
 .qs-identity-card--assistant {
-  background:
-    radial-gradient(
-      circle at 82% 12%,
-      color-mix(in srgb, var(--accent) 14%, transparent),
-      transparent 48%
-    ),
-    color-mix(in srgb, var(--bg-elevated) 52%, var(--card) 48%);
+  background: color-mix(in srgb, var(--bg-elevated) 50%, var(--card) 50%);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--border-strong) 70%, transparent);
 }
 
 .qs-identity-card__copy {
@@ -414,7 +417,10 @@
 
 .qs-segmented {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 2px;
+  max-width: 100%;
   background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   border-radius: var(--radius-md);
@@ -1071,6 +1077,56 @@
 @media (max-width: 1100px) {
   .qs-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .qs-side-stack {
+    display: contents;
+  }
+
+  .qs-card,
+  .qs-card--span-all,
+  .qs-card--personal,
+  .qs-card--model,
+  .qs-card--channels,
+  .qs-card--security,
+  .qs-card--appearance,
+  .qs-card--automations {
+    grid-column: span 1;
+  }
+
+  .qs-card--personal,
+  .qs-card--span-all {
+    grid-column: 1 / -1;
+  }
+
+  .qs-card--model {
+    order: 1;
+  }
+
+  .qs-card--channels {
+    order: 2;
+  }
+
+  .qs-card--security {
+    order: 3;
+  }
+
+  .qs-card--appearance {
+    order: 4;
+  }
+
+  .qs-card--personal {
+    order: 5;
+  }
+
+  .qs-card--automations {
+    grid-column: 1 / -1;
+    order: 6;
+  }
+
+  .qs-card--span-all {
+    order: 7;
   }
 }
 

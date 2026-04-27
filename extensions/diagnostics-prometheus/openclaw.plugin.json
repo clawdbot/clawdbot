@@ -1,0 +1,8 @@
+{
+  "id": "diagnostics-prometheus",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

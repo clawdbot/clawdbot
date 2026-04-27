@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { commitConfigWriteWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import type {
@@ -7,18 +8,19 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
-import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
+import { createConfigIO, resolveGatewayPort, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import { detectSetupMigrationSources, runSetupMigrationImport } from "./setup.migration-import.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
   SECURITY_CONFIRM_MESSAGE,
@@ -26,6 +28,8 @@ import {
   SECURITY_NOTE_TITLE,
 } from "./setup.security-note.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
+
+type SetupFlowChoice = WizardFlow | "import";
 
 type AuthChoiceModule = typeof import("../commands/auth-choice.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
@@ -61,6 +65,10 @@ async function writeWizardConfigFile(config: OpenClawConfig): Promise<OpenClawCo
   return committed.config;
 }
 
+async function readSetupConfigFileSnapshot() {
+  return await createConfigIO({ pluginValidation: "skip" }).readConfigFileSnapshot();
+}
+
 async function resolveAuthChoiceModelSelectionPolicy(params: {
   authChoice: string;
   config: OpenClawConfig;
@@ -83,6 +91,35 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+
+  const [{ resolveManifestProviderAuthChoice }, { resolvePluginSetupProvider }] = await Promise.all(
+    [import("../plugins/provider-auth-choices.js"), import("../plugins/setup-registry.js")],
+  );
+  const manifestChoice = resolveManifestProviderAuthChoice(params.authChoice, {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    includeUntrustedWorkspacePlugins: false,
+  });
+  if (manifestChoice) {
+    const setupProvider = resolvePluginSetupProvider({
+      provider: manifestChoice.providerId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      pluginIds: [manifestChoice.pluginId],
+    });
+    const setupMethod = setupProvider?.auth.find(
+      (method) => normalizeProviderId(method.id) === normalizeProviderId(manifestChoice.methodId),
+    );
+    const setupPolicy =
+      setupMethod?.wizard?.modelSelection ?? setupProvider?.wizard?.setup?.modelSelection;
+    return {
+      preferredProvider,
+      promptWhenAuthChoiceProvided: setupPolicy?.promptWhenAuthChoiceProvided === true,
+      allowKeepCurrent: setupPolicy?.allowKeepCurrent ?? true,
+    };
+  }
 
   const { resolvePluginProviders, resolveProviderPluginChoice } =
     await import("../plugins/provider-auth-choice.runtime.js");
@@ -146,7 +183,7 @@ export async function runSetupWizard(
   await prompter.intro("OpenClaw setup");
   await requireRiskAcknowledgement({ opts, prompter });
 
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await readSetupConfigFileSnapshot();
   let baseConfig: OpenClawConfig = snapshot.valid
     ? snapshot.exists
       ? (snapshot.sourceConfig ?? snapshot.config)
@@ -173,7 +210,7 @@ export async function runSetupWizard(
   }
 
   const compatibilityNotices = snapshot.valid
-    ? buildPluginCompatibilityNotices({ config: baseConfig })
+    ? buildPluginCompatibilitySnapshotNotices({ config: baseConfig })
     : [];
   if (compatibilityNotices.length > 0) {
     await prompter.note(
@@ -195,28 +232,41 @@ export async function runSetupWizard(
 
   const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
   const manualHint = "Configure port, network, Tailscale, and auth options.";
+  const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
+  const firstMigrationDetection = migrationDetections[0];
+  const importOption = firstMigrationDetection
+    ? {
+        value: "import" as const,
+        label: `Import from ${firstMigrationDetection.label}`,
+        ...(firstMigrationDetection.source ? { hint: firstMigrationDetection.source } : {}),
+      }
+    : undefined;
   const explicitFlowRaw = opts.flow?.trim();
   const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
   if (
     normalizedExplicitFlow &&
     normalizedExplicitFlow !== "quickstart" &&
-    normalizedExplicitFlow !== "advanced"
+    normalizedExplicitFlow !== "advanced" &&
+    normalizedExplicitFlow !== "import"
   ) {
-    runtime.error("Invalid --flow (use quickstart, manual, or advanced).");
+    runtime.error("Invalid --flow (use quickstart, manual, advanced, or import).");
     runtime.exit(1);
     return;
   }
-  const explicitFlow: WizardFlow | undefined =
-    normalizedExplicitFlow === "quickstart" || normalizedExplicitFlow === "advanced"
+  const explicitFlow: SetupFlowChoice | undefined =
+    normalizedExplicitFlow === "quickstart" ||
+    normalizedExplicitFlow === "advanced" ||
+    normalizedExplicitFlow === "import"
       ? normalizedExplicitFlow
       : undefined;
-  let flow: WizardFlow =
+  let flow: SetupFlowChoice =
     explicitFlow ??
     (await prompter.select({
       message: "Setup mode",
       options: [
         { value: "quickstart", label: "QuickStart", hint: quickstartHint },
         { value: "advanced", label: "Manual", hint: manualHint },
+        ...(importOption ? [importOption] : []),
       ],
       initialValue: "quickstart",
     }));
@@ -265,6 +315,19 @@ export async function runSetupWizard(
       baseConfig = {};
     }
   }
+
+  if (opts.importFrom || flow === "import") {
+    await runSetupMigrationImport({
+      opts,
+      baseConfig,
+      detections: migrationDetections,
+      prompter,
+      runtime,
+      writeConfigFile: writeWizardConfigFile,
+    });
+    return;
+  }
+  const wizardFlow: WizardFlow = flow;
 
   const quickstartGateway: QuickstartGatewayDefaults = (() => {
     const hasExisting =
@@ -557,7 +620,8 @@ export async function runSetupWizard(
           prompter,
           allowKeep: true,
           ignoreAllowlist: true,
-          includeProviderPluginSetups: true,
+          includeProviderPluginSetups: false,
+          loadCatalog: false,
           workspaceDir,
           runtime,
         });
@@ -569,7 +633,7 @@ export async function runSetupWizard(
         }
 
         const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
-        await warnIfModelConfigLooksOff(nextConfig, prompter);
+        await warnIfModelConfigLooksOff(nextConfig, prompter, { validateCatalog: false });
       }
       break;
     }
@@ -616,6 +680,7 @@ export async function runSetupWizard(
         ignoreAllowlist: true,
         includeProviderPluginSetups: true,
         preferredProvider: authChoiceModelSelectionPolicy?.preferredProvider,
+        browseCatalogOnDemand: true,
         workspaceDir,
         runtime,
       });
@@ -627,13 +692,13 @@ export async function runSetupWizard(
       }
     }
 
-    await warnIfModelConfigLooksOff(nextConfig, prompter);
+    await warnIfModelConfigLooksOff(nextConfig, prompter, { validateCatalog: false });
     break;
   }
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
   const gateway = await configureGatewayForSetup({
-    flow,
+    flow: wizardFlow,
     baseConfig,
     nextConfig,
     localPort,
@@ -710,7 +775,7 @@ export async function runSetupWizard(
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
   const { launchedTui } = await finalizeSetupWizard({
-    flow,
+    flow: wizardFlow,
     opts,
     baseConfig,
     nextConfig,

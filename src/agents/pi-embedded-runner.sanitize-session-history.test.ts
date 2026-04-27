@@ -1133,6 +1133,77 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
+  it("strips prior assistant reasoning for Gemma 4 OpenAI-compatible replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "private reasoning",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "visible answer" },
+      ]),
+      makeUserMessage("second"),
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "lmstudio",
+      modelId: "google/gemma-4-26b-a4b-it",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "text", text: "visible answer" },
+    ]);
+  });
+
+  it("preserves current Gemma 4 tool-call reasoning during tool continuation replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("look up the answer"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "call the tool",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "toolCall", id: "call123456", name: "lookup", arguments: {} },
+      ]),
+      {
+        role: "toolResult",
+        toolCallId: "call123456",
+        toolName: "lookup",
+        content: "42",
+        timestamp: nextTimestamp(),
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "lmstudio",
+      modelId: "google/gemma-4-26b-a4b-it",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      {
+        type: "thinking",
+        thinking: "call the tool",
+        thinkingSignature: "reasoning_content",
+      },
+      { type: "toolCall", id: "call123456", name: "lookup", arguments: {} },
+    ]);
+  });
+
   it("preserves latest assistant thinking blocks for github-copilot models", async () => {
     setNonGoogleModelApi();
 

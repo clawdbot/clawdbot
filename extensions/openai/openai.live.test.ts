@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getModel } from "@mariozechner/pi-ai";
+import { getModel, type Api, type Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
 import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
@@ -27,6 +27,10 @@ const ModelRegistryCtor = ModelRegistry as unknown as {
   new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
 };
 
+function findOpenAIModel(modelId: string): Model<Api> | null {
+  return (getModel("openai", modelId as never) as Model<Api> | undefined) ?? null;
+}
+
 function resolveTemplateModelId(modelId: string) {
   switch (modelId) {
     case "gpt-5.5":
@@ -42,9 +46,12 @@ function resolveTemplateModelId(modelId: string) {
   }
 }
 
-function createTemplateModelRegistry(modelId: string): ModelRegistry {
+function createLiveModelRegistry(modelId: string): ModelRegistry {
   const registry = new ModelRegistryCtor(AuthStorage.inMemory());
-  const template = getModel("openai", resolveTemplateModelId(modelId));
+  const template = findOpenAIModel(modelId) ?? findOpenAIModel(resolveTemplateModelId(modelId));
+  if (!template) {
+    throw new Error(`Unsupported live OpenAI plugin model: ${modelId}`);
+  }
   registry.registerProvider("openai", {
     apiKey: "test",
     baseUrl: template.baseUrl,
@@ -183,12 +190,15 @@ describeLive("openai plugin live", () => {
   it("registers an OpenAI provider that can complete a live request", async () => {
     const { providers } = await registerOpenAIPlugin();
     const provider = requireRegisteredProvider(providers, "openai");
+    const modelRegistry = createLiveModelRegistry(LIVE_MODEL_ID);
 
-    const resolved = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: LIVE_MODEL_ID,
-      modelRegistry: createTemplateModelRegistry(LIVE_MODEL_ID),
-    });
+    const resolved =
+      modelRegistry.find("openai", LIVE_MODEL_ID) ??
+      provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: LIVE_MODEL_ID,
+        modelRegistry,
+      });
 
     if (!resolved) {
       throw new Error("openai provider did not resolve the live model");

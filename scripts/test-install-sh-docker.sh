@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=./docker/install-sh-common/version-parse.sh
 source "$ROOT_DIR/scripts/docker/install-sh-common/version-parse.sh"
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
 resolve_default_smoke_platform() {
   local host_os
@@ -358,7 +359,7 @@ if [[ "$SKIP_SMOKE_IMAGE_BUILD" == "1" ]]; then
   echo "==> Reuse prebuilt smoke image: $SMOKE_IMAGE"
 else
   echo "==> Build smoke image (upgrade, root, ${SMOKE_PLATFORM}): $SMOKE_IMAGE"
-  docker build \
+  docker_build_run install-smoke-build \
     --platform "$SMOKE_PLATFORM" \
     -t "$SMOKE_IMAGE" \
     -f "$ROOT_DIR/scripts/docker/install-sh-smoke/Dockerfile" \
@@ -441,7 +442,7 @@ else
     echo "==> Reuse prebuilt non-root image: $NONROOT_IMAGE"
   else
     echo "==> Build non-root image (${NONROOT_PLATFORM}): $NONROOT_IMAGE"
-    docker build \
+    docker_build_run install-nonroot-build \
       --platform "$NONROOT_PLATFORM" \
       -t "$NONROOT_IMAGE" \
       -f "$ROOT_DIR/scripts/docker/install-sh-nonroot/Dockerfile" \

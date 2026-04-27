@@ -342,5 +342,3 @@ vi.mock("/src/plugins/runtime/runtime-web-channel-plugin.js", () => ({
 
 process.env.OPENCLAW_SKIP_CHANNELS = "1";
 process.env.OPENCLAW_SKIP_CRON = "1";
-process.env.OPENCLAW_SKIP_CHANNELS = "1";
-process.env.OPENCLAW_SKIP_CRON = "1";

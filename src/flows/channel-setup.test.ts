@@ -53,6 +53,7 @@ function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegi
     authRequirements: [],
     webSearchProviders: [],
     webFetchProviders: [],
+    migrationProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],

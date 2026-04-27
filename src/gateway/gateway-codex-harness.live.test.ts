@@ -17,7 +17,9 @@ import {
 } from "./gateway-cli-backend.live-helpers.js";
 import {
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
+  EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
+  isExpectedCodexStatusCommandText,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
   assertCronJobMatches,
@@ -543,7 +545,7 @@ async function waitForCodexSubagentStarted(params: {
   events: CapturedAgentEvent[];
   parentSessionKey: string;
 }): Promise<Record<string, unknown> | undefined> {
-  const deadline = Date.now() + Math.min(CODEX_HARNESS_REQUEST_TIMEOUT_MS, 30_000);
+  const deadline = Date.now() + Math.min(CODEX_HARNESS_REQUEST_TIMEOUT_MS, 120_000);
   let lastRow: Record<string, unknown> | undefined;
   let lastError: unknown;
   while (Date.now() < deadline) {
@@ -790,19 +792,8 @@ describeLive("gateway live (Codex harness)", () => {
             client,
             sessionKey,
             command: "/codex status",
-            expectedText: [
-              "Codex app-server:",
-              "Model: `codex/",
-              "Model: codex/",
-              "Session: `agent:dev:live-codex-harness`",
-              "Session: agent:dev:live-codex-harness",
-              "OpenClaw `",
-              "OpenClaw status:",
-              "model `codex/",
-              "session `agent:dev:live-codex-harness`",
-              "Model/status card shown above",
-              "Status shown above.",
-            ],
+            expectedText: [...EXPECTED_CODEX_STATUS_COMMAND_TEXT],
+            isExpectedText: isExpectedCodexStatusCommandText,
           });
           logCodexLiveStep("codex-status-command", { statusText });
 

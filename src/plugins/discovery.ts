@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { resolveBoundaryPathSync } from "../infra/boundary-path.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -9,6 +8,7 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { resolvePackagedBundledLoadPathAlias } from "./bundled-load-path-aliases.js";
+import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -19,6 +19,10 @@ import {
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
+import {
+  resolvePackageRuntimeExtensionSources,
+  resolvePackageSetupSource,
+} from "./package-entry-resolution.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
@@ -554,271 +558,6 @@ function discoverBundleInRoot(params: {
   return "added";
 }
 
-function resolvePackageEntrySource(params: {
-  packageDir: string;
-  entryPath: string;
-  sourceLabel: string;
-  diagnostics: PluginDiagnostic[];
-  rejectHardlinks?: boolean;
-}): string | null {
-  const source = path.resolve(params.packageDir, params.entryPath);
-  const rejectHardlinks = params.rejectHardlinks ?? true;
-  const candidates = [source];
-  const openCandidate = (absolutePath: string): string | null => {
-    const opened = openBoundaryFileSync({
-      absolutePath,
-      rootPath: params.packageDir,
-      boundaryLabel: "plugin package directory",
-      rejectHardlinks,
-    });
-    if (!opened.ok) {
-      return matchBoundaryFileOpenFailure(opened, {
-        path: () => null,
-        io: () => {
-          params.diagnostics.push({
-            level: "warn",
-            message: `extension entry unreadable (I/O error): ${params.entryPath}`,
-            source: params.sourceLabel,
-          });
-          return null;
-        },
-        fallback: () => {
-          params.diagnostics.push({
-            level: "error",
-            message: `extension entry escapes package directory: ${params.entryPath}`,
-            source: params.sourceLabel,
-          });
-          return null;
-        },
-      });
-    }
-    const safeSource = opened.path;
-    fs.closeSync(opened.fd);
-    return safeSource;
-  };
-  if (!rejectHardlinks) {
-    const builtCandidate = source.replace(/\.[^.]+$/u, ".js");
-    if (builtCandidate !== source) {
-      candidates.push(builtCandidate);
-    }
-  }
-
-  for (const candidate of new Set(candidates)) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-    return openCandidate(candidate);
-  }
-
-  return openCandidate(source);
-}
-
-function isTypeScriptPackageEntry(entryPath: string): boolean {
-  return [".ts", ".mts", ".cts"].includes(normalizeLowercaseStringOrEmpty(path.extname(entryPath)));
-}
-
-function shouldInferBuiltRuntimeEntry(origin: PluginOrigin): boolean {
-  return origin === "config" || origin === "global";
-}
-
-function resolveSafePackageEntry(params: {
-  packageDir: string;
-  entryPath: string;
-  sourceLabel: string;
-  diagnostics: PluginDiagnostic[];
-  rejectHardlinks?: boolean;
-}): { relativePath: string; existingSource?: string } | null {
-  const absolutePath = path.resolve(params.packageDir, params.entryPath);
-  if (fs.existsSync(absolutePath)) {
-    const existingSource = resolvePackageEntrySource({
-      packageDir: params.packageDir,
-      entryPath: params.entryPath,
-      sourceLabel: params.sourceLabel,
-      diagnostics: params.diagnostics,
-      rejectHardlinks: params.rejectHardlinks,
-    });
-    if (!existingSource) {
-      return null;
-    }
-    return {
-      relativePath: path.relative(params.packageDir, absolutePath).replace(/\\/g, "/"),
-      existingSource,
-    };
-  }
-
-  try {
-    resolveBoundaryPathSync({
-      absolutePath,
-      rootPath: params.packageDir,
-      boundaryLabel: "plugin package directory",
-    });
-  } catch {
-    params.diagnostics.push({
-      level: "error",
-      message: `extension entry escapes package directory: ${params.entryPath}`,
-      source: params.sourceLabel,
-    });
-    return null;
-  }
-  return { relativePath: path.relative(params.packageDir, absolutePath).replace(/\\/g, "/") };
-}
-
-function listBuiltRuntimeEntryCandidates(entryPath: string): string[] {
-  if (!isTypeScriptPackageEntry(entryPath)) {
-    return [];
-  }
-  const normalized = entryPath.replace(/\\/g, "/");
-  const withoutExtension = normalized.replace(/\.[^.]+$/u, "");
-  const normalizedRelative = normalized.replace(/^\.\//u, "");
-  const distWithoutExtension = normalizedRelative.startsWith("src/")
-    ? `./dist/${normalizedRelative.slice("src/".length).replace(/\.[^.]+$/u, "")}`
-    : `./dist/${withoutExtension.replace(/^\.\//u, "")}`;
-  const withJavaScriptExtensions = (basePath: string) => [
-    `${basePath}.js`,
-    `${basePath}.mjs`,
-    `${basePath}.cjs`,
-  ];
-  const candidates = [
-    ...withJavaScriptExtensions(distWithoutExtension),
-    ...withJavaScriptExtensions(withoutExtension),
-  ];
-  return [...new Set(candidates)].filter((candidate) => candidate !== normalized);
-}
-
-function resolveExistingPackageEntrySource(params: {
-  packageDir: string;
-  entryPath: string;
-  sourceLabel: string;
-  diagnostics: PluginDiagnostic[];
-  rejectHardlinks?: boolean;
-}): string | null {
-  const source = path.resolve(params.packageDir, params.entryPath);
-  if (!fs.existsSync(source)) {
-    return null;
-  }
-  return resolvePackageEntrySource(params);
-}
-
-function normalizePackageManifestStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
-}
-
-function resolvePackageRuntimeEntrySource(params: {
-  packageDir: string;
-  entryPath: string;
-  runtimeEntryPath?: string;
-  origin: PluginOrigin;
-  sourceLabel: string;
-  diagnostics: PluginDiagnostic[];
-  rejectHardlinks?: boolean;
-}): string | null {
-  const safeEntry = resolveSafePackageEntry({
-    packageDir: params.packageDir,
-    entryPath: params.entryPath,
-    sourceLabel: params.sourceLabel,
-    diagnostics: params.diagnostics,
-    rejectHardlinks: params.rejectHardlinks,
-  });
-  if (!safeEntry) {
-    return null;
-  }
-
-  if (params.runtimeEntryPath) {
-    const runtimeSource = resolvePackageEntrySource({
-      packageDir: params.packageDir,
-      entryPath: params.runtimeEntryPath,
-      sourceLabel: params.sourceLabel,
-      diagnostics: params.diagnostics,
-      rejectHardlinks: params.rejectHardlinks,
-    });
-    if (runtimeSource) {
-      return runtimeSource;
-    }
-  }
-
-  if (shouldInferBuiltRuntimeEntry(params.origin)) {
-    for (const candidate of listBuiltRuntimeEntryCandidates(safeEntry.relativePath)) {
-      const runtimeSource = resolveExistingPackageEntrySource({
-        packageDir: params.packageDir,
-        entryPath: candidate,
-        sourceLabel: params.sourceLabel,
-        diagnostics: params.diagnostics,
-        rejectHardlinks: params.rejectHardlinks,
-      });
-      if (runtimeSource) {
-        return runtimeSource;
-      }
-    }
-  }
-
-  if (safeEntry.existingSource) {
-    return safeEntry.existingSource;
-  }
-
-  return resolvePackageEntrySource({
-    packageDir: params.packageDir,
-    entryPath: params.entryPath,
-    sourceLabel: params.sourceLabel,
-    diagnostics: params.diagnostics,
-    rejectHardlinks: params.rejectHardlinks,
-  });
-}
-
-function resolvePackageSetupSource(params: {
-  packageDir: string;
-  manifest: PackageManifest | null;
-  origin: PluginOrigin;
-  sourceLabel: string;
-  diagnostics: PluginDiagnostic[];
-  rejectHardlinks?: boolean;
-}): string | null {
-  const packageManifest = getPackageManifestMetadata(params.manifest ?? undefined);
-  const setupEntryPath = normalizeOptionalString(packageManifest?.setupEntry);
-  if (!setupEntryPath) {
-    return null;
-  }
-  return resolvePackageRuntimeEntrySource({
-    packageDir: params.packageDir,
-    entryPath: setupEntryPath,
-    runtimeEntryPath: normalizeOptionalString(packageManifest?.runtimeSetupEntry),
-    origin: params.origin,
-    sourceLabel: params.sourceLabel,
-    diagnostics: params.diagnostics,
-    rejectHardlinks: params.rejectHardlinks,
-  });
-}
-
-function resolvePackageRuntimeExtensionEntries(params: {
-  packageDir: string;
-  manifest: PackageManifest | null;
-  extensions: readonly string[];
-  origin: PluginOrigin;
-  sourceLabel: string;
-  diagnostics: PluginDiagnostic[];
-  rejectHardlinks?: boolean;
-}): string[] {
-  const packageManifest = getPackageManifestMetadata(params.manifest ?? undefined);
-  const runtimeExtensions = normalizePackageManifestStringList(packageManifest?.runtimeExtensions);
-  return params.extensions.flatMap((entryPath, index) => {
-    const source = resolvePackageRuntimeEntrySource({
-      packageDir: params.packageDir,
-      entryPath,
-      runtimeEntryPath:
-        runtimeExtensions.length === params.extensions.length
-          ? runtimeExtensions[index]
-          : undefined,
-      origin: params.origin,
-      sourceLabel: params.sourceLabel,
-      diagnostics: params.diagnostics,
-      rejectHardlinks: params.rejectHardlinks,
-    });
-    return source ? [source] : [];
-  });
-}
-
 function discoverInDirectory(params: {
   dir: string;
   origin: PluginOrigin;
@@ -896,7 +635,7 @@ function discoverInDirectory(params: {
     });
 
     if (extensions.length > 0) {
-      const resolvedRuntimeSources = resolvePackageRuntimeExtensionEntries({
+      const resolvedRuntimeSources = resolvePackageRuntimeExtensionSources({
         packageDir: fullPath,
         manifest,
         extensions,
@@ -1032,7 +771,7 @@ function discoverFromPath(params: {
     });
 
     if (extensions.length > 0) {
-      const resolvedRuntimeSources = resolvePackageRuntimeExtensionEntries({
+      const resolvedRuntimeSources = resolvePackageRuntimeExtensionSources({
         packageDir: resolved,
         manifest,
         extensions,
@@ -1197,6 +936,27 @@ export function discoverOpenClawPlugins(params: {
     load: () => {
       const result = createDiscoveryResult();
       const seen = new Set<string>();
+      for (const sourceOverlayDir of listBundledSourceOverlayDirs({
+        bundledRoot: roots.stock,
+        env,
+      })) {
+        discoverFromPath({
+          rawPath: sourceOverlayDir,
+          origin: "bundled",
+          ownershipUid: params.ownershipUid,
+          workspaceDir,
+          env,
+          candidates: result.candidates,
+          diagnostics: result.diagnostics,
+          seen,
+        });
+        result.diagnostics.push({
+          level: "warn",
+          source: sourceOverlayDir,
+          message:
+            "using bind-mounted bundled plugin source overlay; this source overrides the packaged dist bundle for the same plugin id",
+        });
+      }
       if (roots.stock) {
         discoverInDirectory({
           dir: roots.stock,

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- Matrix/E2EE: add `openclaw matrix encryption setup` to enable Matrix encryption, bootstrap recovery, and print verification status from one setup flow. Thanks @gumadeiras.
+
+### Fixes
+
+- Matrix/E2EE: stabilize recovery and broken-device QA flows while avoiding device-cleanup sync races that could leave shutdown-time crypto work running. Thanks @gumadeiras.
+
 ## 2026.4.25
 
 ### Changes

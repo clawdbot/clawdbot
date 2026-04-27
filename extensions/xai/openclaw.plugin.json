@@ -2,6 +2,7 @@
   "id": "xai",
   "enabledByDefault": true,
   "providers": ["xai"],
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providerEndpoints": [
     {
       "endpointClass": "xai-native",

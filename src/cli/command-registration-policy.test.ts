@@ -36,6 +36,20 @@ describe("command-registration-policy", () => {
         hasBuiltinPrimary: false,
       }),
     ).toBe(false);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "help", "--help"],
+        primary: "help",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "help", "voicecall"],
+        primary: "help",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(false);
   });
 
   it("matches lazy subcommand registration policy", () => {

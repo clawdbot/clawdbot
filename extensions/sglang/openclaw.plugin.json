@@ -2,6 +2,13 @@
   "id": "sglang",
   "enabledByDefault": true,
   "providers": ["sglang"],
+  "modelPricing": {
+    "providers": {
+      "sglang": {
+        "external": false
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "sglang": ["SGLANG_API_KEY"]
   },

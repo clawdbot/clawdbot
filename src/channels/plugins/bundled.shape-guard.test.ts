@@ -731,6 +731,53 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
+  it("caches undefined bundled plugin loads as unavailable", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-null-load-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const pluginDir = path.join(root, "dist", "extensions", "alpha");
+    const testGlobal = globalThis as typeof globalThis & {
+      __bundledPluginUndefinedLoads?: number;
+    };
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      [
+        "export default {",
+        "  kind: 'bundled-channel-entry',",
+        "  id: 'alpha',",
+        "  name: 'Alpha',",
+        "  description: 'Alpha',",
+        "  register() {},",
+        "  loadChannelPlugin() {",
+        "    globalThis.__bundledPluginUndefinedLoads = (globalThis.__bundledPluginUndefinedLoads ?? 0) + 1;",
+        "    return undefined;",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    mockAlphaDistExtensionRuntime();
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(root, "dist", "extensions");
+
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-undefined-load",
+      );
+
+      expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
+      expect(testGlobal.__bundledPluginUndefinedLoads).toBe(1);
+    } finally {
+      restoreBundledPluginsDir(previousBundledPluginsDir);
+      fs.rmSync(root, { recursive: true, force: true });
+      delete testGlobal.__bundledPluginUndefinedLoads;
+    }
+  });
+
   it("keeps channel entrypoints on the dedicated entry-contract SDK surface", () => {
     const offenders = collectBundledChannelEntrypointOffenders(
       bundledPluginRoots,
@@ -924,6 +971,14 @@ describe("bundled channel entry shape guards", () => {
     }));
     vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
       listChannelCatalogEntries: () => [],
+    }));
+    // jiti-loader-cache prefers native require() for compiled .js before
+    // falling back to jiti. This test drives plugin loading via the jiti
+    // mock — disable the native-require fast path so the mocked jiti loader
+    // is exercised instead of loading the on-disk fixture directly.
+    vi.doMock("../../plugins/native-module-require.js", () => ({
+      isJavaScriptModulePath: () => false,
+      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
 
     let reentered = false;

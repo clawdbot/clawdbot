@@ -13,7 +13,6 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { modelsStatusCommand } from "../commands/models/list.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -683,6 +682,7 @@ async function buildModelProviders() {
 
 async function runModelAuthStatus() {
   const captured: string[] = [];
+  const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
   await modelsStatusCommand(
     { json: true },
     {

@@ -10,12 +10,12 @@ describe("resolveGlobalLane", () => {
     }
   });
 
-  it("maps cron lane to nested lane to prevent deadlocks", () => {
+  it("maps cron lane to cron-nested lane to prevent deadlocks", () => {
     // When cron jobs trigger nested agent runs, the outer execution holds
     // the cron lane slot. Inner work must use a separate lane to avoid
     // deadlock. See: https://github.com/openclaw/openclaw/issues/44805
     for (const lane of ["cron", "  cron  "]) {
-      expect(resolveGlobalLane(lane)).toBe(CommandLane.Nested);
+      expect(resolveGlobalLane(lane)).toBe(CommandLane.CronNested);
     }
   });
 
@@ -23,6 +23,7 @@ describe("resolveGlobalLane", () => {
     for (const [lane, expected] of [
       ["main", CommandLane.Main],
       ["subagent", CommandLane.Subagent],
+      ["cron-nested", CommandLane.CronNested],
       ["nested", CommandLane.Nested],
       ["custom-lane", "custom-lane"],
       [" custom ", "custom"],

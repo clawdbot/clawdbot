@@ -72,4 +72,33 @@ describe("inbound dedupe", () => {
       inboundB.resetInboundDedupe();
     }
   });
+
+  it("shares claim/commit state across distinct module instances", async () => {
+    const inboundA = await importFreshModule<typeof import("./inbound-dedupe.js")>(
+      import.meta.url,
+      "./inbound-dedupe.js?scope=commit-a",
+    );
+    const inboundB = await importFreshModule<typeof import("./inbound-dedupe.js")>(
+      import.meta.url,
+      "./inbound-dedupe.js?scope=commit-b",
+    );
+
+    inboundA.resetInboundDedupe();
+    inboundB.resetInboundDedupe();
+
+    try {
+      const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
+      expect(firstClaim).toMatchObject({ status: "claimed" });
+      if (firstClaim.status !== "claimed") {
+        throw new Error("expected claimed inbound dedupe result");
+      }
+      inboundA.commitInboundDedupe(firstClaim.key);
+      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toMatchObject({
+        status: "duplicate",
+      });
+    } finally {
+      inboundA.resetInboundDedupe();
+      inboundB.resetInboundDedupe();
+    }
+  });
 });

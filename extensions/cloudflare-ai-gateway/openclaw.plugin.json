@@ -2,6 +2,18 @@
   "id": "cloudflare-ai-gateway",
   "enabledByDefault": true,
   "providers": ["cloudflare-ai-gateway"],
+  "modelPricing": {
+    "providers": {
+      "cloudflare-ai-gateway": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": {
+          "passthroughProviderModel": true
+        }
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"]
   },

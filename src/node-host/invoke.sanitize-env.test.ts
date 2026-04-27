@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { parseWindowsCodePage } from "../infra/windows-encoding.js";
 import { withEnv } from "../test-utils/env.js";
-import { decodeCapturedOutputBuffer, parseWindowsCodePage, sanitizeEnv } from "./invoke.js";
+import { decodeCapturedOutputBuffer, sanitizeEnv } from "./invoke.js";
 import { buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {

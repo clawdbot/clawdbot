@@ -62,12 +62,18 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
 }
 
 describe("renderQuickSettings", () => {
-  it("uses stacked columns for the compact settings layout", () => {
+  it("uses direct dashboard cards for the compact settings layout", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(container.querySelectorAll(".qs-stack")).toHaveLength(2);
+    expect(container.querySelector(".qs-card--model")).not.toBeNull();
+    expect(container.querySelector(".qs-card--channels")).not.toBeNull();
+    expect(container.querySelector(".qs-card--security")).not.toBeNull();
+    expect(container.querySelector(".qs-card--appearance")).not.toBeNull();
+    expect(container.querySelector(".qs-card--automations")).not.toBeNull();
+    expect(container.querySelector(".qs-side-stack .qs-card--appearance")).not.toBeNull();
+    expect(container.querySelector(".qs-side-stack .qs-card--automations")).not.toBeNull();
     expect(container.querySelector(".qs-card--personal")).not.toBeNull();
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });

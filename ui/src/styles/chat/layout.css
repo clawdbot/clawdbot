@@ -947,6 +947,10 @@
   border: 1px solid var(--border);
 }
 
+.chat-attachment-thumb--file {
+  width: 180px;
+}
+
 .chat-attachment-thumb img {
   width: 100%;
   height: 100%;
@@ -974,13 +978,32 @@
 .chat-attachment-file {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  padding: 8px 34px 8px 10px;
+  overflow: hidden;
+  font-size: 0.72rem;
+  color: var(--text);
+  background: var(--panel);
+}
+
+.chat-attachment-file__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.chat-attachment-file__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-attachment-file__name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.72rem;
-  color: var(--muted);
 }
 
 .agent-chat__file-input {

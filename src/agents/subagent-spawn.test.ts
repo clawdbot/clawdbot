@@ -288,6 +288,42 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
+  it("does not duplicate long subagent task text in the initial user message (#72019)", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-no-dup", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const task = "UNIQUE_LONG_SUBAGENT_TASK_TOKEN\n  keep indentation";
+    const result = await spawnSubagentDirect(
+      {
+        task,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = calls.find((call) => call.method === "agent");
+    const params = agentCall?.params as { message?: string; extraSystemPrompt?: string };
+    expect(params.message).not.toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
+    expect(params.message).not.toContain("[Subagent Task]:");
+    expect(params.message).toContain("**Your Role**");
+    expect(params.extraSystemPrompt).toBe("system-prompt");
+  });
+
   it("returns an error when the initial child session patch is rejected", async () => {
     hoisted.callGatewayMock.mockImplementation(
       async (request: { method?: string; params?: unknown }) => {

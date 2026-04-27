@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
+import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   clearPluginManifestRegistryCache,
@@ -561,6 +563,22 @@ describe("loadPluginManifestRegistry", () => {
           ignored: "unknown",
         },
       },
+      modelPricing: {
+        providers: {
+          moonshot: {
+            openRouter: {
+              provider: "moonshotai",
+              modelIdTransforms: ["version-dots", "unknown"],
+            },
+            liteLLM: {
+              provider: "moonshot",
+            },
+          },
+          openai: {
+            external: false,
+          },
+        },
+      },
       configSchema: { type: "object" },
     });
 
@@ -628,6 +646,120 @@ describe("loadPluginManifestRegistry", () => {
         moonshot: "static",
       },
     });
+    expect(registry.plugins[0]?.modelPricing).toEqual({
+      providers: {
+        moonshot: {
+          openRouter: {
+            provider: "moonshotai",
+            modelIdTransforms: ["version-dots"],
+          },
+          liteLLM: {
+            provider: "moonshot",
+          },
+        },
+      },
+    });
+  });
+
+  it("hydrates bundled channel config metadata from plugin-local config surfaces", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "alpha",
+      channels: ["alpha"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        alpha: {
+          schema: {
+            type: "object",
+            properties: {
+              manifestOnly: { type: "boolean" },
+            },
+          },
+          uiHints: {
+            manifestOnly: { help: "manifest hint" },
+          },
+        },
+      },
+    });
+    writeTextFile(dir, "index.ts", "export {};\n");
+    writeTextFile(
+      dir,
+      "src/config-schema.js",
+      [
+        "export const AlphaChannelConfigSchema = {",
+        "  schema: {",
+        "    type: 'object',",
+        "    properties: {",
+        "      generatedOnly: { type: 'string' },",
+        "    },",
+        "    additionalProperties: false,",
+        "  },",
+        "  uiHints: {",
+        "    generatedOnly: { label: 'Generated only' },",
+        "  },",
+        "};",
+      ].join("\n"),
+    );
+
+    const candidate = createPluginCandidate({
+      idHint: "alpha",
+      rootDir: dir,
+      origin: "bundled",
+      packageDir: dir,
+      packageManifest: {
+        channel: {
+          id: "alpha",
+          label: "Alpha",
+          blurb: "Alpha channel",
+        },
+      },
+    });
+    expect(loadRegistry([candidate]).plugins[0]?.channelConfigs?.alpha?.schema).toEqual({
+      type: "object",
+      properties: {
+        manifestOnly: { type: "boolean" },
+      },
+    });
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      bundledChannelConfigCollector: collectBundledChannelConfigs,
+      candidates: [candidate],
+    });
+
+    expect(registry.plugins[0]?.channelConfigs?.alpha).toEqual({
+      schema: {
+        type: "object",
+        properties: {
+          generatedOnly: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      label: "Alpha",
+      description: "Alpha channel",
+      uiHints: {
+        generatedOnly: { label: "Generated only" },
+        manifestOnly: { help: "manifest hint" },
+      },
+    });
+    expect(collectChannelSchemaMetadata(registry)).toEqual([
+      {
+        id: "alpha",
+        label: "Alpha",
+        description: "Alpha channel",
+        configSchema: {
+          type: "object",
+          properties: {
+            generatedOnly: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        configUiHints: {
+          generatedOnly: { label: "Generated only" },
+          manifestOnly: { help: "manifest hint" },
+        },
+      },
+    ]);
   });
 
   it("reports non-bundled providerAuthEnvVars as deprecated compat metadata", () => {

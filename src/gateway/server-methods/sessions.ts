@@ -1597,6 +1597,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
           entryToUpdate.updatedAt = Date.now();
           entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+          if (result.result?.sessionId && result.result.sessionId !== entryToUpdate.sessionId) {
+            entryToUpdate.sessionId = result.result.sessionId;
+          }
+          if (result.result?.sessionFile) {
+            entryToUpdate.sessionFile = result.result.sessionFile;
+          }
           delete entryToUpdate.inputTokens;
           delete entryToUpdate.outputTokens;
           if (

@@ -1,18 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
+import { clearAllBootstrapSnapshots, getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
 describe("workspace bootstrap file caching", () => {
   let workspaceDir: string;
 
   beforeEach(async () => {
+    clearAllBootstrapSnapshots();
     workspaceDir = await makeTempWorkspace("openclaw-bootstrap-cache-test-");
+  });
+
+  afterEach(() => {
+    clearAllBootstrapSnapshots();
   });
 
   const loadAgentsFile = async (dir: string) => {
     const result = await loadWorkspaceBootstrapFiles(dir);
+    return result.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
+  };
+
+  const loadSessionAgentsFile = async (dir: string, sessionKey: string) => {
+    const result = await getOrLoadBootstrapFiles({ workspaceDir: dir, sessionKey });
     return result.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
   };
 
@@ -71,6 +82,32 @@ describe("workspace bootstrap file caching", () => {
 
     // Second load should detect the change and return new content
     const agentsFile2 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile2, content2);
+  });
+
+  it("refreshes session bootstrap snapshots after workspace file changes", async () => {
+    const content1 = "# Initial content";
+    const content2 = "# Updated content";
+    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: content1,
+    });
+
+    const agentsFile1 = await loadSessionAgentsFile(workspaceDir, "agent:main:main");
+    expectAgentsContent(agentsFile1, content1);
+
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: content2,
+    });
+    const bumpedTime = new Date(Date.now() + 1_000);
+    await fs.utimes(filePath, bumpedTime, bumpedTime);
+
+    const agentsFile2 = await loadSessionAgentsFile(workspaceDir, "agent:main:main");
     expectAgentsContent(agentsFile2, content2);
   });
 

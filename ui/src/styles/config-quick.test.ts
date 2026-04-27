@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const css = readFileSync(new URL("./config-quick.css", import.meta.url), "utf8");
+const css = readFileSync(path.join(process.cwd(), "ui/src/styles/config-quick.css"), "utf8");
 
 describe("config-quick styles", () => {
   it("includes the local user identity quick-settings styles", () => {
@@ -15,12 +16,23 @@ describe("config-quick styles", () => {
     expect(css).toContain(".qs-card--personal");
   });
 
-  it("includes the stacked quick-settings density layout", () => {
-    expect(css).toContain(".qs-stack");
+  it("includes the dashboard quick-settings density layout", () => {
+    expect(css).toContain(".qs-card--model");
+    expect(css).toContain(".qs-card--automations");
+    expect(css).toContain(".qs-side-stack");
+    expect(css).toContain("grid-template-rows: auto 1fr;");
     expect(css).toContain(".qs-identity-card__actions");
-    expect(css).toContain("grid-template-columns: repeat(3, minmax(0, 1fr));");
+    expect(css).toContain("grid-template-columns: repeat(12, minmax(0, 1fr));");
+    expect(css).toContain("grid-column: 1 / -1;");
+    expect(css).toContain("grid-column: span 4;");
     expect(css).toContain("grid-template-columns: repeat(2, minmax(0, 1fr));");
-    expect(css).toContain("@media (max-width: 760px)");
+    expect(css).toContain("align-items: stretch;");
+    expect(css).toContain("display: contents;");
+    expect(css).toContain(".qs-card--appearance {\n    order: 4;");
+    expect(css).toContain(".qs-card--appearance");
+    expect(css).toContain("order: 4");
+    expect(css).toContain(".qs-card--automations");
+    expect(css).toContain("order: 6");
   });
 
   it("includes explicit context profile layout hooks", () => {

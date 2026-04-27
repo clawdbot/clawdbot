@@ -4,6 +4,7 @@ import path from "node:path";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
 import type { CodexCommandDeps } from "./command-handlers.js";
@@ -239,6 +240,67 @@ describe("codex command", () => {
       threadId: "thread-123",
       target: { type: "uncommittedChanges" },
     });
+  });
+
+  it("checks Codex Computer Use setup", async () => {
+    const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
+
+    await expect(
+      handleCodexCommand(createContext("computer-use status"), {
+        deps: createDeps({ readCodexComputerUseStatus }),
+      }),
+    ).resolves.toEqual({
+      text: [
+        "Computer Use: ready",
+        "Plugin: computer-use (installed)",
+        "MCP server: computer-use (1 tools)",
+        "Marketplace: desktop-tools",
+        "Tools: list_apps",
+        "Computer Use is ready.",
+      ].join("\n"),
+    });
+    expect(readCodexComputerUseStatus).toHaveBeenCalledWith({
+      pluginConfig: undefined,
+      forceEnable: false,
+    });
+  });
+
+  it("installs Codex Computer Use from command overrides", async () => {
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+
+    await expect(
+      handleCodexCommand(
+        createContext(
+          "computer-use install --source github:example/desktop-tools --marketplace desktop-tools",
+        ),
+        {
+          deps: createDeps({ installCodexComputerUse }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: expect.stringContaining("Computer Use: ready"),
+    });
+    expect(installCodexComputerUse).toHaveBeenCalledWith({
+      pluginConfig: undefined,
+      forceEnable: true,
+      overrides: {
+        marketplaceSource: "github:example/desktop-tools",
+        marketplaceName: "desktop-tools",
+      },
+    });
+  });
+
+  it("shows help when Computer Use option values are missing", async () => {
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+
+    await expect(
+      handleCodexCommand(createContext("computer-use install --source"), {
+        deps: createDeps({ installCodexComputerUse }),
+      }),
+    ).resolves.toEqual({
+      text: expect.stringContaining("Usage: /codex computer-use"),
+    });
+    expect(installCodexComputerUse).not.toHaveBeenCalled();
   });
 
   it("explains compaction when no Codex thread is attached", async () => {
@@ -600,3 +662,18 @@ describe("codex command", () => {
     });
   });
 });
+
+function computerUseReadyStatus(): CodexComputerUseStatus {
+  return {
+    enabled: true,
+    ready: true,
+    installed: true,
+    pluginEnabled: true,
+    mcpServerAvailable: true,
+    pluginName: "computer-use",
+    mcpServerName: "computer-use",
+    marketplaceName: "desktop-tools",
+    tools: ["list_apps"],
+    message: "Computer Use is ready.",
+  };
+}

@@ -216,6 +216,16 @@ vi.mock("../agents/pi-embedded-runner/runs.js", async () => {
   };
 });
 
+vi.mock("../agents/pi-embedded-runner/run-state.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-embedded-runner/run-state.js")>(
+    "../agents/pi-embedded-runner/run-state.js",
+  );
+  return {
+    ...actual,
+    getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
+  };
+});
+
 vi.mock("../auto-reply/reply/dispatcher-registry.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/reply/dispatcher-registry.js")>(
     "../auto-reply/reply/dispatcher-registry.js",

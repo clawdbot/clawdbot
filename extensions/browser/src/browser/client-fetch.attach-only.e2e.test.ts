@@ -22,7 +22,10 @@ describe("browser client fetch attachOnly diagnostics", () => {
 
   it("does not suggest gateway restart when an attachOnly CDP endpoint hangs", async () => {
     tempHome = await createTempHomeEnv("openclaw-browser-client-fetch-live-");
+    const sockets = new Set<net.Socket>();
     const server = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
       socket.on("error", () => {});
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -63,6 +66,9 @@ describe("browser client fetch attachOnly diagnostics", () => {
       expect(message).not.toContain("Restart the OpenClaw gateway");
       expect(message).not.toContain("Do NOT retry the browser tool");
     } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });

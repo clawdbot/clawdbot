@@ -422,6 +422,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  promptInstall?: boolean;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
@@ -442,12 +443,15 @@ export async function ensureOnboardingPluginInstalled(params: {
     bundledLocalPath,
     hasNpmSpec: Boolean(npmSpec),
   });
-  const choice = await promptInstallChoice({
-    entry,
-    localPath,
-    defaultChoice,
-    prompter,
-  });
+  const choice =
+    params.promptInstall === false
+      ? defaultChoice
+      : await promptInstallChoice({
+          entry,
+          localPath,
+          defaultChoice,
+          prompter,
+        });
 
   if (choice === "skip") {
     return {

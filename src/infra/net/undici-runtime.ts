@@ -23,6 +23,10 @@ const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
   allowH2: false as const,
 });
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function isUndiciRuntimeDeps(value: unknown): value is UndiciRuntimeDeps {
   return (
     typeof value === "object" &&
@@ -62,8 +66,16 @@ function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
   // Enforce HTTP/1.1-only — must come after options to prevent accidental override
   Object.assign(base, HTTP1_ONLY_DISPATCHER_OPTIONS);
   if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
-    (base as Record<string, unknown>).bodyTimeout = timeoutMs;
-    (base as Record<string, unknown>).headersTimeout = timeoutMs;
+    const normalizedTimeoutMs = Math.floor(timeoutMs);
+    const baseRecord = base as Record<string, unknown>;
+    baseRecord.bodyTimeout = normalizedTimeoutMs;
+    baseRecord.headersTimeout = normalizedTimeoutMs;
+    if (typeof baseRecord.connect !== "function") {
+      baseRecord.connect = {
+        ...(isObjectRecord(baseRecord.connect) ? baseRecord.connect : {}),
+        timeout: normalizedTimeoutMs,
+      };
+    }
   }
   return base;
 }

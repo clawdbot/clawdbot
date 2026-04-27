@@ -1,6 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
@@ -93,10 +94,34 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.toolCallId",
 ]);
 
-const require = createRequire(import.meta.url);
-const otlpRoot = require("@opentelemetry/otlp-transformer/build/src/generated/root.js") as OtlpRoot;
-const traceRequestDecoder =
-  otlpRoot.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
+let traceRequestDecoder:
+  | OtlpRoot["opentelemetry"]["proto"]["collector"]["trace"]["v1"]["ExportTraceServiceRequest"]
+  | undefined;
+
+function requireOtlpRoot(): OtlpRoot {
+  const candidates = [
+    path.join(process.cwd(), "dist", "extensions", "diagnostics-otel", "package.json"),
+    path.join(process.cwd(), "extensions", "diagnostics-otel", "package.json"),
+    import.meta.url,
+  ];
+  const failures: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      return createRequire(candidate)(
+        "@opentelemetry/otlp-transformer/build/src/generated/root.js",
+      ) as OtlpRoot;
+    } catch (error) {
+      failures.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(`failed to load OTLP transformer decoder:\n${failures.join("\n")}`);
+}
+
+function getTraceRequestDecoder() {
+  traceRequestDecoder ??=
+    requireOtlpRoot().opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
+  return traceRequestDecoder;
+}
 
 function usage(): string {
   return `Usage: pnpm qa:otel:smoke [--output-dir <path>] [--provider-mode <mode>] [--scenario <id>] [--model <ref>] [--alt-model <ref>]
@@ -197,7 +222,7 @@ function spanAttributes(span: OtlpSpan): Record<string, string | number | boolea
 }
 
 function decodeTraceRequest(body: Buffer): CapturedSpan[] {
-  const decoded = traceRequestDecoder.decode(body);
+  const decoded = getTraceRequestDecoder().decode(body);
   const spans: CapturedSpan[] = [];
   for (const resourceSpans of decoded.resourceSpans ?? []) {
     for (const scopeSpans of resourceSpans.scopeSpans ?? []) {
@@ -261,15 +286,15 @@ function startLocalOtlpTraceReceiver() {
   };
 }
 
-function spawnPnpm(args: string[], env: NodeJS.ProcessEnv): ChildProcess {
-  const npmExecPath = process.env.npm_execpath?.trim();
-  if (npmExecPath) {
-    return spawn(process.execPath, [npmExecPath, ...args], {
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+function openClawEntryArgs(): string[] {
+  if (existsSync(path.join(process.cwd(), "scripts", "run-node.mjs"))) {
+    return ["scripts/run-node.mjs"];
   }
-  return spawn(process.platform === "win32" ? "pnpm.cmd" : "pnpm", args, {
+  return ["openclaw.mjs"];
+}
+
+function spawnOpenClaw(args: string[], env: NodeJS.ProcessEnv): ChildProcess {
+  return spawn(process.execPath, [...openClawEntryArgs(), ...args], {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -297,7 +322,6 @@ function buildQaEnv(port: number): NodeJS.ProcessEnv {
 
 function buildQaArgs(options: CliOptions): string[] {
   const args = [
-    "openclaw",
     "qa",
     "suite",
     "--provider-mode",
@@ -410,7 +434,7 @@ async function main() {
 
   let childExitCode = 1;
   try {
-    const child = spawnPnpm(buildQaArgs(options), buildQaEnv(port));
+    const child = spawnOpenClaw(buildQaArgs(options), buildQaEnv(port));
     child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
     child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
     childExitCode = await waitForChild(child);

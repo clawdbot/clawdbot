@@ -545,7 +545,11 @@ function getBundledChannelPluginForRoot(
   cacheContext.pluginLoadInProgressIds.add(id);
   try {
     const metadata = resolveBundledChannelMetadata(id, rootScope);
-    const plugin = entry.loadChannelPlugin();
+    const plugin = entry.loadChannelPlugin() as ChannelPlugin | undefined;
+    if (!plugin) {
+      cacheContext.lazyPluginsById.set(id, null);
+      return undefined;
+    }
     const normalizedPlugin = {
       ...plugin,
       meta: normalizeChannelMeta({

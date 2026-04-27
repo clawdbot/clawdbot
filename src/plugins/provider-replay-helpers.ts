@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { isGemma4ModelId } from "../shared/google-models.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
@@ -11,7 +12,7 @@ import type {
 
 export function buildOpenAICompatibleReplayPolicy(
   modelApi: string | null | undefined,
-  options: { sanitizeToolCallIds?: boolean } = {},
+  options: { sanitizeToolCallIds?: boolean; modelId?: string | null } = {},
 ): ProviderReplayPolicy | undefined {
   if (
     modelApi !== "openai-completions" &&
@@ -39,6 +40,9 @@ export function buildOpenAICompatibleReplayPolicy(
           validateGeminiTurns: false,
           validateAnthropicTurns: false,
         }),
+    ...(modelApi === "openai-completions" && isGemma4ModelId(options.modelId)
+      ? { dropReasoningFromHistory: true }
+      : {}),
   };
 }
 
@@ -131,7 +135,7 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
     });
   }
 
-  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi, { modelId: ctx.modelId });
 }
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";

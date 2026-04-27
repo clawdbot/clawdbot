@@ -11,12 +11,35 @@ import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js"
 
 type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean }) => boolean;
 
-const { watchMock } = vi.hoisted(() => ({
-  watchMock: vi.fn(() => ({
-    on: vi.fn(),
-    close: vi.fn(async () => undefined),
-  })),
-}));
+const { createdWatchers, watchMock } = vi.hoisted(() => {
+  type WatchEvent = "add" | "change" | "unlink" | "unlinkDir";
+  type WatchCallback = () => void;
+  function createMockWatcher() {
+    const handlers = new Map<WatchEvent, WatchCallback[]>();
+    const watcher = {
+      on: vi.fn((event: WatchEvent, callback: WatchCallback) => {
+        handlers.set(event, [...(handlers.get(event) ?? []), callback]);
+        return watcher;
+      }),
+      close: vi.fn(async () => undefined),
+      emit: (event: WatchEvent) => {
+        for (const callback of handlers.get(event) ?? []) {
+          callback();
+        }
+      },
+    };
+    return watcher;
+  }
+  const watchers: Array<ReturnType<typeof createMockWatcher>> = [];
+  return {
+    createdWatchers: watchers,
+    watchMock: vi.fn(() => {
+      const watcher = createMockWatcher();
+      watchers.push(watcher);
+      return watcher;
+    }),
+  };
+});
 
 vi.mock("chokidar", () => ({
   default: { watch: watchMock },
@@ -69,7 +92,9 @@ describe("memory watcher config", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     watchMock.mockClear();
+    createdWatchers.length = 0;
     if (manager) {
       await manager.close();
       manager = null;
@@ -140,9 +165,10 @@ describe("memory watcher config", () => {
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),
         path.join(workspaceDir, "memory"),
-        path.join(extraDir, "**", "*.md"),
+        extraDir,
       ]),
     );
+    expect(watchedPaths.every((watchPath) => !watchPath.includes("*"))).toBe(true);
     expect(options.ignoreInitial).toBe(true);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
@@ -152,15 +178,19 @@ describe("memory watcher config", () => {
       true,
     );
     expect(ignored?.(path.join(workspaceDir, "memory", ".venv", "lib", "python.md"))).toBe(true);
-    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.tmp"))).toBe(true);
-    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.json"))).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.tmp"), {})).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.json"), {})).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.json"), undefined)).toBe(
+      false,
+    );
     expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"))).toBe(false);
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"), {})).toBe(false);
     expect(
       ignored?.(path.join(workspaceDir, "memory", "project"), { isDirectory: () => true }),
     ).toBe(false);
   });
 
-  it("watches multimodal extensions with case-insensitive globs", async () => {
+  it("watches multimodal extra directories with filtered extensions", async () => {
     await setupWatcherWorkspace({ name: "PHOTO.PNG", contents: "png" });
     const cfg = createWatcherConfig({
       provider: "gemini",
@@ -177,16 +207,40 @@ describe("memory watcher config", () => {
       Record<string, unknown>,
     ];
     expect(watchedPaths).toEqual(
-      expect.arrayContaining([
-        path.join(extraDir, "**", "*.[pP][nN][gG]"),
-        path.join(extraDir, "**", "*.[wW][aA][vV]"),
-      ]),
+      expect.arrayContaining([path.join(workspaceDir, "MEMORY.md"), path.join(extraDir)]),
     );
+    expect(watchedPaths.every((watchPath) => !watchPath.includes("*"))).toBe(true);
 
     const ignored = options.ignored as WatchIgnoredFn | undefined;
     expect(ignored).toBeTypeOf("function");
     expect(ignored?.(path.join(extraDir, "nested", "PHOTO.PNG"))).toBe(false);
+    expect(ignored?.(path.join(extraDir, "nested", "PHOTO.PNG"), {})).toBe(false);
     expect(ignored?.(path.join(extraDir, "nested", "voice.WAV"))).toBe(false);
-    expect(ignored?.(path.join(extraDir, "nested", "metadata.json"))).toBe(true);
+    expect(ignored?.(path.join(extraDir, "nested", "voice.WAV"), {})).toBe(false);
+    expect(ignored?.(path.join(extraDir, "nested", "metadata.json"), {})).toBe(true);
   });
+
+  it.each(["add", "change", "unlink", "unlinkDir"] as const)(
+    "schedules watch sync on %s",
+    async (event) => {
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+      vi.useFakeTimers();
+      const syncSpy = vi
+        .spyOn(
+          manager as unknown as {
+            sync: (params?: { reason?: string }) => Promise<void>;
+          },
+          "sync",
+        )
+        .mockResolvedValue(undefined);
+
+      createdWatchers[0]?.emit(event);
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+    },
+  );
 });

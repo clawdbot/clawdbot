@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
+import { isTruthyEnvValue } from "./env.js";
 import { writeJsonAtomic } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
@@ -317,8 +318,10 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
   const auto = resolveAutoUpdatePolicy(params.cfg);
+  const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
+  const shouldRunAutoUpdate = auto.enabled && !autoDisabledByEnv;
   const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
-  if (!shouldRunUpdateHints && !auto.enabled) {
+  if (!shouldRunUpdateHints && !shouldRunAutoUpdate) {
     return;
   }
 
@@ -338,7 +341,9 @@ export async function runGatewayUpdateCheck(params: {
       onUpdateAvailableChange: params.onUpdateAvailableChange,
     });
   }
-  const checkIntervalMs = resolveCheckIntervalMs(params.cfg);
+  const checkIntervalMs = shouldRunAutoUpdate
+    ? resolveCheckIntervalMs(params.cfg)
+    : UPDATE_CHECK_INTERVAL_MS;
   if (lastCheckedAt && Number.isFinite(lastCheckedAt)) {
     if (now - lastCheckedAt < checkIntervalMs) {
       return;
@@ -407,7 +412,14 @@ export async function runGatewayUpdateCheck(params: {
       nextState.lastNotifiedTag = tag;
     }
 
-    if (auto.enabled && (channel === "stable" || channel === "beta")) {
+    if (auto.enabled && autoDisabledByEnv) {
+      params.log.info("auto-update disabled by OPENCLAW_NO_AUTO_UPDATE", {
+        version: resolved.version,
+        tag,
+      });
+    }
+
+    if (shouldRunAutoUpdate && (channel === "stable" || channel === "beta")) {
       const runAuto = params.runAutoUpdate ?? runAutoUpdateCommand;
       const attemptIntervalMs =
         channel === "beta"

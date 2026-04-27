@@ -12,7 +12,7 @@ import {
   collectRelevantDoctorPluginIdsForTouchedPaths,
   listPluginDoctorLegacyConfigRules,
 } from "../plugins/doctor-contract-registry.js";
-import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
+import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
@@ -1119,7 +1119,7 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      const commandAlias = resolveManifestCommandAliasOwner({
+      const commandAlias = resolveManifestCommandAliasOwnerInRegistry({
         command: pluginId,
         registry,
       });

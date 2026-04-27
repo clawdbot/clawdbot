@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 
 const TRACEPARENT_VERSION = "00";
@@ -7,6 +8,7 @@ const TRACE_ID_RE = /^[0-9a-f]{32}$/;
 const SPAN_ID_RE = /^[0-9a-f]{16}$/;
 const TRACE_FLAGS_RE = /^[0-9a-f]{2}$/;
 const TRACEPARENT_VERSION_RE = /^[0-9a-f]{2}$/;
+const DIAGNOSTIC_TRACE_SCOPE_STATE_KEY = Symbol.for("openclaw.diagnosticTraceScope.state.v1");
 
 export type DiagnosticTraceContext = {
   /** W3C trace id, 32 lowercase hex chars. */
@@ -21,6 +23,11 @@ export type DiagnosticTraceContext = {
 
 export type DiagnosticTraceContextInput = Partial<DiagnosticTraceContext> & {
   traceparent?: string;
+};
+
+type DiagnosticTraceScopeState = {
+  marker: symbol;
+  storage: AsyncLocalStorage<DiagnosticTraceContext>;
 };
 
 function randomHex(bytes: number): string {
@@ -45,6 +52,40 @@ function randomSpanId(): string {
     spanId = randomHex(8);
   }
   return spanId;
+}
+
+function createDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
+  return {
+    marker: DIAGNOSTIC_TRACE_SCOPE_STATE_KEY,
+    storage: new AsyncLocalStorage<DiagnosticTraceContext>(),
+  };
+}
+
+function isDiagnosticTraceScopeState(value: unknown): value is DiagnosticTraceScopeState {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<DiagnosticTraceScopeState>;
+  return (
+    candidate.marker === DIAGNOSTIC_TRACE_SCOPE_STATE_KEY &&
+    candidate.storage instanceof AsyncLocalStorage
+  );
+}
+
+function getDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
+  const globalRecord = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalRecord[DIAGNOSTIC_TRACE_SCOPE_STATE_KEY];
+  if (isDiagnosticTraceScopeState(existing)) {
+    return existing;
+  }
+  const state = createDiagnosticTraceScopeState();
+  Object.defineProperty(globalThis, DIAGNOSTIC_TRACE_SCOPE_STATE_KEY, {
+    configurable: true,
+    enumerable: false,
+    value: state,
+    writable: false,
+  });
+  return state;
 }
 
 export function isValidDiagnosticTraceId(value: unknown): value is string {
@@ -157,6 +198,16 @@ export function createChildDiagnosticTraceContext(
   });
 }
 
+export function createDiagnosticTraceContextFromActiveScope(
+  input: Omit<DiagnosticTraceContextInput, "traceId" | "traceparent"> = {},
+): DiagnosticTraceContext {
+  const active = getActiveDiagnosticTraceContext();
+  if (!active) {
+    return createDiagnosticTraceContext(input);
+  }
+  return createChildDiagnosticTraceContext(active, input);
+}
+
 export function freezeDiagnosticTraceContext(
   context: DiagnosticTraceContext,
 ): DiagnosticTraceContext {
@@ -166,4 +217,26 @@ export function freezeDiagnosticTraceContext(
     ...(context.parentSpanId ? { parentSpanId: context.parentSpanId } : {}),
     ...(context.traceFlags ? { traceFlags: context.traceFlags } : {}),
   });
+}
+
+export function getActiveDiagnosticTraceContext(): DiagnosticTraceContext | undefined {
+  return getDiagnosticTraceScopeState().storage.getStore();
+}
+
+export function runWithDiagnosticTraceContext<T>(
+  trace: DiagnosticTraceContext,
+  callback: () => T,
+): T {
+  return getDiagnosticTraceScopeState().storage.run(freezeDiagnosticTraceContext(trace), callback);
+}
+
+export function runWithNewDiagnosticTraceContext<T>(
+  input: DiagnosticTraceContextInput,
+  callback: () => T,
+): T {
+  return runWithDiagnosticTraceContext(createDiagnosticTraceContext(input), callback);
+}
+
+export function resetDiagnosticTraceContextForTest(): void {
+  getDiagnosticTraceScopeState().storage.disable();
 }

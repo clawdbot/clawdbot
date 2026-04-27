@@ -268,6 +268,8 @@ export const zh_CN: TranslationMap = {
       tailscaleDocsLink: "文档：Tailscale Serve",
       insecureHttpDocsTitle: "不安全 HTTP 文档（在新标签页中打开）",
       insecureHttpDocsLink: "文档：不安全 HTTP",
+      copyCommand: "复制命令",
+      copyCommandAria: "复制命令：{command}",
     },
     cards: {
       cost: "费用",
@@ -303,6 +305,30 @@ export const zh_CN: TranslationMap = {
     palette: {
       placeholder: "输入命令…",
       noResults: "无结果",
+      categories: {
+        search: "搜索",
+        navigation: "导航",
+        skills: "技能",
+      },
+      items: {
+        overview: "概览",
+        sessions: "会话",
+        scheduled: "已计划",
+        skills: "技能",
+        settings: "设置",
+        agents: "代理",
+        shellCommand: "Shell 命令",
+        debugMode: "调试模式",
+      },
+      descriptions: {
+        shellCommand: "运行 shell",
+        debugMode: "切换调试",
+      },
+      footer: {
+        navigate: "导航",
+        select: "选择",
+        close: "关闭",
+      },
     },
   },
   dreaming: {
@@ -316,6 +342,15 @@ export const zh_CN: TranslationMap = {
       refreshing: "刷新中…",
       on: "Dreaming 已开启",
       off: "Dreaming 已关闭",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming 运行中",

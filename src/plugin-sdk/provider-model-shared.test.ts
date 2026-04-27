@@ -183,12 +183,13 @@ describe("buildProviderReplayFamilyHooks", () => {
       OPENAI_COMPATIBLE_REPLAY_HOOKS.buildReplayPolicy?.({
         provider: "xai",
         modelApi: "openai-completions",
-        modelId: "grok-4",
+        modelId: "google/gemma-4-26b-a4b-it",
       } as never),
     ).toMatchObject({
       sanitizeToolCallIds: true,
       applyAssistantFirstOrderingFix: true,
       validateGeminiTurns: true,
+      dropReasoningFromHistory: true,
     });
 
     const nativeIdsHooks = buildProviderReplayFamilyHooks({

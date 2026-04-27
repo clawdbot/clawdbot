@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+  ActivityHandling,
   EndSensitivity,
   Modality,
   StartSensitivity,
+  TurnCoverage,
   type FunctionDeclaration,
   type FunctionResponse,
   type LiveServerContent,
@@ -34,6 +36,8 @@ const DEFAULT_AUDIO_STREAM_END_SILENCE_MS = 700;
 
 type GoogleRealtimeSensitivity = "low" | "high";
 type GoogleRealtimeThinkingLevel = "minimal" | "low" | "medium" | "high";
+type GoogleRealtimeActivityHandling = "start-of-activity-interrupts" | "no-interruption";
+type GoogleRealtimeTurnCoverage = "only-activity" | "all-input" | "audio-activity-and-all-video";
 
 type GoogleRealtimeVoiceProviderConfig = {
   apiKey?: string;
@@ -45,6 +49,9 @@ type GoogleRealtimeVoiceProviderConfig = {
   silenceDurationMs?: number;
   startSensitivity?: GoogleRealtimeSensitivity;
   endSensitivity?: GoogleRealtimeSensitivity;
+  activityHandling?: GoogleRealtimeActivityHandling;
+  turnCoverage?: GoogleRealtimeTurnCoverage;
+  automaticActivityDetectionDisabled?: boolean;
   enableAffectiveDialog?: boolean;
   thinkingLevel?: GoogleRealtimeThinkingLevel;
   thinkingBudget?: number;
@@ -60,6 +67,9 @@ type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   silenceDurationMs?: number;
   startSensitivity?: GoogleRealtimeSensitivity;
   endSensitivity?: GoogleRealtimeSensitivity;
+  activityHandling?: GoogleRealtimeActivityHandling;
+  turnCoverage?: GoogleRealtimeTurnCoverage;
+  automaticActivityDetectionDisabled?: boolean;
   enableAffectiveDialog?: boolean;
   thinkingLevel?: GoogleRealtimeThinkingLevel;
   thinkingBudget?: number;
@@ -105,6 +115,40 @@ function asThinkingLevel(value: unknown): GoogleRealtimeThinkingLevel | undefine
     : undefined;
 }
 
+function asActivityHandling(value: unknown): GoogleRealtimeActivityHandling | undefined {
+  const normalized = normalizeOptionalString(value)?.toLowerCase().replaceAll("_", "-");
+  switch (normalized) {
+    case "start-of-activity-interrupts":
+    case "start-of-activity-interrupt":
+    case "interrupt":
+    case "interrupts":
+      return "start-of-activity-interrupts";
+    case "no-interruption":
+    case "no-interruptions":
+    case "none":
+      return "no-interruption";
+    default:
+      return undefined;
+  }
+}
+
+function asTurnCoverage(value: unknown): GoogleRealtimeTurnCoverage | undefined {
+  const normalized = normalizeOptionalString(value)?.toLowerCase().replaceAll("_", "-");
+  switch (normalized) {
+    case "only-activity":
+    case "turn-includes-only-activity":
+      return "only-activity";
+    case "all-input":
+    case "turn-includes-all-input":
+      return "all-input";
+    case "audio-activity-and-all-video":
+    case "turn-includes-audio-activity-and-all-video":
+      return "audio-activity-and-all-video";
+    default:
+      return undefined;
+  }
+}
+
 function resolveGoogleRealtimeProviderConfigRecord(
   config: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -140,6 +184,9 @@ function normalizeProviderConfig(
     silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
     startSensitivity: asSensitivity(raw?.startSensitivity),
     endSensitivity: asSensitivity(raw?.endSensitivity),
+    activityHandling: asActivityHandling(raw?.activityHandling),
+    turnCoverage: asTurnCoverage(raw?.turnCoverage),
+    automaticActivityDetectionDisabled: asBoolean(raw?.automaticActivityDetectionDisabled),
     enableAffectiveDialog: asBoolean(raw?.enableAffectiveDialog),
     thinkingLevel: asThinkingLevel(raw?.thinkingLevel),
     thinkingBudget: asFiniteNumber(raw?.thinkingBudget),
@@ -176,6 +223,32 @@ function mapEndSensitivity(
   }
 }
 
+function mapActivityHandling(
+  value: GoogleRealtimeActivityHandling | undefined,
+): ActivityHandling | undefined {
+  switch (value) {
+    case "no-interruption":
+      return ActivityHandling.NO_INTERRUPTION;
+    case "start-of-activity-interrupts":
+      return ActivityHandling.START_OF_ACTIVITY_INTERRUPTS;
+    default:
+      return undefined;
+  }
+}
+
+function mapTurnCoverage(value: GoogleRealtimeTurnCoverage | undefined): TurnCoverage | undefined {
+  switch (value) {
+    case "only-activity":
+      return TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY;
+    case "all-input":
+      return TurnCoverage.TURN_INCLUDES_ALL_INPUT;
+    case "audio-activity-and-all-video":
+      return TurnCoverage.TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO;
+    default:
+      return undefined;
+  }
+}
+
 function buildThinkingConfig(config: GoogleRealtimeVoiceBridgeConfig): ThinkingConfig | undefined {
   if (config.thinkingLevel) {
     return { thinkingLevel: config.thinkingLevel.toUpperCase() as ThinkingConfig["thinkingLevel"] };
@@ -191,7 +264,12 @@ function buildRealtimeInputConfig(
 ): RealtimeInputConfig | undefined {
   const startSensitivity = mapStartSensitivity(config.startSensitivity);
   const endSensitivity = mapEndSensitivity(config.endSensitivity);
+  const activityHandling = mapActivityHandling(config.activityHandling);
+  const turnCoverage = mapTurnCoverage(config.turnCoverage);
   const automaticActivityDetection = {
+    ...(typeof config.automaticActivityDetectionDisabled === "boolean"
+      ? { disabled: config.automaticActivityDetectionDisabled }
+      : {}),
     ...(startSensitivity ? { startOfSpeechSensitivity: startSensitivity } : {}),
     ...(endSensitivity ? { endOfSpeechSensitivity: endSensitivity } : {}),
     ...(typeof config.prefixPaddingMs === "number"
@@ -201,9 +279,12 @@ function buildRealtimeInputConfig(
       ? { silenceDurationMs: Math.max(0, Math.floor(config.silenceDurationMs)) }
       : {}),
   };
-  return Object.keys(automaticActivityDetection).length > 0
-    ? { automaticActivityDetection }
-    : undefined;
+  const realtimeInputConfig = {
+    ...(Object.keys(automaticActivityDetection).length > 0 ? { automaticActivityDetection } : {}),
+    ...(activityHandling ? { activityHandling } : {}),
+    ...(turnCoverage ? { turnCoverage } : {}),
+  };
+  return Object.keys(realtimeInputConfig).length > 0 ? realtimeInputConfig : undefined;
 }
 
 function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
@@ -233,6 +314,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private sessionReadyFired = false;
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
+  private pendingFunctionNames = new Map<string, string>();
 
   constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {}
 
@@ -242,6 +324,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sessionReadyFired = false;
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
+    this.pendingFunctionNames.clear();
 
     const ai = createGoogleGenAI({
       apiKey: this.config.apiKey,
@@ -294,6 +377,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         onclose: () => {
           this.connected = false;
           this.sessionConfigured = false;
+          this.pendingFunctionNames.clear();
           const reason = this.intentionallyClosed ? "completed" : "error";
           this.session = null;
           this.config.onClose?.(reason);
@@ -368,17 +452,34 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!this.session) {
       return;
     }
-    this.session.sendToolResponse({
-      functionResponses: [
-        {
-          id: callId,
-          response:
-            result && typeof result === "object"
-              ? (result as Record<string, unknown>)
-              : { output: result },
-        },
-      ],
-    });
+    const name = this.pendingFunctionNames.get(callId);
+    if (!name) {
+      this.config.onError?.(
+        new Error(
+          `Google Live function response is missing a matching function call for ${callId}`,
+        ),
+      );
+      return;
+    }
+    try {
+      this.session.sendToolResponse({
+        functionResponses: [
+          {
+            id: callId,
+            name,
+            response:
+              result && typeof result === "object" && !Array.isArray(result)
+                ? (result as Record<string, unknown>)
+                : { output: result },
+          },
+        ],
+      });
+      this.pendingFunctionNames.delete(callId);
+    } catch (error) {
+      this.config.onError?.(
+        error instanceof Error ? error : new Error("Failed to send Google Live function response"),
+      );
+    }
   }
 
   acknowledgeMark(): void {}
@@ -390,6 +491,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.pendingAudio = [];
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
+    this.pendingFunctionNames.clear();
     const session = this.session;
     this.session = null;
     session?.close();
@@ -476,6 +578,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         continue;
       }
       const callId = call.id?.trim() || `google-live-${randomUUID()}`;
+      this.pendingFunctionNames.set(callId, name);
       this.config.onToolCall?.({
         itemId: callId,
         callId,
@@ -519,6 +622,9 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         silenceDurationMs: config.silenceDurationMs,
         startSensitivity: config.startSensitivity,
         endSensitivity: config.endSensitivity,
+        activityHandling: config.activityHandling,
+        turnCoverage: config.turnCoverage,
+        automaticActivityDetectionDisabled: config.automaticActivityDetectionDisabled,
         enableAffectiveDialog: config.enableAffectiveDialog,
         thinkingLevel: config.thinkingLevel,
         thinkingBudget: config.thinkingBudget,

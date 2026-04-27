@@ -311,6 +311,7 @@ export async function channelsAddCommand(
         prompter,
         runtime,
         workspaceDir,
+        promptInstall: false,
       });
       nextConfig = result.cfg;
       if (!result.installed) {

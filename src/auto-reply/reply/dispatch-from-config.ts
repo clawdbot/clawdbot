@@ -343,6 +343,10 @@ export async function dispatchReplyFromConfig(
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
+  let inboundDedupeReplayUnsafe = false;
+  const markInboundDedupeReplayUnsafe = () => {
+    inboundDedupeReplayUnsafe = true;
+  };
 
   const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
@@ -432,26 +436,38 @@ export async function dispatchReplyFromConfig(
   });
   const routeReplyTo = replyRoute.to;
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
-  const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
-  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
-    cfg,
-    sessionKey: acpDispatchSessionKey,
-    workspaceDir,
-    messageProvider: deliveryChannel,
-    accountId: replyRoute.accountId,
-    groupId,
-    groupChannel: ctx.GroupChannel,
-    groupSpace: ctx.GroupSpace,
-    requesterSenderId: ctx.SenderId,
-    requesterSenderName: ctx.SenderName,
-    requesterSenderUsername: ctx.SenderUsername,
-    requesterSenderE164: ctx.SenderE164,
-  });
+  let normalizeReplyMediaPaths:
+    | ReturnType<
+        (typeof import("./reply-media-paths.runtime.js"))["createReplyMediaPathNormalizer"]
+      >
+    | undefined;
+  const getNormalizeReplyMediaPaths = async () => {
+    if (normalizeReplyMediaPaths) {
+      return normalizeReplyMediaPaths;
+    }
+    const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
+    normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+      cfg,
+      sessionKey: acpDispatchSessionKey,
+      workspaceDir,
+      messageProvider: deliveryChannel,
+      accountId: replyRoute.accountId,
+      groupId,
+      groupChannel: ctx.GroupChannel,
+      groupSpace: ctx.GroupSpace,
+      requesterSenderId: ctx.SenderId,
+      requesterSenderName: ctx.SenderName,
+      requesterSenderUsername: ctx.SenderUsername,
+      requesterSenderE164: ctx.SenderE164,
+    });
+    return normalizeReplyMediaPaths;
+  };
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
     if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
       return payload;
     }
-    return await normalizeReplyMediaPaths(payload);
+    const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
+    return await normalizeReplyMediaPayloadPaths(payload);
   };
 
   const routeReplyToOriginating = async (
@@ -461,6 +477,7 @@ export async function dispatchReplyFromConfig(
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
     }
+    markInboundDedupeReplayUnsafe();
     return await routeReplyRuntime.routeReply({
       payload,
       channel: routeReplyChannel,
@@ -526,6 +543,7 @@ export async function dispatchReplyFromConfig(
       }
       return result.ok;
     }
+    markInboundDedupeReplayUnsafe();
     return mode === "additive"
       ? dispatcher.sendToolResult(payload)
       : dispatcher.sendFinalReply(payload);
@@ -709,6 +727,7 @@ export async function dispatchReplyFromConfig(
             );
           }
         } else {
+          markInboundDedupeReplayUnsafe();
           queuedFinal = dispatcher.sendFinalReply(payload);
         }
       } else {
@@ -732,6 +751,9 @@ export async function dispatchReplyFromConfig(
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+      if (resolveSendableOutboundReplyParts(payload).hasContent) {
+        markInboundDedupeReplayUnsafe();
+      }
       const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg,
@@ -755,6 +777,7 @@ export async function dispatchReplyFromConfig(
           routedFinalCount: result.ok ? 1 : 0,
         };
       }
+      markInboundDedupeReplayUnsafe();
       return {
         queuedFinal: dispatcher.sendFinalReply(normalizedPayload),
         routedFinalCount: 0,
@@ -886,6 +909,7 @@ export async function dispatchReplyFromConfig(
         await sendPayloadAsync(payload, undefined, false);
         return;
       }
+      markInboundDedupeReplayUnsafe();
       dispatcher.sendToolResult(payload);
     };
     const sendPlanUpdate = async (payload: {
@@ -902,6 +926,7 @@ export async function dispatchReplyFromConfig(
         await sendPayloadAsync(replyPayload, undefined, false);
         return;
       }
+      markInboundDedupeReplayUnsafe();
       dispatcher.sendToolResult(replyPayload);
     };
     const summarizeApprovalLabel = (payload: {
@@ -1007,6 +1032,7 @@ export async function dispatchReplyFromConfig(
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
+            markInboundDedupeReplayUnsafe();
             await onToolResultFromReplyOptions?.(payload);
             if (suppressDelivery) {
               return;
@@ -1043,12 +1069,14 @@ export async function dispatchReplyFromConfig(
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(deliveryPayload, undefined, false);
             } else {
+              markInboundDedupeReplayUnsafe();
               dispatcher.sendToolResult(deliveryPayload);
             }
           };
           return run();
         },
         onPlanUpdate: async (payload) => {
+          markInboundDedupeReplayUnsafe();
           await onPlanUpdateFromReplyOptions?.(payload);
           if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
             return;
@@ -1056,6 +1084,7 @@ export async function dispatchReplyFromConfig(
           await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
         },
         onApprovalEvent: async (payload) => {
+          markInboundDedupeReplayUnsafe();
           await onApprovalEventFromReplyOptions?.(payload);
           if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
             return;
@@ -1071,6 +1100,7 @@ export async function dispatchReplyFromConfig(
           await maybeSendWorkingStatus(label);
         },
         onPatchSummary: async (payload) => {
+          markInboundDedupeReplayUnsafe();
           await onPatchSummaryFromReplyOptions?.(payload);
           if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
             return;
@@ -1083,6 +1113,12 @@ export async function dispatchReplyFromConfig(
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
+            if (
+              payload.isReasoning !== true &&
+              resolveSendableOutboundReplyParts(payload).hasContent
+            ) {
+              markInboundDedupeReplayUnsafe();
+            }
             if (suppressDelivery) {
               return;
             }
@@ -1144,6 +1180,7 @@ export async function dispatchReplyFromConfig(
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
             } else {
+              markInboundDedupeReplayUnsafe();
               dispatcher.sendBlockReply(normalizedPayload);
             }
           };
@@ -1256,6 +1293,7 @@ export async function dispatchReplyFromConfig(
                 );
               }
             } else {
+              markInboundDedupeReplayUnsafe();
               const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
               queuedFinal = didQueue || queuedFinal;
             }
@@ -1281,7 +1319,11 @@ export async function dispatchReplyFromConfig(
     return { queuedFinal, counts };
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
-      releaseInboundDedupe(inboundDedupeClaim.key);
+      if (inboundDedupeReplayUnsafe) {
+        commitInboundDedupe(inboundDedupeClaim.key);
+      } else {
+        releaseInboundDedupe(inboundDedupeClaim.key);
+      }
     }
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");

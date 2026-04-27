@@ -109,6 +109,32 @@ describe("sessions view", () => {
     expect(onPatch).toHaveBeenCalledWith("agent:main:main", { thinkingLevel: "max" });
   });
 
+  it("labels inherited thinking with the resolved session default", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            thinkingDefault: "adaptive",
+            thinkingLevels: [
+              { id: "off", label: "off" },
+              { id: "adaptive", label: "adaptive" },
+            ],
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
+    expect(thinking?.value).toBe("");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
+  });
+
   it("keeps legacy binary thinking labels patching canonical ids", async () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();

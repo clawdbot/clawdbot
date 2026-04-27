@@ -148,6 +148,10 @@ type JsonOptions = {
   json?: boolean;
 };
 
+type RecoverTabOptions = JsonOptions & {
+  transport?: GoogleMeetTransport;
+};
+
 type CreateOptions = {
   accessToken?: string;
   refreshToken?: string;
@@ -431,7 +435,8 @@ function writeRecoverCurrentTabResult(
   result: Awaited<ReturnType<GoogleMeetRuntime["recoverCurrentTab"]>>,
 ): void {
   writeStdoutLine("Google Meet current tab: %s", result.found ? "found" : "not found");
-  writeStdoutLine("node: %s", result.nodeId);
+  writeStdoutLine("transport: %s", result.transport);
+  writeStdoutLine("node: %s", result.nodeId ?? "local/none");
   if (result.targetId) {
     writeStdoutLine("target: %s", result.targetId);
   }
@@ -445,12 +450,15 @@ function writeRecoverCurrentTabResult(
       session: {
         id: "current-tab",
         url: result.browser.browserUrl ?? result.tab?.url ?? "unknown",
-        transport: "chrome-node",
+        transport: result.transport,
         mode: "transcribe",
         state: "active",
         createdAt: "",
         updatedAt: "",
-        participantIdentity: "signed-in Google Chrome profile on a paired node",
+        participantIdentity:
+          result.transport === "chrome-node"
+            ? "signed-in Google Chrome profile on a paired node"
+            : "signed-in Google Chrome profile",
         realtime: { enabled: false, toolPolicy: "safe-read-only" },
         chrome: {
           audioBackend: "blackhole-2ch",
@@ -1960,12 +1968,13 @@ export function registerGoogleMeetCli(params: {
 
   root
     .command("recover-tab")
-    .description("Focus and inspect an existing Google Meet tab on the Chrome node")
+    .description("Focus and inspect an existing Google Meet tab")
     .argument("[url]", "Optional Meet URL to match")
+    .option("--transport <transport>", "Transport to inspect: chrome or chrome-node")
     .option("--json", "Print JSON output", false)
-    .action(async (url: string | undefined, options: JsonOptions) => {
+    .action(async (url: string | undefined, options: RecoverTabOptions) => {
       const rt = await params.ensureRuntime();
-      const result = await rt.recoverCurrentTab({ url });
+      const result = await rt.recoverCurrentTab({ url, transport: options.transport });
       if (options.json) {
         writeStdoutJson(result);
         return;
