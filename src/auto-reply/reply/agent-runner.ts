@@ -84,8 +84,11 @@ import {
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
-import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
-import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
+import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-line.js";
+import {
+  resolveAutoThreadingTargets,
+  resolveQueuedReplyExecutionConfig,
+} from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import {
@@ -2099,9 +2102,7 @@ export async function runReplyAgent(params: {
       return returnWithQueuedFollowupDrain(undefined);
     }
 
-    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-    const implicitReplyToId =
-      normalizeOptionalString(sessionCtx.MessageThreadId) ?? currentMessageId;
+    const { currentMessageId, implicitReplyToId } = resolveAutoThreadingTargets(sessionCtx);
     const payloadResult = await buildReplyPayloads({
       config: cfg,
       payloads:

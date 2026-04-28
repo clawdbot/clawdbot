@@ -256,6 +256,37 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it("falls back to currentMessageId when no implicit reply target is supplied", async () => {
+    const blockReplyPipeline = {
+      enqueue: vi.fn(),
+    } as unknown as BlockReplyPipelineLike;
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      currentMessageId: "msg-only",
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({ text: "fallback stream" });
+
+    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
+      text: "fallback stream",
+      mediaUrl: undefined,
+      replyToId: "msg-only",
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+      mediaUrls: undefined,
+    });
+  });
+
   it("suppresses implicit current-message threading for block replies when reply threading denies it", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),

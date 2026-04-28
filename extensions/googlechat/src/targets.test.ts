@@ -348,6 +348,27 @@ describe("sendGoogleChatMessage", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["space resource without /threads/", "spaces/AAA"],
+    ["thread name with empty thread id", "spaces/AAA/threads/"],
+    ["thread name with empty space id", "spaces//threads/xyz"],
+    ["thread name with extra path segments", "spaces/AAA/threads/xyz/messages/abc"],
+    ["bare thread id without resource path", "xyz"],
+  ])("rejects %s before sending", async (_label, badThread) => {
+    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/126");
+
+    await expect(
+      sendGoogleChatMessage({
+        account,
+        space: "spaces/AAA",
+        text: "hello",
+        thread: badThread,
+      }),
+    ).rejects.toThrow(`Google Chat thread must be a thread resource name, got ${badThread}`);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("reports malformed send JSON with a stable API error", async () => {
     vi.stubGlobal(
       "fetch",

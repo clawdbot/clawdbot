@@ -185,6 +185,15 @@ export function buildThreadingToolContext(params: {
   };
 }
 
+export function resolveAutoThreadingTargets(sessionCtx: TemplateContext): {
+  currentMessageId: string | undefined;
+  implicitReplyToId: string | undefined;
+} {
+  const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  const implicitReplyToId = normalizeOptionalString(sessionCtx.MessageThreadId) ?? currentMessageId;
+  return { currentMessageId, implicitReplyToId };
+}
+
 /** Detects Bun socket-close errors that should be formatted more clearly. */
 export const isBunFetchSocketError = (message?: string) =>
   message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;

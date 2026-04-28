@@ -128,6 +128,7 @@ import {
 } from "./agent-runner-failure-copy.js";
 import {
   buildEmbeddedRunExecutionParams,
+  resolveAutoThreadingTargets,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
@@ -1777,6 +1778,7 @@ async function runAgentTurnWithFallbackInternal(
     didNotifyAgentRunStart = true;
     params.opts?.onAgentRunStart?.(runId);
   };
+  const { currentMessageId, implicitReplyToId } = resolveAutoThreadingTargets(params.sessionCtx);
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
   ) => {
@@ -1796,9 +1798,6 @@ async function runAgentTurnWithFallbackInternal(
       logVerbose(`execution phase typing signal failed: ${String(err)}`);
     });
   };
-  const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
-  const implicitReplyToId =
-    normalizeOptionalString(params.sessionCtx.MessageThreadId) ?? currentMessageId;
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
     try {

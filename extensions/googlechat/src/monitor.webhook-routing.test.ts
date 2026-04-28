@@ -371,4 +371,99 @@ describe("Google Chat monitor inbound context", () => {
       unregister();
     }
   });
+
+  it("leaves MessageThreadId unset when the inbound message has no thread", async () => {
+    vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
+    await import("./monitor.js");
+
+    const finalizeInboundContext = vi.fn((ctx) => ctx);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {});
+    const core = {
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        commands: {
+          shouldComputeCommandAuthorized: () => false,
+          resolveCommandAuthorizedFromAuthorizers: () => false,
+          shouldHandleTextCommands: () => false,
+          isControlCommandMessage: () => false,
+        },
+        text: { hasControlCommand: () => false },
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "finn",
+            accountId: "default",
+            sessionKey: "agent:finn:googlechat:dm:spaces/DM",
+          }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/openclaw-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordSessionMetaFromInbound: vi.fn(async () => {}),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: ({ body }: { body: string }) => body,
+          finalizeInboundContext,
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        media: {
+          saveMediaBuffer: vi.fn(),
+        },
+      },
+    } as unknown as PluginRuntime;
+
+    const unregister = registerGoogleChatWebhookTarget({
+      account: {
+        accountId: "default",
+        enabled: true,
+        credentialSource: "none",
+        config: {
+          allowBots: true,
+          typingIndicator: "none",
+          dm: { policy: "open" },
+        },
+      } as ResolvedGoogleChatAccount,
+      config: {
+        agents: { list: [{ id: "finn", name: "Cosmo" }] },
+        channels: { googlechat: {} },
+      } as OpenClawConfig,
+      runtime: {},
+      core,
+      path: "/googlechat-context-dm",
+      mediaMaxMb: 5,
+    });
+
+    try {
+      const res = await dispatchWebhookRequest(
+        createWebhookRequest({
+          authorization: "Bearer test-token",
+          path: "/googlechat-context-dm",
+          payload: {
+            type: "MESSAGE",
+            eventTime: "2026-04-28T00:00:00.000Z",
+            space: { name: "spaces/DM", type: "DM" },
+            message: {
+              name: "spaces/DM/messages/789",
+              text: "hi",
+              sender: { name: "users/alice", displayName: "Alice" },
+              annotations: [],
+            },
+          },
+        }),
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(finalizeInboundContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          MessageSid: "spaces/DM/messages/789",
+          MessageSidFull: "spaces/DM/messages/789",
+          MessageThreadId: undefined,
+          ReplyToId: undefined,
+          ReplyToIdFull: undefined,
+        }),
+      );
+    } finally {
+      unregister();
+    }
+  });
 });
